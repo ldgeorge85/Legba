@@ -282,7 +282,7 @@ async def handle(
 ) -> AnalystMethodResult:
     """Sub-handler entry point — one global decay-readout scan.
 
-    REFUSES LOUD on a missing pool (the geo_convergence_scan contract): a scan
+    REFUSES LOUD on a missing pool (the alert_trigger_scan contract): a scan
     that cannot read the substrate must error visibly, never report an honest-
     looking zero distribution it did not measure.
     """

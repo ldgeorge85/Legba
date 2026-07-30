@@ -1,5 +1,5 @@
 /**
- * claimVerdicts — per-citation-chip verify verdicts (P1-8), pure + DOM-free.
+ * claimVerdicts — per-citation-chip verify verdicts (P1-8 / P2-4), pure + DOM-free.
  *
  * WHAT THE PAYLOAD ACTUALLY CARRIES (src/legba/data/provenance/verify.py,
  * `FaithfulnessReport.as_dict`): the finding-level `verification` block records
@@ -7,17 +7,30 @@
  * `supported_claims`, `judge_status`) plus `unsupported_spans` — one entry per
  * FLAGGED claim: `{text, reason, markers}`, where `markers` lists the citation
  * ordinals the flagged claim carried (unit `[N]` signal indices, or
- * composition `[[ref:N]]` sub-claim ordinals). Per-claim SUPPORTED verdicts
- * are NOT persisted — only the failures are named, plus the pooled counts.
+ * composition `[[ref:N]]` sub-claim ordinals).
  *
- * So the honest per-chip verdict is:
+ * P2-4 additionally persists `claim_verdicts` — the FULL per-claim ledger
+ * (`{text, markers, verdict: 'supported'|'hard_fail'|'soft_fail', reason}`),
+ * one row per GRADED claim including supported ones (previously recorded
+ * nowhere — the citation-hover finding this module now closes). Advisory-only
+ * flags (`hedge_laundering` / `double_counted`) are deliberately NOT ledger
+ * rows — they annotate a claim that is itself recorded (typically supported)
+ * — so they still live ONLY in `unsupported_spans`.
+ *
+ * So the honest per-chip verdict, worst-to-best:
  *   * a span with this chip's ordinal in its `markers` → that claim's flag
  *     (contradicted / unsupported / hedge-laundering / …), with the flagged
- *     claim text to show;
- *   * no flagged span naming this chip while the LLM judge RAN → "not
- *     flagged" (every flagged checkable claim is named, so absence is
- *     meaningful — but a positive per-claim "supported" is not recorded, and
- *     we say so via the pooled context);
+ *     claim text to show — checked FIRST so an advisory flag is never
+ *     shadowed by a ledger row that (correctly) also marks the same claim
+ *     `supported`;
+ *   * no flagged span names this chip, but the persisted `claim_verdicts`
+ *     LEDGER names it `supported` → "supported" — a real, backed verdict,
+ *     never fabricated (this is the case the ledger newly makes possible);
+ *   * no flagged span, no ledger row (ledger absent — a pre-P2-4 critique —
+ *     or present but silent on this ordinal) while the LLM judge RAN → "not
+ *     flagged" (the legacy, vaguer fallback: every flagged checkable claim is
+ *     named, so absence is meaningful, but we cannot say "supported" without
+ *     the ledger);
  *   * the judge did not run (deterministic floor only) or there is no verify
  *     block → "claim-level verdict not recorded" — stated, never fabricated.
  */
@@ -43,6 +56,18 @@ export function claimReasonLabel(reason: string): string {
   return CLAIM_REASON_LABELS[reason] ?? reason.replace(/_/g, ' ')
 }
 
+/**
+ * U-5 — the plain-language gloss for the two honest-ABSENCE verdict kinds
+ * ('not-recorded' / 'not-checked'). A hostile UX review found these strings
+ * read like errors to a first-time reader ("verdict not recorded" sounds
+ * broken); this says plainly that nothing was measured yet, never that
+ * something failed.
+ */
+export const CLAIM_VERDICT_ABSENCE_EXPLAIN =
+  'Nothing was checked at this per-claim granularity yet — an honest absence, ' +
+  'not a hidden failure. (The pooled faithfulness score above still covers the ' +
+  'whole read; this line is about THIS ONE citation specifically.)'
+
 /** Extract the ordinal from a citation marker (`[8]` → 8, `[[ref:3]]` → 3).
  *  Null when the marker carries no digits (legacy uuid markers). */
 export function markerOrdinal(marker: string): number | null {
@@ -61,7 +86,11 @@ export type ClaimVerdictKind =
   | 'unsupported'
   /** A non-judge flag (hedge_laundering, double_counted, …) names it. */
   | 'flagged'
-  /** LLM judge ran; no flagged claim names this chip. */
+  /** P2-4 — the persisted claim_verdicts LEDGER names this chip `supported`
+   *  (no flag names it, and the ledger recorded a real per-claim verdict). */
+  | 'supported'
+  /** LLM judge ran; no flagged claim names this chip, and either no ledger
+   *  was persisted for this critique or it says nothing about this ordinal. */
   | 'not-flagged'
   /** Only the deterministic floor ran — no per-claim judge verdict exists. */
   | 'not-checked'
@@ -108,6 +137,55 @@ function spanNamesOrdinal(rawMarkers: unknown, ordinal: number): boolean {
     if (typeof m === 'string') return Number(m) === ordinal
     return false
   })
+}
+
+// ---------------------------------------------------------------------------
+// P2-4 — the persisted per-claim `claim_verdicts` LEDGER (supported +
+// hard_fail + soft_fail rows; verify.py `ClaimVerdict.as_dict`). Consulted
+// ONLY when no span already flags this chip's ordinal — the ledger never
+// overrides a real flag (including the advisory ones it deliberately excludes
+// from its own rows), it only upgrades the previously-vague "not flagged"
+// silence into a backed "supported" when the ledger actually says so.
+// ---------------------------------------------------------------------------
+
+type LedgerVerdict = 'supported' | 'hard_fail' | 'soft_fail'
+
+function isLedgerVerdict(v: unknown): v is LedgerVerdict {
+  return v === 'supported' || v === 'hard_fail' || v === 'soft_fail'
+}
+
+interface LedgerRowMatch {
+  text: string
+  verdict: LedgerVerdict
+  reason: string | null
+}
+
+/** Worst-first ordering for ledger rows that (defensively) both name the same
+ *  ordinal — mirrors REASON_SEVERITY's "hard beats soft" precedent. */
+const LEDGER_SEVERITY: Record<LedgerVerdict, number> = {
+  hard_fail: 0,
+  soft_fail: 1,
+  supported: 2,
+}
+
+function ledgerRowsNamingOrdinal(
+  v: Record<string, unknown>,
+  ordinal: number,
+): LedgerRowMatch[] {
+  const raw = v['claim_verdicts']
+  if (!Array.isArray(raw)) return []
+  const out: LedgerRowMatch[] = []
+  for (const item of raw) {
+    const o = asRecord(item)
+    if (!o) continue
+    const verdict = o['verdict']
+    if (!isLedgerVerdict(verdict)) continue
+    if (!spanNamesOrdinal(o['markers'], ordinal)) continue
+    const text = typeof o['text'] === 'string' ? o['text'] : ''
+    const reason = typeof o['reason'] === 'string' ? o['reason'] : null
+    out.push({ text, verdict, reason })
+  }
+  return out
 }
 
 /**
@@ -159,6 +237,53 @@ export function claimVerdictForMarker(
           ? 'unsupported'
           : 'flagged'
     return { kind, label: worst.reasonLabel, spans, judgeStatus, checkable, supported }
+  }
+
+  // P2-4 — no flag names this ordinal. Prefer the persisted claim_verdicts
+  // LEDGER (records EVERY graded claim, supported included) over the vaguer
+  // legacy "not flagged" read, when the ledger actually names this ordinal.
+  if (ordinal !== null) {
+    const ledgerRows = ledgerRowsNamingOrdinal(v, ordinal)
+    if (ledgerRows.length > 0) {
+      // A defensive worst-first pick: spans and the ledger are written in
+      // parallel server-side, so a failing ledger row should already have
+      // been caught by the spans branch above — this only guards against a
+      // ledger-only failure ever being silently swallowed.
+      const worst = [...ledgerRows].sort(
+        (a, b) => LEDGER_SEVERITY[a.verdict] - LEDGER_SEVERITY[b.verdict],
+      )[0]
+      if (worst.verdict === 'supported') {
+        return {
+          kind: 'supported',
+          label: 'supported by the verify judge',
+          spans: [],
+          judgeStatus,
+          checkable,
+          supported,
+        }
+      }
+      const reasonLabel = worst.reason
+        ? claimReasonLabel(worst.reason)
+        : worst.verdict === 'hard_fail'
+          ? 'flagged (hard fail)'
+          : 'flagged (soft fail)'
+      const kind: ClaimVerdictKind =
+        worst.reason === 'judge_contradicted'
+          ? 'contradicted'
+          : worst.reason === 'judge_unsupported'
+            ? 'unsupported'
+            : 'flagged'
+      return {
+        kind,
+        label: reasonLabel,
+        spans: worst.text
+          ? [{ text: worst.text, reason: worst.reason ?? worst.verdict, reasonLabel }]
+          : [],
+        judgeStatus,
+        checkable,
+        supported,
+      }
+    }
   }
 
   if (judgeStatus === 'llm') {

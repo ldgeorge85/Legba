@@ -1,0 +1,107 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Supply-chain pack — TIER-B desk 9/10: container freight & logistics.
+# planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §1.2 + §5.3.
+#
+# ============================ ACTIVATION GATE =============================
+# TIER B: registered so the topology is DECLARED and the collection gap is
+# VISIBLE — NOT activated. It stays `state: draft` so the reconciler never wires
+# it (source_first_runtime.py:901 boot-wires only `active` targets) and the
+# disruption_status unit never fans onto it.
+#
+#   GATE (plan §1.2): needs freight / logistics press — the plan's §5.2 slot F-1.
+#   ACTIVATE AT: >= 150 titles / 30d matching the freight vocabulary.
+#   MEASURED 2026-07-29 (live, read-only): 20 titles / 30d across the freight
+#   vocabulary (container / freight rate / port congestion / dry bulk / blank
+#   sailing / transhipment); the plan measured container 15, freight rate 2, port
+#   congestion 0, dry bulk 0, cosco 0. STILL AN ORDER OF MAGNITUDE UNDER THE GATE.
+#
+#   THE SOURCE PIN: this is the ONE desk in the pack that CANNOT be geo-anchored
+#   honestly (freight is a global market, not a place), so per plan §5.3 its SQL
+#   pushdown is `sources[].source_id` — the slice reader turns explicit ids into
+#   `source_id = ANY($n)` (a real pushdown), while a selector-based ref is NOT
+#   resolved by the slice reader at all (it reads only `sref.get("source_id")`,
+#   actor_substrate_slice.py:240-243). Slot F-1 IS FILLED:
+#   `source.splash247.news` + `source.theloadstar.news`
+#   (+ `source.maritimeexecutive.news` for general maritime) all went
+#   `state: active` on 2026-07-29 and are ingesting — the pin resolved to 40
+#   canonical rows / 24h on their first day. Sequence: let them accumulate a full
+#   30d -> re-measure the title count -> only then flip this desk.
+#
+#   THE PIN IS ALSO THE HAZARD: because the pin ANDs with everything else, this
+#   desk is blind to any signal outside those three feeds. That is the honest
+#   trade for a genuinely non-geo desk on the current slice reader, and it is why
+#   this desk is Tier B rather than Tier A.
+# ==========================================================================
+#
+# The rest of the shape rationale (the 360-row pre-filter, why contains_any is
+# only a refiner, why no inline `analyst:` block, why no g20/watch tag) is
+# written out once in descriptors/target_lane_hormuz.yaml — read that header
+# first.
+
+identity:
+  id: flow_container_freight
+  name: "Flow — Container Freight & Logistics"
+  schema_uri: legba/target/2.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  inherits: []
+  state: draft
+  owner: supply_chain_pack
+  created: "2026-07-29T00:00:00Z"
+
+scope:
+  domain: thematic
+  themes: [supply_chain, freight, logistics, shipping]
+  # DELIBERATELY EMPTY: freight is a market, not a place. The pushdown is the
+  # source pin below, not geo (plan §5.3). Do NOT "fix" this by inventing a geo
+  # list — a fake geo anchor would silently drop the global rate/capacity
+  # reporting this desk exists to read.
+  geo: []
+  entity_classes:
+    - country
+    - organization
+    - corporation
+    - infrastructure
+    - commodity
+    - location
+    - international_org
+    - event_series
+    - concept
+  relationship_types:
+    - TradesWith
+    - OperatesIn
+    - LocatedIn
+    - PartOf
+    - PartnersWith
+    - CompetesWith
+    - SubsidiaryOf
+  time_horizon_days: 90
+  predicate: >-
+    contains_any(["container", "containership", "freight rate", "spot rate",
+                  "port congestion", "dry bulk", "charter", "blank sailing",
+                  "transhipment", "terminal", "berth", "teu",
+                  "schedule reliability", "capacity"])
+  tags: [supply_chain, disruption, flow]
+
+# EXPLICIT SOURCE PIN — the SQL pushdown for this non-geo desk (plan §5.3).
+# All three ids are supply-chain source descriptors registered AND activated on
+# 2026-07-29; the gate above is the 30d title count, not the pin.
+sources:
+  - source_id: source.splash247.news
+    subscription:
+      canonical_only: true
+  - source_id: source.theloadstar.news
+    subscription:
+      canonical_only: true
+  - source_id: source.maritimeexecutive.news
+    subscription:
+      canonical_only: true
+
+allowed_action_packs: []
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  routing: []

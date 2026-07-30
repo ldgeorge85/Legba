@@ -61,8 +61,16 @@ cadence:
 
 # Agency grant — the substrate_read pack (A-3a): every consult tool call
 # is resolved + governed + ledgered through the agency plane.
+#
+# R-3d — `web_access` is the GRANT leg only. The operator-facing consult surface
+# is where "the substrate does not know this, go look it up" is asked most
+# directly, so it carries the grant. NOTE the honest limit: the consult binding
+# in runtime/dapr_host.py builds ONE AgencyToolBinding, over substrate_read
+# only, so this grant is INERT until that path binds the web_access pack too —
+# it is a descriptor-side preparation, not an activation.
 action_packs:
   - pack_id: substrate_read
+  - pack_id: web_access
 
 outputs:
   - kind: a2a_skill

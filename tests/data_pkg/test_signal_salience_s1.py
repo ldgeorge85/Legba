@@ -250,3 +250,153 @@ async def test_score_signals_dry_run_writes_nothing() -> None:
     conn = _FakeConn(rows)
     examined, scored, _ = await ss.score_signals(conn, _CannedLLM(content), apply=False)
     assert examined == 1 and scored == 1 and conn.writes == []   # dry-run mutates nothing
+
+
+# ---------------------------------------------------------------------------
+# Per-channel source_class override (2026-07-29 Ansar Allah decision) — the
+# stamping-path fix. source_class is otherwise a whole-descriptor field
+# (SourceScope.source_class, read via the s.source_id -> source_descriptors
+# join); config.channels.classes lets ONE channel on a shared telegram
+# descriptor carry a different class, resolved per-signal by
+# ``_channel_class_override`` keyed off ``payload.channel.username`` and
+# preferred over the descriptor's ``source_class`` column in
+# ``select_salience_candidates`` — reaching the S-1 authority stamp
+# (``signals.salience.authority``) the SAME way the descriptor-level default
+# always has, not a cosmetic payload tag nothing reads.
+# ---------------------------------------------------------------------------
+
+_WRAPPED_CLASSES = {
+    "factory_kind": "dict", "key_kind": "text", "value_kind": "text",
+    "raw": {"Almasirah_En": "state_media", "ansarollah1": "state_media"},
+}
+_BARE_CLASSES = {"Almasirah_En": "state_media", "ansarollah1": "state_media"}
+
+
+def test_channel_class_override_wrapped_factory_shape() -> None:
+    assert ss._channel_class_override(_WRAPPED_CLASSES, "Almasirah_En") == "state_media"
+    assert ss._channel_class_override(_WRAPPED_CLASSES, "@Almasirah_En") == "state_media"
+    assert ss._channel_class_override(_WRAPPED_CLASSES, "bloomberg") is None
+
+
+def test_channel_class_override_bare_dict_shape() -> None:
+    assert ss._channel_class_override(_BARE_CLASSES, "ansarollah1") == "state_media"
+    assert ss._channel_class_override(_BARE_CLASSES, "bloomberg") is None
+
+
+def test_channel_class_override_json_string_shape() -> None:
+    """asyncpg with no jsonb codec hands the column back as a raw string."""
+    assert ss._channel_class_override(json.dumps(_WRAPPED_CLASSES), "ansarollah1") == "state_media"
+
+
+def test_channel_class_override_at_prefixed_map_key_matches_stripped_handle() -> None:
+    """The descriptor author may write the override key with '@' — the
+    lookup normalizes both sides (mirrors telegram.py's
+    ``_strip_channel_prefix``)."""
+    raw = {"@Almasirah_En": "state_media"}
+    assert ss._channel_class_override(raw, "Almasirah_En") == "state_media"
+
+
+@pytest.mark.parametrize("absent", [None, {}, "not json", 123, [], {"Almasirah_En": "state_media"}])
+def test_channel_class_override_none_when_no_channel_handle(absent) -> None:
+    assert ss._channel_class_override(absent, None) is None
+    assert ss._channel_class_override(absent, "") is None
+
+
+def test_channel_class_override_none_when_classes_map_absent() -> None:
+    """Non-telegram sources (or a telegram descriptor with no
+    config.classes) -> no override; caller falls back to the descriptor
+    default untouched."""
+    assert ss._channel_class_override(None, "Almasirah_En") is None
+
+
+def test_payload_channel_handle_extracts_and_strips_at_prefix() -> None:
+    assert ss._payload_channel_handle({"channel": {"username": "@Almasirah_En"}}) == "Almasirah_En"
+    assert ss._payload_channel_handle({"channel": {"username": "ansarollah1"}}) == "ansarollah1"
+
+
+def test_payload_channel_handle_json_string_payload() -> None:
+    payload = json.dumps({"channel": {"username": "ansarollah1"}})
+    assert ss._payload_channel_handle(payload) == "ansarollah1"
+
+
+@pytest.mark.parametrize("payload", [{}, {"channel": {}}, {"channel": {"username": None}}, "not json", None])
+def test_payload_channel_handle_none_for_non_telegram_or_malformed_payloads(payload) -> None:
+    assert ss._payload_channel_handle(payload) is None
+
+
+@pytest.mark.asyncio
+async def test_select_salience_candidates_applies_override_and_leaves_others_default() -> None:
+    """The stamping-path test (not just config parsing): three signals off
+    ONE shared descriptor whose scope.source_class is `reporting` — two from
+    channels overridden `state_media` (config.channels.classes), one from a
+    non-overridden channel. select_salience_candidates must reflect the
+    override on the first two and the descriptor default on the third."""
+    rows = [
+        {
+            "id": "am1", "payload": {"channel": {"username": "Almasirah_En"}},
+            "source_class": "reporting", "channel_classes": _WRAPPED_CLASSES,
+        },
+        {
+            "id": "an1", "payload": {"channel": {"username": "ansarollah1"}},
+            "source_class": "reporting", "channel_classes": _WRAPPED_CLASSES,
+        },
+        {
+            "id": "bb1", "payload": {"channel": {"username": "bloomberg"}},
+            "source_class": "reporting", "channel_classes": _WRAPPED_CLASSES,
+        },
+    ]
+    conn = _FakeConn(rows)
+    candidates = await ss.select_salience_candidates(conn, window_hours=96, limit=10)
+    by_id = {c.id: c for c in candidates}
+    assert by_id["am1"].source_class == "state_media"
+    assert by_id["an1"].source_class == "state_media"
+    assert by_id["bb1"].source_class == "reporting"   # non-overridden — descriptor default, unchanged
+
+
+@pytest.mark.asyncio
+async def test_select_salience_candidates_backward_compatible_without_channel_classes_key() -> None:
+    """A row shape that predates this column (e.g. any caller/test fixture
+    that never sets ``channel_classes``) must still work — byte-identical to
+    the pre-override behavior — instead of raising."""
+    rows = [_srow("aaa", {"title": "no channel here"}, "reporting")]
+    assert "channel_classes" not in rows[0]
+    conn = _FakeConn(rows)
+    candidates = await ss.select_salience_candidates(conn, window_hours=96, limit=10)
+    assert candidates[0].source_class == "reporting"
+
+
+@pytest.mark.asyncio
+async def test_score_signals_stamps_authority_from_per_channel_override() -> None:
+    """FULL stamping-path: the override reaches the WRITTEN signal's
+    salience.authority (signals.salience, migration 0089) — not merely a
+    parsed config value. Two Ansar Allah channels riding a `reporting`-
+    classed descriptor come out `state_media`; a third channel on the SAME
+    descriptor with no override stays `reporting`."""
+    rows = [
+        {
+            "id": "am1", "payload": {"title": "Ansar Allah statement (Almasirah)", "channel": {"username": "Almasirah_En"}},
+            "source_class": "reporting", "channel_classes": _WRAPPED_CLASSES,
+        },
+        {
+            "id": "an1", "payload": {"title": "Ansar Allah statement (ansarollah1)", "channel": {"username": "ansarollah1"}},
+            "source_class": "reporting", "channel_classes": _WRAPPED_CLASSES,
+        },
+        {
+            "id": "bb1", "payload": {"title": "Bloomberg wire item", "channel": {"username": "bloomberg"}},
+            "source_class": "reporting", "channel_classes": _WRAPPED_CLASSES,
+        },
+    ]
+    content = json.dumps([
+        {"id": "am1", "event_class": "diplomatic_rupture", "actor_rank": "state_organ", "magnitude": 0.6, "confidence": 0.8},
+        {"id": "an1", "event_class": "diplomatic_rupture", "actor_rank": "state_organ", "magnitude": 0.6, "confidence": 0.8},
+        {"id": "bb1", "event_class": "sanctions_economic", "actor_rank": "state_organ", "magnitude": 0.4, "confidence": 0.8},
+    ])
+    conn = _FakeConn(rows)
+    examined, scored, _ = await ss.score_signals(
+        conn, _CannedLLM(content), apply=True, max_rows=10, batch_size=12,
+        model_id="gpt-oss-test", now_iso="2026-07-29T00:00:00+00:00")
+    assert examined == 3 and scored == 3
+    written = {rid: sal for rid, sal in conn.writes}
+    assert written["am1"]["authority"] == "state_media"
+    assert written["an1"]["authority"] == "state_media"
+    assert written["bb1"]["authority"] == "reporting"   # unaffected — descriptor default

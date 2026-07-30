@@ -36,6 +36,7 @@ Test surface:
 
 from __future__ import annotations
 
+import json
 import logging
 import pathlib
 from datetime import datetime, timezone
@@ -675,3 +676,165 @@ def test_factory_builds_gdelt_files_handler() -> None:
     handler = build_source_handler("gdelt_files", {}, registry=registry)
     assert isinstance(handler, GDELTFilesSourceHandler)
     assert isinstance(handler, SourceHandler)
+
+
+# ---------------------------------------------------------------------------
+# FilterStateStore scalar-cursor codec regression (source.gdelt.files outage,
+# live 2026-07-24 onward — every poll failing with
+# ``json.decoder.JSONDecodeError: Extra data: line 1 column 5 (char 4)``)
+#
+# ``gdelt_files.py`` is the only source handler in the tree that persists a
+# BARE scalar (an ISO-timestamp string, ``newest_ts_processed.isoformat()``)
+# as its cursor value via ``ctx.state_store.set`` — every other handler
+# (rss/geojson/json_api/opensanctions/ucdp/acled/telegram) wraps its cursor
+# in a dict. Production's ``FilterStateStore`` (``legba.runtime.state``)
+# sits on a pool whose connections have a ``jsonb`` codec registered
+# UNCONDITIONALLY (``PostgresStore._init_connection``) — the ``value``
+# column therefore already arrives as a fully-decoded native Python value
+# (str/int/float/bool/None/dict/list), not raw JSON text. The pre-fix
+# ``FilterStateStore.get()`` special-cased only ``dict``/``list`` and
+# unconditionally re-ran ``json.loads()`` on everything else, so a bare
+# decoded string like ``"2026-07-24T09:45:00+00:00"`` (not valid JSON on its
+# own — no wrapping quotes) blew up on every read after the FIRST successful
+# write. ``InMemoryStateStore`` (used by every other test in this file)
+# never serializes at all, so it could not have caught this — these tests
+# exercise the real ``FilterStateStore`` against a fake pool that mimics the
+# codec-registered connection's already-decoded ``value`` column.
+# ---------------------------------------------------------------------------
+
+
+class _FakeCodecConnection:
+    """Mimics an asyncpg connection with ``PostgresStore``'s jsonb codec
+    registered: ``fetchrow`` hands back the ``value`` column ALREADY decoded
+    (any JSON shape), never raw JSON text — matching production, never the
+    codec-less shape ``FilterStateStore.get()`` used to assume exclusively.
+    """
+
+    def __init__(self, table: dict[tuple[str, str, str], str]) -> None:
+        self._table = table
+
+    async def fetchrow(
+        self, _query: str, actor_id: str, filter_id: str, key: str
+    ) -> dict[str, Any] | None:
+        raw = self._table.get((actor_id, filter_id, key))
+        if raw is None:
+            return None
+        return {"value": json.loads(raw)}
+
+    async def execute(
+        self, _query: str, actor_id: str, filter_id: str, key: str, value: str
+    ) -> None:
+        self._table[(actor_id, filter_id, key)] = value
+
+
+class _FakeAcquire:
+    def __init__(self, conn: _FakeCodecConnection) -> None:
+        self._conn = conn
+
+    async def __aenter__(self) -> _FakeCodecConnection:
+        return self._conn
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+class _FakeCodecPool:
+    """Stand-in for ``asyncpg.Pool`` whose connections carry the production
+    jsonb codec — backs a real ``FilterStateStore`` without a live Postgres
+    instance (worktree tests must not touch the live DB)."""
+
+    def __init__(self) -> None:
+        self._table: dict[tuple[str, str, str], str] = {}
+        self._conn = _FakeCodecConnection(self._table)
+
+    def acquire(self) -> _FakeAcquire:
+        return _FakeAcquire(self._conn)
+
+
+async def test_filter_state_store_scalar_string_roundtrips_through_codec_pool() -> None:
+    """Pre-fix: raised json.decoder.JSONDecodeError on the read — the codec
+    already decoded the stored JSON string once, and get() double-decoded."""
+    from legba.runtime.state import FilterStateStore
+
+    pool = _FakeCodecPool()
+    store = FilterStateStore(pool, actor_id="source.gdelt.files", filter_id="filter")
+
+    await store.set("gdelt_files_last_export_ts", "2026-07-24T09:45:00+00:00")
+    result = await store.get("gdelt_files_last_export_ts")
+    assert result == "2026-07-24T09:45:00+00:00"
+
+
+async def test_filter_state_store_dict_value_still_roundtrips_through_codec_pool() -> None:
+    """Guards the pre-existing dict-cursor path every OTHER source handler
+    uses (rss/geojson/json_api/...) — the fix must not regress it."""
+    from legba.runtime.state import FilterStateStore
+
+    pool = _FakeCodecPool()
+    store = FilterStateStore(pool, actor_id="a", filter_id="f")
+
+    await store.set("cursor", {"etag": "abc", "consecutive_304": 0})
+    result = await store.get("cursor")
+    assert result == {"etag": "abc", "consecutive_304": 0}
+
+
+async def test_filter_state_store_none_and_number_values_roundtrip() -> None:
+    """Non-dict/list, non-str scalars (int/float/bool/None) must also pass
+    through untouched — the pre-fix code would have tried json.loads() on
+    an already-decoded int/float/bool too (a related latent bug, never
+    reported live only because no handler happened to store one)."""
+    from legba.runtime.state import FilterStateStore
+
+    pool = _FakeCodecPool()
+    store = FilterStateStore(pool, actor_id="a", filter_id="f")
+
+    for key, value in (("n", 42), ("f", 3.5), ("b", True), ("z", None)):
+        await store.set(key, value)
+    assert await store.get("n") == 42
+    assert await store.get("f") == 3.5
+    assert await store.get("b") is True
+    # A stored None round-trips as a cache miss (matches InMemoryStateStore /
+    # every source handler's `if not raw: ...` no-prior-cursor convention).
+    assert await store.get("z") is None
+
+
+async def test_gdelt_files_cursor_read_survives_codec_decoded_scalar() -> None:
+    """End-to-end through the real handler: seed the cursor exactly as the
+    live 2026-07-24 incident left it after its one real success, then
+    confirm the very next poll (lastupdate.txt still pointing at the same
+    export file — the steady "nothing new yet" state every 15-min tick was
+    landing in) reads it back without raising."""
+    from legba.runtime.state import FilterStateStore
+
+    pool = _FakeCodecPool()
+    store = FilterStateStore(pool, actor_id="source.gdelt.files", filter_id="filter")
+    await store.set("gdelt_files_last_export_ts", "2026-07-24T09:45:00+00:00")
+
+    handler = GDELTFilesSourceHandler()
+    same_export_url = (
+        "http://data.gdeltproject.org/gdeltv2/20260724094500.export.CSV.zip"
+    )
+    mock = _MockResponses(
+        {
+            handler.config.lastupdate_url: _text_response(
+                f"12345 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa {same_export_url}\n"
+            ),
+        }
+    )
+    _patch_client(handler, mock)
+    ctx = SourceContext(
+        target_id="target.test.world",
+        target_version="v0",
+        source_id="source.gdelt.files",
+        config=GDELTFilesConfig(),
+        state_store=store,
+        logger=logging.getLogger("test.gdelt_files"),
+    )
+
+    signals = await _collect(handler, ctx)
+
+    assert signals == []
+    health = await store.get("gdelt_files_health")
+    assert health["state"] == "healthy"
+    # Cursor is unchanged — the index still points at the file we're already
+    # past, so nothing new was walked.
+    assert await store.get("gdelt_files_last_export_ts") == "2026-07-24T09:45:00+00:00"

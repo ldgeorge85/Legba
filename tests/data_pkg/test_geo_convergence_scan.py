@@ -1,25 +1,25 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A7 — the ``geo_convergence_scan`` deterministic geographic convergence
-detector.
+"""A7 — the ``geo_convergence_scan`` module (geographic convergence binning).
 
-Pure tests (no DB): cell/country bin keys, the source-family fold, the score,
-the two-tier binning (country-centroid geocodes NEVER cell-binned), and the
-formation/dissolution edge core. Ephemeral-DB tests (``migrated_pg``): the
-seed-silently → fire-once-on-formation → never-refire → fire-once-on-
-dissolution watermark lifecycle against live SQL, and the diversity rule
-(a same-family pile-on never fires).
+2026-07-29 alert-plane consolidation: this module's alert EMISSION (the
+former standalone analyst's ``handle()``) folded into ``alert_trigger_scan``
+as its trigger class 6 (``trigger_class='geo_convergence'``). The DB-level
+seed → fire-once → never-refire lifecycle tests that used to live here now
+live in ``test_alert_trigger_scan.py`` (Trigger 6 section), exercising the
+SAME scenarios through ``alert_trigger_scan.handle()`` with payload-content
+assertions proving the fold preserved firing conditions + payload content
+byte-for-byte.
+
+Pure tests (no DB, unaffected by the fold): cell/country bin keys, the
+source-family fold, the score, the two-tier binning (country-centroid
+geocodes NEVER cell-binned), and the formation/dissolution edge core — the
+functions ``scan_geo_convergence`` still calls. Registry tests: the module's
+``handle()`` is now a deprecation stub (dispatchable, but a no-op).
 """
 from __future__ import annotations
 
-import json
-from datetime import datetime, timedelta, timezone
-from typing import Any
-from uuid import uuid4
-
-import asyncpg
 import pytest
-import pytest_asyncio
 
 from legba.data.analysts.deterministic import (
     OUTPUT_KIND_BY_SUB_HANDLER,
@@ -28,7 +28,6 @@ from legba.data.analysts.deterministic import (
 from legba.data.analysts.deterministic_handlers import (
     geo_convergence_scan as gcs,
 )
-from legba.data.config import PostgresConfig
 from legba.data.provenance.kinds import (
     STRUCTURAL_VERIFY_EXEMPT_ANALYSTS,
     OutputKind,
@@ -42,9 +41,11 @@ from legba.runtime.analyst_method import AnalystMethodResult
 
 
 def test_registered_as_finding_sub_handler_and_structural_exempt():
-    """The summary is a genuine FINDING (suppressed to trace-only on quiet
-    sweeps), so the handler sits in the STRUCTURAL_VERIFY_EXEMPT registry and
-    the drift guard's FINDING-set equality holds."""
+    """Unchanged by the fold: the sub_handler name stays dispatchable (the
+    deprecation stub's static registration is untouched), so the
+    STRUCTURAL_VERIFY_EXEMPT drift guard's FINDING-set equality still holds
+    even though the stub never actually emits a finding at runtime (it always
+    reports ``force_trace_only=True`` — see ``test_stub_is_a_quiet_noop``)."""
     assert SUB_HANDLERS["geo_convergence_scan"] is gcs.handle
     assert (
         OUTPUT_KIND_BY_SUB_HANDLER["geo_convergence_scan"]
@@ -53,9 +54,33 @@ def test_registered_as_finding_sub_handler_and_structural_exempt():
     assert "geo_convergence_scan" in STRUCTURAL_VERIFY_EXEMPT_ANALYSTS
 
 
-async def test_refuses_loud_without_pool():
-    with pytest.raises(RuntimeError, match="pg_pool"):
-        await gcs.handle([], {"sub_handler": "geo_convergence_scan"}, None)
+async def test_stub_is_a_quiet_noop():
+    """Post-fold, ``handle()`` is a deprecation stub: no pool required (it
+    reads/writes nothing), always force_trace_only, and its data block names
+    the fold destination — so it can never double-fire an alert alongside
+    alert_trigger_scan's folded scan sharing the same watermark rows."""
+    result = await gcs.handle(
+        [], {"sub_handler": "geo_convergence_scan"}, None
+    )
+    assert isinstance(result, AnalystMethodResult)
+    assert result.force_trace_only is True
+    assert result.finding.data["folded_into"] == "alert_trigger_scan"
+    assert result.finding.data["folded_trigger_class"] == gcs.TRIGGER_CLASS
+    assert result.usage == {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "reasoning_tokens": 0,
+    }
+
+    # Deps with NO pg_pool at all — still a no-op, never raises (unlike the
+    # pre-fold handler, which refused loud on a missing pool).
+    class _NoPoolDeps:
+        pass
+
+    result2 = await gcs.handle(
+        [], {"sub_handler": "geo_convergence_scan"}, _NoPoolDeps()
+    )
+    assert result2.force_trace_only is True
 
 
 # ---------------------------------------------------------------------------
@@ -218,316 +243,3 @@ def test_bin_label_states_cell_extent_never_a_point():
     assert gcs.bin_label("country:IQ", "IQ") == "IQ"
     assert gcs.bin_label("cell:33:44", "IQ") == "cell(33..34°, 44..45°) IQ"
     assert gcs.bin_label("cell:-24:-47", None) == "cell(-24..-23°, -47..-46°)"
-
-
-# ---------------------------------------------------------------------------
-# Ephemeral-DB rig
-# ---------------------------------------------------------------------------
-
-
-@pytest_asyncio.fixture
-async def pg_pool(migrated_pg: PostgresConfig):
-    pool = await asyncpg.create_pool(migrated_pg.dsn, min_size=1, max_size=4)
-    yield pool
-    await pool.close()
-
-
-@pytest_asyncio.fixture
-async def clean_slate(pg_pool):
-    """Fresh geo_convergence watermarks + no leftover fixture rows, so every
-    test gets its own seed → fire cycle."""
-    async with pg_pool.acquire() as conn:
-        await conn.execute(
-            "DELETE FROM alert_trigger_watermarks WHERE trigger_class = $1",
-            gcs.TRIGGER_CLASS,
-        )
-        await conn.execute(
-            "DELETE FROM analyst_outputs "
-            "WHERE analyst_id = 'geo_convergence_scan'"
-        )
-        await conn.execute(
-            "DELETE FROM signals WHERE source_id LIKE 'src.geotest.%'"
-        )
-        await conn.execute(
-            "DELETE FROM source_descriptors "
-            "WHERE descriptor_id LIKE 'src.geotest.%'"
-        )
-    yield
-
-
-class _FakeDispatcher:
-    def __init__(self) -> None:
-        self.payloads: list[Any] = []
-
-    async def fan_out(self, payload: Any) -> list[Any]:
-        self.payloads.append(payload)
-        return []
-
-
-class _Deps:
-    def __init__(self, pool: Any, dispatcher: Any) -> None:
-        self.pg_pool = pool
-        self.extras = {"alert_sink_dispatcher": dispatcher}
-
-
-async def _run(pool: Any, dispatcher: Any | None = None, **opts: Any):
-    deps = _Deps(pool, dispatcher if dispatcher is not None else _FakeDispatcher())
-    options = {
-        "sub_handler": "geo_convergence_scan",
-        "analyst_id": "geo_convergence_scan",
-        "run_id": str(uuid4()),
-        **opts,
-    }
-    result = await gcs.handle([], options, deps)
-    assert isinstance(result, AnalystMethodResult)
-    return result
-
-
-async def _alert_rows(conn: Any) -> list[Any]:
-    return await conn.fetch(
-        "SELECT id, title, severity, target_id, data "
-        "FROM analyst_outputs "
-        "WHERE kind = 'alert' AND analyst_id = 'geo_convergence_scan' "
-        "ORDER BY produced_at, id"
-    )
-
-
-def _row_data(row: Any) -> dict[str, Any]:
-    d = row["data"]
-    full = json.loads(d) if isinstance(d, str) else dict(d)
-    inner = full.get("data")
-    return inner if isinstance(inner, dict) else full
-
-
-async def _insert_source(conn: Any, source_id: str, family: str) -> None:
-    await conn.execute(
-        "INSERT INTO source_descriptors (descriptor_id, version, schema_uri, "
-        "is_head, kind, state, owner, name, body) "
-        "VALUES ($1, 'v0', 'legba/source/1.0.0', TRUE, 'rss', 'active', "
-        "'test', $1, $2::jsonb) "
-        "ON CONFLICT DO NOTHING",
-        source_id,
-        json.dumps({"scope": {"tags": [family]}}),
-    )
-
-
-async def _insert_signal(
-    conn: Any,
-    source_id: str,
-    *,
-    geo_tags: list[str] | None = None,
-    lat: float | None = None,
-    lon: float | None = None,
-    precision: str | None = None,
-    geo_source: str | None = None,
-    hours_ago: float = 1.0,
-) -> str:
-    sid = uuid4()
-    payload: dict[str, Any] = {"title": "t"}
-    geo_block: dict[str, Any] = {}
-    if lat is not None:
-        geo_block["lat"] = lat
-        geo_block["lon"] = lon
-    if precision is not None:
-        geo_block["precision"] = precision
-    if geo_source is not None:
-        geo_block["source"] = geo_source
-    if geo_block:
-        payload["geo"] = geo_block
-    ts = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
-    await conn.execute(
-        "INSERT INTO signals (id, source_id, payload, geo, fetched_at) "
-        "VALUES ($1, $2, $3::jsonb, $4::text[], $5)",
-        sid,
-        source_id,
-        json.dumps(payload),
-        geo_tags or [],
-        ts,
-    )
-    return str(sid)
-
-
-async def _seed_three_family_sources(conn: Any) -> None:
-    await _insert_source(conn, "src.geotest.quake", "gis")
-    await _insert_source(conn, "src.geotest.news", "news")
-    await _insert_source(conn, "src.geotest.tg", "social")
-    await _insert_source(conn, "src.geotest.news2", "news")
-    await _insert_source(conn, "src.geotest.health", "health")
-
-
-# ---------------------------------------------------------------------------
-# DB — watermark lifecycle
-# ---------------------------------------------------------------------------
-
-
-async def test_first_scan_seeds_silently_then_steady_state_is_quiet(
-    pg_pool, clean_slate
-):
-    async with pg_pool.acquire() as conn:
-        await _seed_three_family_sources(conn)
-        for src in ("src.geotest.quake", "src.geotest.news", "src.geotest.tg"):
-            await _insert_signal(conn, src, geo_tags=["IQ"])
-
-    r1 = await _run(pg_pool)
-    async with pg_pool.acquire() as conn:
-        assert await _alert_rows(conn) == []  # history never pages
-        wm = await conn.fetchrow(
-            "SELECT state FROM alert_trigger_watermarks "
-            "WHERE trigger_class = $1 AND watermark_key = 'country:IQ'",
-            gcs.TRIGGER_CLASS,
-        )
-    assert wm is not None
-    state = json.loads(wm["state"]) if isinstance(wm["state"], str) else wm["state"]
-    assert state["active"] is True
-    assert state["families"] == ["gis", "news", "social"]
-    # The seed run is a REAL finding (it says what was seeded)…
-    assert r1.force_trace_only is False
-    assert r1.finding.data["seeded"] is True
-
-    # …and the unchanged second scan is trace-only quiet (no refire).
-    r2 = await _run(pg_pool)
-    assert r2.force_trace_only is True
-    assert r2.finding.data["formed_fired"] == 0
-    async with pg_pool.acquire() as conn:
-        assert await _alert_rows(conn) == []
-
-
-async def test_formation_fires_once_with_contributors_then_never_refires(
-    pg_pool, clean_slate
-):
-    async with pg_pool.acquire() as conn:
-        await _seed_three_family_sources(conn)
-        # Below the bar at seed time: two families only.
-        await _insert_signal(conn, "src.geotest.quake", geo_tags=["SY"])
-        await _insert_signal(conn, "src.geotest.news", geo_tags=["SY"])
-    await _run(pg_pool)  # seeds (nothing formed)
-
-    async with pg_pool.acquire() as conn:
-        # Third DISTINCT family arrives → formation edge.
-        await _insert_signal(conn, "src.geotest.tg", geo_tags=["SY"])
-    dispatcher = _FakeDispatcher()
-    r2 = await _run(pg_pool, dispatcher)
-    assert r2.force_trace_only is False
-    assert r2.finding.data["formed_fired"] == 1
-
-    async with pg_pool.acquire() as conn:
-        rows = await _alert_rows(conn)
-    assert len(rows) == 1
-    row = rows[0]
-    assert row["severity"] == "medium"
-    data = _row_data(row)
-    assert data["event"] == "formed"
-    assert data["bin_key"] == "country:SY"
-    assert data["distinct_family_count"] == 3
-    assert sorted(data["families"]) == ["gis", "news", "social"]
-    # Payload lists the contributing signals: ids + sources + families.
-    contribs = data["contributing_signals"]
-    assert len(contribs) == 3
-    assert {c["source_id"] for c in contribs} == {
-        "src.geotest.quake", "src.geotest.news", "src.geotest.tg",
-    }
-    assert all(c["id"] and c["family"] for c in contribs)
-    assert len(dispatcher.payloads) == 1  # fanned outward once
-
-    # Persisting convergence: the next scan fires NOTHING.
-    r3 = await _run(pg_pool)
-    assert r3.force_trace_only is True
-    async with pg_pool.acquire() as conn:
-        assert len(await _alert_rows(conn)) == 1
-
-
-async def test_same_family_pileon_never_fires(pg_pool, clean_slate):
-    await _run(pg_pool)  # seed on an empty window
-    async with pg_pool.acquire() as conn:
-        await _seed_three_family_sources(conn)
-        # 12 signals, TWO sources, ONE family (news) → diversity bar unmet.
-        for _ in range(6):
-            await _insert_signal(conn, "src.geotest.news", geo_tags=["LY"])
-            await _insert_signal(conn, "src.geotest.news2", geo_tags=["LY"])
-    r2 = await _run(pg_pool)
-    assert r2.finding.data["formed_fired"] == 0
-    async with pg_pool.acquire() as conn:
-        assert await _alert_rows(conn) == []
-
-    # Two more DISTINCT families flip it.
-    async with pg_pool.acquire() as conn:
-        await _insert_signal(conn, "src.geotest.quake", geo_tags=["LY"])
-        await _insert_signal(conn, "src.geotest.health", geo_tags=["LY"])
-    r3 = await _run(pg_pool)
-    assert r3.finding.data["formed_fired"] == 1
-    async with pg_pool.acquire() as conn:
-        rows = await _alert_rows(conn)
-    assert len(rows) == 1
-    assert _row_data(rows[0])["distinct_family_count"] == 3
-
-
-async def test_cell_tier_excludes_country_centroid_geocodes(
-    pg_pool, clean_slate
-):
-    await _run(pg_pool)  # seed empty
-    async with pg_pool.acquire() as conn:
-        await _seed_three_family_sources(conn)
-        # Three families with point-trustworthy coordinates in one 1° cell
-        # (no geo country tags → the country tier stays out of the picture).
-        await _insert_signal(
-            conn, "src.geotest.quake",
-            lat=33.2, lon=44.1, geo_source="geometry", precision="country",
-        )
-        await _insert_signal(
-            conn, "src.geotest.news",
-            lat=33.8, lon=44.9, precision="municipality",
-        )
-        await _insert_signal(
-            conn, "src.geotest.tg",
-            lat=33.5, lon=44.5, precision="region",
-        )
-        # A country-precision nominatim point (country CENTROID) in the same
-        # cell MUST NOT enter the cell tier.
-        await _insert_signal(
-            conn, "src.geotest.health",
-            lat=33.5, lon=44.2, precision="country", geo_source="nominatim",
-        )
-    r2 = await _run(pg_pool)
-    assert r2.finding.data["formed_fired"] == 1
-    async with pg_pool.acquire() as conn:
-        rows = await _alert_rows(conn)
-    assert len(rows) == 1
-    data = _row_data(rows[0])
-    assert data["bin_kind"] == "cell"
-    assert data["bin_key"] == "cell:33:44"
-    # The centroid signal is excluded: 3 contributors, no 'health' family.
-    assert data["signal_count"] == 3
-    assert sorted(data["families"]) == ["gis", "news", "social"]
-
-
-async def test_dissolution_fires_once_then_quiet(pg_pool, clean_slate):
-    async with pg_pool.acquire() as conn:
-        await _seed_three_family_sources(conn)
-        for src in ("src.geotest.quake", "src.geotest.news", "src.geotest.tg"):
-            await _insert_signal(conn, src, geo_tags=["SO"])
-    await _run(pg_pool)  # seeds country:SO as active
-
-    async with pg_pool.acquire() as conn:
-        # The window empties out (signals age past 24h).
-        await conn.execute(
-            "UPDATE signals SET fetched_at = now() - interval '3 days' "
-            "WHERE source_id LIKE 'src.geotest.%'"
-        )
-    r2 = await _run(pg_pool)
-    assert r2.force_trace_only is False
-    assert r2.finding.data["dissolved_fired"] == 1
-    async with pg_pool.acquire() as conn:
-        rows = await _alert_rows(conn)
-    assert len(rows) == 1
-    row = rows[0]
-    assert row["severity"] == "info"
-    data = _row_data(row)
-    assert data["event"] == "dissolved"
-    assert data["bin_key"] == "country:SO"
-    assert sorted(data["previous_families"]) == ["gis", "news", "social"]
-
-    # Dissolution fired ONCE — the next scan is quiet.
-    r3 = await _run(pg_pool)
-    assert r3.force_trace_only is True
-    async with pg_pool.acquire() as conn:
-        assert len(await _alert_rows(conn)) == 1

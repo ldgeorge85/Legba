@@ -36,6 +36,7 @@ except ImportError:  # pragma: no cover — opensearch-py must be installed in-i
     async_bulk = None  # type: ignore[assignment]
 
 from .config import OpenSearchConfig
+from .retrieval_origin import resolve_retrieval_origin
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,11 @@ CORPUS_INDEX_MAPPING: dict[str, Any] = {
             "retention_class": {"type": "keyword"},
             "canonical_url": {"type": "keyword"},
             "license_class": {"type": "keyword"},
+            # R-3b / migration 0112 — WHERE this evidence was retrieved from,
+            # orthogonal to license_class (what we may keep) and source_class
+            # (editorial authority). Absent = a curated registered source; the
+            # facet only ever carries the non-default values.
+            "retrieval_origin": {"type": "keyword"},
             # numeric
             "source_credibility": {"type": "float"},
             # dates — fetched_at is a clean column; published_at is a payload
@@ -233,6 +239,22 @@ def signal_license_class(
     return _license_class(row, payload)
 
 
+def signal_retrieval_origin(
+    row: Mapping[str, Any], payload: Mapping[str, Any] | None = None,
+) -> str | None:
+    """Public retrieval-origin resolution for a ``signals`` row (mig 0112).
+
+    Delegates to :func:`legba.data.retrieval_origin.resolve_retrieval_origin`
+    — the ONE owner of the column-then-payload resolution — so this corpus
+    facet and the evidence-archiver's fail-closed retention gate read exactly
+    the same value. ``None`` = a curated registered source (the default for
+    every row written before the concept existed; no backfill).
+    """
+    if payload is None:
+        payload = _as_dict(row.get("payload"))
+    return resolve_retrieval_origin(row, payload)
+
+
 def signal_to_doc(row: Mapping[str, Any]) -> dict[str, Any]:
     """Project a ``signals`` row → an OpenSearch corpus doc.
 
@@ -268,6 +290,11 @@ def signal_to_doc(row: Mapping[str, Any]) -> dict[str, Any]:
         "retention_class": r.get("retention_class"),
         "canonical_url": r.get("canonical_url"),
         "license_class": _license_class(r, payload),
+        # R-3b — the retrieval-origin facet (migration 0112). Resolved by the
+        # ONE owner so this hint and the archiver's retention gate can never
+        # disagree; None for a curated source, which the drop-empties pass
+        # below removes from the doc entirely (honest absence, no backfill).
+        "retrieval_origin": signal_retrieval_origin(r, payload),
         # numeric / dates
         "source_credibility": _as_float(r.get("source_credibility")),
         "fetched_at": _iso(r.get("fetched_at")),
@@ -463,5 +490,7 @@ class OpenSearchStore:
 __all__ = [
     "CORPUS_INDEX_MAPPING",
     "OpenSearchStore",
+    "signal_license_class",
+    "signal_retrieval_origin",
     "signal_to_doc",
 ]

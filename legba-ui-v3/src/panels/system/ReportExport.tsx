@@ -31,6 +31,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { FileDown, Printer, X } from 'lucide-react'
 import { PanelChrome } from '@/components/PanelChrome'
+import { CopyableId } from '@/components/CopyableId'
 import { ApiError, exportCollection, type ExportArtifact } from '@/lib/api'
 import { MD_COMPONENTS } from '@/lib/markdownComponents'
 import { BASKET_MAX_ITEMS, useExportBasket } from '@/state/exportBasket'
@@ -188,9 +189,16 @@ export default function ReportExportPanel({ registration }: PanelProps) {
               <span className="shrink-0 rounded bg-slate-700 px-1 text-slate-200">
                 {KIND_LABELS[i.kind] ?? i.kind}
               </span>
-              <span className="min-w-0 flex-1 truncate text-slate-200" title={i.id}>
-                {i.label ?? i.id}
-              </span>
+              {i.label ? (
+                <span className="min-w-0 flex-1 truncate text-slate-200" title={i.id}>
+                  {i.label}
+                </span>
+              ) : (
+                // U-5 — no label to show: a raw record id is a UUID in most
+                // cases; truncate + offer a copy affordance rather than
+                // spilling the full id into the basket row.
+                <CopyableId id={i.id} className="min-w-0 flex-1 text-slate-200" />
+              )}
               <button
                 onClick={() => remove(i.kind, i.id)}
                 className="shrink-0 text-slate-500 hover:text-slate-200"

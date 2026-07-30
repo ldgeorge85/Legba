@@ -268,6 +268,59 @@ def test_config_rejects_zero_lookback():
 
 
 # ---------------------------------------------------------------------------
+# config.channels.classes — per-channel source_class override
+# (2026-07-29 Ansar Allah decision: ride the existing account instead of a
+# second Telethon session/account; classed per-channel rather than at the
+# whole-descriptor scope.source_class).
+# ---------------------------------------------------------------------------
+
+
+def test_config_classes_defaults_to_empty():
+    cfg = _make_config()
+    assert cfg.classes == {}
+
+
+def test_config_classes_accepts_every_vocabulary_value():
+    cfg = _make_config(
+        channels=["Almasirah_En", "ansarollah1", "bloomberg"],
+        classes={"Almasirah_En": "state_media", "ansarollah1": "state_media"},
+    )
+    assert cfg.classes == {"Almasirah_En": "state_media", "ansarollah1": "state_media"}
+
+
+def test_config_classes_rejects_off_vocabulary_class():
+    """Choice-locked to the S1-T8 source_class vocabulary — an unknown class
+    must fail LOUD at config validation (registration), not silently at
+    signal-write time."""
+    with pytest.raises(ValidationError):
+        _make_config(
+            channels=["Almasirah_En"],
+            classes={"Almasirah_En": "opinion"},  # not in the Literal vocabulary
+        )
+
+
+def test_config_classes_rejects_channel_not_in_channels_list():
+    """An override key that names a channel absent from `channels` (a typo,
+    or a channel later removed from `channels` without cleaning up its
+    override) must fail loud, not silently vanish."""
+    with pytest.raises(ValidationError):
+        _make_config(
+            channels=["bloomberg"],
+            classes={"Almasirah_En": "state_media"},
+        )
+
+
+def test_config_classes_keys_normalize_at_prefix_and_scheme():
+    """A classes key written with '@' (or 'telegram://') normalizes the same
+    way `channels` handles do, so it still matches the channel it names."""
+    cfg = _make_config(
+        channels=["@Almasirah_En"],
+        classes={"@Almasirah_En": "state_media"},
+    )
+    assert cfg.classes == {"Almasirah_En": "state_media"}
+
+
+# ---------------------------------------------------------------------------
 # Handler identity
 # ---------------------------------------------------------------------------
 

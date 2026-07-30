@@ -44,25 +44,17 @@ sources:
     subscription:
       canonical_only: true
 
-# ONE inline analyst on this thematic target — same inline_target assessor the
-# G20 country targets carry, now reading the iran-war-focused slice.
-analyst:
-  use: inline_target
-  cadence:
-    fallback_schedule: "*/15 * * * *"
-  method:
-    kind: llm_planner
-    prompt_module: legba.runtime.analyst_method:_DEFAULT_SYSTEM
-    budget_tokens_per_day: 200000
-    llm:
-      primary:
-        factory_kind: stack_ref
-        raw: llm.primary.openai_compat
-        expected_family: llm_provider
-  grounding:
-    enabled: true
-    scope: [target_geo, slice_entities]
-    sources: [substrate, situations]
-    max_facts: 30
+# Defect C (X-1 dead-config, 2026-07-29): this target used to carry an inline
+# `analyst:` block here, believed (from registration onward) to be the thing
+# that ran an inline_target assessor over this thematic slice. It never did —
+# the runtime never builds a running analyst from a target's inline `method`/
+# `cadence`/`grounding`/`rubric` config (only `analyst.analyst_ref`, a pointer
+# to a SEPARATELY registered analyst descriptor, is ever consulted by
+# legba.runtime.source_first_runtime._analyst_ids_for_target — and this block
+# never set one). Zero outputs were ever produced from it. Units subscribe to
+# a target via a separate analyst descriptor's `subscription.targets`
+# predicate (e.g. `has_tag(...)`) instead — see descriptors/analyst_*.yaml.
+# The registry now warns loudly at registration time if a target body still
+# carries this block (legba.data.registry.descriptor._validate_or_dlq).
 
 allowed_action_packs: []

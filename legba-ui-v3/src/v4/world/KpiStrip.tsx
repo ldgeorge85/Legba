@@ -102,11 +102,11 @@ export default function KpiStrip() {
 
   const signalsValue =
     liveSignalCount != null && liveSignalCount > 0
-      ? formatExact(liveSignalCount)
+      ? exact(liveSignalCount)
       : formatPage(signals.data, signals.isLoading)
   const findingsValue =
     liveFindingCount != null && liveFindingCount > 0
-      ? formatExact(liveFindingCount)
+      ? exact(liveFindingCount)
       : formatPage(findings.data, findings.isLoading)
 
   const activeSituations = (situations.data ?? []).filter(
@@ -136,13 +136,13 @@ export default function KpiStrip() {
       <KpiCard label="Findings 24h" value={findingsValue} delta={findingsDelta} loading={signalLoading(findings.isLoading, liveFindingCount)} />
       <KpiCard
         label="Active situations"
-        value={situations.isLoading ? '—' : formatExact(activeSituations)}
+        value={situations.isLoading ? LOADING : exact(activeSituations)}
         delta={situationsDelta}
         loading={situations.isLoading}
       />
       <KpiCard
         label="Sources active"
-        value={sources.isLoading ? '—' : formatExact(activeSources)}
+        value={sources.isLoading ? LOADING : exact(activeSources)}
         delta={sourcesDelta}
         loading={sources.isLoading}
       />
@@ -160,15 +160,33 @@ function signalLoading(isLoading: boolean, live: number | undefined): boolean {
   return live == null && isLoading
 }
 
-function formatExact(n: number): string {
-  return n.toLocaleString()
+/** A KPI's display text plus whether it's an honest page-cap, not a live count. */
+interface KpiValue {
+  text: string
+  /** True when `text` is `${PAGE_LIMIT}+` — a display cap (the query limit),
+   *  never a real total. `KpiCard` surfaces this via a tooltip so the "+"
+   *  reads as what it is instead of looking like a suspiciously round count. */
+  capped: boolean
 }
 
-/** Page length, suffixed `+` when the page is saturated (true count is higher). */
-function formatPage(rows: { id: string }[] | undefined, loading: boolean): string {
-  if (loading || rows == null) return '—'
+const LOADING: KpiValue = { text: '—', capped: false }
+
+function exact(n: number): KpiValue {
+  return { text: n.toLocaleString(), capped: false }
+}
+
+/**
+ * Page length, suffixed `+` when the page hit `PAGE_LIMIT` (the true count is
+ * higher — the substrate has no cheap count endpoint for this read, see the
+ * module doc). Marked `capped` so the card can say so out loud rather than
+ * leaving "500+" to read as an oddly-precise number.
+ */
+function formatPage(rows: { id: string }[] | undefined, loading: boolean): KpiValue {
+  if (loading || rows == null) return LOADING
   const n = rows.length
-  return n >= PAGE_LIMIT ? `${n.toLocaleString()}+` : n.toLocaleString()
+  return n >= PAGE_LIMIT
+    ? { text: `${n.toLocaleString()}+`, capped: true }
+    : { text: n.toLocaleString(), capped: false }
 }
 
 function KpiCard({
@@ -178,7 +196,7 @@ function KpiCard({
   loading,
 }: {
   label: string
-  value: string
+  value: KpiValue
   delta?: number | null
   loading: boolean
 }) {
@@ -192,9 +210,16 @@ function KpiCard({
           className={cn(
             'text-2xl font-semibold tabular-nums leading-none text-slate-100',
             loading && 'text-slate-500',
+            value.capped && 'cursor-help decoration-dotted decoration-slate-500 underline underline-offset-4',
           )}
+          title={
+            value.capped
+              ? `${PAGE_LIMIT.toLocaleString()}+ is a display cap (the query limit) — the true count is higher, not a live total`
+              : undefined
+          }
+          data-testid={value.capped ? 'world-kpi-capped' : undefined}
         >
-          {value}
+          {value.text}
         </span>
         {delta != null && delta !== 0 && (
           <span

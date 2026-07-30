@@ -1,0 +1,89 @@
+# Supply-chain domain — top-10 first registrations (2026-07-29). Draft
+# SourceDescriptor. Ships DRAFT (operator activates).
+#
+# REGISTRATION STEP (main session): register via a Wave-A-style direct-DB
+# registrar — see scripts/bringup_register_supply_chain_sources.py in this
+# same commit — then, on the live instance:
+#   docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
+#     python scripts/bringup_register_supply_chain_sources.py
+# This descriptor is a brand-new id (no live head exists), so registration
+# lands it at `draft`; the operator activates (draft -> configured -> active)
+# after verifying the route live on the instance, per the S-1/Wave-A contract.
+#
+# Panama Canal Authority (ACP) — the ONLY working official chokepoint-authority
+# feed found in the 2026-07-29 supply-chain source sweep
+# (planning/SUPPLY_CHAIN_SOURCES_2026-07-29.md §2.A, §5 rank #2). Feeds the
+# `lane_panama` Tier-B (draft) desk in the supply-chain pack plan
+# (planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §1.2, §5.2 slot M-2) — this is
+# that slot's fill. Verified live 2026-07-29: HTTP 200, items through
+# 2026-07-24 (site's most recent at capture), robots.txt clean, free/no-auth.
+#
+# source_class: official — ACP is Panama's own autonomous government canal
+# operator (like Kremlin.ru / State Dept / EIA): a primary-source publisher,
+# not a wire/press outlet. Credibility host pancanal.com (seeded 0.82/gov by
+# the registrar) — operational/administrative announcements, not a political
+# mouthpiece, so scored well above Kremlin's 0.35 but in the official/gov band.
+
+identity:
+  id: source.pancanal.news
+  name: Panama Canal Authority (ACP) — News
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: supply_chain_top10
+  created: "2026-07-29T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  # Panama-specific chokepoint authority; geo scopes the source so lane_panama
+  # (and any Panama-desk target) wires it, mirrors the taipeitimes/38north
+  # single-country-voice convention.
+  geo: [PA]
+  languages: [en]
+  tags: [supply_chain, maritime, canal, gov]
+  source_class: official
+
+acquisition: poll
+
+cadence:
+  # "near-daily" cadence per the source sweep — the every-6h "daily-tier" bucket
+  # (matches worldnuclearnews/armscontrol/un_press), not the every-2h wire bucket.
+  schedule:
+    factory_kind: cron
+    raw: "46 4-23/6 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://pancanal.com/en/feed/"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming the
+    # route yields full article text (mirrors the Wave-A conservative default).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

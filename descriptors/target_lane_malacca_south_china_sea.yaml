@@ -1,0 +1,85 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Supply-chain pack — Tier-A desk 3/6: the Malacca Strait / South China Sea
+# corridor. planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §1.1.
+#
+# The full shape rationale (the 360-row pre-filter, why scope.geo is the SQL
+# pushdown and contains_any only a refiner, why no US in the geo set, why no
+# inline `analyst:` block, why no g20/watch tag, why no source_id pin) is written
+# out once in descriptors/target_lane_hormuz.yaml — read that header first.
+#
+# WHY THIS DESK: the densest container/energy corridor on earth, and it feeds
+# directly off existing Indo-Pacific desk coverage (11 `indo_pacific`-tagged
+# sources). It is also the lane where a geopolitics escalation head is most
+# CAUSALLY load-bearing — i.e. the best cross-domain read demo for
+# supply_chain_composition (plan §3).
+#
+# MEASURED: ~275 canonical rows / 24h against the geo set below — ok headroom
+# under the 360 cap at a 24h window (it does NOT fit at 72h).
+#
+# Ships `state: draft`; activation is a deliberate main-session FSM step after
+# scripts/preflight_supply_chain_lanes.py.
+
+identity:
+  id: lane_malacca_south_china_sea
+  name: "Lane — Malacca Strait & South China Sea"
+  schema_uri: legba/target/2.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  inherits: []
+  state: draft
+  owner: supply_chain_pack
+  created: "2026-07-29T00:00:00Z"
+
+scope:
+  domain: thematic
+  themes: [supply_chain, maritime, chokepoint, shipping, indo_pacific]
+  # THE SQL PUSHDOWN — the strait's littoral states + the SCS claimants whose
+  # coast-guard/transit action moves the corridor. No US (plan §0.3).
+  geo: [SG, MY, ID, PH, VN, TW, CN]
+  entity_classes:
+    - country
+    - organization
+    - corporation
+    - infrastructure
+    - commodity
+    - location
+    - international_org
+    - event_series
+    - person
+    - military_unit
+    - armed_group
+    - concept
+  relationship_types:
+    - TradesWith
+    - SanctionsAgainst
+    - HostileTo
+    - OperatesIn
+    - LocatedIn
+    - PartOf
+    - Targets
+    - MilitaryPresenceIn
+    - PartnersWith
+    - CompetesWith
+  time_horizon_days: 90
+  predicate: >-
+    contains_any(["malacca", "south china sea", "strait", "taiwan strait",
+                  "shipping", "vessel", "tanker", "container", "port",
+                  "coast guard", "transit", "blockade", "quarantine"])
+  tags: [supply_chain, disruption, lane]
+
+sources:
+  - source_selector:
+      tags: [news]
+      kinds: [rss]
+      owner_tenant: shared
+    subscription:
+      canonical_only: true
+
+allowed_action_packs: []
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  routing: []

@@ -1,0 +1,167 @@
+# Claim Watch analyst descriptor (KW-3 — flag-only new-evidence-vs-open-question
+# matcher).
+#
+# A `deterministic`-kind META analyst that, on a ~30-minute cadence, matches
+# NEW signals (since a durable cursor watermark) against the standing
+# OPEN-QUESTION set (`hypotheses` rows with status='open_question') on three
+# fused planes and side-writes APPEND-ONLY markers — never content:
+#
+#   * bearing_edges (migration 0107) — "new evidence bears on old question":
+#     one row per (signal, question) match at/above the fused threshold, with
+#     the contributing planes {vector, entity, geo}, the fused weight,
+#     provenance_class='live' and the matcher version. UNIQUE (src, dst, kind)
+#     + ON CONFLICT DO NOTHING = idempotent re-runs.
+#   * review_flags (migration 0107) — ONLY for matched questions that trace to
+#     LIVE (non-superseded) products via a FORWARD walk over
+#     output_consumption (migration 0106); one OPEN flag per (consumer,
+#     question) pair (the partial unique index is the writer idempotency).
+#
+# Matching planes, fused as
+#   (0.50*vector + entity_component(n) + 0.10*geo) * age_factor
+# against a 0.45 threshold (a sub-threshold pair writes NOTHING), where n is
+# the SPECIFICITY-WEIGHTED sum of shared canonical entities and
+# entity_component grades 0.20 for the first + 0.18 per further one, capped
+# at 3.
+#
+# The entity plane is GRADED, not boolean, and that is the conservatism of the
+# whole model: ONE shared entity is desk co-membership, not evidence. On a
+# country desk "this signal mentions Iran and is geo-Iran" against "an open
+# question about Iran" is close to trivially true — the KW-3 first-live run
+# proved it, matching ~2.2 questions per incoming signal until the per-run
+# edge cap was the only thing containing it. So 1 entity + geo = 0.30 (NO
+# match), 2 entities + geo = 0.48 (match), 3 entities = 0.56 (match), and a
+# vector at the 0.60 floor + 1 entity = 0.50 (match). A match therefore always
+# requires either semantic support or genuinely strong entity evidence.
+#
+# ...and each shared entity counts its desk-relative SPECIFICITY rather than a
+# flat 1, because grading the COUNT was not enough. The first live 2.0.0 run
+# wrote 185 edges of which 150 sat at exactly 0.560 — the 3-entity cap, entity
+# plane alone: the same desk co-membership under three names, since a signal
+# mentioning Iran, Khamenei and the IRGC shares three entities with nearly
+# every question on the Iran desk. So an entity's weight falls from 1.0 to a
+# 0.25 floor as its document frequency across THAT desk's questions rises past
+# 0.50 — an IDF computed from the question set the run already loaded, no new
+# table and no new query. It only ever LOWERS a weight (so every conservatism
+# property above is unchanged), and it is INERT on a desk with fewer than 5
+# scanned questions, where df is not estimable.
+#   * vector — the signal's ALREADY-STORED embedding (signal_embedder →
+#     Qdrant legba_signals, point id = signal id) vs the question thesis
+#     embedding (embed-on-first-sight, in-process cache; bounded per-run embed
+#     budget). Plane REUSE: the deps builder threads the SAME store + hosted
+#     embedder it wires for signal_embedder; vectors are read back in bounded
+#     chunks. Unwired/absent/uncovered → the plane contributes 0 and matching
+#     rests on the entity plane — but NEVER silently: signal_vectors_found /
+#     signal_vectors_missing / vector_plane_errors are counted separately and
+#     vector_plane_starved goes true (with a WARNING) when a WIRED plane
+#     covers nothing. The first-live incident was exactly that shape.
+#   * entity — canonical entity overlap between the signal's resolved links
+#     (merged-loser fold) / its NER surface names resolved through the
+#     existing election machinery, and the entities linked to the question's
+#     derived_from lineage signals (bounded two-hop walk).
+#   * geo — the signal's ISO2 geo tags ∩ the question desk's scope geo
+#     (hypotheses.target_id → head target_descriptors body.scope.geo).
+# Age dampening: older questions match colder (the fact-decay MISP retention
+# curve over question age, floored so strong multi-plane evidence can still
+# land on an old-but-open question).
+#
+# Guards: circularity (a signal already in the question's own evidence never
+# matches); per-run caps on signals / questions / edges / flags / embeds with
+# DEFERRAL (the cursor advances only past fully-processed signals, deferrals
+# reported honestly); zero LLM; no alerts; no writes to analysis outputs.
+#
+# CURSOR POLICY: an oldest-first watermark that advances only over
+# fully-processed signals CANNOT keep pace with a stream faster than one run's
+# throughput, and the shortfall compounds (measured on the first 2.0.0 run: 39
+# processed, 461 deferred, ~70 ingested per tick). Because signal_embedder
+# drains NEWEST-first, a permanently lagging cursor is also a permanently
+# STARVED vector plane — one defect, not two. Two mechanisms bound it, both
+# counted:
+#   * FRESHNESS HORIZON — the cursor may never sit further behind the stream
+#     head than max_lag_seconds (6h default). Beyond it the run counts the
+#     intervening signals exactly, WARNs, persists the cursor at the horizon
+#     and ABANDONS them: signals_skipped_ahead in the counters AND in the
+#     receipt title, skip_count_clipped if the bounded count probe saturated.
+#     A skip is a real loss and is reported as one — a day-old signal is worth
+#     far less than staying current, but never silently. Sized so ordinary
+#     catch-up never trips it (a 6h backlog is ~840 signals against ~430/tick
+#     of net catch-up); max_lag_seconds<=0 disables it for a deliberate grind.
+#   * TAIL-HOLD — the batch's trailing rows that the (15-minute, newest-first)
+#     embedder has not covered yet are HELD one tick rather than matched
+#     blind, so they score WITH their vectors (held_for_embedding; held, never
+#     dropped). Disarmed wherever it could wedge: only at the stream head (an
+#     un-truncated batch), only while the plane covers something, only inside
+#     a grace age, never the whole batch.
+# The edge-cap deferral still sets cursor_falling_behind and WARNs when a run
+# both truncates and defers — the horizon bounds that condition's cost, it
+# does not make it healthy. Raising edge_cap is still not the fix; the real
+# containment is the match rate above, so the SIGNAL cap (which advances the
+# cursor) binds rather than the EDGE cap (which strands it).
+#
+# Statefulness: the cursor rides the EXISTING alert_trigger_watermarks table
+# (migration 0091) as trigger_class='claim_watch' — no new watermark table.
+# The 0091 contract is mirrored: the first-ever run seeds the cursor at the
+# newest signal and writes NOTHING; the cursor advances only after the run's
+# writes landed.
+#
+# Target-agnostic + META: no `targets` selector → a SINGLE global run per
+# cadence tick; the handler reads directly via deps.pg_pool and ignores the
+# materialized input slice.
+#
+# Method:
+#   * kind = deterministic — pure SQL + vector reads, NO LLM, token usage
+#     always zero.
+#   * impl = the deterministic kind dispatcher module:run_method, which routes
+#     by `options.sub_handler`. Set explicitly AND id == sub-handler name so
+#     either resolution path works.
+#
+# Cadence:
+#   * fallback_schedule = "7-59/30 * * * *" — every 30 minutes at :07/:37
+#     (clear of the :03 trigger scan and the on-the-hour sweeps).
+#   * cooldown_seconds = 1440 — a 24-min floor below the 30-min tick, so an
+#     organic tick is never swallowed by its own cooldown (the
+#     alert_trigger_scan 0.8× ratio).
+#
+# State: draft in-tree — registration (scripts/bringup_register_claim_watch.py)
+# and the operator's activate flip are DEPLOY steps. Migrations 0091 + 0106 +
+# 0107 must be applied BEFORE first activation.
+
+identity:
+  id: claim_watch
+  name: Claim Watch
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: kw3_claim_watch
+
+subscription:
+  # No `targets` block → META analyst: one global matcher pass per cadence
+  # tick. The handler reads directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: claim_watch
+  # Deterministic kinds carry no LLM block and no per-day token budget — the
+  # question-text embeds ride the self-hosted embed plane ($0), bounded per
+  # run.
+
+cadence:
+  fallback_schedule: "7-59/30 * * * *"
+  cooldown_seconds: 1440
+
+# No output bindings: the run summary is TRACE_ONLY (audited in
+# analyst_traces); the REAL product — the append-only bearing_edges +
+# review_flags rows — is side-written by the handler. No alerts are emitted.
+outputs: []

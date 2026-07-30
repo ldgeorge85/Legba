@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">Legba</h1>
-<p align="center"><em>Cited, verified intelligence you can drill to source — over any feed you can reach, self-hostable.</em></p>
+<p align="center"><em>Cited, grounding-verified intelligence you can drill to source — over any feed you can reach, self-hostable.</em></p>
 <p align="center">
   <a href="docs/TOUR.md"><b>Tour</b></a> ·
   <a href="docs/FAQ.md"><b>FAQ</b></a> ·
@@ -16,8 +16,9 @@
 
 Legba watches a set of feeds and writes intelligence assessments you can check.
 Point it at sources (news RSS, GeoJSON hazard feeds, APIs, webhooks), declare
-what you care about (we run 25 country desks: the G20 plus Israel, Iran,
-Pakistan, Ukraine, Taiwan, North Korea), and it produces short analytic reads — each
+what you care about (we run 32 country desks — 19 G20 plus a 13-country watch
+tier; counts are generated — see [docs/RELEASE_STATE.md](docs/RELEASE_STATE.md)),
+and it produces short analytic reads — each
 claim cited to a source, each citation checked by a second verification pass,
 and everything auditable hop-by-hop back to the original item.
 
@@ -25,13 +26,14 @@ and everything auditable hop-by-hop back to the original item.
  feeds ──► signals ──► facts / entities / situations      (the knowledge substrate)
                           │
                           ▼
-              7 bounded reasoning units                    (one narrow question each,
-   leadership · energy · escalation · narrative ·          per country desk)
-   internal-stability · military-posture · economic-coercion
-                          │  cited [N] → verified
+              8 bounded reasoning units                    (one narrow question each,
+   leadership · energy · escalation · narrative ·          per country desk — except
+   internal-stability · military-posture · economic-coercion  proliferation, narrow:
+   · proliferation                                          8 nuclear-relevant desks)
+                          │  cited [N] → grounding-verified
                           ▼
-   country ──► region ──► world composition                (synthesis over VERIFIED
-        (+ a cross-desk thematic escalation read)           sub-claims only)
+   country ──► region ──► world composition                (synthesis over GROUNDING-
+        (+ a cross-desk thematic escalation read)           VERIFIED sub-claims only)
                           │
                           ▼
                    banded scorecard                        (one row per desk; missing
@@ -46,7 +48,7 @@ source. The whole chain — source item, citation, verify verdict, composed
 conclusion — is preserved and replayable after the fact. You run it yourself
 (AGPL, self-hosted, no SaaS dependencies), so you can inspect all of it.
 
-**What "verified" means — and doesn't.** The verify pass measures
+**What "grounding-verified" means — and doesn't.** The verify pass measures
 *groundedness*: "does this claim follow from the evidence it cites?" — not "is
 this claim true in the world?" Faithfulness is a `[0,1]` score folded into
 `effective_confidence = min(confidence, faithfulness)`; a fabricated claim gets
@@ -68,8 +70,8 @@ deploy/deploy.sh --seed                     # optional: + curated knowledge seed
 ```
 
 One script stands up the whole thing in the load-bearing order: schema →
-credential vault → the substrate stack → the 46-source catalog (plus the shared
-and state-media feeds) → the 25 country desks → the analyst set → runtime.
+credential vault → the substrate stack → the 100+ source catalog (plus the shared
+and state-media feeds) → the 32 country desks → the analyst set → runtime.
 Clean-slate only (no migration path from
 pre-pivot Legba). Step-by-step manual bring-up, a throwaway validation stack,
 and troubleshooting live in [docs/SETUP.md](docs/SETUP.md) and
@@ -93,9 +95,11 @@ read its citations, check its verification, and drill it to the source article.
 Sources own acquisition: a source polls (or receives a push), emits one
 canonical, target-agnostic **signal**, enriched once (language, geo, entities)
 and published once. A fan-out plane routes each signal to every subscribed
-**desk** by predicate — one BBC feed serves all 25 desks without
-re-fetching. Per desk, seven bounded **units** each answer one narrow question
-over a cited 72-hour slice plus accumulated context from the temporal knowledge
+**desk** by predicate — one BBC feed serves all 32 desks without
+re-fetching. Per desk, up to eight bounded **units** each answer one narrow
+question — seven run on every desk; the eighth, `proliferation_watch`, only on
+the 8 nuclear-relevant desks — over a cited 72-hour slice plus accumulated
+context from the temporal knowledge
 substrate (facts and relationships with validity windows — so it integrates
 over weeks, not just today, and stale model priors get overridden). Unit
 findings pass the **verify gate**; only verified sub-claims compose upward into
@@ -112,7 +116,7 @@ carries lineage (`derived_from`) plus a SHA-256 receipt chain, walkable via
 - **A dozen-plus source kinds, one signal shape** — `rss`, `geojson`,
   `json_api`, `gdelt_query`, `acled`, `opensanctions`, `scraper`, `firecrawl`,
   `telegram_channel`, `generic_webhook`, more ([catalog](docs/DATA_SOURCES.md)).
-- **The verified analysis spine** — units → compositions → scorecard, with the
+- **The grounding-verified analysis spine** — units → compositions → scorecard, with the
   faithfulness gate between every layer ([how to read one](docs/TOUR.md)).
 - **Provenance you can walk** — lineage API + receipt chains
   ("chain-consistent (single-node)" — an honest badge, not a tamper-proof claim).

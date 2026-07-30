@@ -1,0 +1,929 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""X-1 — the declared option catalog for deterministic sub-handlers.
+
+**The defect this closes.** Every deterministic handler was written to read
+its thresholds out of the run ``options`` mapping
+(``options.get("per_desk_cap", DEFAULT_PER_DESK_CAP)`` and ~60 siblings), but
+no channel ever fed descriptor-sourced values into that mapping: the runtime
+built ``options`` from scratch at fire time (``dapr_actors``) and
+``MethodBlock`` was ``extra="forbid"`` with no ``options`` field. Every one of
+those knobs was therefore unreachable dead config — the in-source default
+always won, and several descriptors DOCUMENTED knobs they could not set.
+
+**The mechanism.** ``method.options`` on the analyst descriptor (see
+:class:`legba.data.schemas.analyst.MethodBlock`), merged into the run options
+at fire time by the runtime. Descriptor-borne, so it inherits the registry's
+versioning + content-hash + audit chain, and — because the runtime reads the
+descriptor from its registry DB ROW, not the YAML file — it is live-editable
+via ``PUT /api/v1/descriptors/analyst/{id}`` with no code edit, no schema
+change and no image rebuild, exactly like the action-pack side's
+``ToolSpec.config``.
+
+**The contract, in four parts.**
+
+1. *Defaults are byte-identical.* A descriptor with no ``method.options``
+   block contributes NOTHING to the run options mapping — not a key, not a
+   sentinel. Every handler's own ``options.get(key, DEFAULT)`` therefore
+   resolves to the same in-source constant it always did. This module
+   deliberately does **not** record each knob's default value: duplicating
+   those constants here would create exactly the unsynchronized-copy problem
+   the verify-floor already suffers (four drifting copies of 0.50). The
+   handler's own default is the single source of truth; the catalog describes
+   only the key's TYPE and admissible RANGE.
+
+2. *Unknown keys degrade LOUDLY.* A key the running code does not declare is
+   dropped, logged at WARNING, and noted on the run receipt
+   (``analyst_traces.intermediate_steps``) — never silently swallowed, and
+   never fatal. Fatal was rejected deliberately: registry rows outlive code,
+   so a knob renamed in a later release would otherwise brick activation for
+   every descriptor still carrying the old name — a fleet outage in exchange
+   for a cosmetic problem.
+
+3. *Values are validated.* A cap must be a positive int, a floor must sit in
+   [0, 1], an enum must name a declared choice. A value that fails its
+   invariant is dropped with the same loud-degrade treatment, so the handler
+   default stands rather than a nonsense threshold taking effect.
+
+4. *Runtime-owned keys are refused.* ``analyst_id`` / ``run_id`` /
+   ``target_id`` / ``sub_handler`` and friends are provenance the runtime
+   stamps; a descriptor that could overwrite them could forge lineage. They
+   are rejected as ``reserved_key`` regardless of the per-handler catalog, as
+   is any private ``_``-prefixed key (those are test hooks).
+
+Merge semantics, validated invariants and loud degrade-to-default are lifted
+straight from :mod:`legba.data.facts.decay`'s ``LEGBA_FACT_DECAY_CONFIG``
+overlay — the one place in the tree that had already solved this problem
+well. What the descriptor route adds over that JSON file is per-analyst
+scope (two descriptors sharing a sub-handler can differ), versioning, and no
+container recreate to change a value.
+
+Adding a knob to a handler? Declare it here in the same commit. An
+undeclared knob is not settable, which is the point: the catalog IS the
+operator-facing contract, and ``tests/data_pkg/test_handler_options_x1.py``
+holds it to the handlers' actual ``options.get`` call sites.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass
+from typing import Any, Literal, Mapping
+
+logger = logging.getLogger(__name__)
+
+
+__all__ = [
+    "HANDLER_OPTIONS",
+    "OptionReject",
+    "OptionResolution",
+    "OptionSpec",
+    "RESERVED_OPTION_KEYS",
+    "known_option_names",
+    "resolve_handler_options",
+]
+
+
+# ---------------------------------------------------------------------------
+# Reserved keys — runtime-owned, never descriptor-settable
+# ---------------------------------------------------------------------------
+
+#: Keys the runtime itself stamps into the run ``options`` mapping at fire
+#: time (``dapr_actors``): analyst/target provenance, the run id, the
+#: sub-handler route, the per-run agency binding, GATHER wiring, the demoted
+#: LLM ref, and the critic-context lookup. A descriptor MUST NOT be able to
+#: set any of them — ``analyst_id`` alone would let a descriptor write its
+#: side-effect rows under another analyst's name. Rejected as
+#: ``reserved_key`` ahead of any per-handler catalog check.
+RESERVED_OPTION_KEYS: frozenset[str] = frozenset({
+    # identity / provenance
+    "analyst_id",
+    "analyst_version",
+    "run_id",
+    "target_id",
+    "target_version",
+    "owner_tenant",
+    # dispatch + kind wiring
+    "sub_handler",
+    "gather_only",
+    "composition",
+    "thematic_dimension",
+    "contention_groups",
+    "source_analyst_ids",
+    # agency / GATHER plumbing
+    "agency_binding",
+    "gather_tool_bindings",
+    "gather_web_prompt_fragments",
+    "gather_write_prompt_fragments",
+    # LLM plane
+    "llm_ref",
+    "llm_demoted",
+    # critic-kind context (resolved from the analyzed analyst's descriptor)
+    "analyzed_output_id",
+    "analyzed_analyst_id",
+    "analyzed_model",
+    "allow_self_correlated",
+    "rubric",
+})
+
+
+# ---------------------------------------------------------------------------
+# Spec shape
+# ---------------------------------------------------------------------------
+
+OptionKind = Literal["int", "float", "bool", "str", "str_list"]
+
+#: Guards a string option that reaches an identifier position (a Qdrant
+#: collection name). Conservative on purpose.
+_IDENT_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+
+
+@dataclass(frozen=True)
+class OptionSpec:
+    """One declared, operator-settable knob on one deterministic handler.
+
+    Carries the key's TYPE and admissible RANGE — never its default. The
+    handler's own ``options.get(name, DEFAULT)`` remains the sole source of
+    truth for the default, so an absent option is byte-identical to today
+    by construction and no constant is copied twice.
+    """
+
+    name: str
+    kind: OptionKind
+    doc: str
+    minimum: float | None = None
+    maximum: float | None = None
+    #: Inclusive-lower by default; set False for a strict ``> minimum`` bound
+    #: (e.g. a timeout that must be positive, not merely non-negative).
+    minimum_inclusive: bool = True
+    choices: tuple[str, ...] | None = None
+    #: Compiled guard for ``str`` kinds that reach an identifier position.
+    pattern: re.Pattern[str] | None = None
+
+    def validate(self, value: Any) -> tuple[bool, Any, str]:
+        """Return ``(ok, coerced_value, cause)``. ``cause`` is "" when ok."""
+        if self.kind == "bool":
+            if not isinstance(value, bool):
+                return False, None, "expected bool"
+            return True, value, ""
+
+        if self.kind == "int":
+            # bool is an int subclass in Python — refuse it explicitly so a
+            # `true` in YAML can never become a cap of 1.
+            if isinstance(value, bool) or not isinstance(value, int):
+                return False, None, "expected int"
+            return self._check_range(float(value), value)
+
+        if self.kind == "float":
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return False, None, "expected number"
+            return self._check_range(float(value), float(value))
+
+        if self.kind == "str":
+            if not isinstance(value, str) or not value.strip():
+                return False, None, "expected non-empty string"
+            if self.choices is not None and value not in self.choices:
+                return False, None, f"not one of {list(self.choices)}"
+            if self.pattern is not None and not self.pattern.match(value):
+                return False, None, "does not match the allowed pattern"
+            return True, value, ""
+
+        if self.kind == "str_list":
+            if not isinstance(value, (list, tuple)):
+                return False, None, "expected a list of strings"
+            out: list[str] = []
+            for item in value:
+                if not isinstance(item, str) or not item.strip():
+                    return False, None, "expected a list of non-empty strings"
+                if self.choices is not None and item not in self.choices:
+                    return False, None, f"'{item}' not one of {list(self.choices)}"
+                out.append(item)
+            return True, out, ""
+
+        return False, None, f"unsupported option kind {self.kind!r}"
+
+    def _check_range(self, as_float: float, coerced: Any) -> tuple[bool, Any, str]:
+        if self.minimum is not None:
+            if self.minimum_inclusive:
+                if as_float < self.minimum:
+                    return False, None, f"must be >= {self.minimum}"
+            elif as_float <= self.minimum:
+                return False, None, f"must be > {self.minimum}"
+        if self.maximum is not None and as_float > self.maximum:
+            return False, None, f"must be <= {self.maximum}"
+        return True, coerced, ""
+
+
+@dataclass(frozen=True)
+class OptionReject:
+    """One dropped option key + why. Rides the run receipt verbatim."""
+
+    key: str
+    cause: str  # unknown_key | reserved_key | private_key | invalid_value |
+    #             unknown_handler
+    detail: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {"key": self.key, "cause": self.cause, "detail": self.detail}
+
+
+@dataclass(frozen=True)
+class OptionResolution:
+    """Outcome of validating one descriptor's ``method.options`` block."""
+
+    accepted: dict[str, Any]
+    rejected: tuple[OptionReject, ...]
+
+    @property
+    def degraded(self) -> bool:
+        return bool(self.rejected)
+
+
+# ---------------------------------------------------------------------------
+# Shared spec constructors (kept terse — the catalog below is long)
+# ---------------------------------------------------------------------------
+
+
+def _pos_int(name: str, doc: str, *, maximum: float | None = None) -> OptionSpec:
+    """A cap/limit: an int >= 1."""
+    return OptionSpec(name, "int", doc, minimum=1, maximum=maximum)
+
+
+def _nonneg_int(name: str, doc: str, *, maximum: float | None = None) -> OptionSpec:
+    return OptionSpec(name, "int", doc, minimum=0, maximum=maximum)
+
+
+def _unit_float(name: str, doc: str) -> OptionSpec:
+    """A probability / score floor: a number in [0.0, 1.0]."""
+    return OptionSpec(name, "float", doc, minimum=0.0, maximum=1.0)
+
+
+def _nonneg_float(name: str, doc: str, *, maximum: float | None = None) -> OptionSpec:
+    return OptionSpec(name, "float", doc, minimum=0.0, maximum=maximum)
+
+
+def _pos_float(name: str, doc: str, *, maximum: float | None = None) -> OptionSpec:
+    return OptionSpec(
+        name, "float", doc, minimum=0.0, minimum_inclusive=False, maximum=maximum
+    )
+
+
+def _flag(name: str, doc: str) -> OptionSpec:
+    return OptionSpec(name, "bool", doc)
+
+
+#: A year of hours — the ceiling on every "window/lookback in hours" knob, so
+#: a fat-fingered value cannot turn a bounded scan into a full-table walk.
+_MAX_WINDOW_HOURS = 8760
+#: Ten years of days, same rationale.
+_MAX_WINDOW_DAYS = 3650
+
+
+def _window_hours(name: str, doc: str) -> OptionSpec:
+    return OptionSpec(name, "int", doc, minimum=1, maximum=_MAX_WINDOW_HOURS)
+
+
+def _window_days(name: str, doc: str) -> OptionSpec:
+    return OptionSpec(name, "int", doc, minimum=1, maximum=_MAX_WINDOW_DAYS)
+
+
+# ---------------------------------------------------------------------------
+# THE CATALOG — sub-handler name → its declared knobs
+# ---------------------------------------------------------------------------
+#
+# Keyed by the ``SUB_HANDLERS`` name (which is what the runtime resolves into
+# ``options['sub_handler']``), NOT by module name — two sub-handlers can share
+# a module (signals_retention / analyst_traces_retention both delegate to
+# ``_retention_sweep``) and must be independently configurable.
+#
+# An entry with an EMPTY tuple is a deliberate, tested statement: that handler
+# reads no operator-settable option today. It is not an oversight, and it
+# still degrades loudly if a descriptor tries to set one.
+
+HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
+    # -- alerting / triggers -------------------------------------------------
+    "alert_trigger_scan": (
+        _pos_int(
+            "per_desk_cap",
+            "Max alerts emitted per desk per scan, worst-first; the remainder "
+            "folds into ONE honest per-desk rollup whose members' watermarks "
+            "still advance.",
+        ),
+        _pos_int(
+            "per_watch_cap",
+            "Max watchlist_hit alerts per watch per scan, applied BEFORE the "
+            "shared per-desk cap.",
+        ),
+        _unit_float(
+            "effective_conf_floor",
+            "The verified bar: min(confidence, faithfulness) must clear this "
+            "for a finding/contention to be alertable.",
+        ),
+        _window_hours(
+            "finding_window_hours",
+            "verified_finding scan window; wider than the cadence so a "
+            "critique landing after its finding is still seen.",
+        ),
+        OptionSpec(
+            "baseline_days",
+            "int",
+            "baseline_deviation: trailing same-desk baseline depth in 24h "
+            "buckets.",
+            minimum=2,
+            maximum=_MAX_WINDOW_DAYS,
+        ),
+        _nonneg_float(
+            "baseline_sigma",
+            "baseline_deviation: exceedance threshold in sigmas over the "
+            "trailing baseline mean.",
+            maximum=100.0,
+        ),
+        _window_hours(
+            "geo_window_hours",
+            "geo_convergence: rolling window of geolocated signals binned per "
+            "scan.",
+        ),
+        OptionSpec(
+            "geo_min_distinct_families",
+            "int",
+            "geo_convergence: distinct source families that must converge in "
+            "one bin before it fires (diversity is the signal).",
+            minimum=2,
+            maximum=1000,
+        ),
+    ),
+    # The standalone geo scan is a deprecated no-op stub (the emission folded
+    # into alert_trigger_scan); its knobs live on the folded handler above.
+    "geo_convergence_scan": (),
+    # -- desk statistics -----------------------------------------------------
+    "desk_baseline": (
+        OptionSpec(
+            "baseline_days",
+            "int",
+            "Trailing baseline depth in 24h buckets (floored at 2 by the "
+            "handler regardless).",
+            minimum=2,
+            maximum=_MAX_WINDOW_DAYS,
+        ),
+        _nonneg_float(
+            "baseline_sigma",
+            "Uncertainty-band width in sigmas over the robust trailing mean.",
+            maximum=100.0,
+        ),
+    ),
+    "band_calibration_tracker": (
+        _pos_int(
+            "max_scan_rows",
+            "Scorecard rows examined per scan when minting band claims.",
+        ),
+        _window_days(
+            "lookback_days",
+            "Window over which resolved claims are aggregated for the "
+            "calibration readout.",
+        ),
+    ),
+    "calibration_tracking": (
+        OptionSpec(
+            "bin_count",
+            "int",
+            "Reliability-diagram bin count.",
+            minimum=2,
+            maximum=100,
+        ),
+        _pos_int("rolling_weeks", "Rolling window (weeks) for drift detection."),
+        _nonneg_float(
+            "drift_threshold",
+            "|drift_z| above this raises the drift alert.",
+            maximum=100.0,
+        ),
+        _window_days("lookback_days", "History window for the calibration pull."),
+        _nonneg_int(
+            "min_exogenous",
+            "Minimum exogenously-resolved samples before a Brier score is "
+            "reported at all.",
+        ),
+        _pos_int(
+            "forecast_acute_min_sample",
+            "Minimum acute-forecast sample before the segregated pilot Brier "
+            "is reported.",
+        ),
+        _flag(
+            "pull_from_substrate",
+            "Read resolved predictions from the substrate (off = the caller "
+            "supplies rows).",
+        ),
+        _flag("resolve_predictions", "Run the prediction-resolution leg."),
+        _flag("issue_acute_forecasts", "Run the acute-forecast ISSUE leg."),
+        _flag("resolve_acute_forecasts", "Run the acute-forecast RESOLVE leg."),
+    ),
+    "forecast_scoreboard": (
+        _unit_float(
+            "climatology_shrink_w",
+            "Shrinkage weight blending the recent rate toward climatology.",
+        ),
+        _unit_float(
+            "p_epsilon", "Probability clamp keeping p away from 0.0 / 1.0."
+        ),
+        _unit_float(
+            "degeneracy_abstain_share",
+            "Share of the p-vector that must be non-degenerate before the "
+            "issuer will issue rather than abstain (D9 guard).",
+        ),
+        _nonneg_int(
+            "acute_grace_days",
+            "Grace period after the forward window closes before a forecast "
+            "is graded.",
+        ),
+        _window_days(
+            "lookback_days", "History window for the acute-forecast pulls."
+        ),
+    ),
+    "unit_correctness_scorer": (
+        OptionSpec(
+            "units",
+            "str_list",
+            "Bounded-unit analyst ids to score against the gold labels.",
+        ),
+        _window_days("lookback_days", "Finding window scored per run."),
+    ),
+    "scorecard_producer": (
+        _unit_float(
+            "faith_floor",
+            "Faithfulness floor below which a verified unit finding is "
+            "demoted out of the band basis.",
+        ),
+        _unit_float("conf_floor", "Confidence floor for band admissibility."),
+        _unit_float(
+            "conf_confident",
+            "Confidence at/above which a band is reported as confident.",
+        ),
+        _window_hours("lookback_hours", "Signal/finding window per scorecard."),
+    ),
+    # -- claims / contention / narratives ------------------------------------
+    "claim_watch": (
+        _unit_float(
+            "match_threshold",
+            "Fused (vector + entity + geo) score a signal must reach to bear "
+            "on an open question.",
+        ),
+        _pos_int("signal_cap", "New signals examined per run."),
+        _pos_int("question_cap", "Open questions loaded per run."),
+        _pos_int("edge_cap", "bearing_edges written per run."),
+        _pos_int("flag_cap", "review_flags written per run."),
+        _nonneg_int(
+            "embed_cap", "Question embeddings computed per run (0 disables)."
+        ),
+        _nonneg_float(
+            "max_lag_seconds",
+            "Cursor lag above which the run reports itself behind rather than "
+            "silently skipping.",
+        ),
+        _nonneg_float(
+            "unembedded_hold_max_age_seconds",
+            "How long an unembedded signal is held before the cursor advances "
+            "past it.",
+        ),
+        OptionSpec(
+            "meta_question_classes",
+            "str_list",
+            "Harvest classes excluded from matching (v3.2.0 L1). NOT "
+            "choice-locked: the harvest vocabulary can grow ahead of this "
+            "catalog; unknown classes simply exclude nothing. Explicit [] "
+            "disables the exclusion.",
+        ),
+        _pos_int(
+            "global_df_window",
+            "Recent attributed signals sampled for the global entity "
+            "document-frequency estimate (v3.2.0 L2 hub damping).",
+        ),
+        _pos_int(
+            "global_df_min_signals",
+            "Attributed-signal floor below which the global-df discount is "
+            "INERT (a df estimated from too few documents is worse than "
+            "none).",
+        ),
+        _pos_int(
+            "max_questions_per_signal",
+            "Distinct questions one signal may edge per run before the "
+            "omnibus damper drops the remainder, counted in the receipt "
+            "(v3.2.0 L3).",
+        ),
+        OptionSpec(
+            "question_statuses",
+            "str_list",
+            "hypotheses.status values treated as open questions (the handler "
+            "docs call out adding 'active'). NOT choice-locked: unlike "
+            "fact_contention, hypotheses.status is an open vocabulary, and the "
+            "value is passed as a bound array parameter, never interpolated.",
+        ),
+    ),
+    "fact_contention_arbiter": (),
+    "narrative_mapper": (
+        _nonneg_float(
+            "echo_window_hours",
+            "Pairwise co-carriage window used to derive echo lag.",
+            maximum=float(_MAX_WINDOW_HOURS),
+        ),
+        _pos_int(
+            "min_co_carriage",
+            "Minimum co-carriage count before a leader→follower echo edge is "
+            "stored.",
+        ),
+        _pos_int(
+            "systematic_floor",
+            "Co-carriage count at/above which an edge is labelled systematic.",
+        ),
+        _unit_float(
+            "echo_ratio_floor",
+            "Share of co-carriages that must run leader-first before the edge "
+            "is directional.",
+        ),
+        _pos_int("max_narratives", "Contention groups reified per run."),
+        OptionSpec(
+            "statuses",
+            "str_list",
+            "fact_contention statuses reified into narratives. Choice-locked "
+            "to the table's own CHECK vocabulary (migration 0055) — a value "
+            "outside it can never match a row, so rejecting it beats silently "
+            "reifying nothing.",
+            choices=("contested", "surfaced", "collapsed"),
+        ),
+    ),
+    "source_track_record": (
+        _nonneg_float(
+            "lag_hours",
+            "Circularity guard: contention groups resolved more recently than "
+            "this are excluded from the track record.",
+            maximum=float(_MAX_WINDOW_HOURS),
+        ),
+    ),
+    # -- facts ---------------------------------------------------------------
+    "fact_decay_scan": (
+        _pos_int("max_facts", "Open facts walked per readout run."),
+        _nonneg_int(
+            "top_candidates",
+            "Revoke candidates listed in the receipt (0 = counts only).",
+        ),
+    ),
+    "fact_decay": (
+        _flag("run_expire", "Run the expiry leg of the legacy mutating sweep."),
+        _flag("run_decay", "Run the confidence-decay leg."),
+    ),
+    "nexus_decay": (),
+    # -- graph ---------------------------------------------------------------
+    "graph_mining": (
+        _flag(
+            "augment_from_nexuses",
+            "Augment the mined graph with open nexus edges.",
+        ),
+        _flag("augment_from_age", "Augment the mined graph from Apache AGE."),
+    ),
+    "structural_balance": (
+        _flag("augment_from_nexuses", "Augment the signed graph with nexuses."),
+        _flag("augment_from_age", "Augment the signed graph from Apache AGE."),
+    ),
+    "proposed_edge_governance": (
+        _unit_float(
+            "promote_min_confidence",
+            "Proposed-edge confidence at/above which the edge promotes to a "
+            "nexus.",
+        ),
+        _unit_float(
+            "reject_max_confidence",
+            "Proposed-edge confidence at/below which an aged edge is rejected.",
+        ),
+        _nonneg_int(
+            "reject_min_age_days",
+            "Minimum age before a thin edge becomes rejectable.",
+        ),
+        _pos_int("max_promotions_per_run", "Promotion cap per run."),
+        _pos_int("max_rejections_per_run", "Rejection cap per run."),
+    ),
+    # -- entities ------------------------------------------------------------
+    "entity_resolution": (
+        _pos_int("batch_limit", "Signals resolved per run."),
+    ),
+    "entity_gc": (
+        _flag("run_dormant", "Run the dormant-entity leg."),
+        _flag("run_duplicates", "Run the duplicate-profile leg."),
+        _flag("run_orphans", "Run the orphan-entity leg."),
+        _flag("run_source_pause", "Run the failing-source pause leg."),
+        _flag("run_orphan_proposed_edges", "Run the orphan proposed-edge leg."),
+        _flag("run_compaction", "Run the profile-compaction leg."),
+        _flag("run_source_reprobe", "Run the paused-source reprobe leg."),
+    ),
+    # -- signal pipeline -----------------------------------------------------
+    "anomaly_detection": (
+        OptionSpec(
+            "bucket_interval",
+            "str",
+            "time_bucket() width for the volume histogram. Restricted to a "
+            "fixed allow-list — the value is interpolated into SQL.",
+            choices=(
+                "15 minutes",
+                "30 minutes",
+                "1 hour",
+                "2 hours",
+                "6 hours",
+                "12 hours",
+                "1 day",
+            ),
+        ),
+        _window_hours("lookback_hours", "History window for the bucket pull."),
+        _nonneg_float(
+            "z_threshold",
+            "Absolute z-score at/above which a bucket is a rate spike.",
+            maximum=100.0,
+        ),
+        OptionSpec(
+            "window_buckets",
+            "int",
+            "Trailing buckets forming the z-score baseline.",
+            minimum=2,
+            maximum=100_000,
+        ),
+        _pos_int(
+            "novel_lookback",
+            "Trailing buckets defining 'has this entity been seen before'.",
+        ),
+        _flag(
+            "pull_from_substrate",
+            "Pull buckets from the substrate (off = caller-supplied rows).",
+        ),
+        _flag(
+            "pull_from_timescale",
+            "DEPRECATED alias for pull_from_substrate; read only when the "
+            "latter is absent.",
+        ),
+    ),
+    "adversarial_signals": (
+        _flag("run_velocity", "Run the velocity/low-quality-burst leg."),
+        _flag("run_echo", "Run the echo-cluster leg."),
+        _flag("run_provenance", "Run the provenance-collision leg."),
+    ),
+    "cross_source_dedup": (
+        _pos_int("max_groups_per_run", "Dedup groups collapsed per run."),
+        _unit_float(
+            "semantic_threshold",
+            "Cosine similarity at/above which two signals are the same story.",
+        ),
+        OptionSpec(
+            "qdrant_collection",
+            "str",
+            "Vector collection searched for semantic near-duplicates.",
+            pattern=_IDENT_PATTERN,
+        ),
+    ),
+    "cross_source_coalesce": (
+        _flag(
+            "enabled",
+            "Master gate — the handler no-ops on cadence until this is true.",
+        ),
+        _window_hours("window_hours", "Temporal window for coalescing."),
+        _unit_float("semantic_threshold", "Cosine similarity gate."),
+        _unit_float(
+            "title_distance_threshold",
+            "Normalized title-distance gate applied alongside the vector gate.",
+        ),
+        OptionSpec(
+            "qdrant_collection",
+            "str",
+            "Vector collection searched for near-duplicates.",
+            pattern=_IDENT_PATTERN,
+        ),
+        _pos_int("max_signals", "Signals examined per run."),
+    ),
+    "corpus_indexer": (_pos_int("batch_limit", "Signals indexed per run."),),
+    "signal_embedder": (
+        _pos_int("batch_limit", "Signals selected per run."),
+        _pos_int("max_embeds", "Embeddings computed per run."),
+    ),
+    "signal_summarizer": (
+        _pos_int("batch_limit", "Signals selected per run."),
+        _pos_int("max_summaries", "Summaries generated per run."),
+    ),
+    "reenrich_ner": (
+        _pos_int("max_reenrich", "Signals re-run through NER per backfill run."),
+        OptionSpec(
+            "translate_languages",
+            "str_list",
+            "Language codes translated before NER.",
+        ),
+    ),
+    "reenrich_translation": (
+        _pos_int("max_translate", "Signals translated per backfill run."),
+        OptionSpec(
+            "translate_languages",
+            "str_list",
+            "Language codes eligible for translation.",
+        ),
+    ),
+    # -- findings / lineage --------------------------------------------------
+    "finding_supersession": (
+        _window_days("lookback_days", "Finding window examined per run."),
+        OptionSpec(
+            "scope_analyst_id",
+            "str",
+            "Restrict supersession to one producing analyst.",
+            pattern=_IDENT_PATTERN,
+        ),
+        OptionSpec(
+            "cluster_analyst_id",
+            "str",
+            "Legacy alias for scope_analyst_id.",
+            pattern=_IDENT_PATTERN,
+        ),
+        OptionSpec(
+            "topic_fallback",
+            "str",
+            "Signature fallback used when a finding carries no situation id.",
+            pattern=_IDENT_PATTERN,
+        ),
+    ),
+    "composition_lineage_sweep": (
+        _window_hours("window_hours", "Composition-root window swept per run."),
+    ),
+    "indicator_tracker": (
+        _window_days("lookback_days", "Run-over-run diff window."),
+    ),
+    "situation_clustering": (
+        _window_days("lookback_days", "Signal window clustered per run."),
+    ),
+    "thematic_proposal": (),
+    "hypothesis_lifecycle": (),
+    "collection_gap": (
+        _window_days(
+            "window_days",
+            "Scorecard-card window aggregated into collection requirements.",
+        ),
+    ),
+    "integrity_sweep": (),
+    # -- archive / retention -------------------------------------------------
+    "evidence_archiver": (
+        _window_hours(
+            "window_hours", "Finding-recency window for the citation join."
+        ),
+        _unit_float(
+            "verify_floor", "Verified bar a citing finding must clear."
+        ),
+        _pos_int("fetch_budget", "Candidate signals fetched per run."),
+        _pos_int("max_attempts", "Failed-fetch retry cap across runs."),
+        _pos_int("max_object_bytes", "Per-object size cap."),
+        _pos_int("max_text_chars", "Extracted-text cap stored into the payload."),
+        _nonneg_float(
+            "per_host_delay_seconds",
+            "Politeness delay between same-host fetches.",
+            maximum=3600.0,
+        ),
+        _pos_float("timeout_seconds", "Per-request timeout.", maximum=3600.0),
+        _pos_float(
+            "run_deadline_seconds",
+            "Soft per-run wall-clock stop.",
+            maximum=86400.0,
+        ),
+        OptionSpec(
+            "forbid_license_classes",
+            "str_list",
+            "License classes never archived.",
+        ),
+        OptionSpec(
+            "web_origin_license_gate",
+            "str",
+            "Posture for a web-origin object whose license is unreviewed.",
+            choices=("fail_closed", "inherit"),
+        ),
+    ),
+    "signals_retention": (
+        _nonneg_int(
+            "ttl_days",
+            "Age above which signals are purged. 0 disables the sweep (the "
+            "shipped posture); takes precedence over the env fallback.",
+        ),
+        _pos_int("batch_limit", "Rows deleted per batch."),
+    ),
+    "analyst_traces_retention": (
+        _nonneg_int(
+            "ttl_days",
+            "Age above which analyst_traces rows are purged. 0 disables "
+            "(the shipped posture); takes precedence over the env fallback. "
+            "Keep well above 7 days — the telemetry API aggregates a 7-day "
+            "window.",
+        ),
+        _pos_int("batch_limit", "Rows deleted per batch."),
+    ),
+}
+
+
+def known_option_names(sub_handler: str) -> tuple[str, ...]:
+    """Declared option names for ``sub_handler`` (empty for an unknown one)."""
+    return tuple(s.name for s in HANDLER_OPTIONS.get(sub_handler, ()))
+
+
+# ---------------------------------------------------------------------------
+# Resolution
+# ---------------------------------------------------------------------------
+
+
+def resolve_handler_options(
+    sub_handler: str | None,
+    raw: Mapping[str, Any] | None,
+    *,
+    log_context: str = "",
+) -> OptionResolution:
+    """Validate a descriptor's ``method.options`` against the live catalog.
+
+    Returns the accepted subset plus a rejection list. NEVER raises and never
+    partially applies a bad value: a key either lands intact or is dropped
+    whole. An empty/absent ``raw`` yields an empty resolution, which is what
+    makes an options-less descriptor byte-identical to today.
+
+    ``log_context`` (typically ``analyst_id@version``) is folded into the
+    warning lines so an operator can find the offending descriptor.
+    """
+    if not raw:
+        return OptionResolution(accepted={}, rejected=())
+
+    accepted: dict[str, Any] = {}
+    rejected: list[OptionReject] = []
+
+    specs = HANDLER_OPTIONS.get(sub_handler or "")
+    if specs is None:
+        # A sub-handler this build does not register. Every key is unusable,
+        # but the run still proceeds on pure defaults — the dispatcher itself
+        # will fail loudly if the route is genuinely dead.
+        for key in raw:
+            rejected.append(
+                OptionReject(
+                    key=str(key),
+                    cause="unknown_handler",
+                    detail=(
+                        f"sub_handler {sub_handler!r} declares no option "
+                        "catalog in this build"
+                    ),
+                )
+            )
+        _log(rejected, sub_handler, log_context)
+        return OptionResolution(accepted={}, rejected=tuple(rejected))
+
+    by_name = {s.name: s for s in specs}
+    for key, value in raw.items():
+        name = str(key)
+        if name.startswith("_"):
+            rejected.append(
+                OptionReject(
+                    name,
+                    "private_key",
+                    "keys starting with '_' are private runtime/test hooks",
+                )
+            )
+            continue
+        if name in RESERVED_OPTION_KEYS:
+            rejected.append(
+                OptionReject(
+                    name,
+                    "reserved_key",
+                    "stamped by the runtime (identity/provenance/dispatch); a "
+                    "descriptor may not override it",
+                )
+            )
+            continue
+        spec = by_name.get(name)
+        if spec is None:
+            rejected.append(
+                OptionReject(
+                    name,
+                    "unknown_key",
+                    (
+                        f"{sub_handler} declares no such option; known: "
+                        f"{sorted(by_name)}"
+                    ),
+                )
+            )
+            continue
+        ok, coerced, cause = spec.validate(value)
+        if not ok:
+            rejected.append(
+                OptionReject(name, "invalid_value", f"{cause} (got {value!r})")
+            )
+            continue
+        accepted[name] = coerced
+
+    _log(rejected, sub_handler, log_context)
+    return OptionResolution(accepted=accepted, rejected=tuple(rejected))
+
+
+def _log(
+    rejected: list[OptionReject], sub_handler: str | None, log_context: str
+) -> None:
+    """One WARNING per dropped key — loud degrade, never silent, never fatal."""
+    for rej in rejected:
+        logger.warning(
+            "handler_options.rejected sub_handler=%s descriptor=%s key=%s "
+            "cause=%s detail=%s — the handler default stands",
+            sub_handler,
+            log_context or "?",
+            rej.key,
+            rej.cause,
+            rej.detail,
+        )

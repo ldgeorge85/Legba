@@ -20,6 +20,7 @@ New here? Start with the [README](../README.md) and the [Tour](TOUR.md).
 [The scorecard](#the-scorecard--the-12th-outputkind) ·
 [The contested-claims fact model](#the-contested-claims-fact-model) ·
 [The 2026-07-28 wave (0091–0105)](#the-2026-07-28-wave--new-tables-migrations-00910105) ·
+[The follow-on wave (0106–0115)](#the-follow-on-wave--new-tables-migrations-01060115) ·
 [The journal](#the-journal--off-chain-by-design) ·
 [Old → new vocabulary](#old--new-vocabulary) ·
 [Mutate-vs-append cheat-sheet](#mutate-vs-append-cheat-sheet) ·
@@ -51,7 +52,8 @@ chain — see "The journal — off-chain by design"); the consult audit trail
 `consult_sessions` + `consult_turns` (0039); the control-plane `*_descriptors`
 (+ `descriptor_audit_log`); and the operational ledgers `budget_ledger`,
 `action_pack_invocations`, `governor_events`, `seed_batches`,
-`source_poll_outcomes` (0046, + `newest_entry_ts` 0092), `output_dead_letter`.
+`source_poll_outcomes` (0046, + `newest_entry_ts` 0092, + the `success`
+outcome 0114), `output_dead_letter`.
 
 The 2026-07-28 wave (migrations 0091–0105, detailed in
 [its own section below](#the-2026-07-28-wave--new-tables-migrations-00910105))
@@ -65,6 +67,16 @@ readout sidecars** `fact_decay_states` (0098), `narratives` +
 tie-break cache `fact_contention_tiebreak` (0097); and the **evidence archive**
 sidecar `evidence_archive` (0104 — the bytes live content-addressed on the
 `legba_archive` filesystem volume, not in Postgres).
+
+The **follow-on wave** (migrations `0106`–`0115`, detailed in
+[its own section below](#the-follow-on-wave--new-tables-migrations-01060115))
+adds the **lineage-forward** stores `output_consumption` (0106) +
+`review_flags` / `bearing_edges` (0107), the **one-janitor** config table
+`retention_policies` (0109), the **retrieval-origin** axis on `signals` /
+`evidence_archive` (0112), the operator-reviewable
+`collection_requirements` backlog (0113), and a third `source_poll_outcomes`
+outcome — `success` (0114) — closing the error-streak latch guard's blind
+spot to a recovered source.
 
 ## Per-tier table
 
@@ -96,9 +108,14 @@ sidecar `evidence_archive` (0104 — the bytes live content-addressed on the
 | **Op ledgers** | `budget_ledger`/`global_budget_envelope`/`action_pack_invocations` | budget/governor | **mutate-in-place** (upsert/backfill) |
 | **Op ledgers** | `governor_events`, `budget_demotion_events`, `seed_batches`, `descriptor_audit_log`, `audit_checkpoints` | governance/audit | **append-only** |
 | **Graph metrics** | `graph_metrics` (0033) | `structural_balance` / `graph_mining` via `_graph_metrics_sink.write_graph_metric` | **append-only** — signed-triad balance + centrality/community + proxy-chain sign-products land as queryable rows |
-| **Source poll outcomes** | `source_poll_outcomes` (0046) | `source_actor.pull_once` (NON-productive polls only — empty-fetch / error) | **append-only** — provenance for *why* a source went silent (the H5 cadence-watchdog lateral join); productive polls are self-evidencing via their `signals` rows and are NOT logged |
+| **Source poll outcomes** | `source_poll_outcomes` (0046, `success` outcome 0114) | `source_actor.pull_once` — **one row per poll**: `success` (>=1 signal written, or an intra-source duplicate collapsed; `signals_written` carries the count) / `empty` (clean HTTP-200, nothing new) / `error` | **append-only** — provenance for *why* a source went silent (the H5 cadence-watchdog lateral join) **and** for the fact that it recovered. 0046 logged only NON-productive polls, on the premise that a productive one is self-evidencing via its `signals` rows; that holds for a reader inspecting one poll and fails for every reader that walks a RUN, because an absence cannot break a run — a repaired source kept presenting its historical `error` rows as the leading run and `entity_gc` op 4 re-paused it mid-ingest |
 | **Consult audit trail** | `consult_sessions` + `consult_turns` (0039) | the registry consult / deep-consult API (one session header per conversation/task; append-only turns) | session header **mutate-in-place** (title/status); `consult_turns` **append-only** (ReAct steps / tool_calls / cited_refs + optional deep `finding_id`) |
 | **Lineage** | `derived_from UUID[]` on substrate tables | write paths stamp at write | appended on dedup/merge. **`journal_entries` is the deliberate exception** — its `derived_from` is always empty and the table is absent from the lineage catalog (`lineage_api._SUBSTRATE_TABLES`), so a downstream lineage walk can never surface a journal node |
+| **Forward lineage** | `output_consumption` (0106) | stamped at the consumption point (the composition's basis/periphery split; the journal's rendered slice) and materialized on the same connection as the output write | **append** — the inverse index of `derived_from`: *what now rests on this row*. Distinguishes `composition_basis` (load-bearing) from `composition_periphery` (hedged context only), so "who would be affected if this were wrong" is answerable without re-deriving it |
+| **Review flags** | `review_flags` (0107) | `claim_watch` | **append + close-by-supersession** — one open flag per (product, foundation) pair; a BEFORE DELETE trigger makes deletion a database error. **Nothing in-tree closes a flag today** (`SEAMS.md` #49) |
+| **Bearing edges** | `bearing_edges` (0107) | `claim_watch` (`signal → hypothesis`) + the corpus researcher's answer-link (`finding → hypothesis`) | **append-only** dated typed pointers (`ON CONFLICT DO NOTHING`). A bearing edge is *not* lineage: it says "this later thing bears on that earlier question", and it never mutates the question it points at |
+| **Collection requirements** | `collection_requirements` (0113) | `collection_gap` | **append (idempotent on `natural_key`) + disposition mutate-in-place** — content columns are write-once; the route may only move `status`/`reviewed_by`/`reviewed_at`/`disposition_note` |
+| **Retention config** | `retention_policies` (0109) | operator via `/v3/retention-policies` PATCH (or SQL) | **mutate-in-place config**, read by the shared sweep engine. Both seeded policies ship `ttl_days = 0` = **sweep disabled**. The route may only move `ttl_days`/`keep_classes`/`batch_size`/`enabled`/`description` — `policy_name`/`table_name`/`env_fallback_var` are the code-side pairing to a Python adapter and are never writable through it |
 | **Outputs / emit** | `analyst_outputs` (+ `alert_sink_deliveries`); webhook/STIX/A2A/MCP/NATS sinks | `outputs/*.py` emit | substrate = **append-only**; emit = **ephemeral / side-table** |
 | **DLQ** | `output_dead_letter` (0007) | `route_to_output_dead_letter` | append + operator-resolution mutate |
 
@@ -128,16 +145,20 @@ desks** selected by a coverage tag: the 19 G20 country desks (tag `g20`) plus a
 13-desk high-consequence **watch** tier — Israel, Iran, Ukraine, Taiwan, North
 Korea, Pakistan, and the escalation-risk band Sudan, Mali, Burkina Faso, Niger,
 DR Congo, Myanmar, Haiti (descriptor ids `country_watch_<iso2>`, tag `watch`). The seven
-units + `country_composition` subscribe on `has_tag("g20") or has_tag("watch")`
+broad units + `country_composition` subscribe on `has_tag("g20") or has_tag("watch")`
+(the eighth unit, `proliferation_watch`, subscribes narrower on
+`has_tag("nuclear_watch")` instead)
 and the scorecard enumerates any active desk tagged either — so adding a country
 is **register-a-target, no code**. (The composition tower adds the 5 `region_*`
 region-frame targets and the thematic `escalation_composition`.)
 
 ### What does analysis read and write?
 **Reads depend on the analyst's altitude.** A first-order reasoning analyst —
-the seven bounded reasoning UNITS (`leadership_transition`, `energy_security`,
+the eight bounded reasoning UNITS — seven broad ones (`leadership_transition`, `energy_security`,
 `escalation`, `narrative_coordination`, `internal_stability`, `military_posture`,
-`economic_coercion`, fanned out per g20/watch desk) and the
+`economic_coercion`), fanned out per g20/watch desk, plus `proliferation_watch`
+(narrow: tag-scoped to the ~8 nuclear-relevant desks, not the full g20/watch
+roster) — and the
 generic `inline_target` — reads a scope-filtered signal slice (24h default; the
 units widen it to a **72h** raw-signal window) + open `facts` / `nexuses` /
 `hypotheses` + a Tier-1 grounding preamble of **accumulated** substrate
@@ -201,7 +222,8 @@ alone); classifies every failing span **hard vs. soft** (`fail_class`:
 `stale_leader_vs_facts` / `cross_target_leak` are **hard** — the
 entity-scramble class; `no_citation` / `judge_unsupported` /
 `hedge_laundering` / `double_counted` / `indicator_uncited_triggered` /
-`unhedged_periphery_citation` are **soft** — the unsupported-inference class);
+`unhedged_periphery_citation` / `unscoped_absence_claim` are **soft** — the
+unsupported-inference class);
 and persists a full per-claim **`claim_verdicts` ledger *including supported
 claims*** in `data.verification` (capped, with an honest truncation flag).
 These are labels-and-persistence only — none feeds the score. The judge LLM
@@ -219,7 +241,11 @@ it lands in the generic `analyst_outputs` table (`kind='scorecard'`), written by
 `scorecard_producer` (a deterministic META analyst; daily; pure SQL, no LLM,
 `$0`). Each tick it writes **exactly one banded row per active g20/watch desk**
 (19 G20 + 13 watch = 32) from a few high-precision RULES over that desk's
-**already-verified** claims (the seven unit findings + the `country_composition`)
+**already-verified** claims (the seven broad unit findings + the `country_composition`
+— `proliferation_watch` is deliberately NOT one of the fixed scorecard
+dimensions, since it would mis-render `insufficient-evidence` on the 17
+non-nuclear desks it doesn't cover; its read still surfaces via
+`country_composition`)
 inside a **14-day band window**. It is a *perspective over* verified sub-claims,
 never a fresh judgment:
 
@@ -245,9 +271,15 @@ a **first-class, derived, recomputable** state — without ever letting a machin
 overwrite the disputed facts. The substrate change is small and almost entirely
 *additive*; the behaviour is gated OFF by default.
 
-> **Migration head — now `0105` (the 2026-07-28 release wave; `0095`/`0100`
-> intentionally unused — the runner discovers by sorted glob, so gaps are
-> harmless).** On top of
+> **Migration head — now `0115`.** (`0095`, `0100`, `0110` and `0111` are
+> unused: `0095`/`0100` were skipped in the release wave, and `0110`/`0111`
+> were reserved for the C3 source-quality ledger, which landed at `0115`
+> after `0112`–`0114` took the intervening slots — and needed only one of the
+> two. The runner
+> has **no manifest and no head constant** — `migrate.py:_discover()` globs
+> `*.sql` and sorts, applying each file in its own transaction and recording
+> it by filename in `legba_data_migrations`, so numeric gaps are harmless and
+> "head" simply means the lexicographically-last file present.) On top of
 > the write-path gates documented below, successive migrations advanced the head
 > `0060 → 0105`. Five reversible data-hygiene migrations make up the
 > 2026-07-06 audit sub-range (`0076 → 0080`): `0076` entity re-fold + junk close
@@ -264,7 +296,14 @@ overwrite the disputed facts. The substrate change is small and almost entirely
 > entity-blocking infrastructure, a nexus-fragment close, the per-signal
 > salience schema, and the journal `data` column). `0091 → 0105` are the
 > 2026-07-28 release wave — see
-> [the wave section below](#the-2026-07-28-wave--new-tables-migrations-00910105).
+> [the wave section below](#the-2026-07-28-wave--new-tables-migrations-00910105) —
+> and `0106 → 0115` the follow-on wave (see
+> [its section](#the-follow-on-wave--new-tables-migrations-01060115)).
+>
+> One in-tree wart worth knowing before you read the SQL: **`0108`'s internal
+> comments all say "0106"**. It was renumbered `0106 → 0108` when a parallel
+> branch claimed the `0106`/`0107` slots, and the body text was not re-swept.
+> The runner keys on the **filename**, so `0108` is the authoritative number.
 
 **Per-fact credibility — `facts.source_credibility real` (0054).** A 0..1 trust
 score of the most credible source backing this fact, propagated down from
@@ -409,6 +448,42 @@ contention sidecar above, they are views *over* the chain, not primary data.
   capped 120 × 300 chars with an honest `claim_verdicts_truncated` flag) rides
   the existing critique `data` JSONB — **no migration** (`ANALYSIS.md` §6.2).
 
+## The follow-on wave — new tables (migrations 0106–0115)
+
+A second wave began the same day. Its theme is **coherence over time**: the
+chain could already answer *"what did this finding rest on?"*, but not
+*"what now rests on this finding?"* — nor *"has anything since arrived that
+bears on a question we left open?"* The first three new stores answer those;
+`collection_requirements` makes "we could not see it" a durable object instead
+of a sentence in a monthly finding. The wave's tail (`0114`, `0115`) is
+coherence of a different kind — organ consolidation: one poll-provenance row
+per poll instead of a failure-only ledger, and one source-quality read surface
+instead of four separately-grown ones.
+
+| Mig | Table(s) / change | Write semantics |
+|---|---|---|
+| **0106** | `output_consumption` — the **forward** consumption index. PK `(consumer_id, consumed_id, context)`, plus `consumer_kind`, `consumed_at`; a second index `(consumed_id, consumed_at DESC)` is the forward-walk direction. **No FK on purpose** (consumers span `analyst_outputs` *and* `journal_entries`) | **append** (PK dedups). `context` is `text` with **no CHECK** — an open vocabulary; the three literals any code writes today are `composition_basis` (a load-bearing verified above-floor input head), `composition_periphery` (a below-floor/unverified row of a two-tier composition), and `journal_slice` (a row of the journal's rendered priming slice). The writer (`provenance/consumption.py`) **never raises** — a failed consumption write degrades, it cannot fail the compose |
+| **0107** | `review_flags` — one row per (product, question-it-was-founded-on) pair whose foundation has since moved. `output_id`, `founded_on_id`, `moved_at`, `reason`, nullable `closed_by` / `closed_at` with a paired CHECK (`(closed_by IS NULL) = (closed_at IS NULL)`), a **partial unique index** allowing exactly ONE open flag per pair, and a **BEFORE DELETE trigger** that unconditionally raises — deletion is schema-impossible, closure is by supersession | **append + close-by-supersession.** `reason` is open text; the only literal written today is `new_evidence_bears_on_open_question` (by `claim_watch`). Rows are **never deleted** — the trigger makes silent flag disappearance a database error, not a code convention |
+| **0107** | `bearing_edges` — dated, typed, weighted "X bears on Y" pointers. All columns `NOT NULL`: `edge_kind` (default `bears_on`), `src_kind`/`src_id`/`src_as_of`, `dst_kind`/`dst_id`/`dst_as_of`, `weight real`, `planes text[]` (CHECK non-empty), `provenance_class` (CHECK ∈ `live` \| `exemplar`), `matcher_version`, `UNIQUE (src_id, dst_id, edge_kind)` | **append-only**, `INSERT … ON CONFLICT DO NOTHING`. Honest scope note: append-only here is **writer discipline, not a trigger** — unlike `review_flags`, `bearing_edges` has no forbid-delete trigger; what guarantees it is that `provenance/bearing.py` contains exactly one statement (the insert) and no UPDATE/DELETE path exists anywhere in the tree. Written by exactly two producers today: `claim_watch` (`signal → hypothesis`, planes drawn from `vector`/`entity`/`geo`, `matcher_version='claim_watch/3.0.0'`) and the corpus researcher's answer-link (`finding → hypothesis`, `planes=['corpus_research']`, `matcher_version='corpus_researcher_backlog/1.0.0'`). Both stamp `provenance_class='live'`; `exemplar` is reserved for a future curated set and is written by nothing |
+| **0108** | `entity_block_key(text)` gains a leading-`a`/`an` strip; `idx_entity_profiles_block_key` rebuilt | function + index only, no table change. (This is the migration whose in-file comments still say "0106" — see the head note above.) |
+| **0109** | `retention_policies` — the **one-janitor** config table. PK `policy_name`, plus `table_name`, `ttl_days integer NOT NULL DEFAULT 0`, `keep_classes text[]`, `batch_size` (CHECK > 0, default 5000), `enabled`, `env_fallback_var`, `description`, `created_by`, timestamps | **operator-edited config**, seeded `ON CONFLICT DO NOTHING` with exactly two rows — `signals_retention` (`keep_classes = {retain_always, evidence_hold}`) and `analyst_traces_retention` (`keep_classes = {}`) — **both at `ttl_days = 0`, which disables the sweep**. Deleting substrate data is an operator decision, so every seeded policy ships INERT. `/v3/retention-policies` (list/get/PATCH) edits `ttl_days`/`keep_classes`/`batch_size`/`enabled`/`description`; `policy_name`/`table_name`/`env_fallback_var` stay SQL-only (the code-side pairing to a Python adapter) |
+| **0112** | `retrieval_origin text` added (nullable) to **both** `signals` and `evidence_archive`, with a partial index on the `signals` column where not null; the `evidence_archive` status CHECK is widened to add `skipped_license_unreviewed` | **stamped at write.** The value vocabulary is a **convention enforced in code, not a CHECK**: `NULL`/absent = a curated registered source (the default — nothing was backfilled), `curated_source` = the same thing said explicitly, `web_search:<component_id>` = retrieved through a named external search provider. One resolver (`legba.data.retrieval_origin.resolve_retrieval_origin`) serves both the archive gate and the corpus facet, so the two cannot drift |
+| **0113** | `collection_requirements` — durable, operator-reviewable collection requirements. `natural_key text UNIQUE` (the idempotency key), `origin` (CHECK ∈ `collection_gap` \| `source_request`), `desk`, `dimension`, `topic`, `rationale`, `evidence_kind` (CHECK ∈ `analyst_output` \| `hypothesis`) + `evidence_id`, `source_classes_wanted text[]`, `candidate_sources jsonb`, `suggested_fetch_url`, `fillable` + `unfillable_reason` (paired CHECK: not-fillable **must** carry a reason), `priority_rank`, `status` (CHECK ∈ `proposed` \| `reviewed` \| `registered` \| `dismissed`), `reviewed_by` / `reviewed_at` (paired CHECK), `disposition_note` | **append (`ON CONFLICT (natural_key) DO NOTHING`) + disposition mutate-in-place.** Exactly one writer (`collection_gap`) and exactly one dispositioner (`/v3/collection-requirements`, PATCH-only). The content columns are immutable once written; the route may only move the disposition sidecar — see `ACQUISITION.md` §6.1 |
+| **0114** | `source_poll_outcomes.outcome` CHECK widened to admit a third value, `success` — a productive poll (≥1 signal written) now leaves a row, where before the table was failure-only (`empty` \| `error`) and a productive poll wrote nothing at all | **constraint DROP/ADD only, no data migration** — every existing `empty`/`error` row stays valid. Closes the **error-streak latch guard**'s blind spot: `entity_gc` operation 4 auto-pauses a source after >20 contiguous *leading* `error` rows, and with no `success` outcome a recovered source's error run could only be broken by an `empty` row or the `last_signal` recency bound — never by the fact that it started producing again (bit `ukrinform` / `nasa.eonet` 2026-07-22 and `gdelt.files` 2026-07-27, each repaired by hand). A `success` row now breaks the leading run for every reader that walks it, with no operator intervention |
+| **0115** | `source_quality` — a **VIEW**, the C3 source-quality ledger. One typed row per source id known to ANY leg, joining `source_credibility` (asserted, per HOST), `source_ratings` + `source_dossiers` (asserted, 0094), `source_track_records` (earned, 0099) and observed `signals` production (computed). Every non-backbone column is prefixed `asserted_` / `earned_` / `computed_` — the asserted-vs-earned split is the A6 honesty property, so it is enforced by column naming, and **no composite score column exists**. The host leg bridges the keying mismatch by extracting the descriptor's declared endpoint host and probing exact-then-trimmed parent domains, the same rule `filters.source_credibility.extract_lookup_hosts` applies at the signal write path (drift test-enforced) | **no writes — a view owns no state.** Drop and recreate it and the content is identical; that recomputability is the proof it is derived. The freshness GRADE is *not* a column: its budget derives from a cron expression through croniter (Python, not SQL), so the view carries the inputs and `registry/source_freshness.py` grades them at read — one grading implementation, two readers. Nothing here feeds the faithfulness score, and the arbiter's earned tie-break does not read it (byte-identity test-enforced) |
+
+**What is NOT in this wave, and should be read as absent, not implied:**
+
+- **No closer.** `review_flags` rows open and stay open. Nothing in-tree
+  closes one, propagates a correction back into the flagged product, or
+  recomposes anything (`SEAMS.md` #49).
+- **No per-row read route** for `bearing_edges` or `review_flags`. The
+  `staleness_debt` count they imply IS readable since the C3 wave
+  (`GET /v3/system/staleness-debt`, aggregates only); the rows themselves are
+  still receipt-and-SQL territory.
+- **No `retrieval_origin` backfill.** Every pre-0112 row reads `NULL`, which
+  means *unknown-but-presumed-curated*, not *verified curated*.
+
 ## The journal — off-chain by design
 
 The 11th `OutputKind` — `journal` — is the one row family that is **a
@@ -494,7 +569,7 @@ the isolated forecast pilot `acute_forecasts` + the per-unit gold set
 
 **A note on producers (data-model relevant, not a behaviour spec).** The rows in
 `analyst_outputs` are no longer written by one monolithic per-country analyst.
-The trusted spine is bottom-up: seven bounded `inline_target` UNITS →
+The trusted spine is bottom-up: eight bounded `inline_target` UNITS →
 `country_composition` (per country) → `region_composition` (5 region frames) →
 `world_assessor` (global), plus the thematic `escalation_composition` →
 `scorecard_producer` (deterministic banding). The old monolithic
@@ -525,7 +600,12 @@ sequenced retirements/freezes and `ANALYSIS.md` for producer behaviour.
   the audit/governor/seed ledgers, every `*_descriptors` version,
   `alert_sink_deliveries`, `band_calibration_claims` issue rows (horizon
   outcomes stamped once at resolution, like `acute_forecasts`),
-  `goldset_week_samples` (first read pins the week).
+  `goldset_week_samples` (first read pins the week), `output_consumption`
+  (the forward index), `bearing_edges` (append-only by writer discipline —
+  the module has no UPDATE/DELETE path — not by a trigger).
+- **Append + close-by-supersession:** `review_flags` — one open flag per
+  (product, foundation) pair, closed by naming the later output; a BEFORE
+  DELETE trigger makes deletion a database error. Nothing closes one today.
 - **Supersession-versioned (temporal):** `facts` (value change), `nexuses`
   (polarity/label change), `journal_entries` `consolidation` rows
   (a newer consolidation supersedes the prior open one) — new open row, old row
@@ -553,7 +633,12 @@ sequenced retirements/freezes and `ANALYSIS.md` for producer behaviour.
   `action_pack_invocations`, `output_dead_letter` resolution,
   `alert_trigger_watermarks` (durable trigger state), `watchlist` (CRUD +
   soft delete), `correctness_labels` (one-verdict-per-finding upsert),
-  `evidence_archive` (outcome upsert).
+  `evidence_archive` (outcome upsert), `collection_requirements` *disposition
+  only* (`status` / `reviewed_by` / `reviewed_at` / `disposition_note` — the
+  content columns are write-once), `retention_policies` *operator-tunable
+  fields only* (`ttl_days` / `keep_classes` / `batch_size` / `enabled` /
+  `description` via `/v3/retention-policies` PATCH, or SQL — `policy_name` /
+  `table_name` / `env_fallback_var` stay SQL-only).
 - **Ephemeral (no durable row):** subscription wiring, per-target JetStream
   consumers, the predicate match, NATS-stream output.
 - **Derived / recomputable (rebuildable from the primary rows):** the

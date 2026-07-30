@@ -16,13 +16,26 @@
  * This replaces the old scattered `faithfulness NN%` / `judge_status` /
  * `unverified` / `unrated` chips; use it wherever a finding or composition needs
  * a verdict.
+ *
+ * C2b — a structural finding whose asserted quantities passed the
+ * deterministic `structural_claims` verify profile (server stamp
+ * `verify_exempt: "structural-verified"`) renders a distinct, non-muted
+ * `structural — recomputation-verified` confidence chip instead of the
+ * honest-but-unverified `unverified — structural` default. See
+ * `@/lib/verdictModel` (`isStructuralVerified`) for the classification.
  */
 import { useState } from 'react'
 import { HelpCircle } from 'lucide-react'
+import { InfoTip } from '@/components/InfoTip'
 import {
+  CONFIDENCE_EXPLAIN,
   CONFIDENCE_LEGEND,
+  LIKELIHOOD_EXPLAIN,
   LIKELIHOOD_LEGEND,
-  STRUCTURAL_EXEMPT_NOTE,
+  STRUCTURAL_UNVERIFIED_EXPLAIN,
+  STRUCTURAL_VERIFIED_EXPLAIN,
+  UNVERIFIED_EXPLAIN,
+  FAITHFULNESS_EXPLAIN,
   buildVerdict,
   judgeStatusLabel,
   type ConfidenceLevel,
@@ -57,12 +70,18 @@ export function VerdictBadge({
   input,
   showLegend = false,
   className,
+  interactiveParent = false,
 }: {
   verdict?: Verdict
   input?: VerdictInput
   /** Render the discoverable `?` legend affordance next to the chips. */
   showLegend?: boolean
   className?: string
+  /** Pass through when this badge is rendered inside an ambient clickable
+   *  row (e.g. a feed card that is itself a `<button onClick=...>`) so its
+   *  InfoTip chips don't also trigger the row's own click — see
+   *  `InfoTip`'s interactive-parent mode doc. */
+  interactiveParent?: boolean
 }) {
   const v = verdict ?? buildVerdict(input ?? {})
 
@@ -70,42 +89,75 @@ export function VerdictBadge({
   // faithfulness verify pass; make the exception visible instead of letting
   // the row read like an ordinary (someday-verifiable) unverified one.
   const structural = v.confidence === 'unassessed' && v.structural === true
+  // C2b — a SUBSET of structural findings additionally pass the deterministic
+  // structural_claims verify profile (their asserted quantities were
+  // re-derived and MATCHED). That earns a distinct, non-muted "structural —
+  // grounding-verified" chip instead of the honest-but-unverified default.
+  const structuralVerified = structural && v.structuralVerified === true
 
-  const likelihoodTitle =
+  // U-5 — every chip carries the SAME explain-sentence (LIKELIHOOD_EXPLAIN /
+  // CONFIDENCE_EXPLAIN, reused verbatim from the `?` legend below) plus the
+  // per-instance dynamic detail, in ONE InfoTip popover — teaching the
+  // vocabulary at every render site, not just behind the Inspector's `?`.
+  const likelihoodDetail =
     v.likelihood === 'unstated'
-      ? 'Likelihood: not stated by this read (no probability recorded)'
-      : `ICD-203 likelihood · assessed probability ${pct(v.probability)}`
-  const confidenceTitle =
+      ? 'This read carries no probability — an honest absence, not a computed zero.'
+      : `Assessed probability: ${pct(v.probability)}.`
+  const likelihoodText = `${LIKELIHOOD_EXPLAIN} ${likelihoodDetail}`
+
+  const confidenceDetail =
     v.confidence === 'unassessed'
-      ? structural
-        ? `Analytic confidence: ${STRUCTURAL_EXEMPT_NOTE} (unverified — structural)`
-        : 'Analytic confidence: no faithfulness-verify pass on this read (unverified)'
-      : `Analytic confidence (evidence quality) · faithfulness ${pct(v.faithfulness)} · ` +
-        `${judgeStatusLabel(v.judgeStatus)} · ${v.citationCount} citation${
-          v.citationCount === 1 ? '' : 's'
-        }`
+      ? structuralVerified
+        ? STRUCTURAL_VERIFIED_EXPLAIN
+        : structural
+          ? STRUCTURAL_UNVERIFIED_EXPLAIN
+          : UNVERIFIED_EXPLAIN
+      : `${FAITHFULNESS_EXPLAIN} Faithfulness ${pct(v.faithfulness)} over ${
+          v.citationCount
+        } citation${v.citationCount === 1 ? '' : 's'} (${judgeStatusLabel(v.judgeStatus)}).`
+  const confidenceText = `${CONFIDENCE_EXPLAIN} ${confidenceDetail}`
 
   return (
     <span
       className={`inline-flex flex-wrap items-center gap-1.5 ${className ?? ''}`}
       data-testid="verdict-badge"
     >
-      <span className={CHIP} title={likelihoodTitle} data-testid="verdict-likelihood">
+      <InfoTip
+        text={likelihoodText}
+        className={CHIP}
+        testId="verdict-likelihood"
+        interactiveParent={interactiveParent}
+      >
         <span className="uppercase tracking-wide text-ink-3">L</span>
         <span className={v.likelihood === 'unstated' ? 'italic text-ink-3' : ''}>
           {v.likelihood}
         </span>
-      </span>
-      <span className={CHIP} title={confidenceTitle} data-testid="verdict-confidence">
+      </InfoTip>
+      <InfoTip
+        text={confidenceText}
+        className={CHIP}
+        testId="verdict-confidence"
+        interactiveParent={interactiveParent}
+      >
         <span
-          className={`h-1.5 w-1.5 shrink-0 rounded-full ${CONFIDENCE_DOT[v.confidence]}`}
+          className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+            structuralVerified ? 'bg-emerald-400/80' : CONFIDENCE_DOT[v.confidence]
+          }`}
           aria-hidden
         />
         <span className="uppercase tracking-wide text-ink-3">C</span>
-        <span className={v.confidence === 'unassessed' ? 'italic text-ink-3' : ''}>
-          {structural ? 'unverified — structural' : confidenceLabel(v.confidence)}
+        <span
+          className={
+            structuralVerified ? '' : v.confidence === 'unassessed' ? 'italic text-ink-3' : ''
+          }
+        >
+          {structuralVerified
+            ? 'structural — recomputation-verified'
+            : structural
+              ? 'unverified — structural'
+              : confidenceLabel(v.confidence)}
         </span>
-      </span>
+      </InfoTip>
       {showLegend && <VerdictLegend />}
     </span>
   )

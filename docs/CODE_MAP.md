@@ -38,13 +38,13 @@ exists" from "the live system uses it".
 |---|---|---|---|
 | `data/schemas/` | The descriptor types (strict, content-hashed pydantic) | `source.py` | `SourceDescriptor`/`Subscription`/`SourceRef` (`source.py`), `TargetDescriptor`+polymorphic `TargetScope` (`target.py`), `AnalystDescriptor`+open `AnalystKind`+optional `GroundingBlock` (`analyst.py`), `ActionPack`/`PackGovernor` (`action_pack.py`), `StackComponentDescriptor` (`stack.py`), lifecycle FSM (`lifecycle.py`), shared property types (`properties.py`), vocabulary shapes (`vocabulary.py`), version/content-hash helpers (`versioning.py`) |
 | `data/registry/` | Control plane: descriptor registry, vault, HTTP/WS API | `server.py` | content-hashed instance registry + Ed25519 audit + DLQ + NATS events (`descriptor.py`, `audit.py`, `signing.py`, `dlq.py`, `events.py`/`streams.py`/`emitter.py`), XSalsa20-Poly1305 credential vault (`credentials.py`), stack registry (`stack.py`), the `legba-registry` FastAPI app + routers (`server.py` + `api.py`/`v3_api.py`/`substrate_reads_api.py`/`lineage_api.py`/`entities_api.py`/`runtime_telemetry_api.py`/`budget_api.py`/`source_credibility_api.py`/`consult_api.py`), discovery/version conversion (`discovered_materializer.py`, `conversion.py`) |
-| `data/sources/` | Source-kind acquisition handler library | `_contract.py` | the handler Protocol + `Signal` (`_contract.py`/`_protocols.py`), the **per-source baseline pipeline** (`baseline.py`), 14 kind-handler modules (`rss.py`, `gdelt.py`, `acled.py`, `mediacloud.py`, `opensanctions.py`, `common_crawl.py`, `intelmq.py`, `firecrawl.py`, `scraper.py`, `telegram.py`, `discord.py`, `geojson.py`, `json_api.py`, `generic_webhook.py`+`webhook_router.py`), outbound provisioning (`provision.py`), egress helper (`_egress.py`) |
+| `data/sources/` | Source-kind acquisition handler library | `_contract.py` | the handler Protocol + `Signal` (`_contract.py`/`_protocols.py`), the **per-source baseline pipeline** (`baseline.py`), 16 kind-handler modules (`rss.py`, `gdelt.py`, `gdelt_files.py` (S1 — the 15-min file-dump replacement for the rate-limited `gdelt` BigQuery/DOC-API path), `acled.py`, `ucdp.py` (S1-T9 — the Uppsala Conflict Data Program GED feed), `mediacloud.py`, `opensanctions.py`, `common_crawl.py`, `intelmq.py`, `firecrawl.py`, `scraper.py`, `telegram.py`, `discord.py`, `geojson.py`, `json_api.py`, `generic_webhook.py`+`webhook_router.py`), outbound provisioning (`provision.py`), egress helper (`_egress.py`) |
 | `data/filters/` | In-flight enrichment / transform handlers over a `Signal` | `_contract.py` | `StreamHandler` Protocol (`_contract.py`), baseline enrichers (`language_detect.py`, `geocode.py`, `ner.py`, `classify.py`, `source_credibility.py`), ingest dedup tiers 1–2 (`ingest_dedupe.py`, `dedupe.py`), SLM-backed refiners that call the model service (`slm_classification_refine.py`, `slm_entity_resolve.py`, `slm_relationship_validate.py`) |
-| `data/analysts/` | Analyst-kind implementations (one module per kind) | `__init__.py` | kind modules discovered via `discover_analyst_kinds()` (`__init__.py`): `inline_target.py` (the **seven bounded reasoning UNITS** — leadership_transition / energy_security / escalation / narrative_coordination / internal_stability / military_posture / economic_coercion — the base of the spine; each cited-synthesizes ONE narrow question then runs a mandatory faithfulness verify), `cross_target_raw.py`, `meta_findings_synthesizer.py` (the composition tower — the per-country `country_composition`, the per-region `region_composition` (5 region frames), the thematic cross-desk `escalation_composition` with a correlation guard, AND the repointed GLOBAL `world_assessor` composition), `cross_analyst_correlator.py`, `deep_consult.py`, `relationship_reifier.py` (META — co-mention pairs → signed typed nexuses, 8B LLM), `competing_hypotheses.py` (META ACH — evidence×diagnosticity matrix is LLM-scored + ±2 transitions; outcome-resolution + calibration now FIRE against the EXOGENOUS `resolved_outcome` column, migration 0038 — subsequent-facts/operator outcome, self-consistency-flagged when only status-transition), `deterministic.py`, `predictor.py`, `critic.py`, `optimizer.py` (GEPA — see §3.5), `consult_on_demand.py`, `journal_assessor.py` (the `journal` kind — Legba's first-person reflective voice, the ONE analyst pointed at the whole organism; OFF the fact/finding/nexus chain — see §2.7/§2.9); deterministic impls in `deterministic_handlers/` (`entity_resolution.py` (+ `_entity_canon.py`), `cross_source_dedup.py` (BOUNDED per-run scan — skips already-canonicalised content-hash groups in the DB + caps at `max_groups_per_run`=500), `cross_source_coalesce.py` (substrate-wide cross-source semantic/temporal LINKER, off-by-default — SEAM #19), `finding_supersession.py`, `indicator_tracker.py` (deterministic I&W — run-over-run diffs on the structured indicators the units emit), `collection_gap.py` (deterministic I&W — flags starved desk × dimension cells), `situation_clustering.py`, `thematic_proposal.py` (Phase-5 — detects thematic non-geo situation frames + PROPOSES them), `hypothesis_lifecycle.py`, `graph_mining.py`, `proposed_edge_governance.py` (Phase D — promotes pending `proposed_edges` into neutral `CoOccursWith` nexuses), `_graph_metrics_sink.py`, `anomaly_detection.py`, `fact_decay.py`, `calibration_tracking.py`, `integrity_sweep.py`, `entity_gc.py`, `adversarial_signals.py`, `structural_balance.py`, `nexus_decay.py`, plus the analysis-spine META handlers `scorecard_banding.py` + `scorecard_producer.py` (P4 banded scorecard), `unit_correctness_scorer.py` (P2 correctness-vs-reference gold), `forecast_acute.py` + `forecast_scoreboard.py` (the acute-forecast Brier/BSS pilot), `composition_lineage_sweep.py`, `fact_contention_arbiter.py`, `signals_retention.py`); action-pack agency plane in `agency/` (`agency.py` hard gate, `governor.py`, `resolution.py`, `binding.py`, `substrate_read.py`, `tools.py`, `events.py`) |
+| `data/analysts/` | Analyst-kind implementations (one module per kind) | `__init__.py` | kind modules discovered via `discover_analyst_kinds()` (`__init__.py`): `inline_target.py` (the **eight bounded reasoning UNITS** — leadership_transition / energy_security / escalation / narrative_coordination / internal_stability / military_posture / economic_coercion / proliferation_watch (narrow: tag-scoped to the ~8 nuclear-relevant desks, not the full 32) — the base of the spine; each cited-synthesizes ONE narrow question then runs a mandatory faithfulness verify), `cross_target_raw.py`, `meta_findings_synthesizer.py` (the composition tower — the per-country `country_composition`, the per-region `region_composition` (5 region frames), the thematic cross-desk `escalation_composition` with a correlation guard, AND the repointed GLOBAL `world_assessor` composition), `cross_analyst_correlator.py`, `deep_consult.py`, `relationship_reifier.py` (META — co-mention pairs → signed typed nexuses, 8B LLM), `competing_hypotheses.py` (META ACH — evidence×diagnosticity matrix is LLM-scored + ±2 transitions; outcome-resolution + calibration now FIRE against the EXOGENOUS `resolved_outcome` column, migration 0038 — subsequent-facts/operator outcome, self-consistency-flagged when only status-transition), `deterministic.py`, `predictor.py`, `critic.py`, `optimizer.py` (GEPA — see §3.5), `consult_on_demand.py`, `journal_assessor.py` (the `journal` kind — Legba's first-person reflective voice, the ONE analyst pointed at the whole organism; OFF the fact/finding/nexus chain — see §2.7/§2.9); deterministic impls in `deterministic_handlers/` (`entity_resolution.py` (+ `_entity_canon.py`), `cross_source_dedup.py` (BOUNDED per-run scan — skips already-canonicalised content-hash groups in the DB + caps at `max_groups_per_run`=500), `cross_source_coalesce.py` (substrate-wide cross-source semantic/temporal LINKER, off-by-default — SEAM #19), `finding_supersession.py`, `indicator_tracker.py` (deterministic I&W — run-over-run diffs on the structured indicators the units emit), `collection_gap.py` (deterministic I&W — flags starved desk × dimension cells), `situation_clustering.py`, `thematic_proposal.py` (Phase-5 — detects thematic non-geo situation frames + PROPOSES them), `hypothesis_lifecycle.py`, `graph_mining.py`, `proposed_edge_governance.py` (Phase D — promotes pending `proposed_edges` into neutral `CoOccursWith` nexuses), `_graph_metrics_sink.py`, `anomaly_detection.py`, `fact_decay.py`, `calibration_tracking.py`, `integrity_sweep.py`, `entity_gc.py`, `adversarial_signals.py`, `structural_balance.py`, `nexus_decay.py`, plus the analysis-spine META handlers `scorecard_banding.py` + `scorecard_producer.py` (P4 banded scorecard), `unit_correctness_scorer.py` (P2 correctness-vs-reference gold), `forecast_acute.py` + `forecast_scoreboard.py` (the acute-forecast Brier/BSS pilot), `composition_lineage_sweep.py`, `fact_contention_arbiter.py`, `signals_retention.py`); action-pack agency plane in `agency/` (`agency.py` hard gate, `governor.py`, `resolution.py`, `binding.py`, `substrate_read.py`, `tools.py`, `events.py`) |
 | `data/provenance/` | Output-kind payloads, write helpers, receipts, budget, DLQ | `kinds.py` | the 12-member `OutputKind` enum + `KIND_REGISTRY` (`kinds.py`, now incl. `FACT` + `NEXUS` + `JOURNAL` — the journal routes to its own `journal_entries` table, OFF the fact/finding/nexus chain — + `SCORECARD`, the P4 banded per-country verdict), per-kind pydantic payloads (`models.py`, incl. `FactPayload`/`NexusPayload`/`JournalPayload`/`ScorecardPayload`), the analyst-output writers (`writes.py`, `_core.py` — incl. `write_fact`/`write_nexus` + `supersede_prior_facts`/`supersede_prior_nexuses`, `source_type`/`seed_batch_id` threading), the SHA-256 hash-chained receipt chain + verify machinery (`receipts.py`/`_core.py`, `verify.py` — incl. `verify_finding_faithfulness`, the P0-T2 faithfulness pass), durable checkpointer (`checkpointer.py`), budget accounting (`budget.py`), output DLQ (`dlq.py`) |
 | `data/outputs/` | Output-kind emit handlers (analyst payloads → operator surfaces) | `_contract.py` | the `AlertEmitter`/emit Protocol + `discover_output_kinds()` (`_contract.py`/`__init__.py`), `substrate.py` (typed write-back facade), `nats_stream.py`, `webhook.py`, `alert.py`, `ui_panel.py`, `mcp_tool.py`, `a2a_skill.py`, `stix_bundle.py` (STIX 2.1) |
 | substrate adapters (`data/` root) | One typed port per backing store + bootstrap | `config.py` | `postgres.py` (asyncpg + AGE codec), `nats.py` (JetStream, signal subject grammar), `qdrant.py`, `redis.py`, env-driven config (`config.py`), migration runner (`migrate.py`), vocabulary seed/query (`vocabulary.py`), substrate smoke check (`smoke.py`, owns `RETIRED_TABLES`) |
-| `data/migrations/` | SQL schema (applied in order) | `0001_baseline.sql` | **Flattened baseline + forward chain.** `0001_baseline.sql` (commit `06bab95`) collapsed the former 30-step chain into one file — extensions + AGE graph (9 vertex / 14 edge labels) + all 40 relational tables + seed data (incl. the former-0031 source-credibility `tier`/`state_affiliation` columns + seeded credibility rows). The data-analysis arc then re-opened the forward chain (`0032`…`0046`), and the analysis-spine + hygiene arc carried it on through `0047`…`0060`, the data-quality program extended it `0061`…`0075`, the 2026-07-06 audit sweep carried it through `0076`…`0080` (entity re-fold, fact/nexus junk close, cross_correlator sweep, state-media credibility), and the signal-content-depth / NER-reenrich wave took it to **head 0085** (`0081`…`0085`: signal_summarized/indexed/reindex/embedding/reenriched markers) — the `0058`–`0060` composition-fold tail is enumerated in §2.4: `0032_facts_decay_columns.sql` (facts `valid_until`/`superseded_by`/`confidence_components`), `0033_nexuses.sql` (reified `nexuses` table), `0034_seed_batches.sql` (curated-seed batch ledger), `0035_entity_profiles_composite_key.sql`, `0036_signals_retention.sql`, `0037_age_output_label.sql`, `0038_hypotheses_resolved_outcome.sql` (the EXOGENOUS ACH outcome column), `0039_consult_sessions.sql`, then the DQ-sweep tail `0040`…`0046`: situations first-class + temporal repair (`0040`/`0041_situations_valid_from_repair.sql`/`0042_situations_target_id_backfill.sql`), `0043_ingestion_conf1_backfill.sql` + `0044_purge_ingestion_leader_junk.sql` (conf-1.0 sentinel cleanup), `0045_backfill_demonym_nexuses.sql` (NER demonym→country), `0046_source_poll_outcomes.sql` (the `source_poll_outcomes` non-productive-poll provenance table). There is no `0014`. The runner (`migrate.py`) globs `*.sql` in order |
+| `data/migrations/` | SQL schema (applied in order) | `0001_baseline.sql` | **Flattened baseline + forward chain.** `0001_baseline.sql` (commit `06bab95`) collapsed the former 30-step chain into one file — extensions + AGE graph (9 vertex / 14 edge labels) + all 40 relational tables + seed data (incl. the former-0031 source-credibility `tier`/`state_affiliation` columns + seeded credibility rows). The data-analysis arc then re-opened the forward chain (`0032`…`0046`), and the analysis-spine + hygiene arc carried it on through `0047`…`0060`, the data-quality program extended it `0061`…`0075`, the 2026-07-06 audit sweep carried it through `0076`…`0080` (entity re-fold, fact/nexus junk close, cross_correlator sweep, state-media credibility), and the signal-content-depth / NER-reenrich wave carried it through `0081`…`0085` (signal_summarized/indexed/reindex/embedding/reenriched markers). Migrations past `0085` (the entity-identity/salience/journal-data wave `0086`…`0090`, the 2026-07-28 release wave `0091`…`0105`, and the follow-on wave `0106`…`0114`) are **not re-narrated here** — `DATA_MODEL.md`'s ["Migration head" note](DATA_MODEL.md#the-contested-claims-fact-model) and its two per-migration wave tables are the current source; this file just tracks where the tables/handlers *live in the tree*. The `0058`–`0060` composition-fold tail is enumerated in §2.4: `0032_facts_decay_columns.sql` (facts `valid_until`/`superseded_by`/`confidence_components`), `0033_nexuses.sql` (reified `nexuses` table), `0034_seed_batches.sql` (curated-seed batch ledger), `0035_entity_profiles_composite_key.sql`, `0036_signals_retention.sql`, `0037_age_output_label.sql`, `0038_hypotheses_resolved_outcome.sql` (the EXOGENOUS ACH outcome column), `0039_consult_sessions.sql`, then the DQ-sweep tail `0040`…`0046`: situations first-class + temporal repair (`0040`/`0041_situations_valid_from_repair.sql`/`0042_situations_target_id_backfill.sql`), `0043_ingestion_conf1_backfill.sql` + `0044_purge_ingestion_leader_junk.sql` (conf-1.0 sentinel cleanup), `0045_backfill_demonym_nexuses.sql` (NER demonym→country), `0046_source_poll_outcomes.sql` (the `source_poll_outcomes` non-productive-poll provenance table). There is no `0014`. The runner (`migrate.py`) globs `*.sql` in order |
 | `data/predicates/` | Starlark predicate DSL (subscription / matching residual) | `compiler.py` | compile-once-on-register → LRU `CompiledPredicate` (`compiler.py`), in-sandbox evaluator (`evaluator.py`), per-surface helper catalog (`helpers.py`), compile/eval errors (`errors.py`) |
 | `data/stack/` | Provider adapters resolved through the stack registry | (per family) | `llm/` (`anthropic.py`, `vllm.py`, `openai.py`, `base.py`, `pricing.py`), `embedding/`, `vector_store/qdrant.py`, `nats/jetstream.py`, `nlp_service/client.py`, `postgres/age.py`, `proxy/` |
 | `data/discovery/` | Descriptor discovery pipeline (external lists/queries → descriptors) | `registry.py` | discovery kinds (`country_list_discovery.py`, `query_source_discovery.py`, `file_sd_discovery.py`, `static.py`), materializers (`materializer.py`, `source_materializer.py`), `autowire.py`, `relabel.py`, `deps_resolver.py`, `disappearance.py`, `source_validate.py` |
@@ -85,17 +85,22 @@ is traceable to code:
 - **The product is now the ANALYSIS SPINE, not `country_assessor`.** Older docs
   frame the monolithic per-country `country_assessor` one-pager (and an old
   verdict-from-nowhere `world_assessor`) as the product — BOTH framings are
-  retired. The live spine is built bottom-up: (1) **seven bounded `inline_target`
-  UNITS** (`leadership_transition` / `energy_security` / `escalation` /
+  retired. The live spine is built bottom-up: (1) **eight bounded `inline_target`
+  UNITS** — seven broad ones (`leadership_transition` / `energy_security` / `escalation` /
   `narrative_coordination` / `internal_stability` / `military_posture` /
-  `economic_coercion`), each fanned out per desk across the **25 country
-  desks** (19 G20 + a 6-desk high-consequence `watch` tier — Israel, Iran,
-  Ukraine, Taiwan, North Korea, Pakistan, ids `country_watch_il/ir/ua/tw/kp/pk`; the units +
-  `country_composition` subscribe on `has_tag("g20") or has_tag("watch")`) and
+  `economic_coercion`), each fanned out per desk across the **32 country
+  desks** (19 G20 + a 13-desk high-consequence `watch` tier — Israel, Iran,
+  Ukraine, Taiwan, North Korea, Pakistan, and the escalation-risk band Sudan,
+  Mali, Burkina Faso, Niger, DR Congo, Myanmar, Haiti, ids
+  `country_watch_il/ir/ua/tw/kp/pk/sd/ml/bf/ne/cd/mm/ht`; the units +
+  `country_composition` subscribe on `has_tag("g20") or has_tag("watch")`) — plus an
+  eighth, narrower unit, `proliferation_watch`, tag-scoped to the ~8
+  nuclear-relevant desks (`has_tag("nuclear_watch")`) — and
   answering ONE narrow question with cited prose + a **mandatory faithfulness
   verify**; (2)
   `country_composition` (kind `meta_findings_synthesizer`) synthesizing a
-  country's seven VERIFIED units (unverified sub-claims are INNER-JOINed out); (2b)
+  country's up to eight VERIFIED units (the seven broad ones plus, on nuclear
+  desks only, `proliferation_watch`; unverified sub-claims are INNER-JOINed out); (2b)
   `region_composition` composing verified per-country reads into 5 region frames +
   the thematic cross-desk `escalation_composition` (correlation-guarded); (3)
   `world_assessor` (repointed to `meta_findings_synthesizer`) composing over the
@@ -160,10 +165,10 @@ is traceable to code:
   default off), the `inline_target` **GROUND** phase, and the
   `analyst_deps_builder._build_grounding_hook` gate inject a dated "AUTHORITATIVE
   CURRENT CONTEXT" preamble — built from the CURRENT seed/curated substrate facts
-  — into the LLM prompt of the seven bounded UNITS (grounding is opted IN on
+  — into the LLM prompt of the eight bounded UNITS (grounding is opted IN on
   `leadership_transition` / `energy_security` / `escalation` /
   `narrative_coordination` / `internal_stability` / `military_posture` /
-  `economic_coercion`), so a unit reasons over accumulated substrate state
+  `economic_coercion` / `proliferation_watch`), so a unit reasons over accumulated substrate state
   and its stale model priors are superseded. Two units (`leadership_transition`,
   `internal_stability`) additionally draw the LIVE `vector:world_context` RAG source
   (opportunistic, relevance-floored, country-filtered, degrade-not-drop — see §"RAG"
@@ -317,8 +322,9 @@ temporal repair), `0043_ingestion_conf1_backfill.sql` +
 provenance table). The analysis-spine + hygiene arc then carried the chain
 through `0047`…`0060` (the data-quality program `0061`…`0075`, the 2026-07-06
 audit sweep `0076`…`0080`, and the signal-content-depth / NER-reenrich wave
-`0081`…`0085` (signal_summarized/indexed/reindex/embedding/reenriched markers)
-later advanced it to **head `0085`** — see above):
+`0081`…`0085`, signal_summarized/indexed/reindex/embedding/reenriched markers).
+The head has since advanced well past `0085` — see the note at the top of
+this section and `DATA_MODEL.md` for `0086` onward:
 `0047_acute_forecasts.sql` (the `acute_forecasts` Brier/BSS
 pilot table), `0048_journal.sql` (the off-chain `journal_entries` table),
 `0049_facts_collapse_dup_open.sql`, `0050_receipt_chain_fork_tombstone.sql`,
@@ -343,7 +349,11 @@ Protocol (`pull` / `health_check` / lifecycle hooks + the `Signal` it yields)
 — no ABC inheritance, so external packages register kinds without importing a
 base class. `baseline.py` is the **per-source baseline pipeline** (runs once
 per signal: language/geo/entity enrichment + media-tier branching). Handlers:
-`rss.py`, `gdelt.py`, `acled.py`, `mediacloud.py`, `opensanctions.py`,
+`rss.py`, `gdelt.py` (BigQuery), `gdelt_files.py` (the keyless 15-min raw
+event-CSV file-dump path — replaced `gdelt`'s DOC 2.0 API kind after it started
+429-ing at the IP level, see `docs/DATA_SOURCES.md` §3), `acled.py`,
+`ucdp.py` (S1-T9 — Uppsala Conflict Data Program GED events, token-gated,
+feeds `escalation`/`military_posture`), `mediacloud.py`, `opensanctions.py`,
 `common_crawl.py`, `intelmq.py`, `firecrawl.py`, `scraper.py` (+ `scrapers/`),
 `telegram.py`, `discord.py`, `geojson.py` (model-free `structured` /
 `application/geo+json` modality), `json_api.py` (generic cursor-driven polled
@@ -380,16 +390,21 @@ service): `slm_classification_refine.py`, `slm_entity_resolve.py`,
 **The analysis spine (the product), bottom-up.** These are the modules to read
 first; each stage only ever consumes VERIFIED output of the one below it:
 
-1. **Seven bounded reasoning UNITS** — `inline_target.py`, one narrow question
-   each, fanned out per desk across the **25 country desks** via a
+1. **Eight bounded reasoning UNITS** — `inline_target.py`, one narrow question
+   each. Seven fan out per desk across the **32 country desks** via a
    `has_tag("g20") or has_tag("watch")` subscription: the 19 G20 desks plus a
-   6-desk high-consequence `watch` tier — Israel, Iran, Ukraine, Taiwan, North
-   Korea, Pakistan (ids `country_watch_il/ir/ua/tw/kp/pk`, registered by
+   13-desk high-consequence `watch` tier — Israel, Iran, Ukraine, Taiwan, North
+   Korea, Pakistan, and the escalation-risk band Sudan, Mali, Burkina Faso,
+   Niger, DR Congo, Myanmar, Haiti (ids
+   `country_watch_il/ir/ua/tw/kp/pk/sd/ml/bf/ne/cd/mm/ht`, registered by
    `scripts/bringup_register_watch_country_targets.py`; adding a desk is
-   register-a-target, no code).
+   register-a-target, no code). The eighth, `proliferation_watch`, is narrower:
+   it is tag-scoped instead to the ~8 nuclear-relevant desks via
+   `has_tag("nuclear_watch")`.
    The live units are `leadership_transition`, `energy_security`, `escalation`,
-   `narrative_coordination`, `internal_stability`, `military_posture`, and
-   `economic_coercion` (descriptors of the same name). A run: ASSEMBLE a
+   `narrative_coordination`, `internal_stability`, `military_posture`,
+   `economic_coercion`, and `proliferation_watch` (descriptors of the same
+   name). A run: ASSEMBLE a
    cited 72h signal slice + a Tier-1 "AUTHORITATIVE CURRENT CONTEXT" grounding
    preamble of accumulated facts/nexuses/situations (§3.4) → cited SYNTHESIZE (a
    strict-JSON `FindingPayload` whose prose carries `[N]` markers mapped to
@@ -398,8 +413,9 @@ first; each stage only ever consumes VERIFIED output of the one below it:
    → an `effective_confidence` fold + drill-to-source provenance. Skill is a
    PER-UNIT number, never a platform boast.
 2. **Per-country composition** — `meta_findings_synthesizer.py` run as the
-   `country_composition` descriptor: reads a country's seven verified units and
-   writes a hedged, cited synthesis. Unverified sub-claims never enter it — the
+   `country_composition` descriptor: reads a country's up to eight verified
+   units (the seven broad ones plus, on nuclear desks only, `proliferation_watch`)
+   and writes a hedged, cited synthesis. Unverified sub-claims never enter it — the
    gather INNER-JOINs on the faithfulness critique. Supersession keeps one live
    head per desk.
 2b. **Per-region + thematic composition** — the SAME `meta_findings_synthesizer.py`
@@ -790,10 +806,11 @@ degrade-not-drop when the corpus is empty — and is currently flipped ON for
 (`data/analysts/inline_target.py`) prepends the preamble to the LLM user prompt
 (degrade-not-drop). The opt-in schema field is `GroundingBlock`
 (`data/schemas/analyst.py`, `AnalystDescriptor.grounding`); it is opted IN on all
-seven bounded UNITS — `analyst_leadership_transition.yaml`,
+eight bounded UNITS — `analyst_leadership_transition.yaml`,
 `analyst_energy_security.yaml`, `analyst_escalation.yaml`,
 `analyst_narrative_coordination.yaml`, `analyst_internal_stability.yaml`,
-`analyst_military_posture.yaml`, `analyst_economic_coercion.yaml` (and the
+`analyst_military_posture.yaml`, `analyst_economic_coercion.yaml`,
+`analyst_proliferation_watch.yaml` (and the
 on-cadence `journal_assessor`). The
 retired `analyst_country_assessor.yaml` also carries the block, but it no longer
 runs.
@@ -919,11 +936,11 @@ Migrations are applied via `python -m legba.data.migrate` (see `migrate.py`).
 Sources (`source_bbc_world.yaml`, `source_dw_world.yaml`,
 `source_aljazeera_world.yaml`), targets (G20 `target_country_g20.yaml` +
 per-country news targets, `target_india_energy_infra.yaml`), analysts — the
-**analysis spine** descriptors first: the seven units
+**analysis spine** descriptors first: the eight units
 (`analyst_leadership_transition.yaml`, `analyst_energy_security.yaml`,
 `analyst_escalation.yaml`, `analyst_narrative_coordination.yaml`,
 `analyst_internal_stability.yaml`, `analyst_military_posture.yaml`,
-`analyst_economic_coercion.yaml`), the composition tower
+`analyst_economic_coercion.yaml`, `analyst_proliferation_watch.yaml`), the composition tower
 (`analyst_country_composition.yaml`, `analyst_region_composition.yaml`,
 `analyst_world_assessor.yaml`, the thematic `analyst_escalation_composition.yaml`),
 the deterministic I&W pair (`analyst_indicator_tracker.yaml`,
@@ -947,11 +964,12 @@ templates (`template_country*.yaml`).
 ### `scripts/` — bring-up & ops
 
 `bringup_register_*.py` register descriptors into a running registry (stack,
-sources, analysts, action-packs, G20 country targets + the 6-desk `watch` tier
-(`bringup_register_watch_country_targets.py` — ids `country_watch_il/ir/ua/tw/kp/pk`)
+sources, analysts, action-packs, G20 country targets + the 13-desk `watch` tier
+(`bringup_register_watch_country_targets.py` — ids
+`country_watch_il/ir/ua/tw/kp/pk/sd/ml/bf/ne/cd/mm/ht`)
 + discovery, entity resolution, …); `bringup_register_analysts.py` registers the
 live analyst set —
-the analysis-spine descriptors (the seven units, the composition tower —
+the analysis-spine descriptors (the eight units, the composition tower —
 `country_composition` / `region_composition` / `world_assessor` / thematic
 `escalation_composition` — the I&W pair `indicator_tracker` / `collection_gap`,
 `scorecard_producer`, `unit_correctness_scorer`, `forecast_scoreboard`,
@@ -1034,9 +1052,14 @@ live features. The full declared-seam list is `docs/SEAMS.md`.
 - **Non-text UI renderers** — the modality→renderer registry is keyed, but the
   MapLibre renderer for `structured`/geo+json and the audio/video/image players
   are badged placeholders.
-- **Situation clustering at scale** — `finding_supersession` ships as a
-  deterministic analyst that links near-dups; auto-clustering them into
-  feed-level situations is not yet enforced.
+
+**No longer a seam — situation clustering is LIVE.** `finding_supersession`
+stamps a `situation_signature` on clustered findings; `situation_clustering.py`
+(`deterministic_handlers/`) reads those, groups by signature, and UPSERTs one
+`situations` row per cluster (registered + `active`, its own bringup script
+`scripts/bringup_register_situation_clustering.py` — not folded into
+`bringup_register_analysts.py`). Verified live: 83 `situations` rows, 3000+
+`analyst_traces` runs.
 
 Live, in case other notes suggest otherwise: reactive LLM-analyst
 trigger dispatch (`runtime/triggers/` fires LLM analysts on the coalescing

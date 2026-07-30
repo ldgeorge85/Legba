@@ -55,8 +55,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator, Awaitable, Callable, ClassVar, Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ..schemas.source import SourceClass
 from ._contract import Signal, SourceContext, SourceHealth
 
 
@@ -198,6 +199,21 @@ async def _resolve_secret(
     return await _env_resolver(name)
 
 
+def _strip_channel_prefix(channel_ref: str) -> str:
+    """Strip '@' / 'telegram://' the same way everywhere a channel handle is
+    compared: the ``channels`` list (:meth:`TelegramChannelSourceHandler.
+    _normalize_handle`), the ``classes`` per-channel override map's keys
+    (below), and — on the read side — a signal's own
+    ``payload.channel.username`` (:mod:`legba.data.analysts.signal_salience`'s
+    stamping-path lookup). One normalization rule, three call sites, so an
+    override keyed ``"@Almasirah_En"`` matches a channel configured as
+    ``"Almasirah_En"`` (or vice versa) instead of silently never firing."""
+    s = channel_ref.strip()
+    if s.startswith("telegram://"):
+        s = s[len("telegram://"):]
+    return s.lstrip("@")
+
+
 # ---------------------------------------------------------------------------
 # Config schema
 # ---------------------------------------------------------------------------
@@ -231,6 +247,34 @@ class TelegramChannelSourceConfig(BaseModel):
         description="Channel handles or numeric IDs to monitor. Handles "
                     "may be prefixed with '@' or 'telegram://' — both are "
                     "stripped at resolve time.",
+    )
+    classes: dict[str, SourceClass] = Field(
+        default_factory=dict,
+        description="OPTIONAL per-channel source_class override (2026-07-29 "
+                    "Ansar Allah decision). source_class is otherwise a "
+                    "whole-descriptor field (SourceScope.source_class) — one "
+                    "class for the entire batch of channels this descriptor "
+                    "polls. A channel that needs a DIFFERENT editorial class "
+                    "than the batch default — e.g. a Houthi/Ansar Allah "
+                    "state-media voice riding the SAME session/account as a "
+                    "batch classed `reporting` (a second concurrent "
+                    "TelegramClient on one session triggers Telegram's "
+                    "AUTH_KEY_DUPLICATED session-kill — see the module "
+                    "docstring) — is listed here instead of forking a new "
+                    "descriptor + account. Keyed by channel handle (same "
+                    "normalization as `channels` — '@' / 'telegram://' "
+                    "stripped, see `_strip_channel_prefix`); values are "
+                    "choice-locked to the S1-T8 source_class vocabulary "
+                    "(`legba.data.schemas.source.SourceClass`) — an "
+                    "off-vocabulary value fails LOUD right here at config "
+                    "validation (registration/activation), never silently "
+                    "at signal-write time. A channel absent from this map "
+                    "keeps the descriptor's `scope.source_class` default. "
+                    "Read at the S-1 authority-stamping path — "
+                    "`legba.data.analysts.signal_salience."
+                    "_channel_class_override` — which prefers this override "
+                    "over the descriptor default per-signal, keyed by the "
+                    "message's own `payload.channel.username`.",
     )
     lookback_hours: int = Field(
         default=24,
@@ -379,6 +423,33 @@ class TelegramChannelSourceConfig(BaseModel):
                     "left by a crashed poll and is force-cleared (logged). "
                     "Keep it comfortably above cycle_timeout_seconds.",
     )
+
+    @field_validator("classes", mode="after")
+    @classmethod
+    def _normalize_classes_keys(
+        cls, v: dict[str, SourceClass]
+    ) -> dict[str, SourceClass]:
+        """Normalize override keys the same way ``channels`` handles are
+        normalized, so ``"@Almasirah_En"`` and ``"Almasirah_En"`` collide on
+        the same entry instead of silently coexisting as two dead keys."""
+        return {_strip_channel_prefix(k): c for k, c in v.items()}
+
+    @model_validator(mode="after")
+    def _classes_keys_must_reference_a_configured_channel(
+        self,
+    ) -> "TelegramChannelSourceConfig":
+        """Fail loud at registration when an override names a channel that
+        isn't in ``channels`` — a typo (or a channel later removed from
+        ``channels`` without cleaning up its override) must not silently
+        vanish; it should refuse validation instead."""
+        known = {_strip_channel_prefix(c) for c in self.channels}
+        unknown = sorted(set(self.classes) - known)
+        if unknown:
+            raise ValueError(
+                "config.classes references channel(s) not present "
+                f"in config.channels: {unknown}"
+            )
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -1227,8 +1298,8 @@ class TelegramChannelSourceHandler:
     ) -> None:
         """Persist this pull's health under ``health_state_key`` (FIX 1).
 
-        The source actor (``_record_poll_outcome``) reads this record for a
-        non-productive poll and turns ``degraded`` / ``unhealthy`` into an
+        The source actor (``_record_poll_outcome``) reads this record and, for a
+        NON-productive poll, turns ``degraded`` / ``unhealthy`` into an
         ``error`` outcome — the ONLY way a handler-SWALLOWED systemic failure
         (a revoked session, which the per-channel isolation above would
         otherwise return as a clean 0-yield 'empty') becomes visible to
@@ -1543,11 +1614,7 @@ class TelegramChannelSourceHandler:
     @staticmethod
     def _normalize_handle(channel_ref: str) -> str:
         """Strip @-prefix and telegram:// scheme; keep numeric IDs intact."""
-        s = channel_ref.strip()
-        if s.startswith("telegram://"):
-            s = s[len("telegram://"):]
-        s = s.lstrip("@")
-        return s
+        return _strip_channel_prefix(channel_ref)
 
     @staticmethod
     def _normalize_msg_date(msg: Any) -> Optional[datetime]:

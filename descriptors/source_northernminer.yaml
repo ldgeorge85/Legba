@@ -1,0 +1,84 @@
+# Supply-chain domain — top-10 first registrations (2026-07-29). Draft
+# SourceDescriptor. Ships DRAFT (operator activates).
+#
+# REGISTRATION STEP (main session): register via a Wave-A-style direct-DB
+# registrar — see scripts/bringup_register_supply_chain_sources.py in this
+# same commit — then, on the live instance:
+#   docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
+#     python scripts/bringup_register_supply_chain_sources.py
+#
+# Northern Miner — long-running (est. 1915) mining-industry trade press.
+# Fills the C-1 mining/critical-minerals trade-press gap slot
+# (planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §5.2), feeding the Tier-B
+# (draft, not yet activated) `flow_critical_minerals` desk — see §1.2's
+# activation gate (needs >=100 titles/30d with a precision spot-check; the
+# plan flags a confirmed `%nickel%`/FIFA false positive as the warning to
+# check for on activation). Verified live 2026-07-29 per
+# planning/SUPPLY_CHAIN_SOURCES_2026-07-29.md §2.D (§5 rank #10): HTTP 200,
+# same-day items, robots.txt clean, free/no-auth.
+#
+# source_class: reporting — independent commercial trade press (not
+# state-affiliated). Credibility host northernminer.com (seeded 0.68/wire by
+# the registrar) — long-standing sector-standard mining/exploration press.
+
+identity:
+  id: source.northernminer.news
+  name: Northern Miner
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: supply_chain_top10
+  created: "2026-07-29T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  # Global mining/critical-minerals trade press — no single-country focus;
+  # consuming flow_critical_minerals narrows by scope.geo/predicate.
+  geo: []
+  languages: [en]
+  tags: [supply_chain, minerals, mining, economic]
+  source_class: reporting
+
+acquisition: poll
+
+cadence:
+  # "several/day, active" — the every-2h wire bucket.
+  schedule:
+    factory_kind: cron
+    raw: "58 0-23/2 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.northernminer.com/feed/"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming the
+    # route yields full article text (mirrors the Wave-A conservative default).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

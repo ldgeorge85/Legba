@@ -46,11 +46,9 @@ allowlist lines.
 
 ### 3. Deep-crawl discovery jobs (decision F-1 — RESOLVED by removal)
 
-| | |
-|---|---|
-| **What** | `crawl_discovery` / `query_discovery` job kinds (agent-driven deep-crawl / web-query source discovery). The dead enqueue (`discover_sources_tool`) was **removed** per F-1 — it fed kinds no worker handler ever consumed; the `discovery` action pack is retired (`descriptors/action_pack_discovery.yaml`, state=retired). Source discovery ships via the registry discovery route. |
-| **Why deferred** | Job-based deep crawl is a designed direction item — `docs/DIRECTION.md` §8 — not wave scope. |
-| **Guard rail** | Nothing left to guard: the enqueue path no longer exists. `src/legba/runtime/jobs/worker.py:JobWorker` still fails loud on ANY unhandled kind (generic backstop), and `KNOWN_JOB_KINDS` documents `process_media` as the one shipped kind. |
+**RESOLVED 2026-06-09 (decision F-1).** Re-verified 2026-07-28 (C5 hygiene
+pass) — compacted to the [Resolved seams appendix](#resolved-seams-compact-appendix);
+see there for the verification evidence and detail.
 
 ### 4. Fallback-model budget demotion (decision F-2)
 
@@ -110,11 +108,11 @@ allowlist lines.
 
 ### 11. Consult `vector_search` embedder wiring — RESOLVED (L-114, 2026-07-02)
 
-| | |
-|---|---|
-| **Status** | **RESOLVED (L-114 / S5-T1).** The host now threads the hosted embedding client (`embed.primary.openai_compat` — the same `HostedEmbeddingClient` the dedupe-tier-3 path already uses) through the consult substrate-query port at bring-up, so free-text `vector_search` embeds-then-searches live: `PostgresQdrantSubstrateQueryPort(pg_pool=…, qdrant_client=…, embedder=embedding_service)` in `dapr_host.bring_up_production_runtime`. The Qdrant cosine path was already built (`vector_search_by_embedding`); L-114 was purely the embedder-through-port wiring. The SAME embedder-through-port now also backs the live `search_context` corpus-RAG tool (one of the 19 `substrate_read` pack tools) and the Tier-2 `vector:world_context` grounding read — see SEAMS #20 (RESOLVED). |
-| **Fix** | `src/legba/runtime/substrate_query_port.py:PostgresQdrantSubstrateQueryPort.vector_search` — when an `embedder` is present it calls `embedder.embed(query)` then delegates to `vector_search_by_embedding` (tagging the result `backing: "qdrant_cosine"`); an embed-backend failure degrades to `{"unavailable": True, "reason": "embed_failed: …"}` and an empty query short-circuits to an empty result (mirrors `search_signals`). The embedder is threaded from `dapr_host` → `analyst_deps_builder.build_analyst_run_method(embedding_service=…)` and directly into the port ctor. |
-| **Guard rail** | NOT a stub — no fabricated vectors. When the embedding service wasn't provisioned (`embedder is None`) the method still returns the Protocol's explicit `{"unavailable": True, "reason": "no_embedder_wired ..."}` shape (the honest degrade), and `search_signals` still reports `scope_predicate_applied: False` rather than pretending the Starlark predicate ran (that L-104 leg is unchanged). |
+**RESOLVED 2026-07-02 (L-114 / S5-T1).** Re-verified 2026-07-28 (C5 hygiene
+pass) — compacted to the [Resolved seams appendix](#resolved-seams-compact-appendix).
+Note: SEAMS #20 (the Tier-2 `vector:world_context` grounding pilot) shares
+this embedder-through-port wiring but is **NOT** resolved/compacted — it
+stays open below as an active guarded pilot with honest residual risk.
 
 ### 12. Optimizer parent-prompt loading degradation
 
@@ -197,28 +195,22 @@ allowlist lines.
 
 ### 22. Live GATHER actuation of the `web_access` / `propose_facts` tools (S6) — CLOSED (2026-06-19)
 
-| | |
-|---|---|
-| **Status** | **CLOSED.** The run-path wiring that lets a *running* `inline_target` assessor invoke the S6 external + write-back tools mid-run now ships. The previously-deferred edits landed in the three WF-C run-path files. |
-| **What shipped** | (1) `inline_target._GATHER_TOOLS` now spans the read surface **plus** `web_fetch`/`web_search` (`web_access`) and `propose_fact`/`request_source`/`open_question` (`propose_facts`); the GATHER loop ROUTES each tool to the binding for ITS owning pack so `Agency.run_pack_tool` enforces tool↔pack ownership + the per-pack governor (read tools → the `substrate_read` binding; write/web tools → their per-tool binding). (2) `dapr_host` builds the per-pack write/web GATHER bindings — but ONLY for an inline_target assessor that ALSO grants the pack via `action_packs`, and ONLY when the base `substrate_read` GATHER binding is itself wired; `pg_pool` is threaded onto each binding's `ToolContext`. (3) `dapr_actors._gather_write_bindings_for_target` re-points each binding to the running target's `allowed_action_packs` per run and, for the write pack, injects a per-run `WritebackContext` (the run's pg_pool + a fresh per-run `AnalystContext`) **copy-on-write** — it clones the binding + its `ToolContext`, never mutating the shared base (the documented fan-out race). (4) `inline_target._gather_system_suffix` splices the bound packs' operator-authored `prompt_fragments`+`rules` (from `descriptors/action_pack_web_access.yaml` / `action_pack_propose_facts.yaml`) into the GATHER system prompt. |
-| **Trust-model constraints it shipped under** | The wired tools are **PROPOSE-grade ONLY** and stay inside the existing three-way agency gate — nothing here bypasses it. `propose_fact` writes `source_type='proposed'` via `write_fact` (never authoritative, never `_insert_fact`); `request_source`/`open_question` write `hypotheses` rows via `write_hypothesis`. **NONE** mutate the control-plane (no source/target/analyst descriptor writes). `web_fetch`/`web_search` egress **only** through `SsrfGuardedTransport`. Every write carries MANDATORY `derived_from` lineage (review S-1 — the assessor's reasoning is driven by untrusted RSS text, so an uncited write is refused). A write/web pack a target does NOT allow is a loud BLOCK at resolution; a write/web tool named with no wired binding is a clean `tool_unbound` no-op folded back to the planner — never an ungoverned call, never dispatched through the read binding. |
-| **Guard rail** | Everything still fails loud, nothing fabricates: each write handler returns a `failed` `ToolResult` when `ctx.writeback` is absent (`src/legba/data/analysts/agency/write_tools.py`); the web handlers refuse non-public egress; a granted-but-unbindable write/web pack is FAIL-LOUD at deps build (`dapr_host` returns `None` → activation refuses), mirroring the consult/escalation/substrate_read legs. Exercised end-to-end through the real `Agency.run_pack_tool` in `tests/data_pkg/agency/test_web_and_propose_tools_e2e.py`, and the run-path routing + copy-on-write + propose-with-lineage + unbound/blocked degrade-not-drop paths in `tests/data_pkg/test_analyst_inline_target.py` (SEAM #22 block). (No allowlist line — there is no stub symbol; the handlers and the wiring are real and complete.) |
+**CLOSED 2026-06-19.** Re-verified 2026-07-28 (C5 hygiene pass) — compacted
+to the [Resolved seams appendix](#resolved-seams-compact-appendix).
 
 ### 23. Dapr long-activity workflow round-trip (daprd 1.17.9) — RESOLVED for the GEPA optimizer (2026-06-29; = #86)
 
-| | |
-|---|---|
-| **Status** | **RESOLVED for the GEPA optimizer** (`31473ed` / `c76d44d`). The optimizer's durable **Dapr Workflow** round-trip now completes live on the Dapr backend (`Orchestration completed with status: COMPLETED`). The apparent "long activity won't resume" was diagnosed as a **>4 MB gRPC payload overflow** (`RESOURCE_EXHAUSTED: message larger than max ...`), not purely a daprd 1.17.9 resume bug — the optimizer inlined ~500 training rows into the workflow input. The durable `deep_consult` round-trip **shares the same mechanism** but was **NOT independently re-verified**; the in-process fallback path remains live for it (and for the optimizer) as a safety net. |
-| **Fix** | Pass the training set **by reference** rather than inlining it: the workflow input now carries a tiny `TrainingSetRef` and the worker re-fetches the rows via `materialize_training_set` (`optimizer.materialize.ok rows=...` on the live path), so the message no longer crosses the gRPC cap. Belt-and-suspenders gRPC guardrail: the daprd sidecar runs with `-max-body-size ${LEGBA_DAPR_MAX_BODY_SIZE:-16Mi}` (`docker-compose.yml`), the independent supported lever for the HTTP + gRPC limit. The earlier **compile-hang sub-issue stays FIXED** (the bridge LM call had no timeout → infinite hang → no trace → silent death; now per-call + dispatch timeouts, valset cap, real rollouts, and an observable `workflow_timeout` trace). Tracking: `planning/BACKLOG.md` §0/§8 (Dapr long-activity round-trip note). |
-| **Guard rail** | NOT a stub — the durable path now succeeds and the fallback still produces a real result observably. Pass-by-reference: `src/legba/runtime/dapr_workflow/gepa.py` (`TrainingSetRef` + `materialize_training_set`), `src/legba/runtime/dapr_workflow/worker.py` / `client.py` (the `-max-body-size` lever + pass-by-reference notes). If the durable round-trip ever fails again, the optimizer still degrades observably to the in-process path (`run_optimizer_in_process`, the `StubWorkflowHandle` non-stub of the allowlist; `optimizer_workflow.in_process` / `.unavailable` signposts, RUNBOOK §4.2) and never fabricates output. The residual open edge is the **un-re-verified deep_consult** durable leg — it shares the fix but has not been independently confirmed on the Dapr backend, so the in-process synchronous path is still its live default. |
+**RESOLVED for the GEPA optimizer, 2026-06-29** (`31473ed` / `c76d44d`).
+Re-verified 2026-07-28 (C5 hygiene pass) — compacted to the [Resolved seams
+appendix](#resolved-seams-compact-appendix). **Residual, carried forward**:
+the `deep_consult` durable leg shares the same fix but was NOT independently
+re-verified on the Dapr backend — its in-process synchronous fallback stays
+the live default.
 
 ### 24. `nlp_client` boot-singleton cannot re-resolve — RESOLVED (2026-06, #91 / `985db7e`)
 
-| | |
-|---|---|
-| **What** | The runtime builds its NLP / embedding / vector clients **once at boot** from the registered stack components (`dapr_host.bring_up_production_runtime`). If the `nlp.local.legba_models` stack component is absent/unseeded at boot, `nlp_client` stays `None` for the whole process lifetime — it cannot be re-resolved without a runtime restart. Bringing the runtime up against an empty registry and seeding the stack *afterwards* leaves source enrichment unable to build (`source_deps_resolver.enrichment_build_failed`), so signals land with no `geo`/entities and geo-scoped analysts have nothing to match. |
-| **Resolution** | Closed by **#91** (`985db7e`): `src/legba/runtime/nlp_client_factory.py:LazyNlpClient` resolves the NLP / embedding / vector clients on FIRST use and **re-resolves on handler-build**, so a stack component seeded *after* boot is picked up **without a runtime restart** — the boot-time permanent-`None` is gone (+71-line factory, +130-line test). The documented bring-up ORDER + fail-loud boot signpost remain as belt-and-suspenders. _(Prior status: deferred as a reconcile-loop-driven architecture change; #91 delivered the lazy/self-healing equivalent.)_ |
-| **Guard rail** | NOT a stub — the missing client degrades loud, never fabricates enrichment. Boot logs `dapr_host.nlp_client.built component=nlp.local.legba_models` on success and `nlp_client.unavailable` when the component is absent; per-signal enrichment build refuses loud (`source_deps_resolver.enrichment_build_failed … requires an nlp_client_factory`). Operator recipe (seed BEFORE boot, or `--force-recreate` the runtime after seeding) is `docs/RUNBOOK.md` §0. |
+**RESOLVED 2026-06 (#91 / `985db7e`).** Re-verified 2026-07-28 (C5 hygiene
+pass) — compacted to the [Resolved seams appendix](#resolved-seams-compact-appendix).
 
 ### 25. Journal `change`-proposal apply path not yet exercised against a live registry
 
@@ -287,14 +279,13 @@ allowlist lines.
 | **Guard rail** | Mechanically self-enforcing as seams #30/#31: the `if schedule:` gate registers no `run_cadence` reminder for a null schedule (verify: no `reminder.registered` for `india_energy_predictor`; 0 etcd reminders for its actor type). Liveness watchdog excludes it (null-schedule filter). **No allowlist line** — YAML outside `src/legba/**`, no scannable stub symbol; declared CADENCE freeze, not a code stub. To restore: set `fallback_schedule` back to `"*/30 * * * *"`. |
 | **Reconcile (P4-T8, RETURNED AS A SCOPED MEASURED EXPERIMENT)** | Identical rationale to seam #31: forecasting RETURNS at P4-T7 ONLY as the segregated `acute_forecasts` Brier/BSS scoreboard on `GET /api/v1/v3/eval/calibration` (`CalibrationScoreboard`), NEVER as a free-text forecast claim/finding; the degenerate-vector path ABSTAINS (`forecast_acute.abstain_degenerate`, zero rows) and skill is WITHHELD (`brier_forecast_acute=None` / `forecast_unproven=True`) until ready AND non-degenerate AND BSS>0 — guarded by `tests/data_pkg/test_p4t8_honesty_forecast_skill.py` (`pytest -k p4t8_honesty`). The `india_energy_predictor` cadence STAYS null-frozen — the scoreboard supersedes the reactive producer; a DIFFERENT design, NOT a lift of the freeze. |
 
-### 33. journal_assessor cadence — SEQUENCED FREEZE (P0-T6 → returns as introspection/observability)
+### 33. journal_assessor cadence — UNFROZEN, runs live on cadence (historical freeze REVERSED 2026-07-01)
 
 | | |
 |---|---|
-| **What** | `descriptors/analyst_journal_assessor.yaml` — the journal's first-person reflective voice (the 11th `OutputKind`, kind `journal_assessor`, writes only `journal_entries` off the fact/finding/nexus chain) — has its `cadence.fallback_schedule` **NULLED** (`null`, from the prior `"0 0,12 * * *"` every-12h entry tier). SUBTRACT freezes its AUTONOMOUS cadence so the journal RETURNS only as **introspection / observability** (operator- or manual-triggered self-narration), NOT as an always-on producer in the cited-synthesis spine. The descriptor stays `state: active` with kind/persona/packs intact; only the cadence is frozen. |
-| **Why deferred** | Sequenced, not deleted. The journal narrates a voice-bearing point of view OVER the organism; in the order that introspective voice is observability, not a spine producer — it returns on demand (operator trigger) rather than on a 12h tick (`planning/PLATFORM_DIRECTION_PLAN_2026-06-30.md`, P0-T6). The journal already NEVER writes a fact/finding/nexus, so freezing its cadence removes only the autonomous tick, not a verified output leg. |
-| **Guard rail** | Mechanically self-enforcing as seams #30–#32: the `if schedule:` gate registers no `run_cadence` reminder for a null schedule, so no entry tick fires (verify: no `reminder.registered` for `journal_assessor`; 0 etcd reminders for its actor type). Liveness watchdog excludes it (null-schedule filter). **No allowlist line** — YAML outside `src/legba/**`, no scannable stub symbol; declared CADENCE freeze, not a code stub. To restore: set `fallback_schedule` back to `"0 0,12 * * *"`. |
-| **Reconcile (UNFROZEN 2026-07-01, operator decision)** | This freeze is REVERSED: `descriptors/analyst_journal_assessor.yaml` `cadence.fallback_schedule` is set back to `"0 0,12 * * *"` (the 12h entry tier) alongside the daily consolidator tier — the journal RETURNS as an autonomous producer (still OFF the fact/finding/nexus chain; it writes only `journal_entries`). This is the journal_assessor revival (task #100). So the SUBTRACT above is historical: the cadence is LIVE again, not null. |
+| **Current reality** | The journal (the 11th `OutputKind`, kind `journal_assessor`, writes only `journal_entries` off the fact/finding/nexus chain) **runs live on cadence today**: `descriptors/analyst_journal_assessor.yaml` `cadence.fallback_schedule = "0 0,12 * * *"` (every 12h, entry tier) plus `descriptors/analyst_journal_consolidator.yaml` at `"0 2 * * *"` (daily consolidation tier) — both verified non-null in the live descriptor YAMLs. It is NOT frozen. (Corrected 2026-07-28, C5 hygiene pass — the entry below previously led with the historical NULLED state, which read as current and contradicted reality.) |
+| **History** | P0-T6 originally SUBTRACTED the autonomous cadence (nulled `fallback_schedule`, from the prior `"0 0,12 * * *"`) so the journal would return only as operator-triggered introspection/observability, not an always-on spine producer. That freeze was **REVERSED on 2026-07-01** (operator decision, the journal_assessor revival, task #100): the cadence was set back to live and the journal has run as an autonomous producer since, still OFF the fact/finding/nexus chain (it writes only `journal_entries`, never a fact/finding/nexus). |
+| **Guard rail** | Unchanged mechanism, now running the OTHER direction: the `if schedule:` reminder gate (`src/legba/runtime/dapr_actors.py`) registers a `run_cadence` reminder BECAUSE `fallback_schedule` is non-null — verify via `reminder.registered` for `journal_assessor` / `journal_consolidator` in the boot log and a non-zero etcd reminder count for the actor type. **No allowlist line** — YAML outside `src/legba/**`, no scannable stub symbol; this was a declared CADENCE freeze, now reversed, not a code stub. To re-freeze: null `fallback_schedule` again on both descriptors. |
 
 ### 34. world-assessment verdict-banner FRAMING — UI FREEZE (P0-T7 → composed/verified world view returns P3)
 
@@ -343,11 +334,9 @@ allowlist lines.
 
 ### 39. Non-Latin / telegram NER re-enrichment — RESOLVED (backfill drained)
 
-| | |
-|---|---|
-| **What** | *(Historical seam, closed.)* The NER enrichment fixes were originally **forward-only**, leaving ~9k already-ingested telegram / non-Latin signals with empty entities. The `reenrich_ner` backfill has since drained that backlog in place (~10k signals re-enriched, idempotent per-signal marker), so the forward pipeline and the archive share the same enrichment floor. |
-| **Why kept** | Retained as a record that the seam existed and how it closed; the forward path (telegram body NER + NLLB pre-translation for Arabic / Russian / Ukrainian) is unchanged and live. |
-| **Guard rail** | None needed — the backfill wrote real extractions; a signal it could not enrich stays an honest empty. |
+**RESOLVED 2026-07-09** (the `reenrich_ner` backfill, migration 0085).
+Re-verified 2026-07-28 (C5 hygiene pass) — compacted to the [Resolved seams
+appendix](#resolved-seams-compact-appendix).
 
 ### 40. 2026-07-06 audit remediation — deferred follow-ups (declared backlog)
 
@@ -373,29 +362,20 @@ allowlist lines.
 | **Why deferred** | Operator-decided stage-1 scope (program §A3): cited-only + plain FS first, prove it out before widening or adding a store; deletion policy for *evidence* needs an operator decision, not a default. |
 | **Guard rail** | Nothing half-built to guard: the archiver only ever ADDS objects and stamps rows; archived signals are upgraded to `retention_class='evidence_hold'`, which the existing `signals_retention` purge already exempts, so no purge can orphan an archive. A missing/unwritable archive root no-ops the tick LOUDLY (`skipped_no_root` counter + warning), never a silent drop. |
 
-### 43. `signals_retention` TTL is options-only — no env treatment (opt-in gap)
+### 43. `signals_retention` TTL is options-only — RESOLVED (env fallback landed, W-2 2026-07-28)
 
-| | |
-|---|---|
-| **What** | The `signals_retention` purge reads its `ttl_days` ONLY from the handler `options` mapping (`src/legba/data/analysts/deterministic_handlers/signals_retention.py` — `options.get("ttl_days", 0)`), but the cadence dispatch path passes an options dict carrying only `sub_handler` and the descriptor schema forbids arbitrary `method.options`, so an operator has no working lever to opt in on a cadence tick. The SAME class of gap was found and FIXED on the sibling `analyst_traces_retention` handler (2026-07-28): it now falls back to a `LEGBA_ANALYST_TRACES_TTL_DAYS` env var. `signals_retention` has NOT received the equivalent env fallback yet. |
-| **Why deferred** | Noted-open at the traces-TTL fix; a signals TTL is a heavier data-deletion decision than a telemetry TTL, so wiring its env lever deserves its own deliberate pass (the purge deletes substrate, not telemetry). Tracked as a small code item. |
-| **Guard rail** | Fail-safe by construction, not a stub: with `ttl_days <= 0` (the unreachable-in-practice default) the handler is an honest no-op that emits a "disabled — no purge" finding every run — nothing is deleted, nothing pretends to be. The `retain_always` / `evidence_hold` exemptions are unaffected. (No allowlist line — no stub symbol; the purge logic is real, only the opt-in lever is missing.) |
+**RESOLVED 2026-07-28 (W-2).** Re-verified 2026-07-28 (C5 hygiene pass) —
+compacted to the [Resolved seams appendix](#resolved-seams-compact-appendix).
 
-### 44. World/thematic compositions keep the legacy floor (tiered-evidence periphery seam)
+### 44. RESOLVED (2026-07) — world/thematic compositions now carry the two-tier split
 
-| | |
-|---|---|
-| **What** | The C-TIER two-tier evidence split (basis ≥ floor + hedged capped periphery, `LEGBA_COMPOSITION_TIERED_EVIDENCE`) engages on the PER-COUNTRY and REGION composition reads only. The WORLD and THEMATIC (`escalation_composition`) branches keep `_resolve_verify_floor` even when the flag is ON — no periphery is gathered or rendered for them (`src/legba/data/analysts/meta_findings_synthesizer.py`, the C-TIER comment block). |
-| **Why deferred** | Deliberate: raising their bar WITHOUT the periphery machinery would hard-DROP their 0<eff<0.5 heads — exactly the signal loss the two-tier design exists to prevent. Their slices already carry degrade/gap coverage honesty; `_run` is data-driven, so a branch that later marks periphery rows gets the full rendering/citation/envelope treatment with no further `_run` change. |
-| **Guard rail** | Nothing fabricated: the world/thematic behavior is the unchanged legacy path, and the flag-ON country/region path stamps `data.evidence_tiers` so a reader can see which compositions carry the split. (No allowlist line — no stub symbol; the extension is absent, not faked.) |
+**RESOLVED 2026-07-28.** Re-verified 2026-07-28 (C5 hygiene pass) —
+compacted to the [Resolved seams appendix](#resolved-seams-compact-appendix).
 
-### 45. Tier-aware LLM-judge rubric (two-tier verify follow-up)
+### 45. RESOLVED (2026-07) — tier-aware LLM-judge rubric
 
-| | |
-|---|---|
-| **What** | The periphery hedge rule (`unhedged_periphery_citation` — a bald claim resting only on periphery-tier citations is a counted soft failure) runs on the DETERMINISTIC floor profile only. The optional LLM judge grades GROUNDING and knows nothing about evidence tiers; a floor span whose clause the judge also graded dedups by text. Teaching the judge rubric the basis/periphery distinction is a declared follow-up (`src/legba/data/provenance/verify.py`, the C-TIER scope note — "not smuggled in here"). |
-| **Why deferred** | The C1 no-co-veto decision: the judge stays authoritative over the prose it graded; changing its rubric is a measured prompt change, not a rider on the floor rule. |
-| **Guard rail** | The floor rule is always-on for tiered compositions, so an unhedged periphery claim is counted regardless of what the judge does — the follow-up ADDS judge nuance, its absence never lets an overclaim through unflagged. (No allowlist line — the floor rule is real; the judge extension is absent, not faked.) |
+**RESOLVED 2026-07-28.** Re-verified 2026-07-28 (C5 hygiene pass) —
+compacted to the [Resolved seams appendix](#resolved-seams-compact-appendix).
 
 ### 46. Provenance-badge backend fallback signal (`live|fallback|absent` — the `fallback` input)
 
@@ -420,6 +400,70 @@ allowlist lines.
 | **What** | The `narrative_coordination` LLM unit could ground on the reified `narratives` sidecar (carrier sources, echo lags, lead/follow edges) via a new `"narratives"` grounding-source token — a sources-dispatch entry in `analyst_deps_builder.py` plus a block builder in `grounding.py`. Not wired: the unit today reads its signal slice + the standard grounding tiers only (`src/legba/data/analysts/deterministic_handlers/narrative_mapper.py`, the "Seams" docstring section). A sibling display enrichment — tagging carriers with `state_affiliation` from the ratings rubric — is likewise noted-not-wired. |
 | **Why deferred** | Additive and deliberately out of the P4 wave scope; the narrative objects needed to exist and prove stable before an LLM unit grounds on them. |
 | **Guard rail** | Nothing half-built to guard — the token does not exist in the `GroundingBlock.sources` Literal (`src/legba/data/schemas/analyst.py`), so a descriptor declaring `"narratives"` is refused at schema validation (loud pydantic error, the same mechanism as the `stream` seam #2) rather than silently injecting nothing; the narratives read routes and the mapper are real and complete. (No allowlist line — no stub symbol.) |
+
+### 49. `claim_watch` closer (K-5 stage) — not built; the watcher is flag-only
+
+| | |
+|---|---|
+| **What** | `claim_watch` (KW-3, `src/legba/data/analysts/deterministic_handlers/claim_watch.py`) is the WATCHER half only: a deterministic META analyst that matches new signals (since a durable cursor watermark on the shared `alert_trigger_watermarks` table, `trigger_class='claim_watch'`) against the standing open-question set (`hypotheses` rows, `status='open_question'`) via a fused vector+entity+geo plane, and side-writes `bearing_edges` (migration 0107) + `review_flags` (migration 0107, only for questions tracing to LIVE consumers via `output_consumption`) + a per-run `staleness_debt` gauge (open flags whose flagged consumer is still live). It NEVER writes correction content, NEVER writes back to the flagged producer, and NEVER recomposes anything — flags/edges only, by construction. **One further absence rides this seam:** the **K-5 closer** — injecting a confirmed match as evidence into the original producer's next natural run (slice injection), letting supersession correct the record, and closing the review flag by supersession — does not exist in-tree. **Partially closed (C3 wave):** `staleness_debt` now HAS a read route — `GET /api/v1/v3/system/staleness-debt` (`data/registry/v3_api.py`), which computes the headline number with the matcher's own SQL (mirrored under a byte-equality drift guard) and reports `match_verified: false` on the wire. `review_flags` rows are still only aggregated by it (counts, distinct consumers/foundations, reason breakdown) — there is still **no per-row read surface** for `review_flags` or `bearing_edges`, no UI panel, and no MCP tool touching either. |
+| **Why deferred** | Sequenced by design (the claim_watch closer program's planning notes, §5–6). K-5 arms ONLY after **K-4**, a match-precision gold loop (sampled matches labeled out-of-plane, the W31 provenance pattern: frontier model + live search, `labeled_by` stamped, operator spot-checked), proves the watcher's fused-plane matching clears an agreed precision bar — matcher precision is the whole gate: too loose and everything is perpetually "under review" (the debt metric stops meaning anything); too tight and the correcting signal is missed. **DEC-K1** sets that bar — the recommendation on the table is pairwise precision ≥0.85 on the K-4 labeled sample. **K-4 has now been run and the bar is NOT met.** First full measurement 2026-07-29: 122 stratified pairs labeled out of plane (frontier model + live search, `labeled_by` stamped; a calibration pass agreed on 100% of the decision-critical class). Pairwise precision by matching plane — `vector+entity+geo` 1.000 (17/17, but effective n≈9: seven rows are one event cluster ×2 sibling questions), `vector+entity` 0.538, `entity+geo` 0.120 (failures shift to WRONG-DIMENSION rather than wrong-theater), `entity`-only 0.000 (0/54 — hub-entity bridging plus NER junk), meta-questions 0.035 (57 rows structurally unmatchable by a news matcher), substantive theses 0.492, **pooled 0.279**. The apparent version split (3.0.0 0.456 vs 3.1.0 0.056) is **sample composition, not version quality** — the 3.1.0 stratum was the hub-heavy non-vector tail, so plane mix is the real axis. Three measured levers shipped in response (matcher `3.2.0`: meta-question exclusion at match time, global signal-side hub-entity damping, and an omnibus cap of 8 questions per signal plus same-URL dedupe), projecting pooled ≈0.49 post-exclusion — better, still short. **K-5 therefore stays parked**, which is the gate working as designed rather than a schedule slip; it re-arms only on a re-measurement that clears 0.85. Entity-only matching is deliberately not deleted yet — damping may recover it, and that is a re-measurement, not a guess. |
+| **Guard rail** | NOT a stub — there is no half-built closer path to guard; the watcher structurally cannot do more than flag (no LLM call, no correction-content write, no recomposition — true by construction of what the handler writes, not a runtime toggle). `review_flags` rows stay open until a future closer (or an operator) resolves them; the 0107 forbid-delete trigger blocks silent flag disappearance. Until DEC-K1 is decided and met, `staleness_debt` is published honestly as a "flags found, match unverified" count — never a corrected/closed metric. Every edge also carries the `matcher_version` that produced it (`claim_watch/3.2.0` today), so edges written under an earlier, weaker matching rule stay distinguishable rather than being retroactively dignified — that stamp is exactly what let the K-4 measurement stratify 3.0.0 from 3.1.0 instead of pooling them into one meaningless number. The C3 read route does not soften that: it carries a hard-`false` `match_verified` field, reports flags on already-superseded consumers as a SEPARATE count rather than folding them into the debt, and returns the matcher's last run time so a reader can tell a genuine zero from a matcher that never ran — the number is exposed, not dignified. (No allowlist line — no stub symbol; the closer is simply absent, not faked.) |
+
+### 50. Search control-query canary (scheduled half) — RESOLVED (cron installed 2026-07-29)
+
+Closed. See the resolved-seams appendix below. The scheduled half now exists on
+both sides: `scripts/host_search_canary.sh` (`RUNBOOK.md` §24.1) is the hook,
+and its cron line is installed in `/etc/cron.d/legba-watchdog` on a **15-minute**
+clock, paging only after **two consecutive** not-live probes (persisted streak,
+1-hour cooldown, alert-only — it never restarts anything). The correctness
+guarantee it sits behind is unchanged and was never dependent on it: an
+unverified liveness verdict maps to `SearchStatus.EMPTY`, which the `web_search`
+tool returns as a **failure** (`search_liveness_unverified`), never as a
+successful zero-result search, and which `SearchResponse.supports_absence_claim`
+refuses to license. The canary buys earlier operator notice that the plane has
+gone dark, not a stronger absence claim.
+
+### 51. `watchlist.actions` — a watch can only notify (Stage 2 not built)
+
+| | |
+|---|---|
+| **What** | A watchlist row (`watchlist`, migration 0105) declares **what to watch** — an alias/fold-resolved `entity`, a `text` pattern over the search plane, or a `geo` place — and a `min_severity`. It cannot declare **what to do**: the table has no `actions` column, and the scanner (`_watchlist_scan.scan_watchlist`) only builds `AlertCandidate`s, so a watch's sole possible effect is a `watchlist_hit` alert routed to the notify path. The proposed Stage 2 — a `watchlist.actions` jsonb rule store letting a watch also invoke a tool, force an analyst run, or open a collection requirement — does not exist: no column, no dispatcher branch, no per-rule requester identity, no per-rule budget account. The CRUD route (`watchlist_api.build_watchlist_router`) validates only the three pattern kinds and contains no notion of an action. |
+| **Why deferred** | Deliberately demand-gated, and the demand is measurably absent: the live `watchlist` table holds **zero rows** (`watchlist_hit` has exactly one watermark, the seed marker). Building a rule-execution plane onto an authoring surface with no adopted rules would be building the general case before the specific one is used once. The two technical prerequisites, by contrast, are **already landed** — Stage 0, deterministic thresholds becoming real descriptor config (`method.options`, the X-1 wave); and Stage 1, the escalation edge's action becoming selectable config (`action_tool`, validated against the bound pack's live tool list) rather than a hardcoded literal at the fire site. So the gate on Stage 2 is *adoption*, not missing plumbing. |
+| **Guard rail** | Nothing half-built to guard — the notify-only behavior is the *whole* behavior, true by construction of what the scanner can emit rather than by a runtime toggle, and a watch author is never offered an action field that silently does nothing. Were the column added with the proposed default (`[{"kind":"notify"}]`), the migration would be a semantic no-op, which is the honest shape for a store whose only implemented verb is today's behavior. Any Stage-2 build must land the requester identity and the per-rule budget account **with** the dispatcher, never after: an operator-authored rule that can invoke tools is an agency surface, and the agency plane's hard gate is not optional. (No allowlist line — no stub symbol; the action plane is absent, not faked.) |
+
+---
+
+## Resolved seams (compact appendix)
+
+Entries below were declared seams re-verified against the live source during
+the 2026-07-28 C5 registry-hygiene pass and confirmed resolved. Original
+numbering is kept stable because other docs (`STATUS.md`, `RUNBOOK.md`,
+`RELEASE_STATE_MATRIX.md`, `FLOWS.md`) cite specific `SEAMS #N` — the numbered
+slot above each row now carries a one-line pointer here instead of the full
+historical narrative.
+
+| # | Seam | Resolved | Verified against (2026-07-28) |
+|---|------|----------|-------------------------------|
+| 3 | Deep-crawl discovery jobs (`crawl_discovery`/`query_discovery`) | 2026-06-09 (decision F-1) | `discover_sources_tool` removed, `src/legba/data/analysts/agency/tools.py`; `descriptors/action_pack_discovery.yaml` `state: retired` |
+| 11 | Consult `vector_search` embedder wiring | 2026-07-02 (L-114) | `src/legba/runtime/substrate_query_port.py` embeds the query through the port-threaded embedder before `vector_search_by_embedding` |
+| 22 | Live GATHER actuation of `web_access`/`propose_facts` tools (S6) | 2026-06-19 | `inline_target._GATHER_TOOLS` spans read+web+write; `dapr_actors._gather_write_bindings_for_target` live and wired |
+| 23 | Dapr long-activity workflow round-trip — GEPA optimizer leg | 2026-06-29 (=#86) | `TrainingSetRef` + `materialize_training_set` (pass-by-reference) in `dapr_workflow/gepa.py`; `-max-body-size` lever in `docker-compose.yml`. **Residual, still true**: the `deep_consult` sibling shares the fix but was NOT independently re-verified — its in-process fallback stays the live default. |
+| 24 | `nlp_client` boot-singleton cannot re-resolve | 2026-06 (#91 / `985db7e`) | `src/legba/runtime/nlp_client_factory.py:LazyNlpClient` resolves on first use and re-resolves on handler-build |
+| 39 | Non-Latin/telegram NER re-enrichment backlog | 2026-07-09 | `reenrich_ner` backfill (migration 0085) drained ~9k signals; `src/legba/data/analysts/deterministic_handlers/reenrich_ner.py` live |
+| 43 | `signals_retention` TTL is options-only | 2026-07-28 (W-2) | `LEGBA_SIGNALS_RETENTION_TTL_DAYS` env fallback in `signals_retention.py`; `tests/data_pkg/test_signals_retention.py` |
+| 44 | World/thematic compositions two-tier evidence split | 2026-07-28 | `LEGBA_COMPOSITION_TIERED_EVIDENCE` in `meta_findings_synthesizer.py`; `tests/data_pkg/test_composition_tiered_evidence.py` |
+| 45 | Tier-aware LLM-judge rubric | 2026-07-28 | `verify._judge_periphery_rubric`; same test file, judge-rubric section |
+| 50 | Search control-query canary — scheduled half | 2026-07-29 | `scripts/host_search_canary.sh` + its `*/15` line in `/etc/cron.d/legba-watchdog`; probes forcing `verify_engine_liveness(..., force=True)` and confirmed executing on the clock. Pages only after 2 consecutive not-live probes; alert-only, never restarts. |
+
+**Not moved despite a "RESOLVED" status line in its title**: seam **#20**
+(Tier-2 `vector:world_context` grounding) — the embedder-through-port WIRING
+is resolved (that's what #11 covers), but the entry itself is an ACTIVE
+guarded pilot with honest open residuals (single-unit rollout, unproven
+faithfulness benefit, a known tail-risk recurrence guard, an ephemeral
+rollback-state path) — re-verified 2026-07-28 that `src/legba/runtime/rag_rollback.py`
+and the single-unit pilot (`descriptors/analyst_leadership_transition.yaml`
+has RAG off) are still exactly as described. It stays in the main declared-seams
+list, not the resolved appendix.
 
 ---
 

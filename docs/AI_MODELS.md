@@ -30,7 +30,7 @@ The three roles are:
    fans out.
 2. **LLM providers + embeddings** — the analysis plane. A self-hosted vLLM LLM
    (gpt-oss-120b) is the **core analyst plane** ($0, self-hosted) that runs the
-   seven bounded reasoning units, the composition tower, and **every scheduled
+   eight bounded reasoning units, the composition tower, and **every scheduled
    analyst** — including the first-person journal, whose voice phase moved fully
    onto this plane on 2026-07-06; a hosted Anthropic model
    (Claude Opus 4.8) is reserved for the **consult / deep-consult** kinds only
@@ -272,7 +272,7 @@ no code change.
 reserved for the **consult / deep-consult** kinds only (billed — used sparingly),
 and even there it is only the *default* choice: each consult/deep-consult request
 may pick the free core plane instead (the model picker — §5).
-**Every scheduled analyst** — the seven bounded reasoning units, the per-country /
+**Every scheduled analyst** — the eight bounded reasoning units, the per-country /
 per-region / world composition tower (plus the thematic `escalation_composition`),
 the critic, the deterministic maintenance analysts, and the first-person **journal**
 (both its GATHER and VOICE phases — the journal's voice phase previously ran on
@@ -311,7 +311,7 @@ The pass has two layers:
    UNSUPPORTED span. The floor score is the fraction of checkable claims that are
    supported. This layer needs no model and cannot be turned off.
 2. **An optional LLM judge — currently the core reasoning model.** When the
-   descriptor declares `method.llm.verify` (all seven units + every composition in
+   descriptor declares `method.llm.verify` (all eight units + every composition in
    the tower do) **and** the `LEGBA_VERIFY_LLM_JUDGE` flag is on, the runtime wires an LLM
    judge to refine per-claim verdicts. **As of 2026-07-01 that judge is the SAME
    core model** (`llm.primary.openai_compat`, gpt-oss-120b) that wrote the finding
@@ -529,10 +529,11 @@ the substrate facts are only as current as the last seed run, and the vector-bac
 Tier-2 free-text background — now LIVE — is a separate, non-citable preamble (caveat 3
 below).
 
-**Status.** Tier-1 structured grounding is live and opted-in on all **seven bounded
-reasoning units** (`leadership_transition`, `energy_security`, `escalation`,
+**Status.** Tier-1 structured grounding is live and opted-in on all **eight bounded
+reasoning units** — the seven broad ones (`leadership_transition`, `energy_security`, `escalation`,
 `narrative_coordination`, `internal_stability`, `military_posture`,
-`economic_coercion`) — each declares a `grounding:` block. The injected
+`economic_coercion`) plus `proliferation_watch` (narrow: tag-scoped to the ~8
+nuclear-relevant desks, not the full g20/watch roster) — each declares a `grounding:` block. The injected
 preamble folds in **accumulated** `facts`, polarity-signed `nexuses`, and a separate
 clearly-labelled block of ongoing `situation` frames (e.g. "US head of government
 Trump since 2025-01-20; US–Iran active conflict since 2026-02-28; NATO member

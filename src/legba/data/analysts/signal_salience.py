@@ -433,7 +433,8 @@ def _parse_salience_batch(
 
 _SELECT_BATCH_SQL = """
     SELECT s.id, s.payload,
-           d.body::jsonb->'scope'->>'source_class' AS source_class
+           d.body::jsonb->'scope'->>'source_class' AS source_class,
+           d.body::jsonb->'config'->'classes' AS channel_classes
       FROM signals s
       LEFT JOIN source_descriptors d
         ON d.is_head = TRUE AND d.descriptor_id = s.source_id
@@ -450,21 +451,102 @@ _WRITE_SALIENCE_SQL = """
 """
 
 
+def _jsonish(raw: Any) -> Any:
+    """asyncpg hands a jsonb column back as ``str`` (no codec registered on
+    this pool) or an already-decoded Python object (codec-registered pool) —
+    parse defensively either way. Mirrors the same-named helper duplicated
+    across the registry/API modules (``since_api.py``,
+    ``collection_requirements_api.py``, ...)."""
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+    return raw
+
+
+def _payload_channel_handle(payload: Any) -> str | None:
+    """Best-effort ``payload.channel.username`` — the per-message channel
+    handle a ``telegram_channel`` Signal carries
+    (``legba.data.sources.telegram.TelegramChannelSourceHandler._to_signal``).
+    Any other source kind's payload simply has no ``channel`` key -> None.
+    Normalized the same way ``telegram.py``'s ``_strip_channel_prefix`` does,
+    so a stored ``@``-prefixed override key still matches."""
+    payload = _jsonish(payload)
+    if not isinstance(payload, dict):
+        return None
+    channel = payload.get("channel")
+    if not isinstance(channel, dict):
+        return None
+    handle = channel.get("username")
+    if not isinstance(handle, str) or not handle.strip():
+        return None
+    return handle.strip().lstrip("@")
+
+
+def _channel_class_override(
+    channel_classes_raw: Any, channel_handle: str | None,
+) -> str | None:
+    """Resolve a per-channel ``source_class`` override from the descriptor's
+    ``config.classes`` map (the 2026-07-29 Ansar Allah decision — riding the
+    EXISTING telegram descriptor/account instead of a second Telethon
+    session, per-channel-classed via ``TelegramChannelSourceConfig.classes``
+    rather than the whole-descriptor ``scope.source_class``).
+
+    Handles BOTH the property-factory-wrapped descriptor shape
+    (``{"factory_kind": "dict", "key_kind": "text", "value_kind": "text",
+    "raw": {...}}`` — the convention this repo's YAML descriptors use for
+    every other typed dict/list config value) and a bare ``{channel: class}``
+    dict (the runtime's ``_unwrap_factory_dict`` accepts either shape the
+    same way, and other config fields in these descriptors — e.g.
+    ``include_media`` — are already written bare).
+
+    Returns ``None`` (no override; the caller falls back to the descriptor's
+    ``scope.source_class`` default) when the channel has no entry, the map is
+    absent (non-telegram sources, or a telegram descriptor that never added
+    ``classes``), or the handle can't be resolved. THIS is the stamping-path
+    fix: signal_salience's authority stamp (S-1, migration 0089) is the one
+    place ``source_class`` is read per-signal and turned into
+    ``signals.salience.authority`` — overriding here reaches every consumer
+    of that column (the salience authority guard / ranking), not a cosmetic
+    payload tag nothing reads."""
+    if not channel_handle or not channel_handle.strip():
+        return None
+    handle = channel_handle.strip().lstrip("@")  # defensive — tolerate an
+    # un-stripped caller too, not just the raw DB-body author's key below.
+    mapping = _jsonish(channel_classes_raw)
+    if not isinstance(mapping, dict):
+        return None
+    if mapping.get("factory_kind") == "dict" and isinstance(mapping.get("raw"), dict):
+        mapping = mapping["raw"]
+    return mapping.get(handle) or mapping.get(f"@{handle}")
+
+
 async def select_salience_candidates(
     conn, *, window_hours: int, limit: int,
 ) -> list[SignalRow]:
-    """The bounded un-scored recent-text pool (newest-first)."""
+    """The bounded un-scored recent-text pool (newest-first).
+
+    ``source_class`` prefers a per-channel override (S1-T8 — see
+    :func:`_channel_class_override`) over the descriptor's ``scope.
+    source_class`` default. ``.get("channel_classes")`` (not ``[...]``) so a
+    row shape that predates this column (older callers' canned test rows,
+    non-telegram sources whose descriptor never had ``config.classes``)
+    degrades to ``None`` instead of raising — non-overridden signals are
+    unaffected, byte-identical to the pre-override behavior."""
     if limit <= 0:
         return []
     rows = await conn.fetch(_SELECT_BATCH_SQL, int(window_hours), int(limit))
-    return [
-        SignalRow(
+    out: list[SignalRow] = []
+    for r in rows:
+        channel_handle = _payload_channel_handle(r["payload"])
+        override = _channel_class_override(r.get("channel_classes"), channel_handle)
+        out.append(SignalRow(
             id=str(r["id"]),
             text=_signal_text(r["payload"]),
-            source_class=r["source_class"],
-        )
-        for r in rows
-    ]
+            source_class=override or r["source_class"],
+        ))
+    return out
 
 
 def _verdict_to_jsonb(v: SalienceVerdict, *, scored_at: str) -> str:

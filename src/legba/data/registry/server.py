@@ -240,6 +240,16 @@ def create_app(
     from .source_assurance_api import build_source_assurance_router
     app.include_router(build_source_assurance_router(deps), prefix="/api/v1/v3")
 
+    # C3 — the merged source-quality ledger (migration 0115): asserted
+    # (Admiralty grade + host credibility) / earned (contested track record) /
+    # computed (A7 freshness) as three TYPED sections that are never blended.
+    # Supersedes the assurance route above and the /source_credibility reads,
+    # which keep serving under a Deprecation/Sunset window. Mounted AFTER
+    # source_assurance_api so the deprecated path stays registered; the two
+    # have no path collision (.../assurance vs .../quality).
+    from .source_quality_api import build_source_quality_router
+    app.include_router(build_source_quality_router(deps), prefix="/api/v1/v3")
+
     # P4-1/P4-2 — reified narratives + source-echo propagation graph (A11).
     # Read-only surface over the migration-0102 derived tables the
     # narrative_mapper analyst refreshes; the data surface for a future UI
@@ -299,6 +309,26 @@ def create_app(
     # deletes are soft (active=false). See watchlist_api.py.
     from .watchlist_api import build_watchlist_router
     app.include_router(build_watchlist_router(deps), prefix="/api/v1/v3")
+
+    # Collection requirements (R-2) — the operator review surface over
+    # collection_gap's durable "we have a hole" proposals (mig 0113): list /
+    # get / disposition-only PATCH (status + reviewed_by + note). Never a
+    # write path to source_descriptors — registering/activating a source
+    # stays a separate operator action. See collection_requirements_api.py.
+    from .collection_requirements_api import build_collection_requirements_router
+    app.include_router(
+        build_collection_requirements_router(deps), prefix="/api/v1/v3"
+    )
+
+    # Retention-policy config (C2 follow-on) — list / get / update over the
+    # one-janitor `retention_policies` table (mig 0109): ttl_days /
+    # keep_classes / batch_size / enabled / description only. No POST/DELETE
+    # — every row is paired 1:1 with a Python retention adapter that reads it
+    # by policy_name. See retention_policies_api.py.
+    from .retention_policies_api import build_retention_policies_router
+    app.include_router(
+        build_retention_policies_router(deps), prefix="/api/v1/v3"
+    )
 
     # Entity knowledge-graph read API — entity_profiles + signal_entity_links
     # + proposed_edges for the Entities / Entity-Graph / Entity-Detail panels.

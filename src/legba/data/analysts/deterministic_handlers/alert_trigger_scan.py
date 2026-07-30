@@ -7,7 +7,7 @@ A deterministic META analyst on a ~10-minute cadence that watches VERIFIED
 substrate state for TRANSITIONS and side-writes one ``kind='alert'``
 ``analyst_outputs`` row per fired trigger, then fans each outward through the
 shared P1-1 :class:`legba.data.alerts.AlertSinkDispatcher` (ledger row per sink
-outcome + webhook when configured). Four trigger classes:
+outcome + webhook when configured). Six trigger classes:
 
   1. **band_crossing** — a desk×dimension scorecard band changed vs the
      previous scorecard row (the T1 bands rest ONLY on verified claims, so a
@@ -45,6 +45,20 @@ outcome + webhook when configured). Four trigger classes:
      predate it; at most ``per_watch_cap`` (default 3) alerts per watch per
      scan, remainder folded into one honest per-watch rollup. Matching
      semantics + design rationale: :mod:`._watchlist_scan`.
+  6. **geo_convergence** (A7, folded 2026-07-29) — signals from at least
+     ``geo_min_distinct_families`` (default 3) DISTINCT source families
+     converged in one geographic bin (1°×1° cell for point-trustworthy
+     geocodes, or a country bin for ISO2-tagged signals) over the trailing
+     ``geo_window_hours`` (default 24h) — diversity is the signal; a
+     same-family pile-on never fires. Fires on the FORMATION edge (``medium``)
+     and once on the DISSOLUTION edge (``info``); a persisting convergence
+     never refires. Folded from the former standalone ``geo_convergence_scan``
+     analyst — same firing conditions, same payload content, same
+     ``trigger_class='geo_convergence'`` watermark namespace (no migration,
+     no watermark discontinuity); only the anti-noise per-desk cap changed
+     (now shared across all six classes rather than an isolated per-analyst
+     budget). Binning tiers, source-family fold, and scoring rationale:
+     :mod:`.geo_convergence_scan`.
 
 Statefulness — the no-refire contract
 -------------------------------------
@@ -105,7 +119,7 @@ from ...provenance.kinds import (
 )
 from ...provenance.models import AlertPayload, FindingPayload, severity_from_tags
 from ....runtime.analyst_method import AnalystMethodResult
-from . import _watchlist_scan, scorecard_banding
+from . import _watchlist_scan, geo_convergence_scan, scorecard_banding
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +135,11 @@ TRIGGER_FINDING = "verified_finding"
 TRIGGER_CONTENTION = "contention_flip"
 TRIGGER_BASELINE = "baseline_deviation"
 TRIGGER_WATCHLIST = "watchlist_hit"
+#: Folded 2026-07-29 from the standalone geo_convergence_scan analyst — the
+#: SAME trigger_class string that module always used, so existing
+#: alert_trigger_watermarks rows continue under this handler with no
+#: migration and no watermark discontinuity.
+TRIGGER_GEO_CONVERGENCE = "geo_convergence"
 
 #: Per-class seed marker key — present ⇒ the class completed its first scan.
 SEED_KEY = "_seeded"
@@ -166,14 +185,23 @@ _SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
 #: Worst-first tie-break across classes at equal severity (band deterioration
 #: and verified findings ahead of operator watch hits, ahead of
-#: flips/deviations).
+#: flips/deviations, ahead of geo-convergence formations — the newest fold,
+#: given no established relative order against the other five pre-fold, so
+#: it is conservatively ranked last rather than displacing any of them).
 _CLASS_PRIORITY = {
     TRIGGER_BAND: 0,
     TRIGGER_FINDING: 1,
     TRIGGER_WATCHLIST: 2,
     TRIGGER_CONTENTION: 3,
     TRIGGER_BASELINE: 4,
+    TRIGGER_GEO_CONVERGENCE: 5,
 }
+
+#: geo_convergence scan window / diversity-bar defaults — the CANONICAL
+#: values live in geo_convergence_scan (this class's former standalone
+#: module); referenced here, never duplicated, so the two cannot drift.
+DEFAULT_GEO_WINDOW_HOURS = geo_convergence_scan.DEFAULT_WINDOW_HOURS
+DEFAULT_GEO_MIN_DISTINCT_FAMILIES = geo_convergence_scan.DEFAULT_MIN_DISTINCT_FAMILIES
 
 
 # ---------------------------------------------------------------------------
@@ -1112,7 +1140,25 @@ _UNVERIFIED_REASONS = {
         "watch hit on a structural verify-exempt deterministic finding (no "
         "LLM prose to verify; counted under the structural-verified bar)"
     ),
+    # Folded 2026-07-29 from geo_convergence_scan._sink_payload — the exact
+    # same reason text the standalone analyst used.
+    TRIGGER_GEO_CONVERGENCE: (
+        "deterministic geographic-convergence trigger (source-family "
+        "diversity count over binned signals; no LLM prose)"
+    ),
     "rollup": "deterministic per-desk rollup of trigger alerts (no LLM prose)",
+}
+
+#: Per-class outward ``channel_name`` override. Every class defaults to this
+#: handler's own ``CHANNEL_NAME`` ("trigger_scan") EXCEPT geo_convergence,
+#: which keeps the channel identity ("geo_convergence") it carried as a
+#: standalone analyst (2026-07-29 fold) — ledger/log filtering by source is
+#: unaffected by the fold. Purely a labeling preservation: the dispatcher's
+#: cooldown is keyed by sink_kind, never channel_name (see
+#: legba.data.alerts.sinks.AlertSinkDispatcher._deliver_one), so this has no
+#: bearing on dedup/cooldown semantics.
+_CHANNEL_BY_CLASS = {
+    TRIGGER_GEO_CONVERGENCE: geo_convergence_scan.CHANNEL_NAME,
 }
 
 
@@ -1143,7 +1189,7 @@ def _sink_payload(alert_row_id: UUID, cand: AlertCandidate) -> Any:
         summary=cand.title[:512],
         detail=cand.body[:4000],
         severity=cand.severity,
-        channel_name=CHANNEL_NAME,
+        channel_name=_CHANNEL_BY_CLASS.get(cand.trigger_class, CHANNEL_NAME),
         target_id=cand.target_id,
         effective_confidence=cand.effective_confidence,
         verify_state=verify_state,
@@ -1312,6 +1358,17 @@ async def handle(
     )
     baseline_days = int(options.get("baseline_days", DEFAULT_BASELINE_DAYS))
     n_sigma = float(options.get("baseline_sigma", DEFAULT_BASELINE_SIGMA))
+    geo_window_hours = int(
+        options.get("geo_window_hours", DEFAULT_GEO_WINDOW_HOURS)
+    )
+    geo_min_distinct_families = max(
+        2,
+        int(
+            options.get(
+                "geo_min_distinct_families", DEFAULT_GEO_MIN_DISTINCT_FAMILIES
+            )
+        ),
+    )
 
     candidates: list[AlertCandidate] = []
     silent: list[tuple[str, str, dict[str, Any]]] = []
@@ -1362,6 +1419,28 @@ async def handle(
         }
         if not wl_seeded:
             seeded_classes.append(TRIGGER_WATCHLIST)
+
+        # Trigger 6 — geo convergence (A7, folded 2026-07-29 from the former
+        # standalone geo_convergence_scan analyst). Same call shape as the
+        # watchlist scan: per-class stats (currently_formed_bins / cell vs
+        # country breakdown / window signal counts) ride the receipt's
+        # counts_by_class entry — the exact figures the standalone analyst's
+        # own summary finding used to report.
+        geo_candidates, geo_silent, geo_seeded, geo_stats = (
+            await geo_convergence_scan.scan_geo_convergence(
+                conn,
+                window_hours=geo_window_hours,
+                min_families=geo_min_distinct_families,
+            )
+        )
+        candidates.extend(geo_candidates)
+        silent.extend(geo_silent)
+        counts_by_class[TRIGGER_GEO_CONVERGENCE] = {
+            "candidates": len(geo_candidates),
+            **geo_stats,
+        }
+        if not geo_seeded:
+            seeded_classes.append(TRIGGER_GEO_CONVERGENCE)
 
         # Silent bookkeeping (seeds / no-change refreshes / non-fired state
         # advances) — these represent OBSERVED state, never a fired alert.

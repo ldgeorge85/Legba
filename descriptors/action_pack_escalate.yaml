@@ -17,6 +17,19 @@
 # alert on a high-severity tag alone (the raw-confidence gate is closed). A
 # S3-T2 indicator_tracker flip into `triggered` is a second trigger class.
 #
+# Action selection (X-1 Stage 1, read from this same tool config): the crossing
+# invokes the tool named by `action_tool`. UNSET → `escalate`, which is exactly
+# what the fire site used to hardcode — so this pack's behavior is unchanged
+# unless the key is set. To route crossings at a different action, add that
+# tool to `tools:` below and name it here; the value is validated against this
+# pack's live tool list at bind time, and an action naming no tool on the pack
+# degrades LOUD (error log + a `config_note` on every
+# alert_sink_deliveries.payload_summary row) back to `escalate` rather than
+# taking the escalation edge offline over a typo. Because ToolSpec.config is
+# free-form and the runtime reads the REGISTRY DB ROW (not this file), this is
+# live-editable via `PUT /api/v1/descriptors/action_pack/escalate_finding` —
+# no code edit, no rebuild.
+#
 # Applicability: tag-scoped to the live working set — g20 desks AND the
 # `watch` tier (IL/IR/KP/PK/TW/UA), the highest-stakes desks (audit C2 fix,
 # 2026-07-06: watch desks were silently dropping high-severity escalations
@@ -42,6 +55,7 @@ tools:
       default_severity: high
       severity_gate: high
       confidence_gate: 0.85
+      # action_tool: escalate   # default; see the "Action selection" note above
 
 channels:
   - name: escalations

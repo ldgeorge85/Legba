@@ -5,6 +5,16 @@
 Nexuses not evidenced (created_at) in 30 days get confidence decayed by 0.05
 per run, floored at 0.1. No LLM, pure SQL.
 
+C2 "one janitor" SURVEY NOTE (2026-07-28 coherence pass, migration 0109):
+this handler was surveyed alongside ``signals_retention`` /
+``analyst_traces_retention`` for the shared ``retention_policies`` /
+``_retention_sweep`` consolidation and DELIBERATELY NOT folded in — this is a
+confidence-DECAY stamp (an UPDATE that shrinks a value), never a DELETE-by-age
+purge, so it doesn't fit the TTL-purge policy shape those two share. See
+migration 0109's header for the full rationale (a future ``mode`` column or a
+sibling decay-policy table could still generalize this later; nothing here
+precludes it).
+
 Output ``data`` keys:
     decayed_count   int — nexuses with confidence reduced
 """

@@ -32,12 +32,19 @@
 #     product is the archive + the sidecar rows; the per-run counters land in
 #     the trace.
 #
-# Options (all optional; handler defaults in parentheses):
+# Options (all optional; handler defaults in parentheses). Declared in
+# legba.data.analysts.handler_options and settable via a `method.options` block
+# below — X-1 (2026-07-29) connected that channel; before it, this list
+# documented knobs no operator could actually move. A key this build does not
+# declare, or a value outside its range, is dropped with a WARNING and a
+# `handler_options` note on the run's analyst_traces receipt; the handler
+# default then stands.
 #   fetch_budget (200) · window_hours (720) · verify_floor (0.50) ·
 #   max_object_bytes (20971520) · per_host_delay_seconds (2.0) ·
 #   max_attempts (3) · max_text_chars (200000) · timeout_seconds (30) ·
 #   run_deadline_seconds (1200) · forbid_license_classes
-#   (anti_ai_walled / tos_restrictive / personal_use_only)
+#   (anti_ai_walled / tos_restrictive / personal_use_only) ·
+#   web_origin_license_gate (fail_closed)
 #
 # Registered via scripts/bringup_register_evidence_archiver.py or the registry
 # REST API. Ships DRAFT — the operator activates after migration 0104 is

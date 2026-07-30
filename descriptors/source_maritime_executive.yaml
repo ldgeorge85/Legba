@@ -1,0 +1,88 @@
+# Supply-chain domain — top-10 first registrations (2026-07-29). Draft
+# SourceDescriptor. Ships DRAFT (operator activates).
+#
+# REGISTRATION STEP (main session): register via a Wave-A-style direct-DB
+# registrar — see scripts/bringup_register_supply_chain_sources.py in this
+# same commit — then, on the live instance:
+#   docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
+#     python scripts/bringup_register_supply_chain_sources.py
+#
+# Maritime Executive — core general maritime-industry press (vessels, ports,
+# offshore energy, regulation, security) — a second anchor voice alongside the
+# already-live gcaptain (do not duplicate its beat; this outlet's editorial
+# angle skews more regulatory/policy). Feeds the lane_* desks generically; no
+# single-country focus, geo stays empty. Verified live 2026-07-29 per
+# planning/SUPPLY_CHAIN_SOURCES_2026-07-29.md §2.B (§5 rank #5): HTTP 200,
+# same-day items, robots.txt clean, free/no-auth.
+#
+# NOTE — feed format: the URL path is `/articles.rss` but the shortlist marks
+# the format as Atom, not RSS 2.0. The `rss` handler kind (src/legba/data/
+# sources/rss.py) parses both formats via feedparser (L-130 contract covers
+# "RSS 2.0 and Atom 1.0 feeds") — same posture as source.dw.world (Atom, kind
+# rss). No separate kind needed.
+#
+# source_class: reporting — independent commercial trade press. Credibility
+# host maritime-executive.com (seeded 0.65/wire by the registrar) — general
+# maritime-industry trade press, comparable band to gcaptain/rigzone.
+
+identity:
+  id: source.maritimeexecutive.news
+  name: Maritime Executive
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: supply_chain_top10
+  created: "2026-07-29T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  # Global maritime-industry trade press — no single-country editorial focus;
+  # consuming lane_* targets narrow by scope.geo/predicate.
+  geo: []
+  languages: [en]
+  tags: [supply_chain, maritime, shipping, news]
+  source_class: reporting
+
+acquisition: poll
+
+cadence:
+  # "several/day, very active" — the every-2h wire bucket.
+  schedule:
+    factory_kind: cron
+    raw: "9 0-23/2 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.maritime-executive.com/articles.rss"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming the
+    # route yields full article text (mirrors the Wave-A conservative default).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

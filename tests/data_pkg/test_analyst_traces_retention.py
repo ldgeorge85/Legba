@@ -74,6 +74,39 @@ async def test_disabled_summary_is_honest_about_ttl_and_zero():
 
 
 # ---------------------------------------------------------------------------
+# Unit — LEGBA_ANALYST_TRACES_TTL_DAYS env fallback (ff65f78)
+# ---------------------------------------------------------------------------
+#
+# The ff65f78 fix (cadence fires carry ONLY ``sub_handler``; ``method.options``
+# is schema-forbidden, so the env var is the real opt-in lever) shipped without
+# direct coverage — these lock the pattern, mirrored by the
+# ``signals_retention`` parity tests.
+
+
+@pytest.mark.asyncio
+async def test_env_fallback_resolves_ttl_on_cadence_shaped_call(monkeypatch):
+    monkeypatch.setenv("LEGBA_ANALYST_TRACES_TTL_DAYS", "30")
+    res = await analyst_traces_retention.handle(
+        [], {"sub_handler": "analyst_traces_retention"}, None
+    )
+    assert res.finding.data["ttl_days"] == 30
+
+
+@pytest.mark.asyncio
+async def test_options_ttl_takes_precedence_over_env(monkeypatch):
+    monkeypatch.setenv("LEGBA_ANALYST_TRACES_TTL_DAYS", "30")
+    res = await analyst_traces_retention.handle([], {"ttl_days": 0}, None)
+    assert res.finding.data["ttl_days"] == 0
+
+
+@pytest.mark.asyncio
+async def test_env_unset_stays_disabled(monkeypatch):
+    monkeypatch.delenv("LEGBA_ANALYST_TRACES_TTL_DAYS", raising=False)
+    res = await analyst_traces_retention.handle([], {}, None)
+    assert res.finding.data["ttl_days"] == 0
+
+
+# ---------------------------------------------------------------------------
 # Integration — real purge against migrated PG (ephemeral-DB pattern)
 # ---------------------------------------------------------------------------
 

@@ -37,6 +37,7 @@ import type { PanelKind, PanelRegistration } from '@/types'
 import { currentMode, getToken } from '@/auth/jwt'
 import {
   applyPreset,
+  DEFAULT_BOOT_LAYOUT,
   findPreset,
   hasCustomLayout,
   loadCustomLayout,
@@ -209,10 +210,16 @@ export function App() {
 
   // Seed the dockview with the MISSION-CONTROL default layout on first ready
   // (S7-T2 task 3 — the headline of the reform). First screenful = glance state
-  // + the product, per the original UI:
+  // + what changed + the product, per the original UI plus U-4's boot fix
+  // (COHERENCE_WAVES_PLAN_2026-07-28 §U-4 — a hostile UX review found cold
+  // boot answered "what's happening now" but never "what moved while I was
+  // away", even though that surface (the Wall's movers quadrant) already
+  // existed, just opt-in-only):
   //
   //   +-------------------------------------------------------------------+
   //   |  KPI STRIP  (signals / findings / situations / sources + deltas)  |
+  //   +-------------------------------------------------------------------+
+  //   |  MOVERS SINCE LAST VISIT (band changes / reversals / situations)  |
   //   +------------------+--------------------------+---------------------+
   //   |  LIVE FEED       |   WORLD MAP              |  WORLD ASSESSMENT   |
   //   |  (anchor)        |   (real size)           |  (the REPORT)       |
@@ -220,49 +227,45 @@ export function App() {
   //   |  TIMELINE lanes  |                          |                     |
   //   +------------------+--------------------------+---------------------+
   //
-  // KPI is the full-width top strip; the feed anchors the left with the global
-  // Timeline lanes beneath it; the world map takes the center at real size; the
-  // verified World Assessment report is a first-class right panel (the now-
-  // unhidden v4.assessment) with the Inspector tabbed behind it. Everything is
-  // brushed by the one shared selection store. Sizes are pinned after seeding.
+  // KPI is the full-width top strip; the movers band is a full-width slim
+  // strip beneath it — the ONE tile U-4 adds, not the whole 2×2 Wall (the
+  // Wall's other three quadrants — world-at-a-glance band grid, newest
+  // verified, health corner — already have close analogues in the Map, the
+  // Feed, and the KPI strip on this same screen, so mounting the whole Wall
+  // here would duplicate content and crowd 1920×1080; see WallMovers.tsx and
+  // `lib/layoutPresets.ts`'s `DEFAULT_BOOT_LAYOUT` for the full rationale).
+  // The feed anchors the left with the global Timeline lanes beneath it; the
+  // world map takes the center at real size; the verified World Assessment
+  // report is a first-class right panel (the now-unhidden v4.assessment)
+  // with the Inspector tabbed behind it. Everything is brushed by the one
+  // shared selection store. Sizes are pinned after seeding.
+  //
+  // The exact kind/position sequence lives in `DEFAULT_BOOT_LAYOUT`
+  // (layoutPresets.ts) so it's colocated + unit-tested the same way the
+  // named presets are; this effect just seeds it (via the SAME `addSingleton`
+  // the sidebar/palette use) and then adds boot-only extras (active tabs,
+  // pinned sizes) that a generic preset apply doesn't know about.
   useEffect(() => {
     if (!dockApi || seededRef.current) return
     seededRef.current = true
     if (mode !== 'personal' && mode !== 'cis') return
 
-    // KPI glance strip anchors the TOP so it spans full width; the body seeds
-    // below it, then splits into the feed | map | report columns.
-    const kpi = addSingleton(dockApi, 'v4.kpi', mode)
-    const feed = addSingleton(dockApi, 'system.findings', mode, {
-      referencePanel: 'v4.kpi',
-      direction: 'below',
-    })
-    addSingleton(dockApi, 'v4.map', mode, {
-      referencePanel: 'system.findings',
-      direction: 'right',
-    })
-    const report = addSingleton(dockApi, 'v4.assessment', mode, {
-      referencePanel: 'v4.map',
-      direction: 'right',
-    })
-    // The Inspector tabs behind the report on the right rail — the detail/drill
-    // surface the whole wall brushes into.
-    addSingleton(dockApi, 'system.inspector', mode, {
-      referencePanel: 'v4.assessment',
-      direction: 'within',
-    })
-    // The global Timeline lanes sit beneath the feed (bottom-left strip).
-    const timeline = addSingleton(dockApi, 'v4.timeline', mode, {
-      referencePanel: 'system.findings',
-      direction: 'below',
-    })
+    for (const placement of DEFAULT_BOOT_LAYOUT) {
+      addSingleton(dockApi, placement.kind, mode, placement.position)
+    }
+    const kpi = dockApi.getPanel('v4.kpi')
+    const movers = dockApi.getPanel('system.wall_movers')
+    const feed = dockApi.getPanel('system.findings')
+    const report = dockApi.getPanel('v4.assessment')
+    const timeline = dockApi.getPanel('system.timeline')
+
     // The report is the default-active tab on the right rail (not the Inspector),
     // and the feed is the default-active tab on the left (not the timeline).
     report?.api.setActive()
     feed?.api.setActive()
 
     // Pin the mission-control proportions (Dockview defaults to ~50/50 splits).
-    sizeMissionControl(dockApi, { kpi, report, timeline })
+    sizeMissionControl(dockApi, { kpi, movers, report, timeline })
   }, [dockApi, mode])
 
   useEffect(() => {
@@ -492,11 +495,14 @@ function addSingleton(
 }
 
 /**
- * Pin the mission-control boot proportions (S7-T2). Dockview splits ~50/50 by
- * default; this nudges the groups to the wall's weights: a thin full-width KPI
- * strip on top (~100px), the World Assessment report rail at ~30% width on the
- * right, and the global Timeline lanes as a ~160px bottom-left strip, leaving
- * the world map the dominant center surface and the feed a healthy top-left.
+ * Pin the mission-control boot proportions (S7-T2; movers band added U-4).
+ * Dockview splits ~50/50 by default; this nudges the groups to the wall's
+ * weights: a thin full-width KPI strip on top (~100px), the U-4 movers band
+ * as a slim full-width strip beneath it (~190px — enough for 3-4 rows before
+ * its own internal scroll takes over), the World Assessment report rail at
+ * ~30% width on the right, and the global Timeline lanes as a ~160px
+ * bottom-left strip, leaving the world map the dominant center surface and
+ * the feed a healthy top-left.
  *
  * Sizing is best-effort: a failed resize must never break boot.
  */
@@ -504,6 +510,7 @@ function sizeMissionControl(
   api: DockviewApi,
   panels: {
     kpi?: ReturnType<DockviewApi['addPanel']>
+    movers?: ReturnType<DockviewApi['addPanel']>
     report?: ReturnType<DockviewApi['addPanel']>
     timeline?: ReturnType<DockviewApi['addPanel']>
   },
@@ -513,6 +520,7 @@ function sizeMissionControl(
     const width = api.width || 1280
     try {
       panels.kpi?.api.setSize({ height: 100 })
+      panels.movers?.api.setSize({ height: 190 })
       panels.report?.api.setSize({ width: Math.round(width * 0.3) })
       panels.timeline?.api.setSize({ height: 160 })
     } catch {

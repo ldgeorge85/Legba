@@ -111,3 +111,120 @@ describe('claimVerdictForMarker', () => {
     expect(v.kind).toBe('not-flagged')
   })
 })
+
+describe('claimVerdictForMarker — P2-4 claim_verdicts ledger', () => {
+  it('a ledger row naming the ordinal as supported → kind supported', () => {
+    const v = claimVerdictForMarker(
+      {
+        judge_status: 'llm',
+        checkable_claims: 13,
+        supported_claims: 13,
+        unsupported_spans: [],
+        claim_verdicts: [
+          { text: 'A supported claim over ref 9.', markers: [9], verdict: 'supported', reason: null },
+        ],
+      },
+      '[9]',
+    )
+    expect(v.kind).toBe('supported')
+    expect(v.label).toBe('supported by the verify judge')
+    expect(v.checkable).toBe(13)
+    expect(v.supported).toBe(13)
+  })
+
+  it('ledger present but silent on this ordinal → legacy not-flagged fallback', () => {
+    const v = claimVerdictForMarker(
+      {
+        judge_status: 'llm',
+        unsupported_spans: [],
+        claim_verdicts: [
+          { text: 'Some other claim.', markers: [2], verdict: 'supported', reason: null },
+        ],
+      },
+      '[9]',
+    )
+    expect(v.kind).toBe('not-flagged')
+  })
+
+  it('empty ledger array → legacy not-checked fallback (deterministic floor)', () => {
+    const v = claimVerdictForMarker(
+      { judge_status: 'deterministic', unsupported_spans: [], claim_verdicts: [] },
+      '[3]',
+    )
+    expect(v.kind).toBe('not-checked')
+  })
+
+  it('no claim_verdicts key at all (pre-P2-4 critique) → legacy not-flagged fallback', () => {
+    const v = claimVerdictForMarker(
+      { judge_status: 'llm', checkable_claims: 5, supported_claims: 5, unsupported_spans: [] },
+      '[1]',
+    )
+    expect(v.kind).toBe('not-flagged')
+  })
+
+  it('an advisory span (hedge_laundering) naming the ordinal wins over a ledger "supported" row for the same claim', () => {
+    // The ledger correctly records the underlying claim as supported (advisory
+    // flags never demote a ledger row) — but the hover must still surface the
+    // advisory annotation, which lives ONLY in unsupported_spans.
+    const v = claimVerdictForMarker(
+      {
+        judge_status: 'llm',
+        unsupported_spans: [{ text: 'Hedged claim over ref 4.', reason: 'hedge_laundering', markers: [4] }],
+        claim_verdicts: [
+          { text: 'Hedged claim over ref 4.', markers: [4], verdict: 'supported', reason: null },
+        ],
+      },
+      '[4]',
+    )
+    expect(v.kind).toBe('flagged')
+    expect(v.label).toBe(claimReasonLabel('hedge_laundering'))
+  })
+
+  it('a ledger-only hard_fail row (defensive path, no matching span) still surfaces honestly', () => {
+    const v = claimVerdictForMarker(
+      {
+        judge_status: 'llm',
+        unsupported_spans: [],
+        claim_verdicts: [
+          {
+            text: 'Contradicted claim over ref 6.',
+            markers: [6],
+            verdict: 'hard_fail',
+            reason: 'judge_contradicted',
+          },
+        ],
+      },
+      '[6]',
+    )
+    expect(v.kind).toBe('contradicted')
+    expect(v.spans[0].text).toBe('Contradicted claim over ref 6.')
+  })
+
+  it('worst-first when multiple ledger rows name the same ordinal', () => {
+    const v = claimVerdictForMarker(
+      {
+        judge_status: 'llm',
+        unsupported_spans: [],
+        claim_verdicts: [
+          { text: 'A', markers: [7], verdict: 'supported', reason: null },
+          { text: 'B', markers: [7], verdict: 'soft_fail', reason: 'no_citation' },
+        ],
+      },
+      '[7]',
+    )
+    expect(v.kind).toBe('flagged')
+    expect(v.spans[0].text).toBe('B')
+  })
+
+  it('a digitless marker never consults the ledger (ordinal null) → falls through honestly', () => {
+    const v = claimVerdictForMarker(
+      {
+        judge_status: 'llm',
+        unsupported_spans: [],
+        claim_verdicts: [{ text: 'X', markers: [1], verdict: 'supported', reason: null }],
+      },
+      '[not-a-number]',
+    )
+    expect(v.kind).toBe('not-flagged')
+  })
+})

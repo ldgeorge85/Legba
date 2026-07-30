@@ -314,3 +314,72 @@ class ProxyPoolConfig(BaseModel):
 class ProxyPool(StackComponentBase):
     schema_uri: str = Field(pattern=r"^legba/stack/proxy_pool/\d+\.\d+\.\d+$")
     config: ProxyPoolConfig
+
+
+# ---------------------------------------------------------------------------
+# Search provider — the DISCOVERY leg (SearXNG + any compatible JSON API)
+#
+# Handlers live in `src/legba/data/stack/search/`. Search is OPTIONAL
+# capability, not first-run readiness, so `search_provider` is deliberately NOT
+# added to `REQUIRED_MODEL_COMPONENT_KINDS` (registry/api.py) — a deployment
+# with no search component is complete, it simply cannot discover.
+# ---------------------------------------------------------------------------
+
+
+class SearchProviderConfig(BaseModel):
+    """Search provider config.
+
+    ``subprovider`` is EXPLICIT and is the handler-dispatch key, looked up in
+    ``legba.data.stack.search.SEARCH_HANDLERS``. A deliberate departure from
+    the LLM family's ``infer_llm_subprovider()``, which guesses the handler
+    from a six-rung ladder over the component id and endpoint host — that
+    heuristic exists to tolerate legacy ids and is a standing source of
+    surprise. A new family starts clean: declare it, never sniff it.
+
+    The options list is intentionally wider than ``SEARCH_HANDLERS`` today
+    (``firecrawl`` / ``jina`` / ``tavily`` / ``brave`` / ``agent``): a
+    component may be REGISTERED against a provider whose handler has not
+    shipped, and binding it then fails LOUDLY at handler-build time naming the
+    known set — which is the honest failure. The reverse (a handler that
+    cannot be named in config) would be silent.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    subprovider: DropdownStatic = Field(
+        default_factory=lambda: Property.Dropdown.Static.of(
+            "searxng",
+            ["searxng", "json", "firecrawl", "jina", "tavily", "brave", "agent"],
+        )
+    )
+    endpoint: Text
+    #: Optional — the self-hosted subproviders are keyless. Sent as
+    #: ``Authorization: Bearer`` when present.
+    api_key: Secret | None = None
+    timeout_seconds: Number = Field(
+        default_factory=lambda: Property.Number.of(15, minimum=1, maximum=300)
+    )
+    #: Per-call ceiling; the handler additionally clamps to MAX_RESULTS_CAP.
+    max_results: Number = Field(
+        default_factory=lambda: Property.Number.of(10, minimum=1, maximum=50)
+    )
+    #: Upstream engines to query (meta-search). Empty = the instance's own
+    #: configured set — which engine set survives sustained automated use is an
+    #: empirical, per-deployment question, not a value to hardcode here.
+    engines: TypedList = Field(
+        default_factory=lambda: Property.List(raw=[], item_kind="text")
+    )
+    categories: TypedList = Field(
+        default_factory=lambda: Property.List(raw=[], item_kind="text")
+    )
+    #: Empty = the provider's default (no language pin).
+    language: Text = Field(default_factory=lambda: Property.Text.of(""))
+    #: Generic-JSON knobs: where the hits live, and the query parameter name.
+    #: A dotted path is honoured (``data.web`` for a Firecrawl-shaped body).
+    results_key: Text = Field(default_factory=lambda: Property.Text.of("results"))
+    query_param: Text = Field(default_factory=lambda: Property.Text.of("q"))
+
+
+class SearchProvider(StackComponentBase):
+    schema_uri: str = Field(pattern=r"^legba/stack/search_provider/\d+\.\d+\.\d+$")
+    config: SearchProviderConfig

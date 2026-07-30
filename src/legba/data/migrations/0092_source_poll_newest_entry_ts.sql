@@ -1,7 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Lewis George
 -- SPDX-License-Identifier: AGPL-3.0-or-later
 --
--- 0091_source_poll_newest_entry_ts.sql
+-- 0092_source_poll_newest_entry_ts.sql
 --
 -- B0-12 (watchdog precision) — record the newest entry timestamp the handler
 -- OBSERVED upstream on each non-productive poll.

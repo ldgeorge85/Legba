@@ -65,10 +65,14 @@ EXPECTED_TABLES: tuple[str, ...] = (
     "descriptor_audit_log", "audit_checkpoints",
     # Filter / enrichment registries (L-152 + later filter-kind tables)
     "source_credibility",
-    # Non-productive poll provenance (DQ-H5b #88, migration 0046).
+    # Per-poll provenance (DQ-H5b #88, migration 0046; 'success' outcome 0114).
     "source_poll_outcomes",
     # UI panel registrations (L-192).
     "ui_panel_registrations",
+    # P5-6 Watchlist v2 (migration 0105) — operator-defined standing watches.
+    # RE-LANDS the legacy `watchlist` NAME first-class (same shape as the
+    # `nexuses` re-landing), so it moved here out of RETIRED_TABLES.
+    "watchlist",
 )
 
 # Tables that should NOT exist (retired per L-090 §4.3 + source-first pivot
@@ -81,8 +85,12 @@ RETIRED_TABLES: tuple[str, ...] = (
     # (migration 0033) — it now lives in EXPECTED_TABLES above.
     "sources", "predictions",
     # 0030 (C-3) — dead legacy event loop + steering tables.
+    # NB: `watchlist` was retired with that set but is RE-LANDED first-class
+    # by P5-6 Watchlist v2 (migration 0105, operator-defined standing
+    # watches) — the same re-landing shape as `nexuses` above, so it left
+    # this list.
     "events", "signal_event_links", "event_entity_links", "situation_events",
-    "goals", "watchlist", "watch_triggers", "discovered_urls", "users",
+    "goals", "watch_triggers", "discovered_urls", "users",
 )
 
 # Required provenance columns per L-107 §1 on analyst-produced rows.

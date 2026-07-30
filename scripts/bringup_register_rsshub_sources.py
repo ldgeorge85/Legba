@@ -17,6 +17,15 @@ English country page, Radio Free Asia). All are ``source_class: reporting``; NON
 is Chinese state media (the house rule permits state media only for the CN desk,
 where it is knowingly ingested as labeled ``state_media``).
 
+NOTE (2026-07-28): ``source_rsshub_rfi_afrique.yaml`` no longer actually
+depends on the sidecar — RSSHub's own upstream scrape of ``/rfi/fr/afrique``
+started 503-ing, so that one descriptor was re-pointed at RFI's verified
+native RSS feed (``https://www.rfi.fr/fr/afrique/rss``) instead. It is still
+registered by this same script (nothing about registration itself changed —
+just its ``config.url``), so it stays in ``SOURCE_FILES`` below; see the
+descriptor's own header comment for the full story. The other nine feeds,
+including the sibling ``source_rsshub_rfi_ameriques.yaml``, are unaffected.
+
 Ships INERT / activation is the operator's:
   * Every descriptor ships ``identity.state: draft``, so bulk registration
     creates NO live actor (``runtime/dapr_host.py`` skips draft/configured

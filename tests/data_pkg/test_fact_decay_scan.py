@@ -278,6 +278,11 @@ async def test_scan_is_idempotent(pg_pool, clean_slate):
             created_at=datetime.now(timezone.utc) - timedelta(days=30),
         )
 
+    # ISOLATION NOTE: the scan stamps EVERY open fact in the session-shared
+    # migrated DB, so global count(*) assertions are order-fragile (any earlier
+    # test file that leaves an open fact behind adds a sidecar row). Scope the
+    # duplicate-accumulation check to THIS test's fact — the per-fact claim is
+    # the idempotency contract anyway.
     await _run(pg_pool)
     async with pg_pool.acquire() as conn:
         first = await conn.fetchrow(
@@ -285,7 +290,7 @@ async def test_scan_is_idempotent(pg_pool, clean_slate):
             "FROM fact_decay_states WHERE fact_id=$1", fid
         )
         rows_after_first = await conn.fetchval(
-            "SELECT count(*) FROM fact_decay_states"
+            "SELECT count(*) FROM fact_decay_states WHERE fact_id=$1", fid
         )
 
     await _run(pg_pool)
@@ -295,7 +300,7 @@ async def test_scan_is_idempotent(pg_pool, clean_slate):
             "FROM fact_decay_states WHERE fact_id=$1", fid
         )
         rows_after_second = await conn.fetchval(
-            "SELECT count(*) FROM fact_decay_states"
+            "SELECT count(*) FROM fact_decay_states WHERE fact_id=$1", fid
         )
     # One row per fact — no duplicate accumulation; content stable.
     assert rows_after_first == rows_after_second == 1
@@ -320,12 +325,13 @@ async def test_closed_fact_readout_is_pruned(pg_pool, clean_slate):
             confidence=0.9, source_type="seed",
             created_at=datetime.now(timezone.utc) - timedelta(days=3),
         )
-    # First scan stamps both.
+    # First scan stamps both. ISOLATION NOTE: scope every count to THIS test's
+    # two facts — the scan stamps every open fact in the session-shared DB, so
+    # a global count(*) is order-fragile (see test_scan_is_idempotent).
+    _mine = "SELECT count(*) FROM fact_decay_states WHERE fact_id = ANY($1::uuid[])"
     await _run(pg_pool)
     async with pg_pool.acquire() as conn:
-        assert await conn.fetchval(
-            "SELECT count(*) FROM fact_decay_states"
-        ) == 2
+        assert await conn.fetchval(_mine, [keeper, closing]) == 2
         # Close one fact (supersede it).
         await conn.execute(
             "UPDATE facts SET valid_until = now(), superseded_by = $1 "
@@ -334,11 +340,10 @@ async def test_closed_fact_readout_is_pruned(pg_pool, clean_slate):
     # Second scan prunes the closed fact's readout.
     result = await _run(pg_pool)
     async with pg_pool.acquire() as conn:
-        remaining = await conn.fetchval(
-            "SELECT count(*) FROM fact_decay_states"
-        )
+        remaining = await conn.fetchval(_mine, [keeper, closing])
         survivor = await conn.fetchval(
-            "SELECT fact_id FROM fact_decay_states"
+            "SELECT fact_id FROM fact_decay_states "
+            "WHERE fact_id = ANY($1::uuid[])", [keeper, closing],
         )
     assert remaining == 1
     assert survivor == keeper

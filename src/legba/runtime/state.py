@@ -287,9 +287,31 @@ class FilterStateStore:
             if row is None:
                 return None
             raw = row["value"]
-            if isinstance(raw, (dict, list)):
+            # The pool's jsonb codec (``PostgresStore._init_connection``,
+            # registered unconditionally on every connection) already decodes
+            # the ``jsonb`` column into a native Python value for EVERY JSON
+            # shape — object, array, string, number, bool, null — not just
+            # object/array. A bare scalar VALUE (e.g. a source handler that
+            # persists a cursor as a plain ISO-timestamp string rather than a
+            # dict) therefore already arrives as a plain ``str``/``int``/
+            # ``float``/``bool``/``None`` here, and is NOT itself valid JSON
+            # text (``"2026-07-24T09:45:00+00:00"`` has no wrapping quotes) —
+            # re-running ``json.loads`` on it raises spuriously
+            # (``json.decoder.JSONDecodeError: Extra data: ...``), which is
+            # exactly what starved ``source.gdelt.files`` from 2026-07-24
+            # onward (the first source handler to store a bare-string
+            # cursor). Only a non-``str`` value is guaranteed already-decoded
+            # (dict/list/int/float/bool/None all pass through untouched); a
+            # ``str`` might still be raw undecoded JSON text if this store is
+            # ever pointed at a codec-less connection, so attempt the decode
+            # and fall back to the raw string when it isn't valid JSON on its
+            # own — i.e. it was already decoded by the connection's codec.
+            if not isinstance(raw, str):
                 return raw
-            return json.loads(raw)
+            try:
+                return json.loads(raw)
+            except (TypeError, ValueError):
+                return raw
 
     async def set(self, key: str, value: Any) -> None:
         async with self._pool.acquire() as conn:

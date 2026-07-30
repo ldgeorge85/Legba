@@ -691,6 +691,55 @@ services:
       start_period: 40s
     restart: unless-stopped
 
+  # searxng — the local meta-search engine backing the external-retrieval
+  # (R-3) plane. Profile-gated: `--profile search up -d searxng`. INERT until
+  # an operator points a search stack component (or the legacy
+  # LEGBA_WEB_SEARCH_ENDPOINT) at it AND grants the web_access pack — the
+  # container alone changes no analyst behavior.
+  #
+  # Two traps this block resolves up front:
+  #   * JSON is OFF by default in SearXNG. `search.formats` must include
+  #     `json` or every query returns HTML and the parser sees nothing. It is
+  #     set through SEARXNG_SETTINGS_PATH-mounted settings, so we mount a
+  #     minimal settings file rather than relying on env alone.
+  #   * The runtime's SSRF guard REFUSES RFC-1918 targets, which is exactly
+  #     what `searxng` resolves to on the compose network. Reaching it requires
+  #     adding `searxng` to LEGBA_EGRESS_ALLOW_HOSTS (see the runtime service;
+  #     default is `rsshub` only) — deliberately a separate operator action so
+  #     the guard is never widened by merely starting a container.
+  #
+  # Degradation note (R-3a risk 3): upstream engines CAPTCHA/ban a self-hosted
+  # instance and SearXNG answers HTTP 200 with a short/empty `results[]` —
+  # indistinguishable from "nothing exists" unless the caller reads
+  # `unresponsive_engines`. /healthz stays green throughout. The provider
+  # handler owns that distinction; do not treat this healthcheck as evidence
+  # that search results are trustworthy.
+  searxng:
+    logging: *default-logging
+    image: searxng/searxng:latest
+    profiles: ["search"]
+    mem_limit: 512m
+    environment:
+      # Public-facing base; loopback only (no external exposure).
+      SEARXNG_BASE_URL: "${LEGBA_SEARXNG_BASE_URL:-http://localhost:8888/}"
+      SEARXNG_SETTINGS_PATH: "/etc/searxng/settings.yml"
+      # Instance secret — set LEGBA_SEARXNG_SECRET in .env (never commit it).
+      SEARXNG_SECRET: "${LEGBA_SEARXNG_SECRET:-}"
+    volumes:
+      # Minimal settings file: enables the json output format the handler needs.
+      - ./docker/searxng:/etc/searxng:ro
+    ports:
+      # Loopback-only, mirroring the rsshub/ntfy convention: the runtime uses
+      # the compose network (searxng:8080); the host port is for probing.
+      - "127.0.0.1:8888:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
   # ntfy — the local push-notification server for the P1 alert loop (E-4,
   # operator directive 2026-07-27: local-first; subdomain/Caddy exposure and
   # the phone app come later). Profile-gated: `--profile alerts up -d ntfy`.

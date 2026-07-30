@@ -704,6 +704,168 @@ async def test_escalate_target_not_allowing_blocks_visibly(pool):
     assert {(r["decision"], r["cause"]) for r in ev} == {("block", "not_allowed")}
 
 
+# ---------------------------------------------------------------------------
+# X-1 Stage 1 — the ACTION the crossing invokes is config-driven
+#
+# It was the string literal ``"escalate"`` at the fire site. These prove the
+# whole edge — gate → three-way resolution → governor → dispatch → channel emit
+# → audit — runs against a DIFFERENT tool when the pack tool config names one,
+# and that the shipped (unconfigured) pack is unchanged. The unit-level
+# resolver tests live in ``test_escalation_action_config.py``.
+# ---------------------------------------------------------------------------
+
+
+def _escalation_with_action(
+    pool, emitted_sink: list, *, account: str, action_tool: str | None
+):
+    """Build the escalation binding the way ``dapr_host`` does: resolve the
+    action from the pack tool config, against the pack's live tool list.
+
+    ``incident_response`` is used as the pack because it genuinely declares two
+    tools — the shape an operator reaches by adding ``create_incident`` to the
+    ``escalate_finding`` pack with a ``PUT /descriptors/…``.
+    """
+    from legba.data.analysts.agency.binding import resolve_escalation_action
+
+    pack = _load_pack("action_pack_incident_response.yaml")
+    tool_cfg = {}
+    if action_tool is not None:
+        tool_cfg["action_tool"] = action_tool
+    resolved, note = resolve_escalation_action(tool_cfg, pack, log_context=account)
+
+    async def _publish(subject: str, payload: bytes) -> None:
+        emitted_sink.append((subject, json.loads(payload)))
+
+    return EscalationBinding(
+        binding=AgencyToolBinding(
+            agency=Agency(),
+            pack=pack,
+            pg_pool=pool,
+            tool_context=ToolContext(
+                queue=None,
+                # REAL pool: the emit must land its durable
+                # alert_sink_deliveries audit row, which is where the action
+                # name (and any degrade note) becomes queryable.
+                emit=ChannelEmitter(nats_publish=_publish, pg_pool=pool),
+            ),
+            analyst_grants=[ActionPackRef(pack_id=pack.identity.id)],
+            target_allows=None,
+            requested_by=account,
+            budget_account=account,
+        ),
+        severity_gate="high",
+        confidence_gate=0.85,
+        action_tool=resolved,
+        action_degraded=note,
+    ), pack
+
+
+async def _fire_urgent(pool, esc, pack, *, who: str):
+    target_id = f"target.x1.{uuid4().hex[:8]}"
+    async with pool.acquire() as conn:
+        await _insert_target(
+            conn, target_id=target_id,
+            # incident_response is applicable to `incident`/`security` tags;
+            # the applicability leg stays REAL (see the not_applicable test).
+            tags=["g20", "security"],
+            allows=[{"pack_id": pack.identity.id}],
+        )
+        payload = FindingPayload(
+            title="Cross-border incursion confirmed",
+            body="multiple corroborating signals",
+            confidence=0.97,
+        )
+        await _maybe_escalate_finding(
+            conn, escalation=esc, payload=payload,
+            # No analyst_outputs row in this rig, so leave the FK column NULL
+            # rather than pointing it at an id that does not exist.
+            output_row_id=None, target_id=target_id,
+            actor_id="analyst::t::v",
+        )
+        return (
+            await _invocations(conn, requested_by=who),
+            await _deliveries(conn, target_id=target_id),
+        )
+
+
+async def _deliveries(conn, *, target_id: str):
+    return await conn.fetch(
+        "SELECT channel_name, payload_summary FROM alert_sink_deliveries "
+        "WHERE target_id = $1 ORDER BY attempted_at",
+        target_id,
+    )
+
+
+async def test_escalate_unconfigured_action_still_invokes_escalate(pool):
+    """The byte-identical default: no ``action_tool`` on the config → the same
+    ``escalate`` invocation the literal always produced."""
+    who = f"analyst::act_default_{uuid4().hex[:8]}"
+    emitted: list = []
+    esc, pack = _escalation_with_action(pool, emitted, account=who, action_tool=None)
+    assert esc.action_tool == "escalate"
+    assert esc.action_degraded is None
+
+    inv, deliveries = await _fire_urgent(pool, esc, pack, who=who)
+
+    assert [(r["tool_name"], r["outcome"]) for r in inv] == [
+        ("escalate", "completed")
+    ]
+    assert emitted, "the channel emit must still reach the publish callable"
+    # The durable ledger records the action, and carries NO degrade note.
+    summaries = [json.loads(r["payload_summary"]) for r in deliveries]
+    assert summaries, "the emit must land a delivery-audit row"
+    assert {s["action"] for s in summaries} == {"escalate"}
+    assert all("config_note" not in s for s in summaries)
+
+
+async def test_escalate_action_tool_config_selects_a_different_tool(pool):
+    """THE Stage 1 proof: a configured action reaches a DIFFERENT tool through
+    the full three-way gate + governor, and the ledger says so."""
+    who = f"analyst::act_incident_{uuid4().hex[:8]}"
+    emitted: list = []
+    esc, pack = _escalation_with_action(
+        pool, emitted, account=who, action_tool="create_incident"
+    )
+    assert esc.action_tool == "create_incident"
+    assert esc.action_degraded is None
+
+    inv, deliveries = await _fire_urgent(pool, esc, pack, who=who)
+
+    # The governor counted create_incident, NOT escalate — the tools are
+    # separately budgeted, so this is the real distinction, not a label.
+    assert [(r["tool_name"], r["outcome"]) for r in inv] == [
+        ("create_incident", "completed")
+    ]
+    assert emitted, "the configured action must still deliver"
+    summaries = [json.loads(r["payload_summary"]) for r in deliveries]
+    assert {s["action"] for s in summaries} == {"create_incident"}
+
+
+async def test_escalate_unknown_action_degrades_to_escalate_and_notes_the_ledger(
+    pool,
+):
+    """A typo'd action must NOT take the escalation edge offline: the operator
+    still gets paged via ``escalate``, and the degrade is queryable on the
+    delivery ledger rather than buried in a boot log."""
+    who = f"analyst::act_typo_{uuid4().hex[:8]}"
+    emitted: list = []
+    esc, pack = _escalation_with_action(
+        pool, emitted, account=who, action_tool="creat_incident"
+    )
+    assert esc.action_tool == "escalate"
+    assert esc.action_degraded and "creat_incident" in esc.action_degraded
+
+    inv, deliveries = await _fire_urgent(pool, esc, pack, who=who)
+
+    assert [(r["tool_name"], r["outcome"]) for r in inv] == [
+        ("escalate", "completed")
+    ]
+    assert emitted, "a config typo must never silence the escalation edge"
+    summaries = [json.loads(r["payload_summary"]) for r in deliveries]
+    assert {s["action"] for s in summaries} == {"escalate"}
+    assert all("creat_incident" in s["config_note"] for s in summaries)
+
+
 async def test_escalate_non_g20_target_fails_applicability(pool):
     target_id = f"target.a3.{uuid4().hex[:8]}"
     who = f"analyst::tag_{uuid4().hex[:8]}"

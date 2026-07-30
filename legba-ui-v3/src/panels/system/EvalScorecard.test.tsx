@@ -67,8 +67,17 @@ const PAGE = [
   },
 ]
 
+// Routes by URL rather than a blanket mock: the panel also queries
+// /v3/eval/calibration and /v3/eval/country_scorecard, which are NOT
+// ScorecardRow-shaped — feeding them the same PAGE fixture crashes the
+// (unrelated) country-scorecard render path once its query resolves.
 function stubFetch() {
-  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => PAGE })
+  const fetchMock = vi.fn().mockImplementation((url: string) => {
+    if (url.includes('/v3/eval/scorecard')) {
+      return Promise.resolve({ ok: true, json: async () => PAGE })
+    }
+    return Promise.resolve({ ok: true, json: async () => [] })
+  })
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
 }
@@ -107,5 +116,90 @@ describe('EvalScorecardPanel', () => {
     await waitFor(() => {
       expect(screen.getByText(/no critic judgements yet/)).toBeInTheDocument()
     })
+  })
+})
+
+describe('EvalScorecardPanel band calibration section', () => {
+  it('shows the honest awaiting state when no band_calibration section is served', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/v3/eval/calibration')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ available: false, band_calibration: null }),
+        })
+      }
+      return Promise.resolve({ ok: true, json: async () => [] })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(wrap(<EvalScorecardPanel registration={reg()} scope={{}} mode="personal" />))
+    await waitFor(() => {
+      expect(screen.getByTestId('band-calibration-empty')).toBeInTheDocument()
+    })
+  })
+
+  it('renders 14d/28d persistence + reversal rates, honestly labeled (never "Brier")', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/v3/eval/calibration')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            available: true,
+            produced_at: '2026-07-27T00:00:00Z',
+            band_calibration: {
+              available: true,
+              produced_at: '2026-07-27T00:00:00Z',
+              claims_total: 20,
+              resolution_spec: 'hard_band_at_horizon_v1',
+              horizons: {
+                '14d': {
+                  resolved: 10,
+                  open: 2,
+                  outcomes: { held: 6, reverted: 2, worsened: 2 },
+                  confirmed: 8,
+                  reverted: 2,
+                  scored: 10,
+                  excluded_insufficient: 0,
+                  excluded_unresolvable: 0,
+                  persistence_rate: 0.8,
+                  reversal_rate: 0.2,
+                },
+                '28d': {
+                  resolved: 6,
+                  open: 6,
+                  outcomes: { held: 3, reverted: 3 },
+                  confirmed: 3,
+                  reverted: 3,
+                  scored: 6,
+                  excluded_insufficient: 0,
+                  excluded_unresolvable: 0,
+                  persistence_rate: 0.5,
+                  reversal_rate: 0.5,
+                },
+              },
+              by_direction: {},
+              by_dimension: {},
+              no_brier: true,
+              honesty_note: 'Band-persistence and reversal rates are ordinal stability measures.',
+              refs: ['bc-1'],
+            },
+          }),
+        })
+      }
+      return Promise.resolve({ ok: true, json: async () => [] })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(wrap(<EvalScorecardPanel registration={reg()} scope={{}} mode="personal" />))
+    await waitFor(() => {
+      expect(screen.getByTestId('band-calibration-horizon-14d')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('band-calibration-persistence-14d')).toHaveTextContent('80%')
+    expect(screen.getByTestId('band-calibration-reversal-14d')).toHaveTextContent('20%')
+    expect(screen.getByTestId('band-calibration-persistence-28d')).toHaveTextContent('50%')
+    expect(screen.queryByTestId('band-calibration-empty')).not.toBeInTheDocument()
+    // The route's own no-Brier honesty note renders verbatim — the panel
+    // never invents its own (potentially drifting) honesty copy.
+    expect(screen.getByTestId('band-calibration-honesty-note')).toHaveTextContent(
+      'ordinal stability measures',
+    )
   })
 })

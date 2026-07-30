@@ -18,6 +18,17 @@ Entity garbage-collection family. No LLM. Seven operations:
      'paused' (mirroring ``discovered_materializer._pause_discovery``) and
      records the reason into ``body->>auto_paused_*``; the runtime actor loop
      observes the state change and stops polling.
+
+     A source that is CURRENTLY PRODUCING is never paused by this leg. Two
+     mechanisms, both in ``_consecutive_error_streaks``: a productive poll now
+     writes an ``outcome='success'`` row (migration 0114) that BREAKS the
+     leading error run, and — independently of the ledger — a source whose
+     newest signal LANDED within ``_SOURCE_RECENT_SIGNAL_HOURS`` is skipped
+     outright. The second exists because the ledger's pre-0114 rows are
+     structurally wrong: productive polls wrote nothing, so a repaired source
+     kept presenting a frozen historical error run and was re-latched off it
+     (gdelt.files 2026-07-27, paused two minutes after its fix deployed;
+     ukrinform / nasa.eonet before it).
   5. Quarantine orphan ``proposed_edges`` (D25) — pending edges whose
      ``source_entity`` / ``target_entity`` has no matching
      ``entity_profiles.canonical_name`` (the exact drift ``integrity_sweep``
@@ -98,9 +109,31 @@ _DUP_MAX_PAIRS = 50
 _SOURCE_FAILURE_THRESHOLD = 20
 # How many recent poll-outcome rows per source the error-streak read pulls back.
 # Must exceed _SOURCE_FAILURE_THRESHOLD so a qualifying leading error-run is
-# never truncated by the LIMIT (a productive poll writes no outcome row, so the
-# window only ever holds non-productive — empty/error — polls).
+# never truncated by the LIMIT. Since migration 0114 a PRODUCTIVE poll writes an
+# ``outcome='success'`` row, so the window holds successes too — which is the
+# point: a success is what BREAKS the leading error run at its first occurrence.
 _SOURCE_STREAK_WINDOW = max(_SOURCE_FAILURE_THRESHOLD + 5, 25)
+
+# --- Op 4: the currently-producing guard -----------------------------------
+# A source that landed a signal row in the substrate within this window is
+# PRODUCING, and a producing source is not a failing source — it is never
+# auto-paused, whatever its historical poll-outcome rows say.
+#
+# This is defence in depth, deliberately independent of the outcome ledger.
+# Recording success (migration 0114) prevents NEW fossil error-runs, but the
+# rows already on disk stay: gdelt.files carries ~102 leading 'error' rows from
+# a four-day outage that was repaired. This guard neutralises them without
+# anyone hand-deleting data — the repair that operators previously performed by
+# hand, three times over, made structural.
+#
+# 48h matches the "firing" floor the system-status route already uses for the
+# same question (v3_api.SourceFiringRow: "produced a signal within the last 48h
+# → firing, regardless of any recent empty/error poll rows"), so the platform
+# holds ONE definition of currently-producing. It is keyed on
+# ``signals.created_at`` — when the row LANDED in the substrate — not
+# ``fetched_at``, which is handler-supplied and can be back-dated by a bulk /
+# archive loader (the same reason the status route keys on created_at).
+_SOURCE_RECENT_SIGNAL_HOURS = 48
 
 # --- Op 7: auto-unpause re-probe -------------------------------------------
 # Eligibility floor — a source must have sat auto-paused for at least this
@@ -307,34 +340,60 @@ def _consecutive_error_streaks(
     rows: Any,
     *,
     threshold: int,
+    now: datetime | None = None,
+    recent_signal_hours: int = _SOURCE_RECENT_SIGNAL_HOURS,
 ) -> list[tuple[str, int]]:
     """Pure per-source consecutive-``error``-poll decision — no DB, unit-testable.
 
     ``rows``: iterable of mappings carrying ``source_id``, ``outcome``
-    (``'error'`` | ``'empty'``), ``occurred_at`` (tz-aware datetime) and
-    (optionally) ``last_signal`` (tz-aware datetime — the source's newest produced
-    signal), already grouped per source and ordered NEWEST-FIRST (the SQL
-    guarantees this, mirroring the liveness watchdog's empty-streak read). For each
-    source, count the contiguous LEADING run of ``outcome='error'`` rows; the run
-    breaks on the first non-error row (an ``'empty'`` outcome, or — by ABSENCE — a
-    productive poll, which writes no outcome row at all). Returns
-    ``(source_id, streak_len)`` for every source whose leading error run is
-    ``>= threshold``.
+    (``'error'`` | ``'empty'`` | ``'success'``), ``occurred_at`` (tz-aware
+    datetime) and (optionally) ``last_signal`` (tz-aware datetime — the source's
+    newest produced signal) and ``last_ingest`` (tz-aware datetime — when that
+    source's newest signal row LANDED in the substrate), already grouped per
+    source and ordered NEWEST-FIRST (the SQL guarantees this, mirroring the
+    liveness watchdog's empty-streak read). For each source, count the contiguous
+    LEADING run of ``outcome='error'`` rows; the run breaks on the first non-error
+    row — an ``'empty'`` outcome or, since migration 0114, a ``'success'`` one.
+    Returns ``(source_id, streak_len)`` for every source whose leading error run
+    is ``>= threshold``.
 
-    Signal BOUND (T-4a — mirrors ``liveness_watchdog._evaluate_empty_streaks``): a
-    PRODUCTIVE poll writes NO ``source_poll_outcomes`` row (it is self-evidencing
-    via its signals), so this table alone cannot see successes. The error run
-    therefore counts ONLY the leading rows that occurred SINCE ``last_signal`` — an
-    error poll at or before the source's newest produced signal is STALE evidence
-    and stops the count. Without the bound, a source that produces normally but has
-    old error rows sitting at the top of its outcome window (nothing newer exists
-    because productive polls write none) is re-latched to 'paused' forever off dead
-    errors (the ukrinform/nasa 2026-07-22 fossil-latch class). When ``last_signal``
-    is absent (older callers / a source that has never produced), behavior is
-    unchanged: the contiguous error run alone decides — a source that keeps
-    ERRORING and never produced is exactly what auto-pause is for."""
+    THREE independent things stop a source being latched, in the order they are
+    applied. Each exists because a previous single mechanism proved insufficient:
+
+    1. **Currently-producing guard** (``last_ingest`` within
+       ``recent_signal_hours`` of ``now``): the source is producing RIGHT NOW,
+       so it is not failing, and NOTHING in its poll history can pause it. This
+       is the only rule that does not depend on the outcome ledger being
+       correct, which is why it is first: the ledger's historical rows are known
+       to be wrong (before migration 0114 a productive poll wrote no row at all,
+       so a repaired source's leading run stayed frozen at its old failures —
+       gdelt.files 2026-07-27 was auto-paused two minutes after its fix landed,
+       reading a streak that was already history, and its ~102 error rows are
+       still the leading run today). ``last_ingest`` is substrate landing time
+       (``signals.created_at``), NOT the handler-supplied ``fetched_at``, so a
+       bulk/archive loader that back-dates its rows cannot defeat it.
+
+    2. **A 'success' row breaks the run** (migration 0114): the first productive
+       poll after a repair writes ``outcome='success'``, which is a non-error
+       row, which ends the leading run for good. This is the root-cause fix —
+       guard (1) neutralises the fossil rows already on disk, this stops new
+       ones forming.
+
+    3. **Stale-error bound** (T-4a — mirrors
+       ``liveness_watchdog._evaluate_empty_streaks``): an error poll at or before
+       ``last_signal`` is stale evidence and stops the count. Retained: it still
+       covers every pre-0114 row, and it catches the case where a source
+       produced longer ago than ``recent_signal_hours`` yet its error rows are
+       older still.
+
+    When ``last_signal`` / ``last_ingest`` are absent (older callers / a source
+    that has never produced), behavior is unchanged: the contiguous error run
+    alone decides — a source that keeps ERRORING and never produced is exactly
+    what auto-pause is for."""
     if threshold <= 0:
         return []
+    now = now or datetime.now(timezone.utc)
+    recent_cutoff = now - timedelta(hours=max(0, int(recent_signal_hours)))
     by_source: dict[str, list[dict[str, Any]]] = {}
     order: list[str] = []
     for r in rows:
@@ -350,6 +409,10 @@ def _consecutive_error_streaks(
         outcomes = by_source[sid]
         # All rows carry the same per-source last_signal; read it off the first.
         last_signal = outcomes[0].get("last_signal") if outcomes else None
+        # Guard 1 — currently producing ⇒ never paused, whatever the history.
+        last_ingest = outcomes[0].get("last_ingest") if outcomes else None
+        if isinstance(last_ingest, datetime) and last_ingest >= recent_cutoff:
+            continue
         streak = 0
         for r in outcomes:
             if (r.get("outcome") or "") != "error":
@@ -375,13 +438,22 @@ async def _pause_failing_sources(pool: Any) -> int:
 
     There is NO ``sources`` table — the original query hit a non-existent
     ``sources`` relation (D2). The failure signal lives in
-    ``source_poll_outcomes`` (one row per NON-productive poll, ``outcome`` in
-    ``'empty'`` / ``'error'``); a source is a descriptor in ``source_descriptors``
-    (head row keyed on ``descriptor_id`` + ``is_head``, lifecycle in ``state``,
-    metadata in ``body`` jsonb). We read the last ``_SOURCE_STREAK_WINDOW``
-    poll-outcomes per ACTIVE head source, compute the contiguous leading
-    ``error`` run in pure Python, and flip ``state`` 'active'→'paused' (recording
-    the reason in ``body``) for any source over threshold."""
+    ``source_poll_outcomes`` (one row per poll, ``outcome`` in ``'empty'`` /
+    ``'error'`` / ``'success'``); a source is a descriptor in
+    ``source_descriptors`` (head row keyed on ``descriptor_id`` + ``is_head``,
+    lifecycle in ``state``, metadata in ``body`` jsonb). We read the last
+    ``_SOURCE_STREAK_WINDOW`` poll-outcomes per ACTIVE head source, compute the
+    contiguous leading ``error`` run in pure Python, and flip ``state``
+    'active'→'paused' (recording the reason in ``body``) for any source over
+    threshold.
+
+    Two per-source recency columns ride along, and they are NOT the same fact:
+    ``last_signal`` is ``max(signals.fetched_at)`` (handler-supplied logical
+    time — the stale-error bound), while ``last_ingest`` is
+    ``max(signals.created_at)`` (when the row landed in the substrate — the
+    currently-producing guard). A bulk/archive loader can back-date
+    ``fetched_at``; it cannot back-date ``created_at``. See
+    :func:`_consecutive_error_streaks`."""
     paused = 0
     window = int(_SOURCE_STREAK_WINDOW)
     async with pool.acquire() as conn:
@@ -392,7 +464,10 @@ async def _pause_failing_sources(pool: Any) -> int:
                    po.occurred_at AS occurred_at,
                    (SELECT max(s.fetched_at)
                       FROM signals s
-                     WHERE s.source_id = d.descriptor_id) AS last_signal
+                     WHERE s.source_id = d.descriptor_id) AS last_signal,
+                   (SELECT max(s.created_at)
+                      FROM signals s
+                     WHERE s.source_id = d.descriptor_id) AS last_ingest
             FROM source_descriptors d
             JOIN LATERAL (
                 SELECT source_id, outcome, occurred_at

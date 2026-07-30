@@ -1,8 +1,14 @@
 /**
- * Tests for sidebar nav grouping (TASK D5).
+ * Tests for sidebar nav grouping (TASK D5; U-3 task-ordered nav + Engine Room
+ * + the ≤22-visible-row acceptance criterion).
  *
  * Asserts the grouping policy is total (every singleton panel reaches a
- * group), stable/ordered, and auto-slots new kinds via prefix fallback.
+ * group), stable/ordered (task order where U-3 §3 pins one, alphabetical
+ * otherwise), auto-slots new kinds via prefix fallback, and that the
+ * structural sidebar-row count (group headers + the singleton rows they
+ * contain — NOT the dynamic per-desk/per-target/per-analyst instance rows,
+ * which nest inside Desks / Engine Room and don't inflate this count) stays
+ * within the COHERENCE_WAVES_PLAN_2026-07-28 §U-3 target of ≤ 22.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -25,32 +31,34 @@ describe('groupForKind', () => {
     }
   })
 
-  it('routes registry.* and source.* panels into Operations', () => {
+  it('routes registry.* and source.* panels into Engine Room (id: operations)', () => {
     expect(groupForKind('registry.targets')).toBe('operations')
     expect(groupForKind('registry.sources')).toBe('operations')
     expect(groupForKind('source.detail')).toBe('operations')
   })
 
   it('routes the system.* / v4.* families across the five groups', () => {
-    // Awareness — the live surfaces + detail rail.
+    // Awareness — the live surfaces + detail rail. Includes the U-3 merged
+    // Timeline (Events/Validity) and Alerts & Watches (Watches/Triggers/
+    // Deliveries) surfaces.
     expect(groupForKind('system.findings')).toBe('awareness')
-    expect(groupForKind('system.alert_center')).toBe('awareness')
     expect(groupForKind('system.inspector')).toBe('awareness')
     expect(groupForKind('v4.map')).toBe('awareness')
-    // Investigation — dig into the why.
-    expect(groupForKind('system.lineage')).toBe('investigation')
+    expect(groupForKind('system.timeline')).toBe('awareness')
+    expect(groupForKind('system.alerts_watches')).toBe('awareness')
+    // Investigation — dig into the why. Includes the U-3 merged Provenance
+    // surface (Why/Lineage/Flow tabs).
     expect(groupForKind('system.search')).toBe('investigation')
     expect(groupForKind('system.entities')).toBe('investigation')
-    expect(groupForKind('v4.why')).toBe('investigation')
+    expect(groupForKind('system.provenance')).toBe('investigation')
     // Analysis — reason over the substrate.
     expect(groupForKind('system.consult')).toBe('analysis')
-    expect(groupForKind('system.deep_consult')).toBe('analysis')
     expect(groupForKind('system.optimizer')).toBe('analysis')
     expect(groupForKind('system.eval_scorecard')).toBe('analysis')
     // Products — the finished intelligence.
     expect(groupForKind('v4.assessment')).toBe('products')
     expect(groupForKind('system.journal')).toBe('products')
-    // Operations — the plumbing catch-all.
+    // Engine Room (id: operations) — the plumbing catch-all.
     expect(groupForKind('system.budget')).toBe('operations')
     expect(groupForKind('system.governor')).toBe('operations')
     expect(groupForKind('system.actor_health')).toBe('operations')
@@ -58,14 +66,12 @@ describe('groupForKind', () => {
   })
 
   it('auto-slots an unknown kind via prefix fallback', () => {
-    // A hypothetical new registry.* / system.* panel with no explicit
-    // override still lands in the right group purely from its prefix.
     expect(groupForKind('registry.brand_new' as PanelKind)).toBe('operations')
     expect(groupForKind('system.brand_new' as PanelKind)).toBe('operations')
     expect(groupForKind('source.brand_new' as PanelKind)).toBe('operations')
   })
 
-  it('falls back to Operations for an unrecognized prefix', () => {
+  it('falls back to Engine Room for an unrecognized prefix', () => {
     expect(groupForKind('weird.panel' as PanelKind)).toBe('operations')
   })
 })
@@ -81,6 +87,13 @@ describe('kindPrefix', () => {
   })
 })
 
+describe('NAV_GROUP_DEFS — Engine Room (U-3 §2)', () => {
+  it('labels the operations group "Engine Room" while keeping its id stable', () => {
+    const ops = NAV_GROUP_DEFS.find((d) => d.id === 'operations')
+    expect(ops?.label).toBe('Engine Room')
+  })
+})
+
 describe('buildNavGroups', () => {
   it('keeps every singleton panel reachable exactly once', () => {
     const groups = buildNavGroups(SINGLETON_PANELS)
@@ -90,7 +103,6 @@ describe('buildNavGroups', () => {
   })
 
   it('omits empty groups', () => {
-    // Only registry kinds → only the Operations group appears.
     const groups = buildNavGroups(['registry.targets', 'registry.stack'])
     expect(groups.map((g) => g.id)).toEqual(['operations'])
     expect(groups[0].kinds).toContain('registry.targets')
@@ -103,11 +115,46 @@ describe('buildNavGroups', () => {
     expect(indices).toEqual([...indices].sort((a, b) => a - b))
   })
 
-  it('sorts kinds within a group alphabetically by default title', () => {
+  it('Awareness reads Wall → Live Feed → World Map → Timeline → Alerts & Watches → Inspector → the rest (U-3 §3 task order, NOT alphabetical)', () => {
     const groups = buildNavGroups(SINGLETON_PANELS)
-    for (const group of groups) {
-      const titles = group.kinds.map((k) => PANEL_REGISTRY[k].definition.defaultTitle)
-      expect(titles).toEqual([...titles].sort((a, b) => a.localeCompare(b)))
-    }
+    const awareness = groups.find((g) => g.id === 'awareness')!
+    expect(awareness.kinds).toEqual([
+      'system.wall',
+      'system.findings',
+      'v4.map',
+      'system.timeline',
+      'system.alerts_watches',
+      'system.inspector',
+      'v4.kpi', // "At a Glance" — no task-order override, so it's "the rest"
+    ])
+  })
+
+  it('a group with no task-order overrides stays purely alphabetical by title', () => {
+    const groups = buildNavGroups(SINGLETON_PANELS)
+    const products = groups.find((g) => g.id === 'products')!
+    const titles = products.kinds.map((k) => PANEL_REGISTRY[k].definition.defaultTitle)
+    expect(titles).toEqual([...titles].sort((a, b) => a.localeCompare(b)))
+  })
+})
+
+describe('U-3 acceptance — ≤ 22 visible sidebar rows', () => {
+  // "Visible sidebar rows" = the STRUCTURAL rows: the 6 fixed section headers
+  // (Desks + the 5 verb groups, one of which is Engine Room) plus every
+  // singleton panel row that lives directly under Awareness / Investigation /
+  // Analysis / Products (Engine Room's own 14 rows, and the dynamic per-desk /
+  // per-target / per-analyst instance rows nested inside Desks / Engine Room,
+  // are each one collapsed structural row regardless of how many records
+  // exist behind them — see Sidebar.tsx). This is what COHERENCE_WAVES_PLAN
+  // §U-3's "≤ 22 visible sidebar rows" acceptance criterion measures.
+  const DESKS_HEADER = 1
+  const ENGINE_ROOM_HEADER = 1
+
+  it('stays at or under the target', () => {
+    const groups = buildNavGroups(SINGLETON_PANELS)
+    const nonEngineRoomGroups = groups.filter((g) => g.id !== 'operations')
+    const headerCount = nonEngineRoomGroups.length + DESKS_HEADER + ENGINE_ROOM_HEADER
+    const leafCount = nonEngineRoomGroups.reduce((n, g) => n + g.kinds.length, 0)
+    const total = headerCount + leafCount
+    expect(total).toBeLessThanOrEqual(22)
   })
 })

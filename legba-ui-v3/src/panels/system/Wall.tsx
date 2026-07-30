@@ -36,6 +36,7 @@ import { SeverityBadge } from '@/components/SeverityBadge'
 import { apiGet, getSystemAnalystCadence, getSystemSourceFiring } from '@/lib/api'
 import { relTime } from '@/lib/evalOps'
 import {
+  bandChangeDeskLabel,
   buildMovers,
   healthRollup,
   loadWallCursor,
@@ -154,7 +155,15 @@ function BandGridQuadrant() {
 // Q2 + Q3 — the /since fetch (one query serves both quadrants)
 // ---------------------------------------------------------------------------
 
-function useSince() {
+/**
+ * The `/v3/since` fetch + cursor lifecycle — exported so a standalone mount
+ * of just the movers content (the boot-grid "Movers since last visit" tile,
+ * `system.wall_movers` / `panels/system/WallMovers.tsx`) shares the EXACT
+ * same cursor semantics as the full Wall: both read/advance the same
+ * `legba_wall_cursor` localStorage key via `wallModel.ts`, so a desk never
+ * sees two different "since" answers depending on which tile it opened.
+ */
+export function useSince() {
   // Resolve the cursor ONCE per mount: the whole visit diffs from the same
   // anchor; each successful poll advances the STORED cursor for the next open.
   const visit = useMemo(() => resolveWallCursor(loadWallCursor()), [])
@@ -185,10 +194,12 @@ function directionTone(direction: string): 'bad' | 'good' | 'neutral' {
 function BandChangeRow({ c }: { c: BandChange }) {
   const tone = directionTone(c.direction)
   const Icon = tone === 'bad' ? ArrowUpRight : tone === 'good' ? ArrowDownRight : Minus
+  // U-2: the desk reads as its country name, not the raw `country_g20_br` id.
+  const desk = bandChangeDeskLabel(c.target_id)
   return (
-    <li className="flex items-center gap-1.5 text-[11px]" data-testid="wall-band-change">
+    <li className="flex items-center gap-1.5 text-[11px]" data-testid="wall-band-change" title={c.target_id}>
       <Icon className={`h-3 w-3 shrink-0 ${TONE_TEXT[tone]}`} aria-hidden />
-      <span className="truncate font-mono text-ink-2">{c.target_id}</span>
+      <span className="truncate text-ink-2">{desk}</span>
       <span className="truncate text-ink-3">{c.dimension}</span>
       <span className={`ml-auto shrink-0 font-mono ${TONE_TEXT[tone]}`}>
         {c.from_band}→{c.to_band}
@@ -217,23 +228,27 @@ function SituationRow({ s }: { s: SituationChange }) {
   )
 }
 
-function MoversQuadrant({
-  since,
-  cursor,
-  firstVisit,
-  loading,
-  error,
-}: {
+/** The shared "since" props both the full Wall's movers quadrant and the
+ *  standalone boot-grid movers tile (`WallMovers.tsx`) render from. */
+export interface MoversContentProps {
   since: SinceResponse | undefined
   cursor: string
   firstVisit: boolean
   loading: boolean
   error: unknown
-}) {
+}
+
+/**
+ * The movers list itself — loading / error / honest-empty / grouped rows.
+ * Exported UNWRAPPED (no `Quadrant` shell) so `WallMovers.tsx` can drop it
+ * straight into its own `PanelChrome` without a doubled title bar (the
+ * cosmetic double-chrome the U-3 merges flagged — see registry.ts's
+ * `system.wall_movers` comment).
+ */
+export function MoversContent({ since, cursor, loading, error }: MoversContentProps) {
   const movers = since ? buildMovers(since) : null
-  const sinceLabel = firstVisit ? 'first visit — last 24h' : `since ${relTime(cursor)}`
   return (
-    <Quadrant title="Movers since last visit" aside={sinceLabel} testid="wall-movers">
+    <>
       {loading && <div className="py-4 text-center text-label text-ink-3">diffing…</div>}
       {error instanceof Error && (
         <div className="py-2 text-label text-accent-critical">error: {error.message}</div>
@@ -285,6 +300,15 @@ function MoversQuadrant({
           )}
         </div>
       )}
+    </>
+  )
+}
+
+function MoversQuadrant({ since, cursor, firstVisit, loading, error }: MoversContentProps) {
+  const sinceLabel = firstVisit ? 'first visit — last 24h' : `since ${relTime(cursor)}`
+  return (
+    <Quadrant title="Movers since last visit" aside={sinceLabel} testid="wall-movers">
+      <MoversContent since={since} cursor={cursor} firstVisit={firstVisit} loading={loading} error={error} />
     </Quadrant>
   )
 }

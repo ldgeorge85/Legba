@@ -37,11 +37,13 @@ from legba.data.analysts.inline_target import InlineTargetDeps, run_method
 from legba.runtime.grounding import (
     GroundingFact,
     GroundingGraphStructure,
+    GroundingNarrative,
     GroundingNexus,
     GroundingSituation,
     SubstrateGroundingResolver,
     build_graph_structure_block,
     build_grounding_preamble,
+    build_narratives_block,
     build_situations_block,
     collect_grounding_candidates,
     is_non_event_situation_name,
@@ -196,6 +198,8 @@ class _StubConn:
             return self._fetch_rows.get("nexuses", [])
         if "FROM situations" in sql:
             return self._fetch_rows.get("situations", [])
+        if "FROM narratives" in sql:
+            return self._fetch_rows.get("narratives", [])
         return []
 
 
@@ -650,6 +654,121 @@ def test_build_situations_block_is_labelled_and_not_ground_truth():
 
 def test_build_situations_block_none_when_empty():
     assert build_situations_block([]) is None
+
+
+# --- ASSESSED NARRATIVES block (W-3e — mig 0102 sidecar as a grounding source)
+
+
+def _narrative_row(
+    subject: str = "iran",
+    *,
+    status: str = "contested",
+    surfaced_value: Any = None,
+    lead: str | None = "source_wire_a",
+) -> dict[str, Any]:
+    return {
+        "subject_key": subject,
+        "predicate_key": "enrichment level",
+        "status": status,
+        "surfaced_value": surfaced_value,
+        "variant_count": 3,
+        "carrier_source_count": 5,
+        "publish_dated_source_count": 4,
+        "first_seen_at": datetime(2026, 7, 20, tzinfo=timezone.utc),
+        "last_seen_at": datetime(2026, 7, 26, tzinfo=timezone.utc),
+        "lead_source_id": lead,
+        "max_echo_lag_hours": 36.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_resolve_narratives_empty_sidecar_yields_empty_and_no_block():
+    """Honest empty state: nothing in the sidecar ⇒ [] ⇒ NO block (no
+    fabricated header). The SQL excludes collapsed families."""
+    pool = _StubPool(fetch_rows={"narratives": []})
+    resolver = SubstrateGroundingResolver(pg_pool=pool)
+    out = await resolver.resolve_narratives(target_id=None, limit=8)
+    assert out == []
+    assert build_narratives_block(out) is None
+    sql, params = pool.log[-1]
+    assert "FROM narratives" in sql
+    assert "status <> 'collapsed'" in sql
+    assert "ORDER BY last_seen_at DESC" in sql
+
+
+@pytest.mark.asyncio
+async def test_resolve_narratives_populated_maps_rows_and_renders():
+    pool = _StubPool(fetch_rows={"narratives": [
+        _narrative_row(),
+        _narrative_row(subject="strait shipping", status="surfaced",
+                       surfaced_value="closed to tankers", lead=None),
+    ]})
+    resolver = SubstrateGroundingResolver(pg_pool=pool)
+    out = await resolver.resolve_narratives(target_id=None, limit=8)
+    assert [n.subject_key for n in out] == ["iran", "strait shipping"]
+    r0 = out[0].render()
+    assert "[contested] 'iran' enrichment level" in r0
+    assert "3 competing variant(s) across 5 source(s)" in r0
+    assert "active 2026-07-20 -> 2026-07-26" in r0
+    assert "first published by source_wire_a" in r0
+    # Echo-lead honesty rides in the render itself, not only the header.
+    assert "NOT evidence of copying" in r0
+    assert "no surfaced winner — do not treat any variant as settled" in r0
+    r1 = out[1].render()
+    assert "arbiter-surfaced winner='closed to tankers'" in r1
+
+    block = build_narratives_block(out)
+    assert block is not None
+    assert "ASSESSED NARRATIVES" in block
+    assert "detect-only" in block
+    assert "NOT operator-vetted ground truth" in block
+    assert "never by itself evidence of copying or coordination" in block
+    # Fenced off: never laundered into the ground-truth block's header.
+    assert "AUTHORITATIVE CURRENT CONTEXT" not in block
+
+
+@pytest.mark.asyncio
+async def test_resolve_narratives_scopes_per_country_by_subject_whole_word():
+    """A per-country run keeps only narratives whose subject mentions the
+    target's geo names — whole-word ('in' the ISO slug never matches inside
+    'shipping'; 'india' matches)."""
+    pool = _StubPool(fetch_rows={"narratives": [
+        _narrative_row(subject="india border clashes"),
+        _narrative_row(subject="brazil currency policy"),
+        _narrative_row(subject="shipping insurance"),  # 'in' must NOT match
+    ]})
+    resolver = SubstrateGroundingResolver(pg_pool=pool)
+    out = await resolver.resolve_narratives(target_id="country_g20_in", limit=8)
+    assert [n.subject_key for n in out] == ["india border clashes"]
+    # Global run keeps everything (recency top, no scope filter).
+    out_global = await resolver.resolve_narratives(target_id=None, limit=8)
+    assert len(out_global) == 3
+
+
+@pytest.mark.asyncio
+async def test_resolve_narratives_read_failure_degrades_to_empty():
+    """Degrade-not-drop: a read failure (e.g. a pre-0102 DB without the
+    sidecar) logs + yields [] — never an exception into the run."""
+
+    class _RaisingPool:
+        def acquire(self):
+            raise RuntimeError("relation narratives does not exist")
+
+    resolver = SubstrateGroundingResolver(pg_pool=_RaisingPool())
+    assert await resolver.resolve_narratives(target_id=None, limit=8) == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_narratives_bounded_by_cap():
+    rows = [
+        _narrative_row(subject=f"topic {i}") for i in range(20)
+    ]
+    resolver = SubstrateGroundingResolver(
+        pg_pool=_StubPool(fetch_rows={"narratives": rows})
+    )
+    # A generous caller budget is clamped to the module cap (8).
+    out = await resolver.resolve_narratives(target_id=None, limit=30)
+    assert len(out) == 8
 
 
 @pytest.mark.asyncio

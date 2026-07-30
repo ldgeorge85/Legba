@@ -16,14 +16,15 @@
 # deterministic analyst whose handler defaults to a no-op until an operator opts
 # in via the per-run trigger options channel). Two gates:
 #   1. NOT in the default bringup set (an operator registers this file to opt in).
-#   2. The handler's `enabled` option defaults False — even registered + firing on
-#      cadence it no-ops until an operator fires it with run options
-#      `{"enabled": true, ...}` (the same `payload.options` pass-through that
-#      `dapr_actors._run` merges into the deterministic run, exactly how
-#      `signals_retention` takes its `ttl_days`). The defaults below (window_hours
-#      24, semantic_threshold 0.92, title_distance_threshold 0.35,
-#      qdrant_collection legba_coalesce, max_signals 2000) are the handler
-#      built-ins; override any via the same run-options channel.
+#      cadence it no-ops until an operator turns it on — EITHER by declaring
+#      `method.options: {enabled: true, ...}` on this descriptor (X-1; makes
+#      every cadence fire carry it, live-editable via `PUT /descriptors/…`)
+#      OR by forcing a run with `{"options": {"enabled": true, ...}}` (the
+#      `payload.options` pass-through, which outranks the descriptor). The
+#      defaults below (window_hours 24, semantic_threshold 0.92,
+#      title_distance_threshold 0.35, qdrant_collection legba_coalesce,
+#      max_signals 2000) are the handler built-ins; override any through
+#      either channel.
 #
 # Degrade-not-drop: needs BOTH an embedding service AND a Qdrant client (threaded
 # via deps.extras). When either is missing it emits a finding flagged
@@ -65,9 +66,10 @@ method:
   # Deterministic kind: no LLM block, no token budget — pure Python + the shared
   # embedding service / Qdrant client (threaded via deps.extras). Handler options
   # (enabled / window_hours / semantic_threshold / title_distance_threshold /
-  # qdrant_collection / max_signals) flow through the per-run trigger options
-  # channel, NOT a descriptor `method.options` block (the AnalystMethod schema
-  # forbids extra fields). `enabled` defaults False — see the header note.
+  # qdrant_collection / max_signals) ride EITHER a `method.options` block here
+  # (X-1 — declared in legba.data.analysts.handler_options, validated at fire
+  # time) or the per-run trigger options channel, which outranks it. `enabled`
+  # defaults False and no options block ships — see the header note.
 
 cadence:
   # Every 6h — a low-frequency background coalesce sweep.

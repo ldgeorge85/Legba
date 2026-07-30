@@ -61,6 +61,21 @@ Design notes
     score, or with a score outside ``[0.0, 1.0]``, are reported in the
     ``errors`` list with the row number and the rejection reason; the
     rest of the file still upserts.
+
+Deprecation window (C3)
+-----------------------
+
+The two READ endpoints (``GET /source_credibility`` and
+``GET /source_credibility/{host}``) are superseded by the merged
+source-quality ledger (``GET /api/v1/v3/source-quality``), which serves the
+host score alongside the asserted Admiralty grade, the earned track record and
+the computed freshness grade — keyed by SOURCE, with the host resolved the same
+way the signal write path resolves it.  Both keep serving their original wire
+shape until the sunset date, stamped ``Deprecation`` / ``Sunset`` / ``Link``.
+
+The WRITE endpoints (PUT / DELETE / bulk) are **not** deprecated: the ledger is
+a read surface and has no successor for them.  This module remains the only way
+to author a host credibility score.
 """
 
 from __future__ import annotations
@@ -74,9 +89,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
-from .api import RegistryAPIDeps, require_bearer
+from .api import RegistryAPIDeps, require_bearer, sunset_headers
 
 logger = logging.getLogger(__name__)
+
+#: C3 successor for the READ endpoints only — the merged ledger keys on source
+#: descriptor id and resolves the host itself, so there is no per-host
+#: successor path to point a single-host GET at.
+SUCCESSOR_ROUTE = "/api/v1/v3/source-quality"
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +308,8 @@ def build_source_credibility_router(deps: RegistryAPIDeps) -> APIRouter:
     @router.get(
         "/source_credibility",
         response_model=list[SourceCredibilityRow],
+        deprecated=True,
+        dependencies=[Depends(sunset_headers(SUCCESSOR_ROUTE))],
     )
     async def list_source_credibility(
         host: str | None = Query(
@@ -331,6 +353,8 @@ def build_source_credibility_router(deps: RegistryAPIDeps) -> APIRouter:
     @router.get(
         "/source_credibility/{host}",
         response_model=SourceCredibilityRow,
+        deprecated=True,
+        dependencies=[Depends(sunset_headers(SUCCESSOR_ROUTE))],
     )
     async def get_source_credibility(
         host: str,

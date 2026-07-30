@@ -593,6 +593,28 @@ def test_source_stall_diagnosis_no_outcome_row() -> None:
     assert "may be dead" in msg
 
 
+def test_source_stall_diagnosis_success() -> None:
+    # Migration 0114 — a productive poll now leaves a row, so the newest
+    # outcome can be 'success'. Before it, this state fell through to the
+    # "no row at all" branch and the alert accused the poll reminder of being
+    # dead when the poll had in fact worked.
+    when = datetime(2026, 7, 27, 12, 30, tzinfo=timezone.utc)
+    msg = _source_stall_diagnosis(
+        {
+            "last_poll_outcome": "success",
+            "last_poll_health": "healthy",
+            "last_poll_signals_written": 71,
+            "last_poll_error": None,
+            "last_poll_at": when,
+        }
+    )
+    assert "SUCCEEDED" in msg
+    assert "71 signals" in msg
+    assert "2026-07-27T12:30:00" in msg
+    assert "FAILED" not in msg
+    assert "may be dead" not in msg
+
+
 def _src_row_full(source_id, cron, last_signal, **poll):
     row = _src_row(source_id, cron, last_signal)
     row.update(poll)
@@ -674,6 +696,27 @@ def test_empty_streak_eval_breaks_on_error_row() -> None:
     # And with threshold 2 it IS flagged, counting only the leading 2.
     degraded = _evaluate_empty_streaks(rows, threshold=2)
     assert degraded[0][1] == 2
+
+
+def test_empty_streak_eval_breaks_on_success_row() -> None:
+    # Migration 0114 — a PRODUCTIVE poll writes outcome='success', which is a
+    # non-'empty' row and therefore ends the leading run directly, without
+    # needing the last_signal bound to notice the recovery.
+    rows = [
+        _outcome("s", "empty", _NOW),
+        _outcome("s", "empty", _NOW - timedelta(hours=1)),
+        _outcome("s", "success", _NOW - timedelta(hours=2)),  # breaks the run
+    ] + _empty_run("s", 10, start=_NOW - timedelta(hours=3))
+    assert _evaluate_empty_streaks(rows, threshold=5) == []
+    assert _evaluate_empty_streaks(rows, threshold=2)[0][1] == 2
+
+
+def test_empty_streak_eval_leading_success_never_degrades() -> None:
+    # The source polled productively most recently → no empty run at all.
+    rows = [_outcome("s", "success", _NOW)] + _empty_run(
+        "s", 30, start=_NOW - timedelta(hours=1)
+    )
+    assert _evaluate_empty_streaks(rows, threshold=5) == []
 
 
 def test_empty_streak_eval_groups_per_source() -> None:

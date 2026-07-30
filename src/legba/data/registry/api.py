@@ -57,6 +57,7 @@ from fastapi import (
     Header,
     Query,
     Request,
+    Response,
     WebSocket,
     WebSocketDisconnect,
     status,
@@ -222,6 +223,34 @@ def require_bearer(
     return presented
 
 
+#: End of the C3 deprecation window for the routes the source-quality ledger
+#: merges (``/source_credibility`` reads + ``/sources/{id}/assurance``). They
+#: KEEP SERVING their original wire shape until then — a 3xx would silently
+#: hand callers a DIFFERENT response body, which is worse than a header they
+#: can see. Removal is a later, deliberate commit, not a side effect of this
+#: one (`docs/SEAMS.md`, the C3 entry).
+DEPRECATION_SUNSET_HTTP_DATE = "Tue, 27 Oct 2026 00:00:00 GMT"
+
+
+def sunset_headers(successor: str) -> Callable[[Response], None]:
+    """A FastAPI dependency that marks a route deprecated, per RFC 8594/9745.
+
+    Stamps ``Deprecation: true``, ``Sunset: <date>`` and a
+    ``Link: <successor>; rel="successor-version"`` on the response. The route
+    keeps serving its original body unchanged — this advertises the window, it
+    does not shorten it. Attach per-route (``dependencies=[Depends(
+    sunset_headers("/api/v1/v3/..."))]``) so a module's WRITE routes, which
+    have no successor, are not swept up with its reads.
+    """
+
+    def _stamp(response: Response) -> None:
+        response.headers["Deprecation"] = "true"
+        response.headers["Sunset"] = DEPRECATION_SUNSET_HTTP_DATE
+        response.headers["Link"] = f'<{successor}>; rel="successor-version"'
+
+    return _stamp
+
+
 def _bearer_from_header(authorization: str | None) -> str | None:
     """Extract the raw token from an `Authorization: Bearer <token>` header.
 
@@ -324,6 +353,10 @@ class DescriptorRowOut(BaseModel):
     retire_after: datetime | None = None
     kind: str | None = None
     type_signature: dict[str, Any] | None = None
+    # Non-fatal registration-time notes (X-1 dead-config warnings etc.) —
+    # empty on the common path; populated when `register()`/`update()`
+    # surfaced something the caller should see immediately.
+    warnings: list[str] = Field(default_factory=list)
 
     @classmethod
     def from_row(cls, row: DescriptorRow) -> "DescriptorRowOut":
@@ -343,6 +376,7 @@ class DescriptorRowOut(BaseModel):
             retire_after=row.retire_after,
             kind=row.kind,
             type_signature=row.type_signature,
+            warnings=list(row.warnings or []),
         )
 
 

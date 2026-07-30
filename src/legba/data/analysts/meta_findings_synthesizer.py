@@ -62,6 +62,10 @@ from uuid import UUID
 
 import asyncpg
 
+from ..provenance.consumption import (
+    CONSUMPTION_CONTEXT_BASIS,
+    CONSUMPTION_CONTEXT_PERIPHERY,
+)
 from ..provenance.models import FindingPayload
 from ...runtime.analyst_method import AnalystMethodResult, LLMHandlerLike
 
@@ -218,23 +222,26 @@ VERIFY_FLOOR_ENV: str = "LEGBA_COMPOSITION_VERIFY_FLOOR"
 #   * ``LEGBA_COMPOSITION_TIERED_EVIDENCE`` unset/off (code DEFAULT OFF) — the
 #     legacy behavior byte-for-byte: the basis bar is ``_resolve_verify_floor``
 #     (env floor, default 0.0) and NO periphery is gathered or rendered.
-#   * flag ON — the split engages on the PER-COUNTRY and REGION composition
-#     reads: the basis bar becomes the SPLIT floor = the env floor when the
-#     operator pinned ``LEGBA_COMPOSITION_VERIFY_FLOOR``, else
-#     :data:`TIERED_BASIS_FLOOR_DEFAULT` (0.50 — the scorecard's system-wide
-#     verification floor, lockstep-tested against
+#   * flag ON — the split engages on EVERY composition read (PER-COUNTRY,
+#     REGION, WORLD, and THEMATIC): the basis bar becomes the SPLIT floor = the
+#     env floor when the operator pinned ``LEGBA_COMPOSITION_VERIFY_FLOOR``,
+#     else :data:`TIERED_BASIS_FLOOR_DEFAULT` (0.50 — the scorecard's
+#     system-wide verification floor, lockstep-tested against
 #     ``scorecard_banding.FAITH_FLOOR``). Rationale: at the legacy 0.0 default
 #     the "split" would be vacuous (nothing verified is ever below 0.0), so
 #     turning the flag on without a meaningful bar would silently keep the
 #     blend it exists to fix. ``DEFAULT_VERIFY_FLOOR`` itself is UNCHANGED —
 #     the OFF path never moves.
-#   * The WORLD and THEMATIC branches keep ``_resolve_verify_floor`` even when
-#     the flag is ON — a raised bar WITHOUT the periphery machinery would
-#     hard-DROP their 0<eff<0.5 heads (exactly the signal-loss the operator
-#     rejected). Their slices already carry degrade/gap coverage honesty; their
-#     periphery is a declared follow-up seam, and ``_run`` is already
-#     data-driven (any branch that later marks periphery rows gets the full
-#     rendering/citation/envelope treatment with no further ``_run`` change).
+#   * WORLD / THEMATIC scope note (the former SEAMS §44, resolved 2026-07):
+#     their periphery gather is the complement over the SAME declared analyst
+#     roster + target scope their PRIMARY fetch uses (thematic: the unit across
+#     the desk allow-list / all desks; world: the region/thematic heads,
+#     target-unscoped, meta-inclusive). The world's DEGRADE path (member-country
+#     country_composition heads for a headless region) does NOT get its own
+#     periphery complement — a region whose head fell below the bar already
+#     surfaces AS periphery, while its verified country reads feed the basis;
+#     gathering the fallback tier's complement too would double-surface the same
+#     weak lane. The legacy global meta stays untiered, byte-for-byte.
 #
 # DEFAULT OFF (flip note): because flag-ON meaningfully moves the basis bar
 # (0.0 → 0.50 at the default env), the byte-path is NOT identical to today even
@@ -426,18 +433,38 @@ empty ⇒ the thematic read spans ALL desks (escalation_composition is byte-for-
 unchanged). Only meaningful alongside ``THEMATIC_DIMENSION_KEY``. Lives in the open
 ``subscription.substrate`` dict so no schema change is needed."""
 
-# The g20+watch desk-coverage roster: one card per active ASSESSED desk (the
-# tags every unit fans out to — matches scorecard_producer's roster + the units'
-# ``has_tag('g20') or has_tag('watch')`` subscription). The thematic compose diffs
-# this roster against the desks with an escalation head to NAME any desk with no
-# head as an honest gap (degrade-not-drop). Literal tag list mirrors
-# scorecard_producer._G20_TARGETS_SQL (kept in sync).
+# The ASSESSED-desk coverage roster: one row per active desk a bounded unit fans
+# out to. The thematic compose diffs this roster against the desks that HAVE a
+# head this window to NAME any desk with no head as an honest gap
+# (degrade-not-drop).
+#
+# `g20` + `watch` = the subscription key for the seven BROAD geopolitics units
+# (has_tag('g20') or has_tag('watch')).
+#
+# `supply_chain` = the subscription key for the `disruption_status` unit — the
+# supply-chain pack's `lane_*` / `flow_*` desks (2026-07-29,
+# planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §3.5). Those desks deliberately
+# carry NEITHER g20 nor watch (tagging a lane `watch` would fan all seven country
+# units onto non-country desks), so without this literal a supply-chain desk that
+# produced no head would be SILENTLY MISSING from ``data.desk_coverage`` instead
+# of NAMED as a gap. Nothing crashes and nothing is fabricated — but silent
+# coverage is the failure mode this platform exists to refuse.
+#
+# DELIBERATELY NOT WIDENED IN LOCKSTEP (plan §3.5 — this is a decision, not an
+# oversight): ``scorecard_producer._G20_TARGETS_SQL`` (supply-chain desks get NO
+# scorecard — a card with 7 country dimensions reading `insufficient-evidence`
+# plus one supply-chain dimension would misrepresent what the pack measures),
+# ``alert_trigger_scan._DESKS_SQL`` (no `baseline_deviation` alerts for these
+# desks) and ``desk_baseline._DESKS_SQL`` (no desk baselines). Those three keep
+# the bare ``array['g20', 'watch']`` predicate. This roster is the ONLY one that
+# must see a supply-chain desk, because it is the only one whose job is naming
+# ABSENCE.
 _DESK_ROSTER_SQL = """
     SELECT descriptor_id, name
       FROM target_descriptors
      WHERE is_head = TRUE
        AND COALESCE(state, 'active') <> 'retired'
-       AND (body -> 'scope' -> 'tags') ?| array['g20', 'watch']
+       AND (body -> 'scope' -> 'tags') ?| array['g20', 'watch', 'supply_chain']
      ORDER BY descriptor_id
 """
 
@@ -1945,6 +1972,11 @@ async def _detect_stale_inputs(
     }
 
 
+# KW-1 NOTE (comment only, no behavior change): the F-1 walk below descends
+# ``derived_from`` per-slice on every compose. Now that ``output_consumption``
+# (migration 0106) materializes the forward edges at write time, a
+# behavior-identical fast path over that index is a candidate LATER
+# optimization — deliberately not taken in the KW-1 wave.
 async def _attach_freshness(
     conn,  # type: ignore[no-untyped-def]
     rows: list[dict[str, Any]],
@@ -2241,6 +2273,108 @@ def _render_desk_coverage_block(coverage: Sequence[Mapping[str, Any]]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# THE ONE prompt-block interface (C-4)
+# ---------------------------------------------------------------------------
+# The composition user turn is a BASE render (:func:`_render_user_prompt`) plus
+# EIGHT optional blocks, each with its own guard, its own join separator, and its
+# own POSITION — appended after the findings (evidence sections) or prepended
+# ahead of them (directives the model must read first). That assembly was eight
+# ad-hoc ``user_prompt = user_prompt + "\n" + block`` statements whose ORDER,
+# separators and empty-checks were all load-bearing but implicit; the final order
+# [freshness -> salience -> base -> periphery -> contested -> region -> aperture
+# -> desk] only emerged from the interleaving of appends and prepends.
+#
+# It is ONE ordered walk here, with shared char/token accounting so every block's
+# footprint is measured in one place instead of nowhere.
+#
+# BYTE-IDENTICAL BY CONSTRUCTION: blocks are applied in the same order with the
+# same separators and the same guards, and each renderer is invoked LAZILY (only
+# when its guard passes) exactly as before. Two asymmetries are preserved
+# deliberately rather than "cleaned up":
+#   * the CONTESTED block appends WITHOUT an empty-render check (every other
+#     block skips an empty render) — hence ``require_non_empty=False``. It is
+#     unreachable today (its renderer returns "" only for empty groups, and its
+#     guard already requires non-empty groups) but it is not this lane's call to
+#     change what happens if that ever stops holding.
+#   * PREPENDS run AFTER appends, and salience prepends BEFORE freshness, which
+#     is what leaves freshness first in the final turn.
+
+#: Rough token estimate divisor — the same chars/4 convention
+#: ``inline_target._estimate_tokens`` uses (no tokenizer on the hot path).
+_PROMPT_CHARS_PER_TOKEN = 4
+
+_BLOCK_APPEND = "append"
+_BLOCK_PREPEND = "prepend"
+
+
+class _PromptBlockAssembler:
+    """Ordered, budget-accounted assembly of the composition prompt blocks.
+
+    Usage is declarative: construct with the base render, then ``add`` each block
+    in its established order. ``add`` is a no-op when the block's guard is false,
+    so the caller keeps its existing conditions in one readable place and the
+    renderer stays lazy.
+    """
+
+    __slots__ = ("_text", "_ledger")
+
+    def __init__(self, base: str) -> None:
+        self._text = base
+        # (block name, rendered chars) in APPLICATION order; the base is first.
+        self._ledger: list[tuple[str, int]] = [("base", len(base))]
+
+    def add(
+        self,
+        name: str,
+        render: Any,
+        *,
+        when: Any,
+        position: str,
+        separator: str,
+        require_non_empty: bool = True,
+    ) -> None:
+        """Render and splice one optional block.
+
+        ``render`` is a zero-arg callable invoked ONLY when ``when`` is truthy —
+        preserving the original lazy evaluation (several renderers are only valid
+        under their guard). ``require_non_empty=False`` splices even an empty
+        render, separator included.
+        """
+        if not when:
+            return
+        block = render()
+        if require_non_empty and not block:
+            return
+        if position == _BLOCK_PREPEND:
+            self._text = block + separator + self._text
+        elif position == _BLOCK_APPEND:
+            self._text = self._text + separator + block
+        else:  # pragma: no cover - programming error
+            raise ValueError(f"unknown prompt-block position: {position!r}")
+        self._ledger.append((name, len(block)))
+
+    @property
+    def prompt(self) -> str:
+        """The assembled user turn."""
+        return self._text
+
+    @property
+    def total_chars(self) -> int:
+        """Total assembled size — what the ``plan`` trace step records."""
+        return len(self._text)
+
+    @property
+    def est_tokens(self) -> int:
+        """Cheap chars/4 estimate of the assembled turn's input footprint."""
+        return (len(self._text) + _PROMPT_CHARS_PER_TOKEN - 1) // _PROMPT_CHARS_PER_TOKEN
+
+    @property
+    def block_ledger(self) -> list[tuple[str, int]]:
+        """Per-block (name, chars) in application order — the shared accounting."""
+        return list(self._ledger)
+
+
+# ---------------------------------------------------------------------------
 # REASON+ACT — direct LLM call (DSPy wrapping deferred to L-176)
 # ---------------------------------------------------------------------------
 
@@ -2363,7 +2497,11 @@ async def run_method(
     deps:
         Object satisfying :class:`MetaFindingsDeps` — at minimum carries
         an ``llm`` attribute conforming to
-        :class:`legba.runtime.analyst_method.LLMHandlerLike`.
+        :class:`legba.runtime.analyst_method.LLMHandlerLike`. An OPTIONAL
+        ``temperature`` attribute (the deps builder threads the descriptor's
+        ``method.llm.temperature`` — the 2026-07-24 sampling-audit fix)
+        overrides :data:`DEFAULT_TEMPERATURE` when set; absent/None keeps
+        the default, so pre-fix carriers behave byte-identically.
 
     Returns
     -------
@@ -2376,12 +2514,23 @@ async def run_method(
         substrate row's ``derived_from`` column carries the lineage edge.
         Token usage rolls up under the ``usage`` dict for budget recording.
     """
+    # Sampling-audit fix (2026-07-24): honor the descriptor's OPTIONAL
+    # ``method.llm.temperature`` (threaded onto deps by the builder) with the
+    # same precedence the unit inline_target path uses — descriptor value when
+    # set, else the kind default. getattr-guarded so every existing deps
+    # carrier (tests' llm-only stubs included) behaves byte-identically.
+    _temp = getattr(deps, "temperature", None)
+    temperature = (
+        float(_temp)
+        if isinstance(_temp, (int, float)) and not isinstance(_temp, bool)
+        else DEFAULT_TEMPERATURE
+    )
     return await _run(
         inputs,
         options,
         llm=deps.llm,
         max_tokens=DEFAULT_MAX_TOKENS,
-        temperature=DEFAULT_TEMPERATURE,
+        temperature=temperature,
         system_prompt=_SYSTEM_PROMPT,
     )
 
@@ -2574,6 +2723,19 @@ async def _run(
                 },
                 {"phase": "reflect", "kind": "noop_no_inputs"},
             ],
+            # KW-1: even the honest-empty composition head CONSUMED the
+            # periphery it recorded (data.evidence_tiers.periphery_ids) — the
+            # forward index must know those rows were read, so a later mover
+            # among them can flag this head. Basis is empty by definition here.
+            consumed_edges=(
+                [
+                    (u, CONSUMPTION_CONTEXT_PERIPHERY)
+                    for r in periphery_sel
+                    if (u := _coerce_uuid(r.get("id"))) is not None
+                ]
+                if is_composition
+                else []
+            ),
         )
 
     # Composition selection — three flavors + the legacy global meta (the mode
@@ -2671,50 +2833,81 @@ async def _run(
     user_prompt = _render_user_prompt(
         sliced, contributing_analysts, include_source_ids=is_composition
     )
+    # The EIGHT optional prompt blocks, through the ONE budgeted interface
+    # (:class:`_PromptBlockAssembler`). Order, separators and guards are the
+    # established ones — see the class comment for the two preserved asymmetries
+    # (contested splices without an empty-check; prepends run after appends, so
+    # the final turn reads [freshness → salience → findings → …]).
+    _blocks = _PromptBlockAssembler(user_prompt)
     # C-TIER: the PERIPHERY section renders APPENDED to (never interleaved
     # with) the basis blocks, under its explicit delimiter + hedge/conflict
     # rules, with ordinals continuing the basis numbering. Empty periphery ⇒
     # no section ⇒ the prompt is byte-identical to the untiered render.
-    if is_composition and periphery_sel:
-        _peri_block = _render_periphery_block(
+    _blocks.add(
+        "periphery",
+        lambda: _render_periphery_block(
             periphery_sel, start_ordinal=len(sliced) + 1, floor=_tier_floor
-        )
-        if _peri_block:
-            user_prompt = user_prompt + "\n\n" + _peri_block
-    if contention_groups:
-        user_prompt = user_prompt + "\n" + _render_contested_block(contention_groups)
-    if region_coverage:
-        _coverage_block = _render_region_coverage_block(region_coverage)
-        if _coverage_block:
-            user_prompt = user_prompt + "\n" + _coverage_block
+        ),
+        when=is_composition and periphery_sel,
+        position=_BLOCK_APPEND,
+        separator="\n\n",
+    )
+    _blocks.add(
+        "contested",
+        lambda: _render_contested_block(contention_groups),
+        when=contention_groups,
+        position=_BLOCK_APPEND,
+        separator="\n",
+        require_non_empty=False,
+    )
+    _blocks.add(
+        "region_coverage",
+        lambda: _render_region_coverage_block(region_coverage),
+        when=region_coverage,
+        position=_BLOCK_APPEND,
+        separator="\n",
+    )
     # B0-10 (MASTER_PLAN 2026-07-10) — APERTURE honesty for the WORLD compose:
     # the sample is the registered desk roster (operator-chosen), not global
     # coverage. Rendered ALWAYS (not just on gaps) so the world prose names its
     # own bounds — faithfulness verify is silent about what was never collected,
     # so the aperture must be stated, not implied (review W8).
-    if world_composition and region_coverage:
-        _aperture_block = _render_world_aperture_block(region_coverage)
-        if _aperture_block:
-            user_prompt = user_prompt + "\n" + _aperture_block
-    if desk_coverage:
-        _desk_block = _render_desk_coverage_block(desk_coverage)
-        if _desk_block:
-            user_prompt = user_prompt + "\n" + _desk_block
+    _blocks.add(
+        "world_aperture",
+        lambda: _render_world_aperture_block(region_coverage),
+        when=world_composition and region_coverage,
+        position=_BLOCK_APPEND,
+        separator="\n",
+    )
+    _blocks.add(
+        "desk_coverage",
+        lambda: _render_desk_coverage_block(desk_coverage),
+        when=desk_coverage,
+        position=_BLOCK_APPEND,
+        separator="\n",
+    )
     # S-2b: PREPEND the salience-lead directive (composition only) so the model
     # leads by CONSEQUENCE, not by which matter more blocks happen to mention.
     # Prepended BEFORE the freshness block below, so the final order is
     # [freshness → salience → findings] — freshness (demote stale) stays first.
-    if is_composition:
-        _sal_block = _render_salience_lead_block(sliced)
-        if _sal_block:
-            user_prompt = _sal_block + "\n\n" + user_prompt
+    _blocks.add(
+        "salience_lead",
+        lambda: _render_salience_lead_block(sliced),
+        when=is_composition,
+        position=_BLOCK_PREPEND,
+        separator="\n\n",
+    )
     # F-1: PREPEND the freshness advisory (a directive: demote/caveat any framing
     # that rests on a since-superseded reading) so the model reads it BEFORE the
     # findings — the earliest, highest-priority instruction in the user turn.
-    if freshness_advisory:
-        _fresh_block = _render_freshness_advisory_block(freshness_advisory)
-        if _fresh_block:
-            user_prompt = _fresh_block + "\n\n" + user_prompt
+    _blocks.add(
+        "freshness_advisory",
+        lambda: _render_freshness_advisory_block(freshness_advisory),
+        when=freshness_advisory,
+        position=_BLOCK_PREPEND,
+        separator="\n\n",
+    )
+    user_prompt = _blocks.prompt
     steps: list[dict[str, Any]] = [
         {
             "phase": "orient",
@@ -2727,7 +2920,9 @@ async def _run(
         {
             "phase": "plan",
             "kind": "render_prompt",
-            "prompt_chars": len(user_prompt),
+            # Same number as ``len(user_prompt)`` — read off the shared block
+            # accounting so the assembler is the one place prompt size is known.
+            "prompt_chars": _blocks.total_chars,
             "prompt_module": PROMPT_MODULE_PATH,
             "composition": is_composition,
         },
@@ -3035,6 +3230,25 @@ async def _run(
             "gaps": len(desk_gaps),
         })
 
+    # --- FORWARD CONSUMPTION (KW-1, migration 0106) ---------------------
+    # The consumption points, captured exactly where they were decided:
+    # BASIS = the oriented, capped rows (``derived_from`` is basis-only at
+    # this line — the tiered block below appends the periphery ids after
+    # us), PERIPHERY = the selected periphery rows. Scoped to COMPOSITION
+    # runs (country/region/world/thematic); the legacy global meta stamps
+    # nothing, matching the standing legacy-read-unchanged discipline. The
+    # runtime materializes these into ``output_consumption`` on the same
+    # flow as the output write — best-effort, degrade-not-break.
+    consumed_edges: list[tuple[UUID, str]] = []
+    if is_composition:
+        consumed_edges = [
+            (u, CONSUMPTION_CONTEXT_BASIS) for u in derived_from
+        ] + [
+            (u, CONSUMPTION_CONTEXT_PERIPHERY)
+            for r in periphery_sel
+            if (u := _coerce_uuid(r.get("id"))) is not None
+        ]
+
     # --- EVIDENCE TIERS (C-TIER, tiered compositions only) -------------
     # Envelope honesty: record what the composition was BUILT ON — N verified
     # basis + M weak periphery signals and the floor that split them — so the
@@ -3083,6 +3297,7 @@ async def _run(
         usage=usage,
         derived_from=derived_from,
         intermediate_steps=steps,
+        consumed_edges=consumed_edges,
     )
 
 
@@ -3149,6 +3364,13 @@ def _resolve_verify_floor(descriptor: Any, default: float = DEFAULT_VERIFY_FLOOR
     so raising the bar is a one-line env change — no schema field, no registry
     rebuild. ``descriptor`` is accepted for a future per-descriptor override but
     is intentionally not read from an ``extra="forbid"`` schema block today.
+
+    X-1 boundary (2026-07-29): ``method.options`` now exists and IS read at fire
+    time — but only for ``kind=deterministic``, whose sub-handlers route through
+    the ``handler_options`` catalog. This composition is an LLM kind, so the
+    schema still refuses an options block here and the env var remains the only
+    lever. Widening it means giving the LLM kinds their own declared catalog;
+    until that exists this comment stays true rather than becoming a promise.
     """
     raw = os.getenv(VERIFY_FLOOR_ENV)
     if raw is not None:
@@ -3163,23 +3385,30 @@ def _resolve_verify_floor(descriptor: Any, default: float = DEFAULT_VERIFY_FLOOR
 
 
 def _declares_verify(descriptor: Any) -> bool:
-    """True iff the descriptor declares ``method.llm.verify`` OR the P2-4
-    ``method.llm.judge`` key (the composition verify OPT-IN).
+    """True iff the descriptor declares the ``method.llm.verify`` OR the P2-4
+    ``method.llm.judge`` KEY (the composition verify OPT-IN).
 
-    Mirrors the ``analyst_deps_builder.resolve_judge_route`` OPT-IN GATE WITHOUT
-    importing it — this kind module stays standalone (no runtime-package load
-    cycle) and the check is a simple presence test over the open ``method.llm``
-    dict (schemas/analyst.py: ``dict[str, Any]``, so no schema change). Both
-    compositions (country + world) carry ``verify``; the old global meta does NOT
-    → the world branch below (verify-floor + include_meta) engages ONLY for a
-    composition. A future descriptor carrying only the new ``judge`` key opts in
-    the same way (no live descriptor does today — byte-identical).
+    Mirrors the ``analyst_deps_builder.resolve_judge_route_from_llm_block`` rung-0
+    OPT-IN GATE WITHOUT importing it — this kind module stays standalone (no
+    runtime-package load cycle). DEFECT B fix (2026-07-29): this is now a KEY
+    PRESENCE test (``"verify" in llm or "judge" in llm``), exactly mirroring
+    rung 0's ``if "judge" not in llm and "verify" not in llm: return None``.
+    Before the fix this tested VALUE presence (``llm.get("verify") is not
+    None``), so a descriptor carrying a null-valued ``verify``/``judge`` key —
+    e.g. ``{"verify": None, "primary": <ref>}`` — fell through the ladder to a
+    resolvable route (the actor plane judged/verified it) while reading here as
+    NOT opted in (the composer skipped the verify-floor / include_meta branch).
+    See ``tests/data_pkg/test_judge_profile_resolution_pinned.py`` for the
+    corrected pin. Both compositions (country + world) carry ``verify``; the old
+    global meta does NOT → the world branch below (verify-floor + include_meta)
+    engages ONLY for a composition. No live descriptor carries a null-valued
+    key, so this fix changes no behavior on live data.
     """
     method = getattr(descriptor, "method", None)
     llm = getattr(method, "llm", None) if method is not None else None
     if not isinstance(llm, Mapping):
         return False
-    return llm.get("verify") is not None or llm.get("judge") is not None
+    return "verify" in llm or "judge" in llm
 
 
 def thematic_dimension(descriptor: Any) -> str | None:
@@ -3515,7 +3744,8 @@ async def _assemble_thematic_unit_slice(
     Reads the latest verify-floored head of the ``escalation`` unit for EVERY desk
     (``dedupe_heads=True`` folds superseded prior-cycle rows + ``DISTINCT ON
     (analyst_id, target_id)`` yields one head per desk; ``include_meta=False`` — the
-    unit is a FIRST-ORDER finding). Then diffs the g20+watch roster:
+    unit is a FIRST-ORDER finding). Then diffs the assessed-desk roster
+    (``_DESK_ROSTER_SQL``: g20 + watch + supply_chain):
 
       * a desk WITH a head feeds the compose (mode ``present``);
       * a desk with NO head is a GAP (mode ``gap``, 0 inputs) — NAMED, not dropped.
@@ -3711,42 +3941,83 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
     # presence is the discriminator; an early return leaves the world / per-country
     # / legacy switch below byte-for-byte. ``ids`` = other_analysts (the unit).
     if not target_filter and thematic_dimension(descriptor):
-        return await _attach_freshness(
+        # C-TIER: flag ON ⇒ the basis bar is the SPLIT floor and the per-desk
+        # unit heads it excluded (below-floor OR unverified) come back as marked
+        # PERIPHERY rows over the SAME scope (unit roster + dyad allow-list,
+        # first-order). Flag OFF (default) ⇒ byte-for-byte the legacy read.
+        _tiered = _tiered_evidence_enabled()
+        _floor = (
+            _resolve_split_floor(descriptor)
+            if _tiered
+            else _resolve_verify_floor(descriptor)
+        )
+        _desks = thematic_desks(descriptor)   # S2-T5: dyad desk allow-list (None ⇒ all desks)
+        rows = await _attach_freshness(
             conn,
             await _assemble_thematic_unit_slice(
                 conn,
                 unit_analyst_ids=ids,
                 time_window_hours=time_window_hours,
                 limit=limit,
-                verify_floor=_resolve_verify_floor(descriptor),
-                desk_ids=thematic_desks(descriptor),   # S2-T5: dyad desk allow-list (None ⇒ all desks)
+                verify_floor=_floor,
+                desk_ids=_desks,
             ),
         )
+        if _tiered:
+            periphery = await read_periphery_findings(
+                conn,
+                analyst_ids=ids,
+                time_window_hours=time_window_hours,
+                floor=_floor,
+                target_ids=(list(_desks) if _desks else None),
+                include_meta=False,     # the unit is a FIRST-ORDER finding
+            )
+            for row in rows:
+                row[_EVIDENCE_FLOOR_KEY] = _floor
+            rows = rows + periphery
+        return rows
 
     # WORLD branch (S2-T3) — the target-LESS verify-declaring global meta = the
     # world_assessor. It now composes the region_composition heads (degrading a
     # headless region to its country reads, naming a fully-absent region as a
     # gap), NOT the ~24 country heads directly. An early return, so the
     # per-country + legacy switch below is byte-for-byte the P3-T2 code.
-    # C-TIER seam: the WORLD (and THEMATIC above) branch deliberately keeps
-    # ``_resolve_verify_floor`` even when LEGBA_COMPOSITION_TIERED_EVIDENCE is
-    # ON — raising its bar WITHOUT the periphery machinery would hard-DROP
-    # 0<eff<floor heads (the signal-loss the split exists to fix), and its
-    # slice already carries degrade/gap coverage honesty. Extending the
-    # periphery gather into ``_assemble_world_region_slice`` /
-    # ``_assemble_thematic_unit_slice`` is the declared follow-up; ``_run`` is
-    # already data-driven (marked rows get the full treatment unchanged).
+    # C-TIER (former SEAMS §44, resolved): flag ON ⇒ the basis bar is the SPLIT
+    # floor (threaded through the whole assemble, degrade reads included) and
+    # the region/thematic heads the bar excluded come back as marked PERIPHERY
+    # rows over the SAME primary scope (the declared roster, target-unscoped,
+    # meta-inclusive — region_composition heads ARE meta=True). The DEGRADE
+    # path's member-country complement is deliberately NOT gathered (see the
+    # module-top C-TIER scope note). Flag OFF (default) ⇒ byte-for-byte legacy.
     if not target_filter and _declares_verify(descriptor):
-        return await _attach_freshness(
+        _tiered = _tiered_evidence_enabled()
+        _floor = (
+            _resolve_split_floor(descriptor)
+            if _tiered
+            else _resolve_verify_floor(descriptor)
+        )
+        rows = await _attach_freshness(
             conn,
             await _assemble_world_region_slice(
                 conn,
                 region_analyst_ids=ids,
                 time_window_hours=time_window_hours,
                 limit=limit,
-                verify_floor=_resolve_verify_floor(descriptor),
+                verify_floor=_floor,
             ),
         )
+        if _tiered:
+            periphery = await read_periphery_findings(
+                conn,
+                analyst_ids=ids,
+                time_window_hours=time_window_hours,
+                floor=_floor,
+                include_meta=True,
+            )
+            for row in rows:
+                row[_EVIDENCE_FLOOR_KEY] = _floor
+            rows = rows + periphery
+        return rows
 
     # Two branches (BYTE-FOR-BYTE the P3-T2 per-country + legacy read when the
     # C-TIER flag is OFF, its code default):

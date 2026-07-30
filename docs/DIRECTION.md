@@ -26,7 +26,7 @@ the same core reasoning model that writes the analysis, not cross-family (a
 deliberate, temporary choice; see `AI_MODELS.md` §3) — plus a deterministic
 citation-presence floor); it does **not** adjudicate whether the claim is true
 about the world. Within the **built** system this document still separates the
-**measured core** — the seven units, the per-country / per-region / world
+**measured core** — the eight units, the per-country / per-region / world
 composition tower, the
 banded scorecard, and the provenance / drill-down that carries them — from **the
 ambitious legs, which now return ONLY as measured, honestly-reported
@@ -774,10 +774,10 @@ Three tiers:
    dated "AUTHORITATIVE CURRENT CONTEXT (treat as ground truth over prior knowledge)"
    preamble built from the current authoritative facts (the temporal-honesty gate,
    preferring `seed`/`curated` provenance) about the target geo + slice entities.
-   Degrade-not-drop, token-capped, bare-QID-skipping. Opted in on **all seven bounded
+   Degrade-not-drop, token-capped, bare-QID-skipping. Opted in on **all eight bounded
    units** (`leadership_transition` / `energy_security` / `escalation` /
    `narrative_coordination` / `internal_stability` / `military_posture` /
-   `economic_coercion`) — the grounding was **ported off the now-retired
+   `economic_coercion` / `proliferation_watch`) — the grounding was **ported off the now-retired
    `country_assessor` monolith onto the units** (2026-07-01), which also widened the
    raw-signal window to 72h so a unit integrates the multi-week substrate, not only
    the fresh slice. The per-country / per-region / world compositions read
@@ -800,11 +800,11 @@ Three tiers:
 (`src/legba/data/analysts/inline_target.py`); `_build_grounding_hook`
 (`src/legba/runtime/analyst_deps_builder.py`); the seed adapters
 (`src/legba/data/seed/adapters/wikidata_leaders.py`, `world_baseline.py`); the RAG
-loader (`src/legba/data/rag/`); the seven unit descriptors carrying the `grounding:`
+loader (`src/legba/data/rag/`); the eight unit descriptors carrying the `grounding:`
 block (`descriptors/analyst_leadership_transition.yaml`, `analyst_energy_security.yaml`,
 `analyst_escalation.yaml`, `analyst_narrative_coordination.yaml`,
 `analyst_internal_stability.yaml`, `analyst_military_posture.yaml`,
-`analyst_economic_coercion.yaml`).
+`analyst_economic_coercion.yaml`, `analyst_proliferation_watch.yaml`).
 
 **Status:** Tier 0 + Tier 1 **built** (deployed + canary-verified live); Tier 2
 (vector `world_context`) is now **BUILT / LIVE** — the embedder-through-port wiring

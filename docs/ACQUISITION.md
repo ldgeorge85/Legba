@@ -22,6 +22,7 @@ observations — target-agnostic facts — not per-target interpretations.
 [4 Fan-out and subscription](#4-fan-out-and-subscription) ·
 [5 Cross-source dedup](#5-cross-source-dedup) ·
 [6 Discovery](#6-discovery) ·
+[6.1 Collection requirements](#61-collection-requirements--a-gap-becomes-an-object-2026-07-28) ·
 [7 End-to-end, in one line](#7-end-to-end-in-one-line)
 
 ---
@@ -557,6 +558,64 @@ data-lag is visible. A read-only diagnostic
 (`scripts/diagnose_stale_leaders.py` — SELECT-only, writes nothing) previews
 the re-seed delta first, because the live upstream can carry vandalism the
 heuristic would import; **re-seeding is operator-gated, never automatic**.
+
+### 6.1 Collection requirements — a gap becomes an object (2026-07-28)
+
+Discovery answers *"what else could we acquire?"* This answers the harder
+question in the other direction: *"what did we need and not have?"* — and it
+makes the answer **durable** instead of a sentence inside a monthly finding
+that scrolls away.
+
+`collection_gap` (the deterministic I&W analyst, monthly, no LLM) already
+ranked the starved desk × dimension cells the scorecard banded
+`insufficient-evidence`. It now also **drains a second backlog** — `hypotheses`
+rows with `status='source_request'`, the rows the operator-gated
+`request_source` agency tool lands when an analyst hits a coverage wall — and
+writes both into `collection_requirements` (migration 0113): a durable,
+operator-reviewable requirement carrying its desk/dimension, the topic, the
+rationale, the **evidence** it came from (an analyst output or a hypothesis, by
+id), which `source_class`es would plausibly feed it, and up to five
+**candidate sources**.
+
+The candidates are **deterministic, not proposed by a model**: a plain SQL
+match against the registered `source_descriptors` on declared source class and
+ISO2 geo overlap, preferring already-active sources. Where nothing matches, the
+requirement is stamped `fillable = false` with `unfillable_reason`
+`no_known_feed` — an honest "we do not know of a feed for this", which is a
+more useful operator artifact than a fabricated suggestion. A paired CHECK
+makes an unfillable requirement without a reason a database error.
+
+Bounds and idempotency, per code: at most 50 new requirements per run from the
+gap sweep and 20 from the request backlog; five candidates each; and a
+`natural_key` UNIQUE index (`collection_gap:<desk>:<dimension>` /
+`source_request:<hypothesis id>`) with an insert that does nothing on conflict.
+A cell that stays starved across monthly sweeps stays **one** requirement, not
+a new one each month. Priority rank is inherited from the gap ranking — desks
+with more starved dimensions first, then persistence.
+
+**A proposal is never an activation.** This is the load-bearing constraint, and
+it is enforced structurally rather than by convention:
+
+- The analyst **reads** `source_descriptors` and has no write path to it. It
+  cannot register, activate, or modify a source.
+- The `/v3/collection-requirements` route is **disposition-only**: `GET` list,
+  `GET` one, and a `PATCH` that may set only `status` / `reviewed_by` /
+  `reviewed_at` / `disposition_note`. There is **no POST and no DELETE** (a
+  test asserts both are unroutable), the content columns are write-once, and
+  nothing on the route touches the source registry.
+- The disposition vocabulary is closed — `proposed` / `reviewed` /
+  `registered` / `dismissed` — validated at the route *and* by a DB CHECK. Note
+  what `registered` means: it records that the operator **separately** added a
+  source through the normal registration path. Setting it performs no
+  activation.
+- **Nothing consumes a requirement.** Exactly one writer and one dispositioner
+  reference the table in the whole tree; no job, analyst, or ingest path watches
+  for `registered` and acts on it.
+
+Honest gaps: there is **no UI panel** for the backlog today (it is an API-only
+surface), and the requirement objects are not yet read by anything that would
+close the loop — a requirement is a note to the operator, and the operator is
+the loop.
 
 ---
 

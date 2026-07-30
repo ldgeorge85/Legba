@@ -922,6 +922,7 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
         AnalystDepsBuildError,
         build_analyst_run_method,
         build_llm_handler_from_stack_component,
+        build_search_handler_from_stack_component,
         resolve_judge_route,
     )
     from .audit_checkpointer_wiring import start_audit_checkpointer
@@ -1030,6 +1031,51 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             secrets_resolve=_secrets_resolve,
         )
         _llm_handler_cache[component_id] = handler
+        return handler
+
+    # ---- Search-provider handler factory (R-3d) -------------------
+    # The DISCOVERY leg's twin of _llm_handler_factory. Caches a SUCCESS per
+    # component id (a search handler holds no persistent client — every query
+    # opens its own guarded client — so one instance is freely shareable) and
+    # NEVER caches a failure, mirroring the Lazy* holders' #235 lesson: a
+    # component registered (or a registry recovered) minutes after boot must
+    # heal on the NEXT deps build, not on the next restart.
+    #
+    # Returns None rather than raising, and that is NOT a silent degradation:
+    # the ONLY consumer binds it into ToolContext.search, and `web_search`
+    # turns a DECLARED-but-unbound route into a loud `search_provider_unresolved`
+    # tool failure that explicitly says NO query was issued. Raising here would
+    # instead take the whole analyst's deps build down (return None from the
+    # resolver ⇒ the actor never activates), which is a much worse failure for
+    # a capability that is additive to the analyst's substrate work.
+    _search_handler_cache: dict[str, Any] = {}
+
+    async def _search_handler_factory(component_id: str) -> Any | None:
+        existing = _search_handler_cache.get(component_id)
+        if existing is not None:
+            return existing
+        try:
+            handler = await build_search_handler_from_stack_component(
+                component_id,
+                registry_client=registry_client,
+                secrets_resolve=_secrets_resolve,
+            )
+        except Exception as exc:
+            logger.error(
+                "dapr_host.search_provider.unresolved component=%s err=%s — "
+                "the web_search ToolSpec DECLARES this route; every web_search "
+                "call will fail loudly with search_provider_unresolved (never "
+                "an empty result set) until it resolves. Register the component "
+                "(scripts/bringup_register_stack.py) or drop the ref. Retried "
+                "on the NEXT analyst deps build.",
+                component_id, exc,
+            )
+            return None
+        logger.info(
+            "dapr_host.search_provider.bound component=%s subprovider=%s",
+            component_id, getattr(handler, "subprovider", "?"),
+        )
+        _search_handler_cache[component_id] = handler
         return handler
 
     # ---- Pre-built service clients --------------------------------
@@ -1709,6 +1755,48 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                         _gw_base_ctx is not None, _pack is not None, _pack_id,
                     )
                     return None
+                # R-3d — THE SEARCH BINDING. `ToolContext.search` /
+                # `search_route` were DECLARED by R-3b and bound by nothing,
+                # which is what kept the discovery leg inert: `web_search`
+                # could not reach a provider at all. Resolve the pack's own
+                # `web_search` ToolSpec `config.provider` StackRef through the
+                # SAME ladder the tool documents (`resolve_tool_search_route`,
+                # which also honours the LEGBA_SEARCH_STACK_REF global repoint)
+                # and bind the configured handler here, next to the other
+                # stack-backed capabilities (substrate port, LLM handlers).
+                #
+                # Rung 0 of that ladder is an OPT-IN GATE: no `provider` key on
+                # the ToolSpec ⇒ no route ⇒ nothing bound ⇒ `web_search` falls
+                # through to the legacy operator-pinned endpoint exactly as
+                # before. A DECLARED route we could not build binds None, and
+                # the tool then fails LOUDLY (`search_provider_unresolved`,
+                # "NO query was issued") rather than returning zero hits — an
+                # unresolved provider and an empty web must never share a wire
+                # shape. Re-resolved on every deps build, so an operator PUT
+                # that adds the ref takes effect on the actor's next build.
+                _search_handler = None
+                _search_route = None
+                if _pack_id == WEB_ACCESS_PACK_ID:
+                    from ..data.stack.search import (
+                        resolve_tool_search_route as _resolve_search_route,
+                    )
+
+                    _ws_cfg = next(
+                        (dict(_t.config) for _t in _pack.tools
+                         if _t.name == "web_search"),
+                        {},
+                    )
+                    _search_route = _resolve_search_route(_ws_cfg)
+                    if _search_route is not None:
+                        _search_handler = await _search_handler_factory(
+                            _search_route.component_id
+                        )
+                        logger.info(
+                            "analyst_deps_resolver.search_route actor_id=%s "
+                            "component=%s source=%s bound=%s",
+                            actor_id, _search_route.component_id,
+                            _search_route.source, _search_handler is not None,
+                        )
                 # The base ToolContext carries the read substrate + queue/emit;
                 # the per-run WritebackContext (write pack) is injected by the
                 # actor, NOT pinned here (it needs the run's AnalystContext).
@@ -1716,6 +1804,8 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                     queue=_gw_base_ctx.queue,
                     emit=_gw_base_ctx.emit,
                     substrate=substrate_query_port,
+                    search=_search_handler,
+                    search_route=_search_route,
                 )
                 _binding = _GWBinding(
                     agency=_gw_agency,
@@ -1824,6 +1914,7 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 AgencyToolBinding,
                 EscalationBinding,
                 fetch_action_pack,
+                resolve_escalation_action,
             )
             from .source_first_runtime import AGENCY_HOLDER
 
@@ -1846,6 +1937,16 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 if t.name == "escalate":
                     esc_tool_cfg = dict(t.config or {})
                     break
+            # Stage 1 — WHICH tool the crossing invokes. Read from the same
+            # DB-sourced tool config the gates come from, validated against
+            # this pack's live tool list. Absent → "escalate", byte-identical
+            # to the string literal this replaced. An action naming no tool on
+            # the pack degrades LOUD (error log + a note that follows every
+            # emit onto alert_sink_deliveries) rather than taking the operator's
+            # escalation edge offline over a typo.
+            esc_action, esc_action_note = resolve_escalation_action(
+                esc_tool_cfg, esc_pack, log_context=ad.identity.id
+            )
             escalation = EscalationBinding(
                 binding=AgencyToolBinding(
                     agency=esc_agency,
@@ -1859,6 +1960,8 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 ),
                 severity_gate=str(esc_tool_cfg.get("severity_gate", "high")),
                 confidence_gate=float(esc_tool_cfg.get("confidence_gate", 0.85)),
+                action_tool=esc_action,
+                action_degraded=esc_action_note,
             )
 
         # P0-T2 faithfulness verify — resolve the OPTIONAL judge LLM for the
@@ -1880,20 +1983,27 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
         # ``judge_llm_ref`` (which model judged — provenance, forever).
         verify_judge: Any = None
         verify_judge_ref: str = ""
+        # W-3d — the coarse route CLASS (configured|fallback_verify|
+        # fallback_primary) riding along with the ref so the critique row can
+        # stamp ``judge_route`` (the UI badge's configured-vs-fell-back signal).
+        verify_judge_route: str = ""
         judge_route = resolve_judge_route(ad)
         if judge_route is not None and _llm_judge_enabled():
             try:
                 verify_judge = await _llm_handler_factory(judge_route.component_id)
                 verify_judge_ref = judge_route.component_id
+                verify_judge_route = judge_route.route_class
                 logger.info(
                     "analyst_deps_resolver.verify_judge_wired actor_id=%s "
-                    "analyst=%s judge_ref=%s source=%s",
+                    "analyst=%s judge_ref=%s source=%s route=%s",
                     actor_id, ad.identity.id,
                     judge_route.component_id, judge_route.source,
+                    verify_judge_route,
                 )
             except Exception as exc:  # noqa: BLE001 — soft-fail, floor still runs
                 verify_judge = None
                 verify_judge_ref = ""
+                verify_judge_route = ""
                 logger.warning(
                     "analyst_deps_resolver.verify_judge_resolve_failed "
                     "actor_id=%s analyst=%s component_id=%s source=%s err=%s — "
@@ -1916,6 +2026,7 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             gather_write_bindings=gather_write_bindings,
             verify_judge=verify_judge,
             verify_judge_ref=verify_judge_ref,
+            verify_judge_route=verify_judge_route,
         )
 
     register_target_deps_resolver(_target_deps_resolver)

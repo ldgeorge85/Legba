@@ -144,6 +144,103 @@ export interface CalibrationScoreboard {
   forecast_unproven: boolean
   calibration_thin: boolean
   refs: string[]
+  /** P2-3 — the band-calibration harness section (additive; `null` only when
+   *  the section read itself failed — see {@link BandCalibrationSection}). */
+  band_calibration: BandCalibrationSection | null
+}
+
+// ===========================================================================
+// Band-calibration harness (system.eval — P2-3, NOT a Brier score)
+// ===========================================================================
+
+/**
+ * One horizon's (14d / 28d) graded-outcome block. Mirrors
+ * `band_calibration_tracker.summarize_claims`'s `_rate_block` +
+ * `_block` shape and the registry's `BandCalibrationSection.horizons[*]`.
+ *
+ * `outcomes` is the raw outcome-count map (`held` / `worsened` / `improved` /
+ * `reverted` / `insufficient` / `unresolvable` — whichever occurred; absent
+ * keys never occurred, not zero-by-omission). `persistence_rate` /
+ * `reversal_rate` are `null` on a zero `scored` denominator — an honest empty
+ * read, never a fabricated 0.0.
+ */
+export interface BandCalibrationHorizon {
+  resolved: number
+  open: number
+  outcomes: Record<string, number>
+  confirmed: number
+  reverted: number
+  scored: number
+  excluded_insufficient: number
+  excluded_unresolvable: number
+  persistence_rate: number | null
+  reversal_rate: number | null
+}
+
+/** One `by_direction[direction]` / `by_dimension[dimension]` slice — the same
+ *  horizon blocks, plus the claim count they were computed over. */
+export interface BandCalibrationSlice {
+  claims: number
+  [horizon: string]: BandCalibrationHorizon | number
+}
+
+/**
+ * P2-3 — the band-persistence harness aggregate. Mirrors the registry route's
+ * `BandCalibrationSection` (`GET /api/v1/v3/eval/calibration`'s
+ * `band_calibration` key), itself the freshest `band_calibration_tracker`
+ * finding's `data.data.band_calibration` block.
+ *
+ * HONESTY (the whole point of this section, per `no_brier` + `honesty_note`):
+ * bands are ORDINAL risk categories, not probabilities. There is no Brier
+ * score, Brier-skill score, or forecast-skill claim here or anywhere in this
+ * harness — only persistence/reversal RATES with their sample sizes. UI copy
+ * consuming this type must never call a rate a "Brier score".
+ * `available` is false before the tracker's first finding exists (a distinct
+ * "nothing graded yet" state, not a zero rate).
+ */
+export interface BandCalibrationSection {
+  available: boolean
+  produced_at: string | null
+  claims_total: number | null
+  resolution_spec: string | null
+  horizons: Record<string, BandCalibrationHorizon>
+  by_direction: Record<string, BandCalibrationSlice>
+  by_dimension: Record<string, BandCalibrationSlice>
+  no_brier: boolean
+  honesty_note: string | null
+  refs: string[]
+}
+
+/** Horizon display order — 14-day read before 28-day, then anything else. */
+export const BAND_CALIBRATION_HORIZON_ORDER = ['14d', '28d'] as const
+
+/** Order a `horizons` (or a `by_direction`/`by_dimension` slice's horizon
+ *  keys) map for display: the two known horizons first, then any extras. */
+export function orderedBandHorizons(
+  horizons: Record<string, BandCalibrationHorizon>,
+): Array<[string, BandCalibrationHorizon]> {
+  const known = BAND_CALIBRATION_HORIZON_ORDER.filter((h) => h in horizons).map(
+    (h) => [h, horizons[h]] as [string, BandCalibrationHorizon],
+  )
+  const extras = Object.keys(horizons)
+    .filter((h) => !(BAND_CALIBRATION_HORIZON_ORDER as readonly string[]).includes(h))
+    .sort()
+    .map((h) => [h, horizons[h]] as [string, BandCalibrationHorizon])
+  return [...known, ...extras]
+}
+
+/** A horizon rate as a percentage string, or the honest empty marker when the
+ *  scored denominator is zero (never a fabricated 0%/100%). */
+export function bandRateLabel(rate: number | null): string {
+  return rate == null ? '— (no scored claims yet)' : `${Math.round(rate * 100)}%`
+}
+
+/** True when the section carries nothing graded yet — no tracker finding
+ *  (`!available`), or a finding with zero claims logged so far. Drives the
+ *  panel's empty/awaiting state. */
+export function bandCalibrationEmpty(section: BandCalibrationSection | null | undefined): boolean {
+  if (!section || !section.available) return true
+  return !section.claims_total || section.claims_total <= 0
 }
 
 export type AcuteTag = 'ready' | 'accumulating' | 'degenerate'

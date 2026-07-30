@@ -8,14 +8,38 @@
  *
  * Search + class-facet filter, mention-count sort, expandable rows showing the
  * entity's recent signals (lineage-clickable) + its co-occurrence relationships.
+ *
+ * U-3 merge: two panels that were really "more entity views" now live here as
+ * tabs, UNMODIFIED — `system.entity_graph` (the full knowledge-graph viz) as
+ * "Graph", and `system.notable_structure` (the ranked cross-entity structural
+ * shortlist — tense actors/brokers/hostile edges/triads/proxy chains) as
+ * "Structure". Both mount inside `PanelEmbedProvider` so their own
+ * (otherwise-standalone) `PanelChrome` header/border stays suppressed — this
+ * panel's own header above is the ONLY chrome that renders (the "double
+ * chrome" fix, same mechanism as `panels/merged/*.tsx`). Both kinds stay
+ * registered (hidden from the sidebar) pointing at the SAME original
+ * components — see panel-registry/registry.ts HIDDEN_KINDS — so a saved
+ * layout referencing either old id keeps resolving exactly as before.
  */
 import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { PanelChrome } from '@/components/PanelChrome'
+import { PanelEmbedProvider } from '@/components/PanelEmbedContext'
+import { PanelTabStrip, type PanelTabDef } from '@/components/PanelTabs'
 import { apiGet } from '@/lib/api'
 import { resolveCountry } from '@/lib/countryGeo'
 import type { PanelProps } from '@/types'
 import { selectRow, useSelection } from '@/state/selection'
+import EntityGraphPanel from './EntityGraph'
+import NotableStructurePanel from './NotableStructure'
+
+type EntitiesTab = 'list' | 'graph' | 'structure'
+
+const ENTITIES_TABS: readonly PanelTabDef[] = [
+  { id: 'list', label: 'List' },
+  { id: 'graph', label: 'Graph' },
+  { id: 'structure', label: 'Structure' },
+]
 
 interface EntityNode {
   id: string
@@ -84,7 +108,8 @@ function openEntityGraph(name: string) {
   useSelection.getState().select({ kind: 'entity', id: name, label: name, origin: 'entities' })
 }
 
-export default function EntitiesPanel({ registration }: PanelProps) {
+export default function EntitiesPanel({ registration, scope, mode }: PanelProps) {
+  const [tab, setTab] = useState<EntitiesTab>('list')
   const [q, setQ] = useState('')
   const [cls, setCls] = useState<string | null>(null)
   const [open, setOpen] = useState<string | null>(null)
@@ -118,53 +143,74 @@ export default function EntitiesPanel({ registration }: PanelProps) {
   return (
     <PanelChrome
       registration={registration}
-      subtitle={`${rows.length} shown · ${listQ.data?.total ?? 0} entities`}
-      onRefresh={() => listQ.refetch()}
+      subtitle={tab === 'list' ? `${rows.length} shown · ${listQ.data?.total ?? 0} entities` : undefined}
+      onRefresh={tab === 'list' ? () => listQ.refetch() : undefined}
       actions={
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="search entities…"
-          className="bg-surface-200 border border-slate-700 rounded px-2 py-0.5 text-[11px] w-40"
-          data-testid="entities-search"
-        />
+        <div className="flex items-center gap-2">
+          <PanelTabStrip
+            tabs={ENTITIES_TABS}
+            active={tab}
+            onChange={(id) => setTab(id as EntitiesTab)}
+            ariaLabel="Entities surface"
+            testIdPrefix="entities-tab"
+          />
+          {tab === 'list' && (
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="search entities…"
+              className="bg-surface-200 border border-slate-700 rounded px-2 py-0.5 text-[11px] w-40"
+              data-testid="entities-search"
+            />
+          )}
+        </div>
       }
     >
-      <div className="flex-1 overflow-auto text-xs">
-        {/* class facet chips */}
-        <div className="flex items-center gap-1 mb-2 flex-wrap" data-testid="entities-class-filter">
-          <Chip label="all" on={cls === null} onClick={() => setCls(null)} />
-          {classes.map((c) => (
-            <Chip key={c} label={c} on={cls === c} color={CLASS_COLOR[c]} onClick={() => setCls(cls === c ? null : c)} />
-          ))}
-        </div>
-
-        {listQ.isLoading && <div className="text-slate-500 py-4 text-center">loading entities…</div>}
-        {!listQ.isLoading && rows.length === 0 && (
-          <div className="text-slate-500 py-4 text-center" data-testid="entities-empty">
-            no entities — the entity graph populates as the NER + linking pipeline runs
+      {tab === 'list' && (
+        <div className="flex-1 overflow-auto text-xs">
+          {/* class facet chips */}
+          <div className="flex items-center gap-1 mb-2 flex-wrap" data-testid="entities-class-filter">
+            <Chip label="all" on={cls === null} onClick={() => setCls(null)} />
+            {classes.map((c) => (
+              <Chip key={c} label={c} on={cls === c} color={CLASS_COLOR[c]} onClick={() => setCls(cls === c ? null : c)} />
+            ))}
           </div>
-        )}
 
-        <div className="space-y-0.5">
-          {rows.map((e) => (
-            <div key={e.id} className="border border-slate-800 rounded bg-surface-100">
-              <button
-                onClick={() => setOpen(open === e.id ? null : e.id)}
-                className="w-full flex items-center gap-2 px-2 py-1 hover:bg-surface-200 text-left"
-                data-testid={`entities-row-${e.id}`}
-              >
-                <span className="w-2 h-2 rounded-full shrink-0" style={{ background: CLASS_COLOR[e.entity_class] ?? '#94a3b8' }} />
-                <span className="text-slate-200 flex-1 truncate">{e.canonical_name}</span>
-                {e.geo_country && <span className="text-[10px] text-emerald-400">{e.geo_country}</span>}
-                <span className="text-[10px] text-slate-500">{e.entity_class}</span>
-                <span className="text-[10px] text-slate-400 tabular-nums">{e.mentions}×</span>
-              </button>
-              {open === e.id && <EntityDetail id={e.id} name={e.canonical_name} />}
+          {listQ.isLoading && <div className="text-slate-500 py-4 text-center">loading entities…</div>}
+          {!listQ.isLoading && rows.length === 0 && (
+            <div className="text-slate-500 py-4 text-center" data-testid="entities-empty">
+              no entities — the entity graph populates as the NER + linking pipeline runs
             </div>
-          ))}
+          )}
+
+          <div className="space-y-0.5">
+            {rows.map((e) => (
+              <div key={e.id} className="border border-slate-800 rounded bg-surface-100">
+                <button
+                  onClick={() => setOpen(open === e.id ? null : e.id)}
+                  className="w-full flex items-center gap-2 px-2 py-1 hover:bg-surface-200 text-left"
+                  data-testid={`entities-row-${e.id}`}
+                >
+                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: CLASS_COLOR[e.entity_class] ?? '#94a3b8' }} />
+                  <span className="text-slate-200 flex-1 truncate">{e.canonical_name}</span>
+                  {e.geo_country && <span className="text-[10px] text-emerald-400">{e.geo_country}</span>}
+                  <span className="text-[10px] text-slate-500">{e.entity_class}</span>
+                  <span className="text-[10px] text-slate-400 tabular-nums">{e.mentions}×</span>
+                </button>
+                {open === e.id && <EntityDetail id={e.id} name={e.canonical_name} />}
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
+      {/* This panel's own PanelChrome header above already carries the tab
+          strip, so EntityGraphPanel/NotableStructurePanel — each otherwise a
+          standalone panel with its own PanelChrome — mount embedded, per the
+          same "double chrome" fix `panels/merged/*.tsx` uses. */}
+      <PanelEmbedProvider>
+        {tab === 'graph' && <EntityGraphPanel registration={registration} scope={scope} mode={mode} />}
+        {tab === 'structure' && <NotableStructurePanel registration={registration} scope={scope} mode={mode} />}
+      </PanelEmbedProvider>
     </PanelChrome>
   )
 }

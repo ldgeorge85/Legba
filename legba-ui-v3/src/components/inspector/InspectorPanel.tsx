@@ -17,6 +17,7 @@ import { useState } from 'react'
 import { apiPost } from '@/lib/api'
 import { PanelChrome } from '@/components/PanelChrome'
 import { DescriptorView } from '@/components/DescriptorView'
+import { CopyableId } from '@/components/CopyableId'
 import { RecordLink, refKindForField } from '@/components/inspector/RecordLink'
 import { useInspectorDetail, type InspectorDetail, type Ref } from './useInspectorDetail'
 import { useSelection, type Selection, type SelectionPreview } from '@/state/selection'
@@ -111,9 +112,11 @@ function Header({ kind, id, label }: { kind: Selection['kind']; id: string; labe
       <span className="rounded bg-surf-1 px-1.5 py-0.5 text-label uppercase tracking-wide text-ink-2">
         {kind}
       </span>
-      <code className="truncate font-mono text-label text-ink-3" title={id}>
-        {id}
-      </code>
+      {/* U-5 — a raw UUID/SHA shown in full is noisy and un-copyable without a
+          text-select; truncated display + a one-click copy affordance (a
+          no-op truncation for an already-short id like a target/analyst
+          name). */}
+      <CopyableId id={id} className="text-label text-ink-3" testId="inspector-header-id" />
       {kind === 'finding' && <AddToExportButton id={id} label={label} />}
       {kind === 'entity' && <WatchThisButton id={id} label={label} />}
     </div>

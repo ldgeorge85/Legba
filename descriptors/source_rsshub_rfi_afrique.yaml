@@ -1,22 +1,45 @@
-# RSSHub lane — Niger desk (country_watch_ne). Ships DRAFT (operator activates).
+# Niger desk (country_watch_ne). Ships DRAFT (operator activates).
 #
-# RFI Afrique (Radio France Internationale — France Médias Monde, state-funded but editorially independent public broadcaster; NOT state media — mirrors the VOA/France24 treatment) bridged to RSS by the self-hosted RSSHub sidecar
-# (docker-compose `rsshub`, profile `sources-extra`). The `rss` handler polls
-# `http://rsshub:1200/rfi/fr/afrique`, which RSSHub renders from rfi.fr/fr/afrique (probed
-# 2026-07-24, HTTP 200). Chosen for the Niger desk — a STARVED non-G7 desk
-# (NE: 2 signals/7d) — because RFI is the deepest French-language wire on the Sahel (Niger/Mali/Burkina), which the English global feeds under-report; regional so it also feeds the CD/ML/BF desks.
+# RFI Afrique (Radio France Internationale — France Médias Monde, state-funded
+# but editorially independent public broadcaster; NOT state media — mirrors
+# the VOA/France24 treatment). Chosen for the Niger desk — a STARVED non-G7
+# desk (NE: 2 signals/7d) — because RFI is the deepest French-language wire on
+# the Sahel (Niger/Mali/Burkina), which the English global feeds under-report;
+# regional so it also feeds the CD/ML/BF desks.
 #
-# source_class: reporting. Article links in the RSSHub feed are the real
-# rfi.fr URLs, so the credibility filter reads host rfi.fr (seeded 0.78/wire by the
-# registrar).
+# NATIVE FEED (RSSHub dependency REMOVED, 2026-07-28): this originally polled
+# the self-hosted RSSHub sidecar's rendering of rfi.fr/fr/afrique
+# (`http://rsshub:1200/rfi/fr/afrique`), which went unhealthy — RSSHub's own
+# upstream scrape of that route started 503-ing (`Error in /rfi/fr/afrique:
+# SyntaxError: Unexpected end of JSON input`), an RSSHub-side breakage, not
+# ours. RFI publishes a native RSS 2.0 feed for this section directly —
+# verified 2026-07-28 (`curl -sI https://www.rfi.fr/fr/afrique/rss` -> HTTP
+# 200 `application/rss+xml`; full GET returned a well-formed feed with
+# current-dated items) — so this descriptor now polls that URL directly,
+# same as every other non-rsshub native-RSS descriptor (e.g.
+# source_dw_world.yaml), one fewer moving part: no sidecar, no SSRF
+# allowlist entry for `rsshub`, no dependency on RSSHub's own scrape health.
+# The sibling source_rsshub_rfi_ameriques.yaml is unaffected (still polls
+# RSSHub fine) and keeps the rsshub_lane tag/route.
+#
+# NOTE for the deploying session: the descriptor id/filename intentionally
+# were NOT renamed (still `source.rsshub.rfi.afrique` /
+# `source_rsshub_rfi_afrique.yaml`) — only `config.url` changed, so the
+# existing re-register-on-content-hash-change + reconcile-retires-old-version
+# mechanics apply exactly like any other descriptor edit; no manual
+# actor retirement/re-registration dance needed. Just cosmetically stale.
+#
+# source_class: reporting. The feed's article links are the real rfi.fr
+# URLs, so the credibility filter reads host rfi.fr (seeded 0.78/wire by the
+# rsshub-lane registrar; unaffected by this transport change).
 #
 # state: draft — bulk registration creates NO live actor; activation
-# (draft -> configured -> active) is the operator's after the sidecar is up and
-# the route is verified live on the instance.
+# (draft -> configured -> active) is the operator's after the route is
+# verified live on the instance.
 
 identity:
   id: source.rsshub.rfi.afrique
-  name: RFI Afrique — francophone Africa (via RSSHub)
+  name: RFI Afrique — francophone Africa
   kind: rss
   schema_uri: legba/source/1.0.0
   version: "0000000000000000"        # placeholder — registry stamps content hash
@@ -29,14 +52,14 @@ scope:
   owner_tenant: shared
   geo: []
   languages: [fr]
-  tags: [news, world, africa, sahel, francophone, niger, rsshub_lane]
+  tags: [news, world, africa, sahel, francophone, niger]
   source_class: reporting
 
 acquisition: poll
 
 cadence:
-  # Hourly, staggered minute offset. RSSHub caches upstream (CACHE_EXPIRE=1h by
-  # default), so polling faster just serves cache — hourly is courteous.
+  # Hourly, staggered minute offset — courteous to RFI's own servers (native
+  # feed now, no intermediate cache to lean on).
   schedule:
     factory_kind: cron
     raw: "8 * * * *"
@@ -46,7 +69,7 @@ cadence:
 config:
   url:
     factory_kind: text
-    raw: "http://rsshub:1200/rfi/fr/afrique"
+    raw: "https://www.rfi.fr/fr/afrique/rss"
 
 pipeline:
   ingestion_filters:
@@ -56,9 +79,9 @@ pipeline:
       config: {}
   enrichment:
     # language_detect FIRST so ner_multilingual can use the detected language.
-    # No fact_extractor: the default RSSHub feed carries title+link (not full
-    # bodies), so relation mining is low-value here — the operator can add the
-    # stage after confirming the route yields article text.
+    # No fact_extractor: the feed carries title+description (not full
+    # bodies), so relation mining is low-value here — the operator can add
+    # the stage after confirming the route yields article text.
     - kind: language_detect
       config: {}
     - kind: ner_multilingual

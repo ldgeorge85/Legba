@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""K-3 — Brazil Energy Predictor descriptor end-to-end test.
+"""K-3 — Energy-target Predictor descriptor end-to-end test.
 
-Wires the production ``descriptors/analyst_india_energy_predictor.yaml``
-descriptor through the real path:
+Wires a predictor descriptor body through the real path:
 
   registry register → analyst_deps_builder._build_predictor →
   predictor.run_method (real AutoARIMA / naive fallback) →
@@ -15,9 +14,15 @@ in :mod:`tests.runtime.test_spike_integration`'s gate-9 test
 (``test_gate9_predictor_writes_prediction_kind_through_daprd``);
 this file complements that by:
 
-  * Mirroring the **production** descriptor body (loaded from the YAML
-    file) rather than the spike's bespoke fixture, so a descriptor-
-    schema regression here surfaces as a fail.
+  * Mirroring the **production** ``stat_forecaster`` predictor descriptor
+    body — parsed through real ``yaml.safe_load`` + pydantic validation
+    exactly as the registry does over the wire — so a descriptor-schema
+    regression here surfaces as a fail. (C5-1, 2026-07-28: this used to
+    load ``descriptors/analyst_india_energy_predictor.yaml`` from disk;
+    that descriptor was part of the india_energy pilot lane, now retired
+    and removed from ``descriptors/`` — the body is inlined below,
+    byte-for-byte the same shape, so this test no longer depends on a
+    retired pilot's YAML file.)
   * Covering the **naive-mean fallback path** when fewer than
     ``predictor.MIN_OBSERVATIONS`` daily buckets are available.
   * Covering the **narrative-LLM-degraded path** when the optional
@@ -33,7 +38,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -60,15 +64,53 @@ from legba.data.schemas.analyst import AnalystDescriptor, AnalystKind
 
 
 # ---------------------------------------------------------------------------
-# Module paths
+# Descriptor body (inlined — C5-1 retired the india_energy pilot lane's
+# descriptors/*.yaml files; this is byte-for-byte the same shape the retired
+# ``descriptors/analyst_india_energy_predictor.yaml`` carried, kept as real
+# YAML text so it still exercises ``yaml.safe_load`` + strict=False pydantic
+# coercion the same way the registry's HTTP PUT path does)
 # ---------------------------------------------------------------------------
 
+_PREDICTOR_DESCRIPTOR_YAML_TEXT = """
+identity:
+  id: india_energy_predictor
+  name: India Energy Predictor
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: predictor
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Prediction
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: k3_predictor_activation
 
-DESCRIPTOR_YAML = (
-    Path(__file__).resolve().parents[2]
-    / "descriptors"
-    / "analyst_india_energy_predictor.yaml"
-)
+subscription:
+  targets:
+    predicate: 'target_id() == "india_energy_infra"'
+    data_types: [signal]
+    time_window: 336h
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: stat_forecaster
+  prompt_module: legba.prompts.predictor.v1
+  llm:
+    horizon_days: 7
+    ci_level: 90
+
+cadence:
+  fallback_schedule: null
+  cooldown_seconds: 900
+
+outputs:
+  - kind: a2a_skill
+    config:
+      skill_id: intelligence.india_energy_forecast
+"""
 
 SIGNAL_SCHEMA_URI = "iglu:legba/signal/jsonschema/2-0-0"
 PREDICTION_SCHEMA_URI = "iglu:legba/prediction/jsonschema/2-0-0"
@@ -140,10 +182,9 @@ async def descriptor_registry(pg_store):  # type: ignore[no-untyped-def]
 
 
 def _load_descriptor_yaml() -> dict[str, Any]:
-    """Load the production predictor descriptor YAML + stamp a placeholder
+    """Parse the inlined predictor descriptor YAML + stamp a placeholder
     version (the registry overwrites with the real content hash)."""
-    with open(DESCRIPTOR_YAML) as f:
-        body = yaml.safe_load(f)
+    body = yaml.safe_load(_PREDICTOR_DESCRIPTOR_YAML_TEXT)
     body.setdefault("identity", {})["version"] = "0" * 16
     return body
 

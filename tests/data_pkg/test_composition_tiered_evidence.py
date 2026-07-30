@@ -14,7 +14,8 @@ Covered here:
 
   * flag + floor wiring — code default OFF byte-identical; ON ⇒ split floor
     (env floor when pinned, else the 0.50 scorecard lockstep) + a second
-    periphery gather on the per-country and region branches;
+    periphery gather on the per-country, region, WORLD, and THEMATIC branches
+    (the last two resolved the former SEAMS §44);
   * ``read_periphery_findings`` — the exact complement of the basis
     admissibility (LEFT join, below-floor-or-unverified predicate, coerce-tag
     drop, head-fold, NULL effective_confidence for unverified rows);
@@ -665,3 +666,381 @@ def test_periphery_reason_maps_soft_fail():
         verify.fail_class_for_reason("unhedged_periphery_citation")
         == verify.FAIL_CLASS_SOFT
     )
+
+
+# ---------------------------------------------------------------------------
+# 6b. Tier-aware LLM-judge rubric (former SEAMS §45)
+# ---------------------------------------------------------------------------
+
+
+def test_judge_periphery_rubric_empty_for_untiered_citations():
+    """Untiered citation lists (every pre-C-TIER composition, every unit) yield
+    the EMPTY string — the judge prompt stays byte-identical."""
+    untiered = [
+        _comp_citation(1, eff=0.8, derived=["s1"]),
+        _comp_citation(2, eff=0.3, derived=["s2"]),
+    ]
+    assert verify._judge_periphery_rubric(untiered) == ""
+    assert verify._judge_periphery_rubric([]) == ""
+    assert verify._judge_periphery_rubric(None) == ""
+    # Unit-convention citations (no tier key) are inert too.
+    assert verify._judge_periphery_rubric(
+        [{"marker": "[2]", "signal_id": "sig-2"}]
+    ) == ""
+
+
+def test_judge_periphery_rubric_names_periphery_ordinals():
+    citations = [
+        _comp_citation(1, eff=0.8, derived=["s1"]),
+        _comp_citation(2, eff=0.3, derived=["s2"], tier="periphery"),
+        _comp_citation(3, eff=0.2, derived=["s3"], tier="periphery"),
+    ]
+    rubric = verify._judge_periphery_rubric(citations)
+    assert "EVIDENCE TIERS" in rubric
+    assert "[2, 3]" in rubric
+    assert "PERIPHERY tier" in rubric
+    assert "hedged AND attributed" in rubric
+    assert "ESTABLISHED FACT" in rubric
+    # Non-empty rubric ends with the block separator so the evidence map
+    # renders on its own line.
+    assert rubric.endswith("\n\n")
+
+
+class _JudgePromptCapture:
+    """Judge LLM double: captures every prompt, answers all-supported."""
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def chat_complete(
+        self,
+        messages: list[Any],
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        system: str | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        prompt = str(messages[0]["content"])
+        self.prompts.append(prompt)
+        # One verdict per numbered claim (count the numbered CLAIMS lines).
+        n = sum(
+            1
+            for line in prompt.splitlines()
+            if line[:1].isdigit() and ". " in line[:6]
+        )
+        return SimpleNamespace(content=json.dumps({"verdicts": ["supported"] * n}))
+
+
+@pytest.mark.asyncio
+async def test_run_judge_prompt_carries_tier_rubric_only_when_tiered():
+    body = (
+        "Leadership is contested [[ref:1]]. Weakly-supported reporting "
+        "suggests a convoy moved [[ref:2]]."
+    )
+    tiered = [
+        _comp_citation(1, eff=0.8, derived=["s1"]),
+        _comp_citation(2, eff=0.3, derived=["s2"], tier="periphery"),
+    ]
+    untiered = [
+        _comp_citation(1, eff=0.8, derived=["s1"]),
+        _comp_citation(2, eff=0.3, derived=["s2"]),
+    ]
+    judge_tiered = _JudgePromptCapture()
+    await verify._run_judge(judge_tiered, body=body, citations=tiered)
+    assert judge_tiered.prompts, "judge was never called"
+    assert all("EVIDENCE TIERS" in p for p in judge_tiered.prompts if "N -> sub-claim" in p)
+    assert any("EVIDENCE TIERS" in p for p in judge_tiered.prompts)
+    assert any("[2]" in p and "PERIPHERY tier" in p for p in judge_tiered.prompts)
+
+    judge_untiered = _JudgePromptCapture()
+    await verify._run_judge(judge_untiered, body=body, citations=untiered)
+    assert judge_untiered.prompts
+    assert all("EVIDENCE TIERS" not in p for p in judge_untiered.prompts)
+
+
+# ---------------------------------------------------------------------------
+# 7. READ_SLICE wiring — WORLD + THEMATIC branches (former SEAMS §44)
+# ---------------------------------------------------------------------------
+
+
+class _DispatchConn:
+    """Fake conn that dispatches on query shape: roster / periphery / basis."""
+
+    def __init__(
+        self,
+        basis_rows: list[dict[str, Any]] | None = None,
+        roster_rows: list[dict[str, Any]] | None = None,
+        periphery_rows: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self._basis = basis_rows or []
+        self._roster = roster_rows or []
+        self._periphery = periphery_rows or []
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    async def fetch(self, query: str, *params: Any) -> list[dict[str, Any]]:
+        self.calls.append((query, params))
+        if "target_descriptors" in query:
+            return [dict(r) for r in self._roster]
+        if "LEFT JOIN LATERAL" in query:
+            return [dict(r) for r in self._periphery]
+        return [dict(r) for r in self._basis]
+
+
+def _thematic_descriptor(desks: list[str] | None = None) -> SimpleNamespace:
+    substrate: dict[str, Any] = {synth.THEMATIC_DIMENSION_KEY: "escalation"}
+    if desks is not None:
+        substrate[synth.THEMATIC_DESKS_KEY] = desks
+    return SimpleNamespace(
+        subscription=SimpleNamespace(
+            other_analysts=[
+                SimpleNamespace(id="escalation", time_window="24h", data_types=[])
+            ],
+            substrate=substrate,
+        ),
+        method=SimpleNamespace(
+            llm={"verify": {"factory_kind": "stack_ref", "raw": "llm.x"}}
+        ),
+    )
+
+
+def _world_descriptor() -> SimpleNamespace:
+    return SimpleNamespace(
+        subscription=SimpleNamespace(
+            other_analysts=[
+                SimpleNamespace(
+                    id="region_composition", time_window="24h", data_types=[]
+                )
+            ],
+            substrate={},
+        ),
+        method=SimpleNamespace(
+            llm={"verify": {"factory_kind": "stack_ref", "raw": "llm.x"}}
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_flag_on_thematic_read_splits_basis_and_periphery(monkeypatch):
+    monkeypatch.setenv(synth.TIERED_EVIDENCE_ENV, "1")
+    monkeypatch.delenv(synth.VERIFY_FLOOR_ENV, raising=False)
+    basis = _row(analyst_id="escalation")
+    basis["derived_from"] = []
+    peri = _row(analyst_id="escalation", periphery=True, floor=0.5)
+    conn = _DispatchConn(
+        basis_rows=[basis],
+        roster_rows=[{"descriptor_id": "country_g20_in", "name": "India"}],
+        periphery_rows=[peri],
+    )
+    rows = await synth.READ_SLICE(
+        conn, descriptor=_thematic_descriptor(), target_filter=None
+    )
+    # THREE fetches: the basis unit read at the SPLIT floor, the desk roster,
+    # then the periphery complement at the SAME floor.
+    basis_calls = [
+        (q, p) for q, p in conn.calls
+        if "JOIN LATERAL" in q and "LEFT JOIN LATERAL" not in q
+    ]
+    peri_calls = [(q, p) for q, p in conn.calls if "LEFT JOIN LATERAL" in q]
+    assert len(basis_calls) == 1 and len(peri_calls) == 1
+    basis_q, basis_p = basis_calls[0]
+    peri_q, peri_p = peri_calls[0]
+    # Thematic basis: no target scope (all desks) → floor is $3; head-folded;
+    # meta stays EXCLUDED (the unit is first-order).
+    assert basis_p[2] == synth.TIERED_BASIS_FLOOR_DEFAULT
+    assert "DISTINCT ON (f.analyst_id, f.target_id)" in basis_q
+    assert "IS DISTINCT FROM 'true'" in basis_q
+    # Periphery complement: same analyst set + window + floor, meta excluded.
+    assert peri_p[0] == basis_p[0]
+    assert peri_p[1] == basis_p[1]
+    assert peri_p[2] == basis_p[2]
+    assert "v.faithfulness_score IS NULL" in peri_q
+    assert "IS DISTINCT FROM 'true'" in peri_q
+    # Row marking: basis rows carry the floor; periphery rows carry tier+floor.
+    basis_rows = [r for r in rows if r.get("_evidence_tier") != synth.PERIPHERY_TIER]
+    peri_rows = [r for r in rows if r.get("_evidence_tier") == synth.PERIPHERY_TIER]
+    assert basis_rows and peri_rows
+    assert all(
+        r["_evidence_floor"] == synth.TIERED_BASIS_FLOOR_DEFAULT for r in rows
+    )
+
+
+@pytest.mark.asyncio
+async def test_flag_on_thematic_dyad_scopes_periphery_to_desk_allowlist(monkeypatch):
+    monkeypatch.setenv(synth.TIERED_EVIDENCE_ENV, "1")
+    monkeypatch.delenv(synth.VERIFY_FLOOR_ENV, raising=False)
+    conn = _DispatchConn()
+    await synth.READ_SLICE(
+        conn,
+        descriptor=_thematic_descriptor(
+            desks=["country_watch_ir", "country_watch_il"]
+        ),
+        target_filter=None,
+    )
+    peri_calls = [(q, p) for q, p in conn.calls if "LEFT JOIN LATERAL" in q]
+    assert len(peri_calls) == 1
+    peri_q, peri_p = peri_calls[0]
+    # Dyad allow-list scopes the periphery too: target-id SET at $3, floor $4.
+    assert "f.target_id = ANY($3::TEXT[])" in peri_q
+    assert peri_p[2] == ["country_watch_ir", "country_watch_il"]
+    assert peri_p[3] == synth.TIERED_BASIS_FLOOR_DEFAULT
+
+
+@pytest.mark.asyncio
+async def test_flag_off_thematic_read_is_byte_identical(monkeypatch):
+    monkeypatch.delenv(synth.TIERED_EVIDENCE_ENV, raising=False)
+    monkeypatch.delenv(synth.VERIFY_FLOOR_ENV, raising=False)
+    basis = _row(analyst_id="escalation")
+    basis["derived_from"] = []
+    conn = _DispatchConn(
+        basis_rows=[basis],
+        roster_rows=[{"descriptor_id": "country_g20_in", "name": "India"}],
+    )
+    rows = await synth.READ_SLICE(
+        conn, descriptor=_thematic_descriptor(), target_filter=None
+    )
+    # Exactly the legacy pair: basis read (floor 0.0) + desk roster; NO periphery.
+    assert not [q for q, _ in conn.calls if "LEFT JOIN LATERAL" in q]
+    basis_q, basis_p = conn.calls[0]
+    assert basis_p[2] == synth.DEFAULT_VERIFY_FLOOR
+    assert all("_evidence_floor" not in r for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_flag_on_world_read_splits_basis_and_periphery(monkeypatch):
+    monkeypatch.setenv(synth.TIERED_EVIDENCE_ENV, "1")
+    monkeypatch.delenv(synth.VERIFY_FLOOR_ENV, raising=False)
+    basis = _row(analyst_id="region_composition")
+    basis["target_id"] = "region_mena"
+    basis["derived_from"] = []
+    peri = _row(analyst_id="region_composition", periphery=True, floor=0.5)
+    peri["target_id"] = "region_apac"
+    conn = _DispatchConn(basis_rows=[basis], periphery_rows=[peri])
+    rows = await synth.READ_SLICE(
+        conn, descriptor=_world_descriptor(), target_filter=None
+    )
+    basis_calls = [
+        (q, p) for q, p in conn.calls
+        if "JOIN LATERAL" in q and "LEFT JOIN LATERAL" not in q
+    ]
+    peri_calls = [(q, p) for q, p in conn.calls if "LEFT JOIN LATERAL" in q]
+    assert len(basis_calls) == 1 and len(peri_calls) == 1
+    basis_q, basis_p = basis_calls[0]
+    peri_q, peri_p = peri_calls[0]
+    # World basis: SPLIT floor at $3, meta-INCLUSIVE (region heads are meta=True).
+    assert basis_p[2] == synth.TIERED_BASIS_FLOOR_DEFAULT
+    assert "IS DISTINCT FROM 'true'" not in basis_q
+    # Periphery complement: same roster + window + floor, meta-inclusive too.
+    assert peri_p[0] == basis_p[0]
+    assert peri_p[1] == basis_p[1]
+    assert peri_p[2] == basis_p[2]
+    assert "IS DISTINCT FROM 'true'" not in peri_q
+    assert "v.faithfulness_score IS NULL" in peri_q
+    basis_rows = [r for r in rows if r.get("_evidence_tier") != synth.PERIPHERY_TIER]
+    peri_rows = [r for r in rows if r.get("_evidence_tier") == synth.PERIPHERY_TIER]
+    assert basis_rows and peri_rows
+    assert all(
+        r["_evidence_floor"] == synth.TIERED_BASIS_FLOOR_DEFAULT for r in rows
+    )
+
+
+@pytest.mark.asyncio
+async def test_flag_off_world_read_is_byte_identical(monkeypatch):
+    monkeypatch.delenv(synth.TIERED_EVIDENCE_ENV, raising=False)
+    monkeypatch.delenv(synth.VERIFY_FLOOR_ENV, raising=False)
+    conn = _DispatchConn()
+    await synth.READ_SLICE(
+        conn, descriptor=_world_descriptor(), target_filter=None
+    )
+    # Legacy pair only: region roster + the ONE floor-0.0 basis read.
+    assert not [q for q, _ in conn.calls if "LEFT JOIN LATERAL" in q]
+    basis_calls = [
+        (q, p) for q, p in conn.calls
+        if "JOIN LATERAL" in q and "LEFT JOIN LATERAL" not in q
+    ]
+    assert len(basis_calls) == 1
+    _, basis_p = basis_calls[0]
+    assert basis_p[2] == synth.DEFAULT_VERIFY_FLOOR
+
+
+@pytest.mark.asyncio
+async def test_run_thematic_composition_gets_full_periphery_treatment():
+    """The data-driven ``_run`` gives a THEMATIC slice with marked periphery the
+    identical rendering/citation/envelope treatment the country path gets."""
+    basis_uid, peri_uid = uuid4(), uuid4()
+    basis = _row(analyst_id="escalation", uid=basis_uid, floor=0.5)
+    peri = _row(
+        analyst_id="escalation",
+        uid=peri_uid,
+        title="Ungraded escalation read",
+        effective_confidence=None,
+        faithfulness_score=None,
+        periphery=True,
+        floor=0.5,
+    )
+    llm = _CannedLLM(
+        _canned_payload(
+            "Escalation is contained [[ref:1]]. Weakly-supported reporting "
+            "suggests a new front [[ref:2]]."
+        )
+    )
+    result = await synth._run(
+        [basis, peri],
+        {"thematic_dimension": "escalation", "analyst_id": "escalation_composition"},
+        llm=llm,
+        max_tokens=512,
+        temperature=0.2,
+        system_prompt="unused-global",
+    )
+    prompt = _user_prompt_of(llm)
+    assert "WEAKLY-SUPPORTED / UNVERIFIED SIGNALS" in prompt
+    assert "[[ref:2]] Ungraded escalation read" in prompt
+    cites = {c["ordinal"]: c for c in result.finding.data["citations"]}
+    assert cites[2]["tier"] == synth.PERIPHERY_TIER
+    assert "tier" not in cites[1]
+    assert result.finding.data["evidence_tiers"] == {
+        "basis_count": 1,
+        "periphery_count": 1,
+        "periphery_ids": [str(peri_uid)],
+        "floor": 0.5,
+    }
+    assert result.derived_from == [basis_uid, peri_uid]
+
+
+@pytest.mark.asyncio
+async def test_run_world_composition_gets_full_periphery_treatment():
+    basis_uid, peri_uid = uuid4(), uuid4()
+    basis = _row(analyst_id="region_composition", uid=basis_uid, floor=0.5)
+    basis["target_id"] = "region_mena"
+    peri = _row(
+        analyst_id="region_composition",
+        uid=peri_uid,
+        title="Below-floor region read",
+        effective_confidence=0.3,
+        faithfulness_score=0.3,
+        periphery=True,
+        floor=0.5,
+    )
+    peri["target_id"] = "region_apac"
+    llm = _CannedLLM(
+        _canned_payload(
+            "MENA holds steady [[ref:1]]. Weakly-supported reporting suggests "
+            "APAC tension [[ref:2]]."
+        )
+    )
+    result = await synth._run(
+        [basis, peri],
+        {"composition": True, "analyst_id": "world_assessor"},
+        llm=llm,
+        max_tokens=512,
+        temperature=0.2,
+        system_prompt="unused-global",
+    )
+    prompt = _user_prompt_of(llm)
+    assert "WEAKLY-SUPPORTED / UNVERIFIED SIGNALS" in prompt
+    cites = {c["ordinal"]: c for c in result.finding.data["citations"]}
+    assert cites[2]["tier"] == synth.PERIPHERY_TIER
+    tiers = result.finding.data["evidence_tiers"]
+    assert tiers["basis_count"] == 1 and tiers["periphery_count"] == 1
+    assert tiers["floor"] == 0.5
+    assert result.derived_from == [basis_uid, peri_uid]

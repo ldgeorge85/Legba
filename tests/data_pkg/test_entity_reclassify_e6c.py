@@ -410,7 +410,11 @@ async def test_reclass_entity_share_clamped_out_of_range():
             self.limits: list[int] = []
 
         async def fetch(self, sql, limit, *a, **k):
-            self.limits.append(int(limit))
+            # generate_candidates' country-alias gazetteer probe passes a
+            # surface LIST (not a LIMIT); it is not a pool query, so it is
+            # excluded from the recorded limits this test asserts on.
+            if isinstance(limit, (int, float)):
+                self.limits.append(int(limit))
             return []
 
     llm = _CountingLLM()

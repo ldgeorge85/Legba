@@ -99,6 +99,19 @@ describe('describeProvenance', () => {
     )
   })
 
+  it('stamps the grounding-verified caveat for a structural-verified analyst (C2b)', () => {
+    const f = describeProvenance({
+      produced_at: '2026-07-27T00:00:00Z',
+      verify_exempt: 'structural-verified',
+      derived_from: ['x'],
+    })
+    expect(f.confidence).toBe('structural — recomputation-verified')
+    expect(f.limitations).toContain(
+      'deterministic structural claims re-derived and matched — not routed through the ' +
+        'faithfulness verify pass (structural analyst)',
+    )
+  })
+
   it('records a no-lineage limitation when derived_from is empty + appends extras', () => {
     const f = describeProvenance({
       produced_at: '2026-07-24T00:00:00Z',

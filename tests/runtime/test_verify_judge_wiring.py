@@ -48,7 +48,11 @@ from legba.data.schemas.analyst import (
 from legba.data.schemas.lifecycle import LifecycleState
 from legba.data.schemas.properties import Property
 from legba.runtime.analyst_deps_builder import (
+    JUDGE_ROUTE_CONFIGURED,
+    JUDGE_ROUTE_FALLBACK_PRIMARY,
+    JUDGE_ROUTE_FALLBACK_VERIFY,
     JUDGE_STACK_REF_ENV,
+    JudgeRoute,
     _verify_llm_component_id,
     resolve_judge_route,
     resolve_judge_route_from_llm_block,
@@ -365,6 +369,65 @@ def test_route_from_llm_block_dict_shape(
     assert route.source == "method.llm.verify"
     assert resolve_judge_route_from_llm_block({"primary": _PRIMARY_LLM_REF}) is None
     assert resolve_judge_route_from_llm_block(None) is None
+
+
+# ---------------------------------------------------------------------------
+# W-3d — the judge-route CLASS stamp (configured vs fallback), per ladder rung
+# ---------------------------------------------------------------------------
+
+
+def test_route_class_env_override_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rung 1 (env override) — an EXPLICIT judge choice → ``configured``."""
+    monkeypatch.setenv(JUDGE_STACK_REF_ENV, _ENV_JUDGE_REF)
+    route = resolve_judge_route(_descriptor(llm=_llm_with_verify()))
+    assert route is not None
+    assert route.route_class == JUDGE_ROUTE_CONFIGURED == "configured"
+
+
+def test_route_class_judge_key_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rung 2 (method.llm.judge) — the explicit per-descriptor judge key →
+    ``configured``."""
+    monkeypatch.delenv(JUDGE_STACK_REF_ENV, raising=False)
+    llm = _llm_with_verify()
+    llm["judge"] = Property.StackRef(
+        raw=_JUDGE_LLM_REF, expected_family="llm_provider",
+    ).model_dump()
+    route = resolve_judge_route(_descriptor(llm=llm))
+    assert route is not None
+    assert route.route_class == JUDGE_ROUTE_CONFIGURED
+
+
+def test_route_class_verify_rung_is_fallback_verify(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rung 3 (method.llm.verify — today's live rung for EVERY descriptor) →
+    ``fallback_verify``: not an explicit judge pick."""
+    monkeypatch.delenv(JUDGE_STACK_REF_ENV, raising=False)
+    route = resolve_judge_route(_descriptor(llm=_llm_with_verify()))
+    assert route is not None
+    assert route.route_class == JUDGE_ROUTE_FALLBACK_VERIFY == "fallback_verify"
+
+
+def test_route_class_primary_rung_is_fallback_primary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rung 4 (terminal — malformed judge/verify refs) → ``fallback_primary``."""
+    monkeypatch.delenv(JUDGE_STACK_REF_ENV, raising=False)
+    llm = _llm_without_verify()
+    llm["verify"] = {}  # opt-in present, ref unresolvable
+    route = resolve_judge_route(_descriptor(llm=llm))
+    assert route is not None
+    assert (
+        route.route_class == JUDGE_ROUTE_FALLBACK_PRIMARY == "fallback_primary"
+    )
+
+
+def test_route_class_unknown_source_is_empty_never_fabricated() -> None:
+    assert JudgeRoute(component_id="x", source="something_else").route_class == ""
 
 
 @pytest.mark.asyncio

@@ -77,6 +77,53 @@ export const STRUCTURAL_VERIFY_EXEMPT_ANALYSTS: ReadonlySet<string> = new Set([
 export const STRUCTURAL_EXEMPT_NOTE =
   'deterministic structural read — not routed through the faithfulness verify pass'
 
+// ---------------------------------------------------------------------------
+// U-5 — plain-language explainers, reused VERBATIM by the `InfoTip` attached
+// to every rendered L/C chip (not just the Inspector's separate `?` legend
+// popover below). Same wording as that popover's intro paragraph — one
+// vocabulary, taught wherever the chip appears.
+// ---------------------------------------------------------------------------
+
+/** What the L (likelihood) chip means, for a first-time reader. */
+export const LIKELIHOOD_EXPLAIN =
+  'ICD-203 likelihood — how probable this judgment is about the world (e.g. ' +
+  '"likely" ≈ 55–80% chance). Kept separate from confidence, which ' +
+  'measures how well the evidence backs it.'
+
+/** What the C (confidence) chip means, for a first-time reader. */
+export const CONFIDENCE_EXPLAIN =
+  'ICD-203 confidence — how well the evidence backs this judgment (source ' +
+  'quality + corroboration). Kept separate from likelihood, which measures ' +
+  'how probable the judgment itself is.'
+
+/** What "faithfulness" measures — the ONE sentence every faithfulness-score
+ *  render (verdict chip, unit eval badge, Goldset card, ProvenanceCard) should
+ *  carry: what the number checks, explicitly NOT what it doesn't. */
+export const FAITHFULNESS_EXPLAIN =
+  "Faithfulness measures whether the written analysis stayed inside its " +
+  "cited evidence — it is not a truth score; it only checks that the prose " +
+  "didn't say more than its sources support."
+
+/** The honest "not yet verified" explainer for a non-structural row with no
+ *  verify pass at all — deliberately never mentions "structural" (that's a
+ *  DIFFERENT, structural-only explainer below) so it stays true for the
+ *  common ordinary-unverified case. */
+export const UNVERIFIED_EXPLAIN =
+  'No faithfulness-verify pass has run on this read yet — an honest "not yet ' +
+  'checked," not a failure.'
+
+/** Why a structural/mining analyst's row never gets a faithfulness score. */
+export const STRUCTURAL_UNVERIFIED_EXPLAIN =
+  'This analyst does deterministic structural/mining work with no LLM prose ' +
+  'to grade, so it never enters the faithfulness-verify pass — "structural" ' +
+  'names that design choice, not a failed check.'
+
+/** Why a structural row CAN still earn "grounding-verified" (C2b). */
+export const STRUCTURAL_VERIFIED_EXPLAIN =
+  "This structural analyst's asserted numbers were independently re-derived " +
+  'and matched by a deterministic check — verified by re-computation, not by ' +
+  'the faithfulness-verify pass (which this analyst is exempt from).'
+
 /**
  * True when a finding is verify-exempt STRUCTURAL: either the server stamped
  * it (`verify_exempt === 'structural'`, authoritative) or its analyst_id is in
@@ -98,8 +145,8 @@ export function isStructuralExempt(
  * C2b (P4-6) — true when a structural finding's asserted quantities were
  * DETERMINISTICALLY re-derived and MATCHED (the server stamped
  * `verify_exempt === 'structural-verified'`). The badge then reads
- * `structural — verified` instead of the honest `unverified — structural`.
- * A structural row without a passing structural critique is not verified.
+ * `structural — recomputation-verified` instead of the honest `unverified — structural`.
+ * A structural row without a passing structural critique is not grounding-verified.
  */
 export function isStructuralVerified(verifyExempt?: string | null): boolean {
   return verifyExempt === 'structural-verified'
@@ -132,7 +179,7 @@ export interface Verdict {
   structural: boolean
   /** C2b — true when a structural finding's asserted quantities were
    *  deterministically re-derived and matched (server stamp
-   *  `structural-verified`). The badge then reads `structural — verified`. */
+   *  `structural-verified`). The badge then reads `structural — recomputation-verified`. */
   structuralVerified: boolean
 }
 

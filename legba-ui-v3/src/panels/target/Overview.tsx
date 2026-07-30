@@ -19,6 +19,7 @@ import { PanelChrome } from '@/components/PanelChrome'
 import { apiGet, ApiError } from '@/lib/api'
 import type { PanelProps } from '@/types'
 import { selectRow } from '@/state/selection'
+import { humanizeAnalystId } from '@/lib/analystNames'
 
 interface TargetRuntimeResponse {
   descriptor_id: string
@@ -261,7 +262,7 @@ export default function TargetOverviewPanel({ registration, scope }: PanelProps)
                   <div className="text-slate-400 line-clamp-2 mt-1">{f.body}</div>
                 )}
                 <div className="text-slate-600 mt-1 flex gap-2">
-                  {f.analyst_id && <span>{f.analyst_id}</span>}
+                  {f.analyst_id && <span title={f.analyst_id}>{humanizeAnalystId(f.analyst_id)}</span>}
                   {f.confidence !== null && <span>c={f.confidence.toFixed(2)}</span>}
                   <span>{new Date(f.produced_at).toLocaleString()}</span>
                 </div>

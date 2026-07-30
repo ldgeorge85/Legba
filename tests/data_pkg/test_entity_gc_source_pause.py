@@ -18,9 +18,20 @@ These pure, no-DB unit tests assert:
   * the pause UPDATE targets ``source_descriptors`` head rows, flips ``state`` →
     ``'paused'``, and records the reason in ``body`` jsonb;
   * the pure ``_consecutive_error_streaks`` helper counts only the contiguous
-    LEADING run of ``outcome='error'`` rows (an ``'empty'`` breaks it), keyed off
-    the same newest-first per-source ordering the SQL guarantees;
+    LEADING run of ``outcome='error'`` rows (an ``'empty'`` breaks it — and,
+    since migration 0114, so does a ``'success'``), keyed off the same
+    newest-first per-source ordering the SQL guarantees;
+  * a source that is CURRENTLY PRODUCING is never paused, whatever its poll
+    history says (the ``last_ingest`` guard — see below);
   * a failing leg degrades to zero without aborting the run.
+
+The two producing-source protections exist for different reasons and are tested
+separately. ``'success'`` rows are the root-cause fix: a productive poll used to
+write NO row at all, so a repaired source's error run could not be broken by its
+own recovery. The ``last_ingest`` guard is defence in depth over the rows ALREADY
+on disk, which carry that defect permanently — gdelt.files was auto-paused on
+2026-07-27 two minutes after its fix deployed, off a 25-error streak that was
+entirely historical, and still carries ~102 leading error rows.
 """
 
 from __future__ import annotations
@@ -183,6 +194,121 @@ async def test_pause_query_carries_last_signal_bound():
 
 
 # ---------------------------------------------------------------------------
+# Migration 0114: a PRODUCTIVE poll now writes outcome='success', which BREAKS
+# the leading error run. This is the root-cause fix — before it, a productive
+# poll wrote no row at all, so a repaired source's error run could never be
+# broken by its own recovery and the latch re-fired off dead evidence.
+# ---------------------------------------------------------------------------
+
+
+def test_streak_broken_by_a_success_row():
+    # Newest-first: 2 errors, then the poll that RECOVERED, then the old run.
+    # Only the 2 post-recovery errors count.
+    n = entity_gc._SOURCE_FAILURE_THRESHOLD
+    rows = (
+        [_row("source.gdelt.files", "error") for _ in range(2)]
+        + [_row("source.gdelt.files", "success")]
+        + [_row("source.gdelt.files", "error") for _ in range(n + 10)]
+    )
+    assert entity_gc._consecutive_error_streaks(rows, threshold=n) == []
+    assert entity_gc._consecutive_error_streaks(rows, threshold=2) == [
+        ("source.gdelt.files", 2)
+    ]
+
+
+def test_streak_leading_success_row_means_no_pause_at_all():
+    # The repaired source: its very newest poll succeeded, so however long the
+    # historical error run behind it is, the streak is 0.
+    n = entity_gc._SOURCE_FAILURE_THRESHOLD
+    rows = [_row("source.gdelt.files", "success")] + [
+        _row("source.gdelt.files", "error") for _ in range(102)
+    ]
+    assert entity_gc._consecutive_error_streaks(rows, threshold=n) == []
+
+
+# ---------------------------------------------------------------------------
+# The currently-producing guard: a source whose signals are LANDING right now
+# is never paused, whatever its poll history says. Defence in depth — it does
+# not depend on the outcome ledger being correct, which matters because the
+# pre-0114 rows on disk are structurally wrong (gdelt.files carries ~102
+# leading 'error' rows from an outage that was repaired hours ago).
+# ---------------------------------------------------------------------------
+
+
+def _err_ingested(source_id: str, t: datetime, *, last_ingest, last_signal=None):
+    row = {"source_id": source_id, "outcome": "error", "occurred_at": t,
+           "last_ingest": last_ingest}
+    if last_signal is not None:
+        row["last_signal"] = last_signal
+    return row
+
+
+def test_recent_signals_guard_blocks_pause_despite_a_long_error_run():
+    # The gdelt.files 2026-07-27 shape EXACTLY: a long leading run of error
+    # rows (from the outage), and signals landing in the substrate right now.
+    now = datetime(2026, 7, 27, 18, 17, tzinfo=timezone.utc)
+    outage = now - timedelta(hours=6)
+    rows = [
+        _err_ingested(
+            "source.gdelt.files", outage - timedelta(minutes=5 * i),
+            last_ingest=now - timedelta(minutes=2),   # ingesting NOW
+            # deliberately NOT bounded by last_signal — prove the guard alone
+            # is sufficient, not the pre-existing stale-error bound.
+            last_signal=outage - timedelta(days=4),
+        )
+        for i in range(102)
+    ]
+    out = entity_gc._consecutive_error_streaks(
+        rows, threshold=entity_gc._SOURCE_FAILURE_THRESHOLD, now=now,
+    )
+    assert out == []
+
+
+def test_recent_signals_guard_expires_so_a_truly_dead_source_still_pauses():
+    # Same rows, but the last ingest is older than the guard window: the source
+    # stopped producing, so the latch must still do its job.
+    now = datetime(2026, 7, 27, 18, 17, tzinfo=timezone.utc)
+    stale_ingest = now - timedelta(
+        hours=entity_gc._SOURCE_RECENT_SIGNAL_HOURS + 1
+    )
+    n = entity_gc._SOURCE_FAILURE_THRESHOLD
+    rows = [
+        _err_ingested(
+            "source.dead.feed", now - timedelta(minutes=5 * i),
+            last_ingest=stale_ingest, last_signal=stale_ingest,
+        )
+        for i in range(n)
+    ]
+    out = entity_gc._consecutive_error_streaks(rows, threshold=n, now=now)
+    assert out == [("source.dead.feed", n)]
+
+
+def test_recent_signals_guard_absent_column_is_back_compatible():
+    # Rows without last_ingest (older callers) behave exactly as before.
+    n = entity_gc._SOURCE_FAILURE_THRESHOLD
+    rows = [_row("source.never.produced", "error") for _ in range(n)]
+    assert entity_gc._consecutive_error_streaks(
+        rows, threshold=n, now=datetime.now(timezone.utc),
+    ) == [("source.never.produced", n)]
+
+
+def test_recent_signals_guard_window_is_the_firing_floor():
+    # One platform-wide definition of "currently producing" — the same 48h
+    # floor the system-status route uses to call a source 'firing'.
+    assert entity_gc._SOURCE_RECENT_SIGNAL_HOURS == 48
+
+
+async def test_pause_query_carries_the_substrate_landing_time():
+    # The guard must key on signals.created_at (when the row LANDED), not the
+    # handler-supplied fetched_at a bulk/archive loader can back-date.
+    conn = _FakeConn(fetch_rows=[])
+    await entity_gc._pause_failing_sources(_FakePool(conn))
+    sql = conn.fetched[0]
+    assert "last_ingest" in sql
+    assert "max(s.created_at)" in sql
+
+
+# ---------------------------------------------------------------------------
 # Fake asyncpg pool/conn — capture SQL + args, drive the corrected leg.
 # ---------------------------------------------------------------------------
 
@@ -285,6 +411,34 @@ async def test_pause_below_threshold_does_nothing():
     conn = _FakeConn(fetch_rows=_error_rows("source.rss.flaky", threshold - 1))
     paused = await entity_gc._pause_failing_sources(_FakePool(conn))
     assert paused == 0
+    assert conn.executed == []
+
+
+async def test_pause_leg_does_not_pause_a_currently_producing_source():
+    # Whole-leg proof of the guard: the same over-threshold error run that
+    # pauses above is inert once the rows say the source is still ingesting.
+    threshold = entity_gc._SOURCE_FAILURE_THRESHOLD
+    now = datetime.now(timezone.utc)
+    rows = _error_rows("source.gdelt.files", threshold + 82)
+    for r in rows:
+        r["last_ingest"] = now - timedelta(minutes=2)
+    conn = _FakeConn(fetch_rows=rows)
+    assert await entity_gc._pause_failing_sources(_FakePool(conn)) == 0
+    assert conn.executed == []
+
+
+async def test_pause_leg_stops_at_a_success_row():
+    # Whole-leg proof of the ledger fix: one recovery row at the head of the
+    # window ends the run, with no recency guard involved at all.
+    threshold = entity_gc._SOURCE_FAILURE_THRESHOLD
+    base = datetime.now(timezone.utc)
+    rows = [{
+        "source_id": "source.gdelt.files",
+        "outcome": "success",
+        "occurred_at": base,
+    }] + _error_rows("source.gdelt.files", threshold + 82)
+    conn = _FakeConn(fetch_rows=rows)
+    assert await entity_gc._pause_failing_sources(_FakePool(conn)) == 0
     assert conn.executed == []
 
 

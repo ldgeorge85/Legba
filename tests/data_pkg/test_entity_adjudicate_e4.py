@@ -206,6 +206,32 @@ async def test_echoed_names_matching_nothing_are_dropped(pg_pool):
     assert verdicts[0].verdict == "unsure"  # echoed names match no pair -> dropped
 
 
+@pytest.mark.asyncio
+async def test_prompt_carries_transliteration_guidance():
+    """E4a recall lever: the system prompt must carry the transliteration /
+    honorific-prefix guidance (the LLM wrongly split "Ali Khamenei" vs "Seyyed
+    Ali Khameni" and "Imam Hussein" vs "Imam Hussain") while KEEPING the
+    father/son conservative guard. No DB needed: use_cache/persist off means
+    the conn is never touched, so the assembled system prompt is observable
+    straight off the stub."""
+    p1 = _pair("Imam Zzhussein", "Imam Zzhussain")
+    llm = _StubLLM(json.dumps([{"n": 1, "verdict": "same", "confidence": 0.9}]))
+    verdicts = await adjudicate_pairs(
+        None, llm, [p1], use_cache=False, persist=False)
+    assert verdicts[0].verdict == "same"
+    system = llm.calls[0]["system"]
+    # the new guidance
+    assert "TRANSLITERATION" in system
+    assert "Seyyed" in system and "Sayyid" in system
+    assert '"Hussein"/"Hussain"' in system
+    assert '"Khamenei"/"Khameni"' in system
+    assert "diacritic" in system
+    # the conservative posture is intact: father/son stays the canonical error
+    assert "Mojtaba Khamenei" in system
+    assert 'NEVER guess "same"' in system
+    assert "be conservative" in system
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_human_verdict_not_clobbered(pg_pool):

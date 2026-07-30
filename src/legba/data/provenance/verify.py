@@ -38,7 +38,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Hashable, Mapping, TypeVar
+from typing import Any, Callable, Hashable, Mapping, TypeVar
 from uuid import UUID
 
 import asyncpg
@@ -640,11 +640,16 @@ _ADVISORY_REASONS = frozenset({"double_counted", "hedge_laundering"})
 # there, not the load-bearing evidence). Citations with no ``tier`` key —
 # every pre-C-TIER composition — leave this rule inert, byte-for-byte.
 #
-# Scope note: this is a FLOOR-profile rule. On the optional LLM-judge path the
-# judge stays authoritative over the prose it graded (the C1 no-co-veto
-# decision) and grades GROUNDING, not tier-hedging — so a floor span whose
-# clause the judge also graded dedups by text there. Teaching the judge rubric
-# the tier is a declared follow-up, not smuggled in here.
+# Scope note: the deterministic FLOOR rule above is always-on for tiered
+# compositions. The optional LLM judge is ALSO tier-aware (the former SEAMS
+# §45, resolved 2026-07): when the citation list carries periphery-tier stamps,
+# the composition judge prompt gains the ADDITIVE EVIDENCE-TIERS rubric block
+# (:func:`_judge_periphery_rubric`) naming the periphery ordinals and requiring
+# hedged/attributed use — treating a periphery item as established fact is a
+# failure. Untiered citation lists (every pre-C-TIER composition) leave the
+# judge prompt byte-identical; the C1 no-co-veto decision is unchanged (the
+# judge stays authoritative over the prose it graded, and the floor rule still
+# counts an unhedged periphery claim regardless).
 # ---------------------------------------------------------------------------
 
 _PERIPHERY_TIER = "periphery"
@@ -704,19 +709,47 @@ def _is_hedged_attributed(claim: str) -> bool:
 def _periphery_ordinals(citations: Any) -> set[int]:
     """The set of cited sub-claim ORDINALS the composition stamped
     ``tier='periphery'``. Empty for every pre-C-TIER citation list (no ``tier``
-    key) — the periphery rule is then inert."""
-    out: set[int] = set()
-    if not isinstance(citations, (list, tuple)):
-        return out
-    for entry in citations:
-        if not isinstance(entry, Mapping):
-            continue
-        if entry.get("tier") != _PERIPHERY_TIER:
-            continue
-        n = _citation_ordinal(entry)
-        if n is not None:
-            out.add(n)
-    return out
+    key) — the periphery rule is then inert.
+
+    Shares :func:`_build_ordinal_map` (defined below — resolved at call time, as
+    this function already did for :func:`_citation_ordinal`); the tier filter
+    rides the projector as a SKIP.
+    """
+    return set(
+        _build_ordinal_map(
+            citations,
+            lambda entry, n: n if entry.get("tier") == _PERIPHERY_TIER else _ORDINAL_SKIP,
+        )
+    )
+
+
+def _judge_periphery_rubric(citations: Any) -> str:
+    """The ADDITIVE tier-aware judge rubric block (former SEAMS §45), or ``""``.
+
+    Rendered into the COMPOSITION judge prompt lead ONLY when the citation list
+    carries periphery-tier stamps (a tiered C-TIER composition); every untiered
+    citation list — every pre-C-TIER composition and every unit — yields the
+    empty string, leaving the judge prompt byte-identical. Mirrors the
+    deterministic floor's periphery hedge contract so the two graders share ONE
+    tier semantics: periphery = below-floor / unverified, may only inform
+    hedged, attributed context; treated as established fact ⇒ a failure.
+    """
+    ords = _periphery_ordinals(citations)
+    if not ords:
+        return ""
+    ord_list = ", ".join(str(n) for n in sorted(ords))
+    return (
+        "EVIDENCE TIERS: sub-claim(s) "
+        f"[{ord_list}] are PERIPHERY tier — signals that scored BELOW the "
+        "verification floor or were never verified. They are weak leads, NOT "
+        "established findings. A claim resting ONLY on periphery sub-claims is "
+        "SUPPORTED only when it is hedged AND attributed to weak reporting "
+        "(e.g. 'weakly-supported reporting suggests ...'); a claim that treats "
+        "a periphery sub-claim as ESTABLISHED FACT (asserted bald, with no "
+        "hedge/attribution) is UNSUPPORTED even when the periphery text "
+        "contains it. A claim citing at least one non-periphery (basis) "
+        "sub-claim is graded normally.\n\n"
+    )
 
 # ---------------------------------------------------------------------------
 # P2-4 — hard/soft verdict labels (the Primer taxonomy). LABELS ONLY: nothing
@@ -732,7 +765,7 @@ def _periphery_ordinals(citations: Any) -> set[int]:
 #     hedge laundered into confidence, an overclaim / uncited assertion.
 #
 # THE mapping table lives HERE and only here (drift-guard test:
-# tests/data_pkg/test_verify_fail_class.py scans this module for every emitted
+# tests/data_pkg/test_verify_claim_ledger.py scans this module for every emitted
 # ``reason`` and asserts it is mapped) — a new span reason MUST be added to this
 # table or the guard fails the suite.
 # ---------------------------------------------------------------------------
@@ -774,6 +807,10 @@ _FAIL_CLASS_BY_REASON: dict[str, str] = {
     "double_counted": FAIL_CLASS_SOFT,
     # S3-T1 — a 'triggered' structured indicator with no citation — uncited claim
     "indicator_uncited_triggered": FAIL_CLASS_SOFT,
+    # W31 — an absence claim stated as a WORLD-fact with no collection-scoping
+    # language ("no outages were reported" on a thin-collection desk). An
+    # honesty-PHRASING defect (overclaim family), NOT fabrication — soft.
+    "unscoped_absence_claim": FAIL_CLASS_SOFT,
 }
 
 
@@ -1250,20 +1287,55 @@ def _citation_ordinal(entry: Mapping[str, Any]) -> int | None:
     return None
 
 
+# --- THE ONE ordinal-map builder (C-4) -------------------------------------
+# Every per-ordinal projection below shared ONE traversal, copy-pasted five
+# times: tolerate a non-list ``citations``; skip non-Mapping entries; resolve
+# the entry's sub-claim ORDINAL via :func:`_citation_ordinal`; skip entries with
+# no resolvable ordinal; project the entry to a value. Collapsed here so the
+# traversal has a single definition and a per-map change cannot drift.
+#
+# SKIP SEMANTICS (load-bearing — this is why the projector returns a sentinel
+# rather than ``None``): a projector returning :data:`_ORDINAL_SKIP` contributes
+# NOTHING for that entry, which on a DUPLICATE ordinal leaves any previously
+# projected value INTACT. That is exactly the ``continue`` each hand-rolled loop
+# used, and it differs observably from writing a ``None``. ``None`` itself is a
+# legitimate projected value and is stored.
+_ORDINAL_SKIP: Any = object()
+
+
+def _build_ordinal_map(
+    citations: Any,
+    project: Callable[[Mapping[str, Any], int], Any],
+) -> dict[int, Any]:
+    """Traverse ``citations`` once, keyed by resolved sub-claim ORDINAL.
+
+    ``project(entry, ordinal)`` returns the value to store, or
+    :data:`_ORDINAL_SKIP` to contribute nothing for that entry. Later entries
+    overwrite earlier ones for the same ordinal (last-wins), except that a
+    SKIPPED entry never clears an earlier value.
+    """
+    out: dict[int, Any] = {}
+    if not isinstance(citations, (list, tuple)):
+        return out
+    for entry in citations:
+        if not isinstance(entry, Mapping):
+            continue
+        n = _citation_ordinal(entry)
+        if n is None:
+            continue
+        value = project(entry, n)
+        if value is _ORDINAL_SKIP:
+            continue
+        out[n] = value
+    return out
+
+
 def _resolved_citation_ordinals(citations: Any) -> set[int]:
     """The set of resolved sub-claim ORDINALS in a composition's ``citations``.
 
     Skips any entry that carries no resolvable ordinal (never a fabricated one).
     """
-    out: set[int] = set()
-    if not isinstance(citations, (list, tuple)):
-        return out
-    for entry in citations:
-        if isinstance(entry, Mapping):
-            n = _citation_ordinal(entry)
-            if n is not None:
-                out.add(n)
-    return out
+    return set(_build_ordinal_map(citations, lambda _entry, n: n))
 
 
 def _ordinal_evidence_map(citations: Any) -> dict[int, str]:
@@ -1275,22 +1347,16 @@ def _ordinal_evidence_map(citations: Any) -> dict[int, str]:
     evidence — a citation with no captured text degrades to its ordinal string so
     the judge still has a stable label.
     """
-    out: dict[int, str] = {}
-    if not isinstance(citations, (list, tuple)):
-        return out
-    for entry in citations:
-        if not isinstance(entry, Mapping):
-            continue
-        n = _citation_ordinal(entry)
-        if n is None:
-            continue
+
+    def _project(entry: Mapping[str, Any], n: int) -> str:
         text = entry.get("evidence_text")
         if not (isinstance(text, str) and text):
             text = entry.get("title")
         if not (isinstance(text, str) and text):
             text = str(n)
-        out[n] = str(text)
-    return out
+        return str(text)
+
+    return _build_ordinal_map(citations, _project)
 
 
 def _ordinal_effconf_map(citations: Any) -> dict[int, float]:
@@ -1302,23 +1368,17 @@ def _ordinal_effconf_map(citations: Any) -> dict[int, float]:
     never hedge-flagged and never contributes to the cap (honest: no fabricated
     correlation/ceiling).
     """
-    out: dict[int, float] = {}
-    if not isinstance(citations, (list, tuple)):
-        return out
-    for entry in citations:
-        if not isinstance(entry, Mapping):
-            continue
-        n = _citation_ordinal(entry)
-        if n is None:
-            continue
+
+    def _project(entry: Mapping[str, Any], _n: int) -> Any:
         eff = entry.get("effective_confidence")
         if eff is None:
-            continue
+            return _ORDINAL_SKIP
         try:
-            out[n] = float(eff)
+            return float(eff)
         except (TypeError, ValueError):
-            continue
-    return out
+            return _ORDINAL_SKIP
+
+    return _build_ordinal_map(citations, _project)
 
 
 def _ordinal_derived_map(citations: Any) -> dict[int, set[str]]:
@@ -1329,19 +1389,14 @@ def _ordinal_derived_map(citations: Any) -> dict[int, set[str]]:
     (the shared-lineage detector — T7). A citation with no ``derived_from`` list
     is omitted → it forms its own singleton component (never falsely correlated).
     """
-    out: dict[int, set[str]] = {}
-    if not isinstance(citations, (list, tuple)):
-        return out
-    for entry in citations:
-        if not isinstance(entry, Mapping):
-            continue
-        n = _citation_ordinal(entry)
-        if n is None:
-            continue
+
+    def _project(entry: Mapping[str, Any], _n: int) -> Any:
         df = entry.get("derived_from")
-        if isinstance(df, (list, tuple)):
-            out[n] = {str(x) for x in df if x is not None and str(x)}
-    return out
+        if not isinstance(df, (list, tuple)):
+            return _ORDINAL_SKIP
+        return {str(x) for x in df if x is not None and str(x)}
+
+    return _build_ordinal_map(citations, _project)
 
 
 def _ordinal_source_map(citations: Any) -> dict[int, str]:
@@ -1358,21 +1413,16 @@ def _ordinal_source_map(citations: Any) -> dict[int, str]:
     real double-count and stops falsely collapsing a desk's 7 independent units.
     A citation with no source is omitted → it never blocks a union (back-compat).
     """
-    out: dict[int, str] = {}
-    if not isinstance(citations, (list, tuple)):
-        return out
-    for entry in citations:
-        if not isinstance(entry, Mapping):
-            continue
-        n = _citation_ordinal(entry)
-        if n is None:
-            continue
+
+    def _project(entry: Mapping[str, Any], _n: int) -> Any:
         src = entry.get("source")
         if not (isinstance(src, str) and src):
             src = entry.get("analyst_id")
         if isinstance(src, str) and src:
-            out[n] = src
-    return out
+            return src
+        return _ORDINAL_SKIP
+
+    return _build_ordinal_map(citations, _project)
 
 
 def _correlated_components(
@@ -1874,6 +1924,255 @@ def _markers_in_claim(claim: str, *, subclaim: bool) -> list[int]:
         {int(m.group(1)) for m in _CLAIM_MARKER_RE.finditer(claim)}
         | _range_markers(claim)
     )
+
+
+# ---------------------------------------------------------------------------
+# W31 (2026-07-28) — the UNSCOPED-ABSENCE backstop (denominator honesty for
+# negative claims).
+#
+# The measured 2026-W31 gold-set class: 5 of 8 sampled downgrades were an
+# ABSENCE claim stated as a WORLD claim on a thin-collection desk ("no
+# weaponized commodity embargoes" while a fuel embargo was extensively reported
+# — just never carried by the desk's sources; "no outages were reported"; "no
+# signals report health issues"; "no coordinated narrative is evident";
+# "large-scale exercise: not observed"). The findings were FAITHFUL to their
+# inputs and wrong about the world, because the prose claimed world scope the
+# collection cannot support. The floor deliberately EXEMPTS absence claims from
+# citation-presence (the #1 honest-low-risk calibration), so this defect class
+# previously carried ZERO deterministic penalty.
+#
+# The backstop is CONSERVATIVE by construction (a false flag poisons
+# faithfulness scores; a missed flag is the cheap error):
+#   * only floor-EXEMPT spans are eligible (``_is_fact_asserting`` False) — a
+#     counted span ("There is no fuel embargo." → no_citation) is never
+#     double-counted;
+#   * the strong-absence match must be the claim's MAIN assertion: an explicit
+#     strong opener at claim start ("no evidence of", "no observable", "there
+#     is no ..."), a bare "No/None ..." opener whose predicate is an absence
+#     verb ("... was reported", "... is evident", "... occurred"), or a
+#     label-colon verdict tail ("...: not observed");
+#   * hedged forms pass ("we assess", "likely", "appears", ...), cited spans
+#     pass (evidence-anchored), forward-looking signposts pass, and any
+#     collection-scoping language in the claim OR the immediately preceding
+#     span passes ("in collected reporting", "this desk's sources", "among
+#     monitored ...", the M14 survey shapes, ...). When in doubt, do NOT flag.
+#
+# Emitted as the SOFT reason ``unscoped_absence_claim`` (an honesty-PHRASING
+# defect — the overclaim family — not fabrication), folded into the floor via
+# ``_fold_guard_spans`` so a hit is one checkable-but-unsupported claim in the
+# pooled score. The span text is the RAW segmented claim, so on the judge path
+# the #116c text-dedup keeps the judge authoritative over prose it graded (the
+# V3 absence rubric already treats an unbounded/unscoped absence as
+# unsupported) — the deterministic backstop bites on the judge-off default.
+# The prompt-side fix is the paired commit: every inline unit now carries a
+# collection-scoped ABSENCE-CLAIM rule whose recommended phrasings are all in
+# the scope lexicon below, so a compliant unit is never flagged.
+# ---------------------------------------------------------------------------
+
+_UNSCOPED_ABSENCE = "unscoped_absence_claim"
+
+# Strong absence OPENERS — the claim must START with one (after stripping list
+# bullets, bold markers, and a leading BLUF label). Deliberately the assertive
+# world-negative shapes only; softer forms ("nothing to suggest", "absence of")
+# stay unflagged (conservative direction).
+_ABSENCE_STRONG_OPENERS: tuple[str, ...] = (
+    "no evidence of",
+    "no evidence that",
+    "no evidence has",
+    "no observable",
+    "no observed",
+    "no indication",
+    "no sign of",
+    "no signs of",
+    "no signal ",
+    "no signals",
+    "no report of",
+    "no reports of",
+    "there is no ",
+    "there are no ",
+    "there was no ",
+    "there were no ",
+)
+
+# The bare "No/None ..." opener flags ONLY when its predicate is an absence
+# verb — the "no X was reported / is evident / occurred" main-assertion shape.
+# A verbless "No confirmed movement of armor." stays unflagged (fragmentary —
+# doubt → no flag).
+_ABSENCE_ASSERTION_VERB_RE = re.compile(
+    r"\b(?:is|are|was|were|has\s+been|have\s+been|had\s+been)\s+"
+    r"(?:reported|observed|detected|identified|recorded|documented|noted|found"
+    r"|seen|confirmed|corroborated|announced|evident|apparent|visible|underway)\b"
+    r"|\b(?:occurred|took\s+place|materiali[sz]ed|emerged|surfaced|exists?)\b"
+)
+
+# The label-colon verdict tail ("Large-scale exercise: not observed") — the
+# bold-scaffold signpost shape the floor exempts via _LABELED_SCAFFOLD_RE.
+# Terminal-anchored so a scoped tail ("...: not observed in collected
+# reporting") never matches.
+_ABSENCE_VERDICT_TAIL_RE = re.compile(
+    r"(?:^|:\s*)(?:not\s+(?:observed|detected|evident|identified|reported)"
+    r"|none\s+(?:observed|detected|evident|identified|reported|found))\s*\.?\s*$"
+)
+
+# Hedged-assessment markers — a hedged negative is the analyst's calibrated
+# inference, not a bald world-fact; it passes (the task's "we assess no" /
+# "likely no" class). Substring, lowercased; trailing spaces keep "may " from
+# matching "mayor".
+_ABSENCE_HEDGE_MARKERS: tuple[str, ...] = (
+    "we assess",
+    "assessed",
+    "assessment",
+    "likely",
+    "unlikely",
+    "appears",
+    "appear to",
+    "seems",
+    "seem to",
+    "may ",
+    "might ",
+    "could ",
+    "possibly",
+    "probably",
+    "if confirmed",
+    "cannot be ruled out",
+)
+
+# Collection-scoping lexicon — language that bounds a negative to what was
+# actually collected/searched, NOT the world. Deliberately GENEROUS (substring,
+# lowercased): a scoped variant slipping through unflagged is the cheap error;
+# flagging a genuinely scoped negative is the expensive one. Every phrasing the
+# unit prompts now recommend ("in collected reporting", "this desk's sources",
+# "the corpus searched", "the reviewed documents", ...) matches here.
+_COLLECTION_SCOPE_MARKERS: tuple[str, ...] = (
+    # desk / collection possessives
+    "this desk",
+    "the desk",
+    "desk's",
+    # collection / gathering stems (cover "collected signals", "the collection
+    # window", "monitored sources", "reviewed reporting", "the corpus
+    # searched", ...)
+    "collected",
+    "collection",
+    "gathered",
+    "ingested",
+    "monitored",
+    "sampled",
+    "reviewed",
+    "examined",
+    "analyzed",
+    "analysed",
+    "searched",
+    # bounded corpus / slice / window nouns
+    "corpus",
+    "working set",
+    "signal set",
+    "source set",
+    "evidence set",
+    "slice",
+    "window",
+    # available-evidence idioms
+    "available reporting",
+    "available sources",
+    "available signals",
+    "available evidence",
+    "in the available",
+    # bounded-referent signal/source idioms ("in the signals" names the slice;
+    # bare "no signals report X" does not)
+    "in the signals",
+    "among the signals",
+    "across the signals",
+    "of the signals",
+    "in these signals",
+    "in the signal",
+    "in the sources",
+    "among the sources",
+    "across the sources",
+    "of the sources",
+    "in these sources",
+    "in our sources",
+    "in the documents",
+    "among the documents",
+    "of the documents",
+    "in the evidence",
+    "in the cited",
+)
+
+_BLUF_LEAD_RE = re.compile(r"^bluf\s*[:—-]\s*")
+
+
+def _has_collection_scope(text_low: str) -> bool:
+    """True when lowercased text carries collection-scoping language — the
+    scope lexicon or the M14 survey shape ('none of the 78 signals ...',
+    'across the examined ...'), which is corpus-scoped by construction."""
+    if any(m in text_low for m in _COLLECTION_SCOPE_MARKERS):
+        return True
+    return bool(_SURVEY_SHAPE_RE.search(text_low))
+
+
+def _is_strong_absence_assertion(low: str) -> bool:
+    """True when a flattened, lowercased span's MAIN assertion is a strong
+    absence claim (see the three shapes in the block comment above)."""
+    if low.startswith(_ABSENCE_STRONG_OPENERS):
+        return True
+    if (low.startswith("no ") or low.startswith("none ")) and not low.startswith(
+        ("no fewer", "no less", "no longer", "no doubt", "no single", "no one")
+    ):
+        return bool(_ABSENCE_ASSERTION_VERB_RE.search(low))
+    return bool(_ABSENCE_VERDICT_TAIL_RE.search(low))
+
+
+def unscoped_absence_spans(body: str) -> list[UnsupportedSpan]:
+    """FLAG world-scoped absence claims that carry no collection scoping (W31).
+
+    One soft ``unscoped_absence_claim`` span per hit, text = the RAW segmented
+    claim (load-bearing: the judge-path #116c dedup matches on it). Only
+    floor-EXEMPT spans are eligible — a span the floor already counts can never
+    be double-counted here. Never raises.
+    """
+    if not body:
+        return []
+    spans: list[UnsupportedSpan] = []
+    prev_low = ""
+    for claim in _segment_claims(body):
+        stripped = claim.strip().lstrip("#-*> ").strip()
+        if not stripped:
+            prev_low = ""
+            continue
+        # Flatten markdown emphasis so "**BLUF:** No ..." / "**X:** not
+        # observed" anchor-match like their plain forms.
+        low = re.sub(r"[*_`]+", "", stripped).strip().lower()
+        this_low = low
+        # A floor-counted span (fact-asserting) is already graded — skip.
+        if _is_fact_asserting(claim):
+            prev_low = this_low
+            continue
+        # Forward-looking signposts / cited (evidence-anchored) spans pass.
+        if _is_forward_looking(low):
+            prev_low = this_low
+            continue
+        if _markers_in_claim(claim, subclaim=False) or _markers_in_claim(
+            claim, subclaim=True
+        ):
+            prev_low = this_low
+            continue
+        # A BLUF restates the verdict — strip the label so the absence shape
+        # anchors; every OTHER synthesis opener ("Assessed:", ...) is hedged
+        # by convention and drops via the hedge lexicon below.
+        lead = _BLUF_LEAD_RE.sub("", low)
+        if not _is_strong_absence_assertion(lead):
+            prev_low = this_low
+            continue
+        if any(m in low for m in _ABSENCE_HEDGE_MARKERS):
+            prev_low = this_low
+            continue
+        # Scoping language in the claim OR the immediately preceding span
+        # ("Collection here is thin; no embargo activity is evident.").
+        if _has_collection_scope(low) or (prev_low and _has_collection_scope(prev_low)):
+            prev_low = this_low
+            continue
+        spans.append(UnsupportedSpan(text=claim, reason=_UNSCOPED_ABSENCE))
+        prev_low = this_low
+    return spans
 
 
 def _deterministic_floor(
@@ -2651,8 +2950,8 @@ def _fold_world_knowledge_guards(
 def _fold_guard_spans(
     floor: FaithfulnessReport, guard_spans: list[UnsupportedSpan],
 ) -> FaithfulnessReport:
-    """Fold guard-emitted spans (M13/M15/E-1) into a floor report: each is an
-    extra CHECKABLE-but-UNSUPPORTED span (demotes faithfulness) plus a failed
+    """Fold guard-emitted spans (M13/M15/E-1/W31) into a floor report: each is
+    an extra CHECKABLE-but-UNSUPPORTED span (demotes faithfulness) plus a failed
     ledger row. Empty spans → the floor is returned UNCHANGED (byte-identical).
     """
     if not guard_spans:
@@ -2668,8 +2967,8 @@ def _fold_guard_spans(
         judge_status=floor.judge_status,
         judge_unavailable_reason=floor.judge_unavailable_reason,
         confidence_ceiling=floor.confidence_ceiling,
-        # P2-4: each guard hit is a checkable-but-failed ledger row (hard_fail —
-        # entity scramble class), text mirroring its span.
+        # P2-4: each guard hit is a checkable-but-failed ledger row (class from
+        # the ONE _FAIL_CLASS_BY_REASON table), text mirroring its span.
         claim_verdicts=floor.claim_verdicts
         + [ClaimVerdict.failed(s.text, s.reason, list(s.markers)) for s in guard_spans],
     )
@@ -3065,6 +3364,10 @@ async def _run_judge(
         # the M14 whole-finding call and the V3 citation_support partition; each
         # appends its own numbered claim list.
         evidence = _ordinal_evidence_map(citations)
+        # C-TIER (former SEAMS §45): the ADDITIVE tier-aware rubric — non-empty
+        # ONLY when the citation list carries periphery-tier stamps, so every
+        # untiered composition's judge prompt stays byte-identical.
+        tier_rubric = _judge_periphery_rubric(citations)
         shared_lead = (
             "For each numbered CLAIM, decide whether it is FAITHFUL to the cited "
             "SUB-CLAIMS (the N -> sub-claim text map below). A claim that cites a "
@@ -3075,7 +3378,8 @@ async def _run_judge(
             "contradicted by, ALL of the sub-claims. Answer strict JSON only: "
             '{"verdicts": ["supported"|"unsupported"|"contradicted", ...]} with '
             "one verdict per claim, in order.\n\n"
-            f"N -> sub-claim: {json.dumps({str(k): v for k, v in evidence.items()})}"
+            + tier_rubric
+            + f"N -> sub-claim: {json.dumps({str(k): v for k, v in evidence.items()})}"
         )
         # The absence rubric is scoped to the SAME evidence map so the negative
         # judge sees exactly what the analyst searched (design §3.4 per-claim lead).
@@ -3287,6 +3591,12 @@ async def verify_finding_faithfulness(
     floor = _fold_world_knowledge_guards(
         floor, title=title, body=body, target_id=target_id
     )
+    # W31: the unscoped-absence backstop — a world-scoped negative with no
+    # collection-scoping language is one checkable-but-unsupported soft claim.
+    # Folded BEFORE the judge; span text = the raw claim, so the #116c dedup
+    # keeps the judge authoritative over prose it graded (the V3 absence rubric
+    # already covers unscoped absence there).
+    floor = _fold_guard_spans(floor, unscoped_absence_spans(body))
     if facts_conn is not None:
         # E-1: the facts-reconciled officeholder guard (never raises — degrade-
         # not-drop lives inside stale_leader_vs_facts_spans).
@@ -3312,6 +3622,7 @@ def build_faithfulness_critique_payload(
     analyzed_model: str = "",
     judge_model: str = "",
     judge_llm_ref: str = "",
+    judge_route: str = "",
 ) -> dict[str, Any]:
     """Build the ``CritiquePayload``-shaped dict for the faithfulness verdict.
 
@@ -3340,6 +3651,14 @@ def build_faithfulness_critique_payload(
         component id) stamped top-level (CritiquePayload field) AND into
         ``data.verification`` so provenance records which model judged, forever.
         ``""`` = floor-only (no judge wired).
+      * ``judge_route`` (W-3d, additive) — the judge-route CLASS the ladder
+        resolved: ``configured`` (env override / ``method.llm.judge``) |
+        ``fallback_verify`` (``method.llm.verify`` — today's live rung) |
+        ``fallback_primary`` (terminal rung). Stamped top-level AND into
+        ``data.verification`` (which the findings API projects wholesale) so
+        the UI provenance badge can tell an explicitly-configured judge from a
+        ladder fallback. ``""`` = floor-only / pre-W-3d rows (the block then
+        carries ``None``, never a fabricated class).
       * ``data.verification.claim_verdicts`` — the size-bounded per-claim
         verdict LEDGER (supported + hard_fail + soft_fail rows) with an honest
         ``claim_verdicts_truncated`` flag; each ``unsupported_spans`` entry
@@ -3409,6 +3728,9 @@ def build_faithfulness_critique_payload(
         # P2-4: the RESOLVED judge stack-ref (JudgeRoute component id) —
         # provenance for which model judged, stamped on the row forever.
         "judge_llm_ref": judge_llm_ref[:256],
+        # W-3d: the judge-route CLASS (configured|fallback_verify|
+        # fallback_primary) — the badge's configured-vs-fell-back signal.
+        "judge_route": judge_route[:32],
         "scores": {"faithfulness": score},
         # The gate reads data->>'overall_score' off the analyst_outputs row; the
         # whole CritiquePayload is model_dumped into the data JSONB, so this
@@ -3436,6 +3758,9 @@ def build_faithfulness_critique_payload(
                 # full per-claim verdict ledger (supported verdicts included —
                 # previously recorded nowhere), size-bounded with an honest flag.
                 "judge_llm_ref": judge_llm_ref[:256] or None,
+                # W-3d: the route CLASS behind the ref — the UI reads this
+                # block wholesale, so the badge gets it with no route change.
+                "judge_route": judge_route[:32] or None,
                 "claim_verdicts": claim_verdicts,
                 "claim_verdicts_truncated": claim_verdicts_truncated,
             }

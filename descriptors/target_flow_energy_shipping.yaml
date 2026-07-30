@@ -1,0 +1,103 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Supply-chain pack — Tier-A desk 6/6: the producer-side energy export flow.
+# planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §1.1.
+#
+# The full shape rationale (the 360-row pre-filter, why scope.geo is the SQL
+# pushdown and contains_any only a refiner, why no US in the geo set, why no
+# inline `analyst:` block, why no g20/watch tag, why no source_id pin) is written
+# out once in descriptors/target_lane_hormuz.yaml — read that header first.
+#
+# WHY THIS DESK: the producer-side complement to lane_hormuz (which is the
+# transit side). Six ALREADY-ACTIVE energy sources feed it — source.oilprice.news,
+# source.rigzone.news, source.eia.today_in_energy, source.eia.press,
+# source.worldnuclearnews.news, source.iaea.topnews — the pack's strongest
+# existing collection base (plan §5.1: 8 of 100 active sources are
+# domain-relevant and all 8 are energy or maritime).
+#
+# BOUNDARY (also carried in the unit prompt, plan §2.4): this desk owns the
+# PHYSICAL EXPORT FLOW — terminals, cargoes, loading, berths, force majeure,
+# outages that stop movement. It does NOT own national energy security or supply
+# adequacy: that is the `energy_security` unit's lane on the 32 country desks.
+# Do not double-count one wire item across the two.
+#
+# VOLUME: this is the one Tier-A geo set the plan did not pre-measure (§1.1 marks
+# it "(preflight)"). PREFLIGHT 2026-07-29 (scripts/preflight_supply_chain_lanes.py,
+# live, read-only): 291 canonical rows / 24h — comfortably inside the 360-row cap,
+# 7 predicate hits, ZERO hits dropped by the pre-filter. BUT it is the one Tier-A
+# desk FLAGGED on concentration: `source.gdelt.files` is 33% of the lane's 24h
+# rows, over the plan's ~30% guard (§0.3). Read that flag with the catalog health
+# note in plan §5.1 — gdelt.files produced 2,738 signals over only 3 distinct days
+# in a 30-day window, i.e. it is a BURSTY catch-all whose share swings day to day
+# (it sits at 28% on lane_hormuz and 26% on lane_malacca on the same run). The
+# main session MUST re-run the preflight at activation time; if the share is still
+# over ~30%, trim the geo set (AU and KZ are the weakest contributors to the
+# corridor question) rather than accepting a single-source desk.
+#
+# Ships `state: draft`; activation is a deliberate main-session FSM step after
+# that preflight.
+
+identity:
+  id: flow_energy_shipping
+  name: "Flow — Energy Shipping (producer-side export flow)"
+  schema_uri: legba/target/2.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  inherits: []
+  state: draft
+  owner: supply_chain_pack
+  created: "2026-07-29T00:00:00Z"
+
+scope:
+  domain: thematic
+  themes: [supply_chain, energy, shipping, commodity]
+  # THE SQL PUSHDOWN — hydrocarbon EXPORT origins (deliberately disjoint from
+  # lane_hormuz's transit littoral except QA, which is both a producer and a
+  # Hormuz-transiting exporter). No US (plan §0.3).
+  # "NO" MUST be quoted — YAML 1.1 parses a bare NO as the boolean false, which
+  # fails the _GeoCode string pattern at registration.
+  geo: [NG, AO, DZ, LY, QA, AU, "NO", KZ]
+  entity_classes:
+    - country
+    - organization
+    - corporation
+    - infrastructure
+    - commodity
+    - location
+    - international_org
+    - event_series
+    - person
+    - armed_group
+    - concept
+  relationship_types:
+    - TradesWith
+    - SanctionsAgainst
+    - HostileTo
+    - OperatesIn
+    - LocatedIn
+    - PartOf
+    - Targets
+    - PartnersWith
+    - CompetesWith
+  time_horizon_days: 90
+  predicate: >-
+    contains_any(["lng", "crude", "pipeline", "terminal", "export", "cargo",
+                  "tanker", "refinery", "outage", "force majeure", "loading",
+                  "berth"])
+  tags: [supply_chain, disruption, flow]
+
+sources:
+  - source_selector:
+      tags: [news]
+      kinds: [rss]
+      owner_tenant: shared
+    subscription:
+      canonical_only: true
+
+allowed_action_packs: []
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  routing: []

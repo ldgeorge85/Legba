@@ -403,6 +403,22 @@ class GatherBlock(BaseModel):
     max_rounds: int = Field(default=1, ge=1, le=6)
 
 
+def _is_json_option_value(value: Any) -> bool:
+    """True for a value a registry ``body`` jsonb column round-trips intact.
+
+    Scalars and flat lists of scalars only — a nested object would let a
+    descriptor smuggle structure past the flat-key option catalog, and the
+    house rule is flat schemas.
+    """
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return True
+    if isinstance(value, (list, tuple)):
+        return all(
+            isinstance(v, (str, int, float, bool)) or v is None for v in value
+        )
+    return False
+
+
 class MethodBlock(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
@@ -474,6 +490,34 @@ class MethodBlock(BaseModel):
     # When the block is absent the runtime uses ``RetryBlock()`` defaults,
     # which match the prior implicit behavior.
     retry: RetryBlock = Field(default_factory=RetryBlock)
+    # X-1 — operator-settable thresholds for a DETERMINISTIC sub-handler.
+    #
+    # Every deterministic handler was written to read its knobs out of the run
+    # ``options`` mapping, but nothing ever fed descriptor values into it: this
+    # block did not exist and the runtime built ``options`` from scratch at fire
+    # time, so ~60 documented thresholds fleet-wide were unreachable dead
+    # config. This is the missing channel. The runtime merges the validated
+    # subset into the run options at fire time (``dapr_actors``) — see
+    # ``legba.data.analysts.handler_options`` for the per-sub-handler catalog,
+    # the reserved-key list and the loud-degrade contract.
+    #
+    # Deliberately a free-form ``dict[str, Any]`` (mirroring ``llm`` above and
+    # the action-pack side's ``extra="allow"`` ``ToolSpec.config``) rather than
+    # a typed block: the admissible keys are a property of the HANDLER, not of
+    # the schema, and pinning them here would force a schema bump — and a
+    # registry+runtime rebuild — every time a handler gained a knob. Structural
+    # constraints that can never be legitimate (a non-string key, a private
+    # ``_`` key, a value no registry row can carry, options on a kind that has
+    # no handler) are refused HERE, at registration. Catalog-level problems (an
+    # unknown key, an out-of-range value) degrade loudly at fire time instead of
+    # refusing, because registry rows outlive code: a knob renamed in a later
+    # release must not brick activation for every descriptor still carrying the
+    # old name.
+    #
+    # Absent (the shipped state of all 162 descriptors) → contributes NOTHING to
+    # the run options mapping, so every handler default resolves exactly as it
+    # did before this field existed.
+    options: dict[str, Any] = Field(default_factory=dict)
 
     # Kinds that fundamentally require a prompt_module (the LLM-bearing
     # surfaces).  ``stat_forecaster`` is intentionally NOT here — its LLM
@@ -503,7 +547,52 @@ class MethodBlock(BaseModel):
             )
         if self.kind == "deterministic" and not self.impl:
             raise ValueError("method.kind=deterministic requires impl")
+        self._check_options_structure()
         return self
+
+    def _check_options_structure(self) -> None:
+        """X-1 — structural gate on ``method.options`` (registration-time).
+
+        Refuses ONLY what can never be a legitimate operator intent and can
+        never arise from code/registry version skew:
+
+        * options on a non-``deterministic`` kind — no other kind routes
+          through the sub-handler catalog, so such a block could only ever be
+          inert. A silent inert block is exactly the dead config X-1 exists to
+          remove;
+        * a non-string or empty key, or a private ``_``-prefixed key (those
+          name test hooks, not operator config);
+        * a value shape no registry row can round-trip (JSON scalars, and flat
+          lists of them, only).
+
+        Everything CATALOG-level — an unknown key for this handler, a value
+        outside its declared range — is deliberately NOT refused here. Those
+        degrade loudly at fire time (see
+        :func:`legba.data.analysts.handler_options.resolve_handler_options`)
+        so that a knob renamed in a later release cannot brick activation for
+        descriptor rows already in the registry.
+        """
+        if not self.options:
+            return
+        if self.kind != "deterministic":
+            raise ValueError(
+                f"method.options is only read for kind=deterministic "
+                f"(got kind={self.kind}); a block on any other kind would be "
+                "silently inert"
+            )
+        for key, value in self.options.items():
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError("method.options keys must be non-empty strings")
+            if key.startswith("_"):
+                raise ValueError(
+                    f"method.options key {key!r} is private (leading '_'): "
+                    "reserved for runtime/test hooks, not operator config"
+                )
+            if not _is_json_option_value(value):
+                raise ValueError(
+                    f"method.options[{key!r}] must be a JSON scalar or a flat "
+                    f"list of scalars (got {type(value).__name__})"
+                )
 
 
 class CadenceBlock(BaseModel):
@@ -621,6 +710,13 @@ class GroundingBlock(BaseModel):
             clustered from recent findings, rendered in a SEPARATE, clearly-
             labelled "ASSESSED SITUATIONS" block (analysis-derived, NOT ground
             truth — never laundered into the ground-truth block). Phase 5a.
+          * ``narratives`` — the reified contested-claim families (mig 0102,
+            written by the ``narrative_mapper`` deterministic analyst) for the
+            target's scope, rendered in a SEPARATE "ASSESSED NARRATIVES" block
+            (detect-only, analysis-derived; echo/lead ordering is descriptive
+            publish-order timing, never a coordination verdict — the mapper's
+            honesty contract rides in the block header). Empty sidecar ⇒ no
+            block. Primary consumer: the narrative_coordination unit.
           * ``vector:world_context`` — opportunistic RAG (S5-T3): a semantic
             search over the curated ``world_context`` vector corpus (unstructured
             country/topic priors, doctrine summaries), rendered in a SEPARATE,
@@ -628,6 +724,15 @@ class GroundingBlock(BaseModel):
             block BELOW the authoritative preamble. PRIOR, not evidence: never
             citable via ``[N]`` — verify semantics are untouched. Degrades to no
             block when the vector plane is unwired or the collection is empty.
+          * ``open_questions`` — R-1 (the corpus_researcher backlog source): the
+            bounded, DETERMINISTICALLY-ordered standing question set
+            (``hypotheses.status='open_question'``), rendered in a SEPARATE
+            "STANDING OPEN QUESTIONS" block instructing the analyst to prefer
+            answering one of these over self-selecting a topic (a null result —
+            the corpus doesn't resolve it — is a legitimate finding). Capped
+            hard at 8 regardless of ``max_facts`` (see
+            ``runtime.grounding._MAX_OPEN_QUESTIONS_GROUNDING``); scope-
+            independent (does not consult ``scope`` / candidate names).
     max_facts:
         Hard cap on the number of current facts folded into the preamble
         (token budget). 1..200; default 30.
@@ -646,7 +751,14 @@ class GroundingBlock(BaseModel):
     # grounds even when today's slice doesn't surface them. Empty by default.
     static_candidates: list[str] = Field(default_factory=list, max_length=32)
     sources: list[
-        Literal["substrate", "situations", "graph_structure", "vector:world_context"]
+        Literal[
+            "substrate",
+            "situations",
+            "graph_structure",
+            "narratives",
+            "vector:world_context",
+            "open_questions",
+        ]
     ] = Field(default_factory=lambda: ["substrate"])
     max_facts: int = Field(default=30, ge=1, le=200)
     # M22 — the FOCUSED ``vector:world_context`` RAG query theme. The RAG query is
@@ -692,7 +804,32 @@ class AnalystDescriptor(BaseModel):
             and self.method.kind not in ("llm_planner", "llm_single_turn", "critic")
         ):
             raise ValueError("critic analyst method.kind must be an LLM kind")
+        self._warn_on_dead_options()
         return self
+
+    def _warn_on_dead_options(self) -> None:
+        """X-1 — surface catalog-level ``method.options`` problems at REGISTER.
+
+        The sub-handler name is only resolvable here (``method.sub_handler``
+        with the ``identity.id`` fallback the runtime itself uses), so this is
+        the earliest point a key can be checked against the live catalog.
+
+        Warn-not-raise, on purpose: the same resolution runs again at fire time
+        where it is authoritative, and refusing registration would make a
+        renamed knob a fleet outage rather than a log line (see
+        ``MethodBlock._check_options_structure``). Registering a descriptor
+        whose knobs this build cannot honour is legal — it is just never
+        silent.
+        """
+        if not self.method.options:
+            return
+        from ..analysts.handler_options import resolve_handler_options
+
+        resolve_handler_options(
+            self.method.sub_handler or self.identity.id,
+            self.method.options,
+            log_context=f"{self.identity.id}@register",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -774,4 +911,77 @@ def validate_indicators(value: Any) -> list[dict[str, Any]]:
         if not isinstance(entry, dict):
             raise ValueError(f"data.indicators[{i}] must be an object")
         out.append(IndicatorEntry(**entry).model_dump(mode="json"))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# K-2b — open questions (a finding-payload sub-shape)
+# ---------------------------------------------------------------------------
+#
+# The inline units are single-shot JSON emitters (no tool loop), so they cannot
+# call the ``open_question`` agency write tool. The route is payload-field: the
+# unit's JSON MAY carry an OPTIONAL top-level ``open_questions`` array which
+# lands as ``FindingPayload.data.open_questions[]`` (additive-optional — every
+# existing payload without the key validates byte-for-byte unchanged, the
+# ``indicators`` precedent). A post-persist conversion in the actor run path
+# turns each entry into a queryable ``hypotheses`` row
+# (status='open_question'); see ``inline_target.convert_open_questions``.
+#
+# Same placement rationale as IndicatorEntry: this is the typed contract a
+# descriptor-driven finding's output must satisfy, so it lives in data/schemas
+# (a change here rebuilds BOTH registry + runtime).
+
+#: Hard cap on ``data.open_questions`` entries (the unit prompts ask for at
+#: most 3; the schema tolerates a little headroom, never a flood).
+MAX_OPEN_QUESTIONS: int = 5
+
+
+class OpenQuestionEntry(BaseModel):
+    """One genuinely-unresolved analytical question a unit run surfaced (K-2b).
+
+    Fields
+    ------
+    question:
+        The unresolved analytical question, in the unit's own words (e.g. a
+        contradiction between cited sources, a missing confirmation for a
+        load-bearing claim, an unexplained change).
+    refs:
+        The finding's own ASCII ``[N]`` citation INDICES (the ints keying
+        ``data['citations']``) whose cited evidence raises the question. The
+        conversion resolves each to its signal UUID for the hypothesis row's
+        ``derived_from`` lineage; an unresolvable index degrades to
+        finding-only lineage (never fabricated).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1, max_length=2048)
+    refs: list[int] = Field(default_factory=list, max_length=32)
+
+
+def validate_open_questions(value: Any) -> list[dict[str, Any]]:
+    """Validate + normalize a finding payload's ``data['open_questions']`` block.
+
+    Mirrors :func:`validate_indicators`: ``None``/absent → ``[]``; present but
+    not a list, over the :data:`MAX_OPEN_QUESTIONS` cap, or carrying a
+    malformed entry → ``ValueError`` (the write path DLQs the payload).
+    Tolerant ingestion of a noisy LLM array is the caller's job
+    (``inline_target._coerce_open_questions`` drops malformed entries BEFORE
+    the payload is constructed, so this strict pass only fires on a genuine
+    mis-write).
+    """
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("data.open_questions must be a list of question entries")
+    if len(value) > MAX_OPEN_QUESTIONS:
+        raise ValueError(
+            f"data.open_questions carries {len(value)} entries "
+            f"(max {MAX_OPEN_QUESTIONS})"
+        )
+    out: list[dict[str, Any]] = []
+    for i, entry in enumerate(value):
+        if not isinstance(entry, dict):
+            raise ValueError(f"data.open_questions[{i}] must be an object")
+        out.append(OpenQuestionEntry(**entry).model_dump(mode="json"))
     return out

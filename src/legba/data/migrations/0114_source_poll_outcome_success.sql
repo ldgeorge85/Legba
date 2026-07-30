@@ -1,0 +1,61 @@
+-- SPDX-FileCopyrightText: 2026 Lewis George
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- 0114_source_poll_outcome_success.sql
+--
+-- Admit a THIRD poll outcome — 'success' — so a PRODUCTIVE poll leaves a row.
+--
+-- WHY (the defect this closes):
+--   Migration 0046 deliberately made this table a FAILURE-ONLY ledger: "a
+--   PRODUCTIVE poll (>=1 signal written) is self-evidencing via its signals
+--   rows and is intentionally NOT logged here". That premise is false for
+--   every reader that counts a RUN of rows, because a run has no way to
+--   observe an absence. Measured on live data the whole-table vocabulary was
+--   exactly `empty` (14,841) + `error` (480) — a poll that ingested 71 items
+--   wrote nothing at all, so the newest row for a healthily-firing source
+--   stayed whatever failure it last had, forever.
+--
+--   The concrete consequence is `entity_gc` operation 4 (auto-pause after >20
+--   contiguous LEADING `outcome='error'` rows): because success never appears,
+--   a source's error run can only ever be broken by an `empty` row or by the
+--   `last_signal` recency bound — never by the fact that the source RECOVERED
+--   and is producing. A source that failed for days, was repaired, and is now
+--   ingesting normally still presents 100+ leading `error` rows and is
+--   re-latched to 'paused' off dead evidence. That has bitten repeatedly
+--   (ukrinform / nasa.eonet 2026-07-22; gdelt.files 2026-07-27) and was each
+--   time repaired by hand-deleting rows and un-pausing.
+--
+--   Recording success makes the streak self-healing: the first productive poll
+--   after a repair writes a non-error row that BREAKS the leading run for
+--   every reader that walks it (entity_gc op 4, the liveness watchdog's
+--   empty-streak escalation), with no operator intervention and no data
+--   deletion. It also makes "no row at all" mean what the watchdog's
+--   diagnosis always claimed it meant — the poll never ran.
+--
+-- WHY 'success' (and not a new column / a widened 'empty'):
+--   * 'success' is ALREADY the in-code vocabulary for this exact state: the
+--     pull path's own result contract returns
+--     `{"outcome": "success" if written else ("hard_fail" if errored else
+--     "noop")}` in the very function that writes this row
+--     (`SourceCore.pull_once`). One word, one meaning, both sides of the write.
+--   * `empty` KEEPS its exact current meaning — "polled fine, found nothing
+--     new". Collapsing the two would destroy a real distinction the empty-
+--     streak watchdog and the freshness reads depend on: "polled and found
+--     nothing" and "polled and ingested 28 items" are different facts.
+--   * `signals_written` (already on the table since 0046, always 0 until now)
+--     carries the count, so a success row is self-describing.
+--
+-- ROW-COUNT NOTE: this table now gets one row per poll rather than one per
+-- non-productive poll. The productive fraction is small (most polls of a news
+-- feed find nothing new), and rows are narrow; the existing
+-- (source_id, occurred_at DESC) index serves every reader's "newest N per
+-- source" read unchanged.
+--
+-- WHAT (idempotent — constraint DROP/ADD only; additive to the vocabulary, no
+-- data migration, no rewrite; every existing 'empty'/'error' row stays valid).
+
+ALTER TABLE public.source_poll_outcomes
+    DROP CONSTRAINT IF EXISTS source_poll_outcomes_outcome_chk;
+ALTER TABLE public.source_poll_outcomes
+    ADD CONSTRAINT source_poll_outcomes_outcome_chk
+    CHECK (outcome IN ('empty', 'error', 'success'));

@@ -6,7 +6,10 @@
  *   ACQUISITION — per-source firing matrix
  *                 (`GET /api/v1/v3/system/source-firing`): is each source
  *                 firing / silent / erroring / paused, with signal volume +
- *                 last-seen age.
+ *                 last-seen age, plus the A7 `freshness_grade` column (a
+ *                 dot + closed grade — ok/stale/warn/empty/ungraded — read
+ *                 against that source's own cadence-derived budget; see
+ *                 `@/lib/sourceFreshness`).
  *   ANALYSIS    — per-analyst cadence
  *                 (`GET /api/v1/v3/system/analyst-cadence`): last-run age +
  *                 runs/24h + healthy / stale / never. This reads
@@ -36,6 +39,7 @@ import {
   type AnalystCadenceRow,
 } from '@/lib/api'
 import { lagSeverity, sortLag, relTime, type ConsumerLagRow } from '@/lib/evalOps'
+import { freshnessTone, freshnessTitle, type FreshnessTone } from '@/lib/sourceFreshness'
 import type { PanelProps } from '@/types'
 
 const POLL_MS = 10_000
@@ -178,6 +182,16 @@ function sourceLight(status: string): Light {
   }
 }
 
+// A7 — the per-source freshness grade rides the SAME traffic-light dot/pill
+// vocabulary as the row `status` column (LIGHT_DOT), via the freshness→tone
+// classification in `@/lib/sourceFreshness` (kept panel-agnostic there).
+const FRESHNESS_TONE_LIGHT: Record<FreshnessTone, Light> = {
+  ok: 'green',
+  watch: 'amber',
+  bad: 'red',
+  muted: 'grey',
+}
+
 function AcquisitionSection() {
   const { data, isLoading, error } = useQuery<SourceFiringRow[]>({
     queryKey: ['system-status', 'source-firing'],
@@ -239,12 +253,14 @@ function AcquisitionSection() {
               <th className="py-1 px-1 text-right">24h</th>
               <th className="py-1 px-1 text-right">7d</th>
               <th className="py-1 px-1 text-left">last seen</th>
+              <th className="py-1 px-1 text-left">freshness</th>
               <th className="py-1 px-1 text-left">status</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => {
               const light = sourceLight(r.status)
+              const freshLight = FRESHNESS_TONE_LIGHT[freshnessTone(r.freshness_grade)]
               return (
                 <tr
                   key={r.source_id}
@@ -266,6 +282,18 @@ function AcquisitionSection() {
                     {r.recent_error_count > 0 && (
                       <span className="text-rose-400"> · {r.recent_error_count} err</span>
                     )}
+                  </td>
+                  <td className="py-1 px-1" data-testid={`status-source-freshness-${r.source_id}`}>
+                    <span
+                      className="inline-flex items-center gap-1"
+                      title={freshnessTitle(r.freshness_grade, r.budget_minutes)}
+                    >
+                      <span
+                        className={`h-1.5 w-1.5 shrink-0 rounded-full ${LIGHT_DOT[freshLight]}`}
+                        aria-hidden
+                      />
+                      <span className={LIGHT_NUM[freshLight]}>{r.freshness_grade}</span>
+                    </span>
                   </td>
                   <td className="py-1 px-1">
                     <StatusPill

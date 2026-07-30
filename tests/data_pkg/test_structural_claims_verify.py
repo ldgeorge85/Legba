@@ -257,22 +257,39 @@ def test_structural_badge_flip():
 
 
 # ---------------------------------------------------------------------------
-# End-to-end reference: geo_convergence_scan emits a re-derivable claim
+# End-to-end reference: geo_convergence_scan's rollup-identity claim shape
 # ---------------------------------------------------------------------------
 
 
 def test_geo_convergence_summary_emits_verifiable_claim():
-    """The reference analyst's summary FINDING carries a structural_claims block
-    whose rollup identity re-derives to structural_verified."""
-    from legba.data.analysts.deterministic_handlers import geo_convergence_scan as gcs
+    """geo_convergence_scan is a STRUCTURAL_CLAIMS_VERIFY_ANALYSTS member
+    whose summary finding USED to carry this exact ``formed_bins_rollup``
+    claim shape (``currently_formed_bins == cell_bins_formed +
+    country_bins_formed``) via its own (now-removed) ``_build_summary``.
 
-    finding = gcs._build_summary(
-        seeded_now=False, formed_fired=1, dissolved_fired=0, rollups=0,
-        suppressed=0, write_failures=0, active_bins=5, cell_bins_formed=2,
-        country_bins_formed=3, point_signals=10, country_signal_rows=20,
-        window_hours=24, min_families=3, per_desk_cap=3,
-    )
-    report = V.verify_structural_claims(data=finding.data)
+    2026-07-29: that summary role moved to ``alert_trigger_scan``'s own
+    TRACE_ONLY receipt post-fold (geo_convergence_scan's ``handle()`` is now
+    a deprecation stub emitting no structural_claims block at all — a
+    no-op per the STRUCTURAL_CLAIMS_VERIFY_ANALYSTS registry's own contract:
+    "an opted-in analyst whose finding carries no structural_claims block is
+    a NO-OP"). This test is kept as the WORKED-EXAMPLE reference for the
+    claim shape geo_convergence_scan's registry membership documents,
+    constructed inline rather than via the removed function."""
+    data = {
+        "structural_claims": [
+            {
+                "id": "formed_bins_rollup",
+                "statement": (
+                    "currently_formed_bins (5) = cell_bins_formed (2) + "
+                    "country_bins_formed (3)"
+                ),
+                "op": "sum",
+                "asserted": 5,
+                "basis": [2, 3],
+            },
+        ],
+    }
+    report = V.verify_structural_claims(data=data)
     assert report.had_claims is True
     assert report.structural_verified is True
     assert report.claim_verdicts[0].claim_id == "formed_bins_rollup"

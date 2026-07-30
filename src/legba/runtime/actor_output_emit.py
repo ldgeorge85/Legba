@@ -327,14 +327,27 @@ async def _maybe_escalate_finding(
         scope = GLOBAL_SCOPE
 
     bound = escalation.binding.for_target(scope=scope, target_allows=target_allows)
+    # Stage 1 — the action is config-driven. This was the string literal
+    # ``"escalate"``, which welded the one production threshold→action edge to
+    # a single tool even though the pack tool config that could name another
+    # was already free-form and read from the registry DB row. The binding
+    # resolved it at activation (default ``escalate``, so an unconfigured pack
+    # behaves exactly as before); a REFUSED action carries its degrade note
+    # onto the delivery ledger via ``config_note``.
+    action_tool = getattr(escalation, "action_tool", None) or "escalate"
     outcome = await bound.run_tool(
-        "escalate",
+        action_tool,
         {
             "severity": str(severity or "high"),
             "title": str(getattr(payload, "title", ""))[:512],
             "detail": str(getattr(payload, "body", "") or "")[:2000],
             "target_ref": f"analyst_outputs:{output_row_id}",
-            "action": "escalate",
+            "action": action_tool,
+            # Set ONLY when a configured action was refused — a durable,
+            # queryable trace of the degrade on alert_sink_deliveries rather
+            # than a boot-time log line nobody reads. None on every clean path,
+            # which keeps the audit row byte-identical to today.
+            "config_note": getattr(escalation, "action_degraded", None),
             # Durable per-delivery audit inputs (migration 0061): the finding id,
             # its country, and the verify-FOLDED effective confidence the gate
             # crossed — threaded so the ChannelEmitter writes an auditable
@@ -351,14 +364,16 @@ async def _maybe_escalate_finding(
     if outcome.admitted and outcome.tool_result is not None:
         logger.info(
             "dapr_actors.analyst.escalated actor_id=%s target_id=%s "
-            "output_id=%s status=%s",
-            actor_id, target_id, output_row_id, outcome.tool_result.status,
+            "output_id=%s action=%s status=%s",
+            actor_id, target_id, output_row_id, action_tool,
+            outcome.tool_result.status,
         )
     else:
         logger.info(
             "dapr_actors.analyst.escalation.blocked actor_id=%s target_id=%s "
-            "cause=%s detail=%s",
-            actor_id, target_id, outcome.block_cause, outcome.detail,
+            "action=%s cause=%s detail=%s",
+            actor_id, target_id, action_tool, outcome.block_cause,
+            outcome.detail,
         )
 
 
@@ -469,6 +484,19 @@ async def _gather_write_bindings_for_target(
     if scope is None:
         scope = GLOBAL_SCOPE
 
+    # META analyst path (``target_id=None`` — corpus_researcher /
+    # journal_assessor / world_assessor): there is no target row to read an
+    # allow-list from, so each binding SELF-ALLOWS its OWN pack under the
+    # GLOBAL scope. This mirrors ``_gather_binding_for_target`` (and the
+    # consult/deep_consult META self-allow in dapr_host / deep_consult_workflow)
+    # EXACTLY — and its absence here was a live gap: a META assessor granting
+    # web_access/journal_propose got ``target_allows=None`` ⇒ ``allows == {}``
+    # ⇒ every call denied at the ALLOW leg with `not_allowed`, i.e. the pack was
+    # granted and silently toolless. The grant leg stays real and
+    # operator-authored (the analyst descriptor's ``action_packs``); for a
+    # target-bound run the operator's per-target allow-list is untouched.
+    _meta_self_allow = target_id is None
+
     base_bindings: dict[str, Any] = base.get("bindings") or {}
     # The pack ids whose tools NEED the per-run WritebackContext (a connection
     # source + the run identity). propose_facts writes live facts/hypotheses;
@@ -499,8 +527,13 @@ async def _gather_write_bindings_for_target(
         key = id(base_binding)
         bound = by_base.get(key)
         if bound is None:
+            _allows = target_allows
+            if _meta_self_allow:
+                from ..data.schemas.action_pack import ActionPackRef
+
+                _allows = [ActionPackRef(pack_id=base_binding.pack.identity.id)]
             bound = base_binding.for_target(
-                scope=scope, target_allows=target_allows
+                scope=scope, target_allows=_allows
             )
             if base_binding.pack.identity.id in writeback_pack_ids:
                 # Copy-on-write the ToolContext WITH the per-run writeback. The
@@ -510,6 +543,13 @@ async def _gather_write_bindings_for_target(
                     queue=src_ctx.queue,
                     emit=src_ctx.emit,
                     substrate=src_ctx.substrate,
+                    # R-3d: carry the search binding across the clone. A write
+                    # pack does not use it today, but a clone that silently
+                    # DROPS a bound capability is the bug class this
+                    # field-by-field copy keeps re-introducing.
+                    search=src_ctx.search,
+                    search_route=src_ctx.search_route,
+                    search_liveness=src_ctx.search_liveness,
                     writeback=WritebackContext(
                         pg_pool=bound.pg_pool,
                         analyst_ctx=analyst_ctx,

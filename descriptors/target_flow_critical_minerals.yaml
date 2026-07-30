@@ -1,0 +1,96 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Supply-chain pack — TIER-B desk 8/10: critical minerals.
+# planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §1.2.
+#
+# ============================ ACTIVATION GATE =============================
+# TIER B: registered so the topology is DECLARED and the collection gap is
+# VISIBLE — NOT activated. It stays `state: draft` so the reconciler never wires
+# it (source_first_runtime.py:901 boot-wires only `active` targets) and the
+# disruption_status unit never fans onto it.
+#
+#   GATE (plan §1.2): needs mining / commodity trade press — the plan's §5.2
+#   slot C-1.
+#   ACTIVATE AT: >= 100 titles / 30d AND a PRECISION SPOT-CHECK passes.
+#   MEASURED 2026-07-29 (live, read-only): 36 titles / 30d on the mineral-name
+#   vocabulary (plan measured 33) — STILL WELL UNDER THE GATE. And one CONFIRMED
+#   FALSE POSITIVE stands: a `%nickel%` match landed on a FIFA story. That is why
+#   this desk's gate carries a precision spot-check and the others do not; a
+#   mineral name is a much weaker discriminator than a corridor name.
+#
+#   NOTE: slot C-1 IS FILLED. `source.northernminer.news`
+#   (descriptors/source_northernminer.yaml, `reporting`) went `state: active` on
+#   2026-07-29 and is ingesting. Sequence: let it accumulate a full 30d ->
+#   re-measure -> sample ~15 matched titles by hand for genuine mineral-supply
+#   content -> only then flip this desk.
+# ==========================================================================
+#
+# The full shape rationale (the 360-row pre-filter, why scope.geo is the SQL
+# pushdown and contains_any only a refiner, why no US in the geo set, why no
+# inline `analyst:` block, why no g20/watch tag, why no source_id pin) is written
+# out once in descriptors/target_lane_hormuz.yaml — read that header first.
+
+identity:
+  id: flow_critical_minerals
+  name: "Flow — Critical Minerals"
+  schema_uri: legba/target/2.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  inherits: []
+  state: draft
+  owner: supply_chain_pack
+  created: "2026-07-29T00:00:00Z"
+
+scope:
+  domain: thematic
+  themes: [supply_chain, minerals, mining, commodity]
+  # THE SQL PUSHDOWN — the producer states for the battery/electronics mineral
+  # set (CD/ZM cobalt-copper, ID nickel, AU lithium/rare earths, CL lithium-
+  # copper, ZA platinum-group, MN coking coal/copper). No US (plan §0.3).
+  geo: [CD, ZM, ID, AU, CL, ZA, MN]
+  entity_classes:
+    - country
+    - organization
+    - corporation
+    - infrastructure
+    - commodity
+    - location
+    - international_org
+    - event_series
+    - person
+    - concept
+  relationship_types:
+    - TradesWith
+    - SanctionsAgainst
+    - OperatesIn
+    - LocatedIn
+    - PartOf
+    - PartnersWith
+    - CompetesWith
+    - SubsidiaryOf
+  time_horizon_days: 90
+  # A REFINER only, and a weak one on its own — see the precision note in the
+  # gate above. The mineral names stay paired with flow vocabulary so the desk
+  # reads supply movement, not commodity-price commentary.
+  predicate: >-
+    contains_any(["critical minerals", "rare earth", "rare earths", "cobalt",
+                  "lithium", "nickel", "graphite", "manganese", "smelter",
+                  "concentrate", "offtake", "export ban", "export quota",
+                  "mine", "tailings"])
+  tags: [supply_chain, disruption, flow]
+
+sources:
+  - source_selector:
+      tags: [news]
+      kinds: [rss]
+      owner_tenant: shared
+    subscription:
+      canonical_only: true
+
+allowed_action_packs: []
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  routing: []

@@ -97,8 +97,15 @@ describe('EscalationsPanel', () => {
     stubFetch()
     render(wrap(<EscalationsPanel registration={reg()} scope={{}} mode="personal" />))
 
-    await waitFor(() => expect(screen.getByTestId('escalations-banner-clear')).toBeInTheDocument())
-    expect(screen.getByTestId('escalations-empty')).toBeInTheDocument()
+    // The health banner falls back to a local EMPTY summary before the query
+    // resolves, so it reads "clear" on the very first (pre-fetch) render too
+    // — asserting on it first made `waitFor` return trivially without ever
+    // waiting on the actual fetch, so the very next (synchronous) assertion
+    // below raced the still-pending query and failed intermittently. Wait on
+    // the empty-state row instead: it only appears once `isLoading` flips
+    // false, so it's the one honest post-load signal.
+    await waitFor(() => expect(screen.getByTestId('escalations-empty')).toBeInTheDocument())
+    expect(screen.getByTestId('escalations-banner-clear')).toBeInTheDocument()
     // No fabricated rows / no alarm.
     expect(screen.queryByTestId('escalations-banner-alarm')).not.toBeInTheDocument()
   })

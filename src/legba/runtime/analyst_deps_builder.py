@@ -39,6 +39,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from datetime import datetime
 from typing import Any, Awaitable, Callable, Mapping, NamedTuple, Sequence
 from urllib.parse import urlparse
 
@@ -60,10 +61,14 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "AnalystDepsBuildError",
+    "JUDGE_ROUTE_CONFIGURED",
+    "JUDGE_ROUTE_FALLBACK_PRIMARY",
+    "JUDGE_ROUTE_FALLBACK_VERIFY",
     "JUDGE_STACK_REF_ENV",
     "JudgeRoute",
     "build_analyst_run_method",
     "build_llm_handler_from_stack_component",
+    "build_search_handler_from_stack_component",
     "infer_llm_subprovider",
     "resolve_judge_route",
     "resolve_judge_route_from_llm_block",
@@ -275,7 +280,9 @@ async def build_analyst_run_method(
     elif kind == "cross_target_raw":
         trio = await _build_cross_target_raw(handler, _resolve_primary_llm)
     elif kind == "meta_findings_synthesizer":
-        trio = await _build_meta_findings_synthesizer(handler, _resolve_primary_llm)
+        trio = await _build_meta_findings_synthesizer(
+            descriptor, handler, _resolve_primary_llm,
+        )
     elif kind == "cross_analyst_correlator":
         trio = await _build_cross_analyst_correlator(handler, _resolve_primary_llm)
     elif kind == "relationship_reifier":
@@ -667,6 +674,7 @@ def _build_grounding_hook(
         return None
 
     from ..data.analysts.inline_target import (
+        GROUNDING_QUESTION_SINK_KEY,
         GROUNDING_RAG_CHUNK_SINK_KEY,
         GROUNDING_RAG_STATS_SINK_KEY,
     )
@@ -675,6 +683,8 @@ def _build_grounding_hook(
         SubstrateGroundingResolver,
         build_graph_structure_block,
         build_grounding_preamble,
+        build_narratives_block,
+        build_open_questions_block,
         build_situations_block,
         build_world_context_block,
         collect_grounding_candidates,
@@ -708,12 +718,25 @@ def _build_grounding_hook(
     # from the structural_balance + graph_mining metrics, analysis-derived. This
     # is the consume-side of "use the graph in analysis to find interesting edges".
     want_graph_structure = "graph_structure" in sources
+    # narratives = the SEPARATE "ASSESSED NARRATIVES" block — the reified
+    # contested-claim families (mig 0102, narrative_mapper) for the run's target
+    # scope, analysis-derived + detect-only (the block header carries the
+    # echo-is-descriptive-not-causal honesty contract). Primary consumer: the
+    # narrative_coordination unit. Empty sidecar ⇒ no block (honest empty).
+    want_narratives = "narratives" in sources
     # S5-T3 opportunistic RAG — the curated ``world_context`` vector corpus,
     # queried semantically and rendered as the non-citable BACKGROUND PRIORS
     # block. Needs BOTH an embedder AND a Qdrant client; log the gap once at build
     # time so a descriptor that opts in without a provisioned vector plane is
     # observable (the run then degrades to no block).
     want_world_context = "vector:world_context" in sources
+    # R-1 — the STANDING OPEN QUESTIONS block (the corpus_researcher backlog
+    # source): the bounded, deterministically-ordered standing question set,
+    # rendered SEPARATELY from ground truth, telling the analyst to PREFER
+    # answering one of these over self-selecting a topic. See
+    # ``grounding.SubstrateGroundingResolver.resolve_open_questions`` for the
+    # ranking + ``build_open_questions_block`` for the render.
+    want_open_questions = "open_questions" in sources
     # AUTO-ROLLBACK KILL-SWITCH (M22 — FIX A: per-run authoritative). A unit rolled
     # back off (via the persisted rag_rollback state or the
     # LEGBA_WORLD_CONTEXT_DISABLED_UNITS env pin) gets NO world_context block even
@@ -746,12 +769,19 @@ def _build_grounding_hook(
         )
     # A descriptor that declares NONE of the wired sources resolves nothing —
     # surface that rather than silently injecting an empty preamble.
-    if not (want_substrate or want_situations or want_graph_structure or want_world_context):
+    if not (
+        want_substrate
+        or want_situations
+        or want_graph_structure
+        or want_narratives
+        or want_world_context
+        or want_open_questions
+    ):
         logger.info(
             "analyst_deps_builder.grounding.no_wired_source analyst=%r "
             "sources=%r — only 'substrate' (facts/nexuses), 'situations', "
-            "'graph_structure', and 'vector:world_context' are wired; no "
-            "preamble built",
+            "'graph_structure', 'narratives', 'vector:world_context', and "
+            "'open_questions' are wired; no preamble built",
             descriptor.identity.id, sources,
         )
 
@@ -784,6 +814,36 @@ def _build_grounding_hook(
                 )
             return _candidates
 
+        # R-1 — STANDING OPEN QUESTIONS block (the corpus_researcher backlog
+        # source), rendered FIRST so the backlog directive is the first thing
+        # the analyst reads (the supporting ground-truth/situations/etc.
+        # blocks below are context for the run, not the assignment itself).
+        # Fail-safe: any resolver error already degrades to [] inside
+        # resolve_open_questions (never raises here); an empty/absent block
+        # leaves the sink untouched (stays {}), so the analyst falls back to
+        # self-selection — BYTE-IDENTICAL to its behavior before this source
+        # existed (requirement: empty backlog -> unchanged fallback).
+        if want_open_questions:
+            questions = await resolver.resolve_open_questions(limit=max_facts)
+            oq_block = build_open_questions_block(questions)
+            if oq_block:
+                parts.append(oq_block)
+                # Fill the tag -> question sink (SAME order as the render, so
+                # "Q1"/"Q2"/... match the rendered tags exactly) for REFLECT
+                # to resolve the model's ``addressed_question`` answer against.
+                oq_sink = options.get(GROUNDING_QUESTION_SINK_KEY)
+                if isinstance(oq_sink, dict):
+                    for i, q in enumerate(questions, start=1):
+                        oq_sink[f"Q{i}"] = {
+                            "id": str(q.id),
+                            "produced_at": (
+                                q.produced_at.isoformat()
+                                if isinstance(q.produced_at, datetime)
+                                else None
+                            ),
+                            "harvest_class": q.harvest_class,
+                        }
+
         # Ground-truth block (facts + signed nexuses), provenance-gated.
         if want_substrate:
             facts, nexuses = await resolver.resolve(candidates(), max_facts=max_facts)
@@ -799,6 +859,17 @@ def _build_grounding_hook(
                 limit=max_facts,
             )
             block = build_situations_block(situations)
+            if block:
+                parts.append(block)
+        # ASSESSED NARRATIVES block — the reified contested-claim families for
+        # this run's target scope (per-country runs scope by subject geo-name
+        # match; meta runs read the global recency top). Analysis-derived +
+        # detect-only, fenced off from ground truth; empty sidecar ⇒ no block.
+        if want_narratives:
+            narratives = await resolver.resolve_narratives(
+                target_id=target_id, limit=max_facts,
+            )
+            block = build_narratives_block(narratives)
             if block:
                 parts.append(block)
         # ASSESSED STRUCTURE block — the knowledge graph's interesting structures
@@ -962,6 +1033,7 @@ async def _build_cross_target_raw(
 
 
 async def _build_meta_findings_synthesizer(
+    descriptor: AnalystDescriptor,
     handler: KindHandler,
     resolve_llm: Callable[[], Awaitable[LLMProviderHandler]],
 ) -> tuple[Callable[..., Any], Any | None, OutputKind]:
@@ -969,11 +1041,22 @@ async def _build_meta_findings_synthesizer(
 
     Same shape as :func:`_build_cross_target_raw`: the kind's
     ``MetaFindingsDeps`` Protocol asks only for an ``llm`` attribute.
+
+    2026-07-24 sampling-audit fix: the descriptor's OPTIONAL
+    ``method.llm.temperature`` is threaded through the carrier (the unit
+    inline_target path already honored it; this kind silently ignored it).
+    Same precedence as the units — descriptor value when set, else the kind
+    module's own ``DEFAULT_TEMPERATURE`` (the carrier stays ``None`` so the
+    kind's fallback is authoritative, never mirrored here).
     """
     llm = await resolve_llm()
+    temperature = _read_method_llm_option(descriptor, "temperature", default=None)
     return (
         handler.run_method,
-        _LLMOnlyDeps(llm=llm),
+        _LLMOnlyDeps(
+            llm=llm,
+            temperature=(None if temperature is None else float(temperature)),
+        ),
         handler.output_kind,
     )
 
@@ -1303,8 +1386,11 @@ async def _build_deterministic(
     # from embed.primary.openai_compat). Build + connect a QdrantStore AND thread
     # that embedder, both into deps.extras, so the sweep can embed the next batch
     # of un-embedded signals into legba_signals. Wired only for the bound
-    # sub-handler so no other deterministic analyst pays for a store it never uses.
-    if is_deterministic and sub_handler == "signal_embedder":
+    # sub-handlers so no other deterministic analyst pays for a store it never
+    # uses. claim_watch RIDES THE SAME PLANE (same wiring, same extras keys):
+    # it reads stored signal vectors back by id and embeds only the bounded
+    # open-question set — reuse, not a second vector stack.
+    if is_deterministic and sub_handler in ("signal_embedder", "claim_watch"):
         deps = await _wire_signal_embedder(
             descriptor, deps, embedding_service=embedding_service,
         )
@@ -1974,6 +2060,69 @@ async def build_llm_handler_from_stack_component(
     return handler
 
 
+async def build_search_handler_from_stack_component(
+    component_id: str,
+    *,
+    registry_client: RegistryHTTPClient,
+    secrets_resolve: Callable[[str], Awaitable[bytes]],
+) -> Any:
+    """Build + configure a ``search_provider`` handler from registry data.
+
+    The search-family twin of
+    :func:`build_llm_handler_from_stack_component`, and deliberately the same
+    shape: fetch ``/stack/{component_id}``, hand the row to the family's own
+    ``build_handler``, and let THAT validate. Two differences worth naming:
+
+      * the FAMILY is validated (``assert_search_component`` — the check
+        ``expected_family`` on a StackRef does NOT perform, because it is
+        stripped at bind time by ``_FACTORY_KEY_HINTS``), so a route pointed at
+        an ``llm.*`` id fails at bind time naming the mismatch rather than at
+        first query;
+      * the SUBPROVIDER is EXPLICIT (``config.subprovider`` looked up in
+        ``SEARCH_HANDLERS``), never inferred from the id or the endpoint host —
+        no ``infer_llm_subprovider``-style string ladder.
+
+    Raises :class:`AnalystDepsBuildError` on lookup failure / a missing row /
+    a malformed config, and lets the family's own ``HardSearchFailure`` through
+    for a wrong-family or unknown-subprovider component. Every one of those is
+    a LOUD failure by design: a search route that cannot be resolved must never
+    degrade into "the provider returned nothing".
+    """
+    from ..data.stack.search import build_handler
+
+    try:
+        row = await _fetch_stack_component(registry_client, component_id)
+    except RegistryClientError as exc:
+        raise AnalystDepsBuildError(
+            f"search stack-component lookup failed for {component_id!r}: {exc}"
+        ) from exc
+    if row is None:
+        raise AnalystDepsBuildError(
+            f"search stack-component {component_id!r} not found in registry "
+            "(register it with scripts/bringup_register_stack.py)"
+        )
+    body = row.get("body") or {}
+    if not isinstance(body, Mapping):
+        raise AnalystDepsBuildError(
+            f"search stack-component {component_id!r}: body is "
+            f"{type(body).__name__}, expected a mapping"
+        )
+    raw_config = body.get("config")
+    if not isinstance(raw_config, Mapping):
+        raise AnalystDepsBuildError(
+            f"search stack-component {component_id!r}: body.config is missing "
+            f"or non-mapping (got {type(raw_config).__name__})"
+        )
+    return await build_handler(
+        {
+            "id": component_id,
+            "schema_uri": str(body.get("schema_uri") or ""),
+            "config": dict(raw_config),
+        },
+        secrets=_SecretsResolverAdapter(secrets_resolve),
+    )
+
+
 def infer_llm_subprovider(component_id: str, *, endpoint: str) -> str:
     """Pick the :data:`LLM_HANDLERS` key for a stack-component.
 
@@ -2143,6 +2292,27 @@ def _verify_llm_component_id(descriptor: AnalystDescriptor) -> str | None:
 #: Env var carrying the deployment-wide judge stack-ref override (ladder rung 1).
 JUDGE_STACK_REF_ENV = "LEGBA_JUDGE_STACK_REF"
 
+# Judge-route CLASS labels (W-3d, additive provenance): the coarse
+# configured-vs-fell-back readout the UI provenance badge needs.
+# ``judge_llm_ref`` alone cannot distinguish "the operator configured this
+# judge" from "resolution fell down the ladder to the producer plane" — both
+# can name the same component id. The class collapses the ladder rung:
+#
+#   * ``configured``       — rung 1 (env override) or rung 2 (method.llm.judge):
+#                            an EXPLICIT judge choice.
+#   * ``fallback_verify``  — rung 3 (method.llm.verify): today's live key — the
+#                            legacy verify ref, not an explicit judge pick.
+#   * ``fallback_primary`` — rung 4 (method.llm.primary): the terminal rung —
+#                            opted in but judge/verify refs were malformed, so
+#                            judging landed on the producer's own plane.
+#
+# Stamped alongside ``judge_llm_ref`` on the critique row + its
+# ``data.verification`` block (which the findings API projects wholesale), so
+# the badge can say WHICH rung won without re-deriving the ladder.
+JUDGE_ROUTE_CONFIGURED = "configured"
+JUDGE_ROUTE_FALLBACK_VERIFY = "fallback_verify"
+JUDGE_ROUTE_FALLBACK_PRIMARY = "fallback_primary"
+
 
 class JudgeRoute(NamedTuple):
     """A resolved judge route: the stack component id + which ladder rung won."""
@@ -2151,6 +2321,21 @@ class JudgeRoute(NamedTuple):
     #: ``env:LEGBA_JUDGE_STACK_REF`` | ``method.llm.judge`` |
     #: ``method.llm.verify`` | ``method.llm.primary``
     source: str
+
+    @property
+    def route_class(self) -> str:
+        """The coarse configured-vs-fallback class for this route's rung.
+
+        ``""`` for an unrecognized source string (defensive — never fabricate
+        a class; the ref itself is still stamped).
+        """
+        if self.source.startswith("env:") or self.source == "method.llm.judge":
+            return JUDGE_ROUTE_CONFIGURED
+        if self.source == "method.llm.verify":
+            return JUDGE_ROUTE_FALLBACK_VERIFY
+        if self.source == "method.llm.primary":
+            return JUDGE_ROUTE_FALLBACK_PRIMARY
+        return ""
 
 
 def _stack_ref_raw(value: Any) -> str | None:
@@ -2355,12 +2540,21 @@ class _LLMOnlyDeps:
     only ask for an ``llm`` attribute.  We avoid importing the kind's
     Protocol (it isn't dataclass-shaped) and avoid declaring a dataclass
     per kind so the carrier stays small.
+
+    ``temperature`` (2026-07 sampling-audit fix): the OPTIONAL descriptor
+    ``method.llm.temperature`` override. ``None`` (the default — and the only
+    value :func:`_build_cross_target_raw` ever sets) means "descriptor didn't
+    say" and the kind module falls back to its own default, so every carrier
+    built without the knob behaves byte-identically.
     """
 
-    __slots__ = ("llm",)
+    __slots__ = ("llm", "temperature")
 
-    def __init__(self, llm: LLMProviderHandler) -> None:
+    def __init__(
+        self, llm: LLMProviderHandler, *, temperature: float | None = None,
+    ) -> None:
         self.llm = llm
+        self.temperature = temperature
 
     def __repr__(self) -> str:                              # pragma: no cover
         return f"_LLMOnlyDeps(llm={type(self.llm).__name__})"

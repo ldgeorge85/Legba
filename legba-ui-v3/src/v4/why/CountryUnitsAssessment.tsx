@@ -3,10 +3,13 @@
  *
  * The PRODUCT surface for a country: the bounded reasoning units, each a single
  * cited + faithfulness-verified + measured read answering ONE bounded question.
- * There are now SIX (leadership transition, energy security, escalation,
- * narrative / coordination, internal stability, military posture); the desk
- * renders however many it actually has — a unit with no finding yet is shown
- * HONESTLY ("no read yet") rather than hidden or hard-coded.
+ * There are now EIGHT (leadership transition, energy security, escalation,
+ * narrative / coordination, internal stability, military posture, economic
+ * coercion, proliferation watch); the desk renders however many it actually
+ * has — a unit with no finding yet is shown HONESTLY ("no read yet") rather
+ * than hidden or hard-coded. `proliferation_watch` is narrower still — it is
+ * tag-scoped to nuclear-relevant desks only, so most desks will NEVER produce
+ * one; its empty state says so instead of implying a read is merely pending.
  *
  * Each unit card carries its honest eval badge (P2-T6) and links its latest
  * finding into the Inspector (the full cited card + evidence).
@@ -28,6 +31,8 @@ export const UNITS: { id: string; label: string }[] = [
   { id: 'narrative_coordination', label: 'Narrative / coordination' },
   { id: 'internal_stability', label: 'Internal stability' },
   { id: 'military_posture', label: 'Military posture' },
+  { id: 'economic_coercion', label: 'Economic coercion' },
+  { id: 'proliferation_watch', label: 'Proliferation watch' },
 ]
 const UNIT_IDS = UNITS.map((u) => u.id).join(',')
 
@@ -56,7 +61,7 @@ export function CountryUnitsAssessment({ targetId }: { targetId: string }) {
   const { data, isLoading, error } = useQuery<FindingsResponse>({
     queryKey: ['country-units', targetId],
     refetchInterval: 5 * 60_000,
-    // P1-T1 facet: analyst_id_in filters findings to the four units, target-scoped.
+    // P1-T1 facet: analyst_id_in filters findings to the eight units, target-scoped.
     queryFn: () =>
       apiGet<FindingsResponse>(
         `/findings?analyst_id_in=${UNIT_IDS}&target_id=${encodeURIComponent(targetId)}&limit=40`,
@@ -128,7 +133,11 @@ export function CountryUnitsAssessment({ targetId }: { targetId: string }) {
                 </button>
               ) : (
                 <div className="mt-1 text-sm text-slate-600" data-testid="unit-no-read">
-                  {isLoading ? 'loading…' : 'no read yet — this unit runs on a 12h cadence'}
+                  {isLoading
+                    ? 'loading…'
+                    : u.id === 'proliferation_watch'
+                      ? 'no read yet — narrower scope: only nuclear-relevant desks run this unit'
+                      : 'no read yet — this unit runs on a 12h cadence'}
                 </div>
               )}
             </div>

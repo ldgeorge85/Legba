@@ -55,6 +55,7 @@ from ..schemas.stack import (
     PostgresCluster,
     ProxyPool,
     RedisCluster,
+    SearchProvider,
     StackComponentBase,
     VectorStore,
 )
@@ -95,6 +96,10 @@ KIND_MODELS: dict[str, type[StackComponentBase]] = {
     "postgres":     PostgresCluster,
     "redis":        RedisCluster,
     "proxy_pool":   ProxyPool,
+    # The DISCOVERY leg (SearXNG + any compatible JSON API). Deliberately NOT
+    # in REGISTRY api.REQUIRED_MODEL_COMPONENT_KINDS: search is optional
+    # capability, not first-run readiness.
+    "search_provider": SearchProvider,
 }
 
 # Reverse: pydantic class -> kind family string.
@@ -112,6 +117,7 @@ HEALTH_CHECKER_KIND: dict[str, str] = {
     "postgres":     "postgres",
     "redis":        "redis",
     "proxy_pool":   "proxy_pool",
+    "search_provider": "search_provider",
 }
 
 

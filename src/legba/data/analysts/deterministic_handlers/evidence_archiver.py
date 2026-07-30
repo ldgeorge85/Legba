@@ -65,12 +65,45 @@ found zero active sources with an anti-LLM EULA, and the evaluated class is
 recorded on every row precisely so a future policy flip (e.g. fail-closed on
 ``unknown``) can re-evaluate mechanically instead of by memory.
 
+**R-3b — THE FAIL-OPEN DEFAULT INVERTS FOR WEB-RETRIEVED ROWS (and ONLY those).**
+The fail-open posture above was calibrated against a FINITE, operator-reviewed
+set of ~48 active sources. A search provider returns arbitrary open-web
+domains — unbounded, unreviewed, and certainly including anti-AI-walled
+publishers. Under the old rule such a hit would arrive with
+``license_class = None``, take the fail-open path, and be archived. So:
+
+  * a row whose :func:`legba.data.retrieval_origin.resolve_retrieval_origin`
+    says ``web_search:<component_id>`` AND whose ``license_class`` is unset or
+    the reviewed-but-indeterminate ``"unknown"`` does **NOT** get its bytes
+    archived. It is recorded with the DISTINCT status
+    ``skipped_license_unreviewed`` (migration 0112) and its own
+    ``skipped_license_unreviewed`` counter — counted and visible, never silent,
+    and never conflated with ``skipped_license`` (which means "a REVIEWED class
+    forbade retention"). Keeping them separate is what lets an operator ask
+    "how much did fail-closed cost us?", the question that decides whether to
+    move to ledger-on-first-sight.
+  * METADATA retention is unaffected: the sidecar row still records the URL,
+    the licence class and the origin. Only the BYTES are withheld, and the
+    fetch is skipped entirely — nothing is downloaded and then discarded.
+  * **Registered sources are byte-for-byte unaffected.** The gate keys on a web
+    origin, which no existing row carries (``retrieval_origin`` is NULL for
+    every row written before 0112, and NULL is not web).
+  * Policy is per-run overridable without a code change, exactly like
+    ``forbid_license_classes``: ``options.web_origin_license_gate`` =
+    ``"fail_closed"`` (default) | ``"inherit"`` (fall back to the curated
+    fail-open posture).
+
 **RETENTION HONESTY.** Archived objects are evidence — this handler NEVER
 deletes them, and nothing else does either (the sidecar has no TTL; archived
 signals are upgraded to ``evidence_hold``, which signals_retention exempts).
 The future retention interplay — ``media_ref_expires_at`` sweeps, object-store
 GC, operator-gated erasure on a license policy flip — is a declared seam
-(docs/SEAMS.md), not built here.
+(docs/SEAMS.md), not built here. C2 "one janitor" (migration 0109) surveyed
+this seam when building the shared ``retention_policies`` config table /
+``_retention_sweep`` engine (now backing ``signals_retention`` +
+``analyst_traces_retention``) and deliberately did NOT build an archive-GC
+policy now — but the schema needs no shape change to add one later (a new
+``policy_name='evidence_archive_retention'`` row + a small Python adapter).
 
 Idempotency: a successful archive stamps ``signals.object_ref`` → the row
 leaves the selection predicate forever. Failures are retried up to
@@ -88,7 +121,13 @@ Output ``data`` keys (the cadence receipt the operator reads):
     media_failed        int — media_ref fetches that failed (row still archived)
     text_extracted      int — archived objects whose main text reached payload
     text_extract_failed int — HTML/text objects Trafilatura could not extract
-    skipped_license     int — P2-2 gate refusals (recorded, never silent)
+    skipped_license     int — P2-2 gate refusals on a REVIEWED forbidding class
+    skipped_license_unreviewed
+                        int — R-3b fail-closed refusals: web-retrieved origin +
+                              unset/unknown licence. Bytes withheld, metadata
+                              kept, counted separately from skipped_license so
+                              the cost of fail-closed is measurable.
+    web_origin_examined int — candidates carrying a web retrieval origin
     skipped_size        int — objects over the size cap (recorded)
     fetch_failed        int — fetch/store failures this run (attempt-counted)
     egress_blocked      int — of ``fetch_failed``, SSRF-guard refusals (terminal)
@@ -120,6 +159,7 @@ from ...archive import (
 )
 from ...opensearch import signal_license_class
 from ...provenance.models import FindingPayload
+from ...retrieval_origin import is_web_retrieved, resolve_retrieval_origin
 from ...sources._egress import EgressBlockedError, guarded_async_client
 from ....runtime.analyst_method import AnalystMethodResult
 
@@ -137,6 +177,28 @@ SUB_HANDLER_NAME = "evidence_archiver"
 FORBID_RETENTION_CLASSES: frozenset[str] = frozenset(
     {"anti_ai_walled", "tos_restrictive", "personal_use_only"}
 )
+
+#: R-3b — for a WEB-RETRIEVED row, does an unreviewed licence still archive?
+#: ``False`` = fail CLOSED. The LIC-1 fail-open default was calibrated against
+#: ~48 operator-reviewed sources; search makes the domain set unbounded and
+#: unaudited, so the default inverts — but ONLY for rows whose retrieval origin
+#: says web. Registered sources keep the fail-open posture unchanged.
+WEB_ORIGIN_UNKNOWN_LICENSE_ARCHIVES: bool = False
+
+#: Licence values that are NOT an affirmative permission to retain bytes.
+#: ``None`` = never stamped; ``"unknown"`` = reviewed and indeterminate. For a
+#: curated source both archive (the open-web quotation-for-evidence posture);
+#: for a web-retrieved row neither does.
+UNREVIEWED_LICENSE_CLASSES: frozenset[str] = frozenset({"unknown"})
+
+#: The sidecar status for an R-3b fail-closed skip (migration 0112). Distinct
+#: from ``skipped_license`` on purpose: that one means "a REVIEWED class forbade
+#: retention", this one means "we never reviewed this domain".
+STATUS_SKIPPED_LICENSE_UNREVIEWED = "skipped_license_unreviewed"
+
+#: ``options.web_origin_license_gate`` values.
+WEB_ORIGIN_GATE_FAIL_CLOSED = "fail_closed"
+WEB_ORIGIN_GATE_INHERIT = "inherit"
 
 _USER_AGENT = "legba-evidence-archiver/0.1"
 
@@ -189,6 +251,10 @@ _SELECT_CANDIDATES_SQL = """
     )
     SELECT s.id, s.source_id, s.canonical_url, s.media_ref, s.payload,
            s.raw_provenance, s.retention_class,
+           -- R-3b (mig 0112): the retrieval-origin axis the fail-closed gate
+           -- reads. NULL for every row written before the concept existed,
+           -- which is exactly "a curated registered source".
+           s.retrieval_origin,
            COALESCE(ea.attempts, 0) AS prior_attempts
       FROM signals s
       JOIN cited c ON c.sid = s.id
@@ -209,10 +275,10 @@ _UPSERT_ARCHIVE_SQL = """
     INSERT INTO evidence_archive (
         signal_id, status, object_ref, sha256, size_bytes, content_type,
         fetched_url, media_object_ref, media_sha256, media_size_bytes,
-        license_class, text_extracted, attempts, last_error, archived_at,
-        updated_at
+        license_class, text_extracted, attempts, last_error, retrieval_origin,
+        archived_at, updated_at
     ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
         CASE WHEN $2 = 'archived' THEN now() ELSE NULL END, now()
     )
     ON CONFLICT (signal_id) DO UPDATE SET
@@ -226,6 +292,7 @@ _UPSERT_ARCHIVE_SQL = """
         media_sha256     = EXCLUDED.media_sha256,
         media_size_bytes = EXCLUDED.media_size_bytes,
         license_class    = EXCLUDED.license_class,
+        retrieval_origin = EXCLUDED.retrieval_origin,
         text_extracted   = EXCLUDED.text_extracted,
         attempts         = EXCLUDED.attempts,
         last_error       = EXCLUDED.last_error,
@@ -280,8 +347,52 @@ def license_forbids_retention(
 
     Unknown/unset (``None``) ARCHIVES — the open-web quotation-for-evidence
     default posture (module docstring); the class is recorded either way so a
-    policy flip can re-evaluate."""
+    policy flip can re-evaluate.
+
+    This is the CURATED-source rule. Web-retrieved rows additionally pass
+    :func:`web_origin_license_unreviewed` (R-3b), which inverts the unknown
+    default for them alone."""
     return license_class is not None and license_class in forbid
+
+
+def resolve_signal_retrieval_origin(row: Mapping[str, Any]) -> str | None:
+    """The signal's retrieval origin as the R-3b gate sees it.
+
+    The migration-0112 column first, then the payload stamp — resolved by the
+    ONE owner (:mod:`legba.data.retrieval_origin`) that the OpenSearch facet
+    also uses, so the gate and the facet can never disagree."""
+    return resolve_retrieval_origin(row)
+
+
+def web_origin_license_unreviewed(
+    license_class: str | None,
+    retrieval_origin: str | None,
+    *,
+    fail_closed: bool = True,
+) -> bool:
+    """True when this row is web-retrieved with NO affirmative licence verdict.
+
+    The R-3b inversion, stated as a single predicate so its scope is
+    auditable at a glance:
+
+      * not a web origin → ``False`` (curated sources keep the fail-open
+        posture EXACTLY as before — this is why the change is a no-op for every
+        row that exists today, all of which have a NULL origin);
+      * ``fail_closed=False`` (``options.web_origin_license_gate='inherit'``) →
+        ``False`` (the documented policy escape hatch);
+      * web origin AND ``license_class`` unset or ``"unknown"`` → ``True``:
+        withhold the bytes.
+
+    An AFFIRMATIVE class on a web-origin row (an operator classified the
+    domain — the ledger-on-first-sight path) archives normally; a REVIEWED
+    forbidding class was already refused upstream by
+    :func:`license_forbids_retention`.
+    """
+    if not fail_closed:
+        return False
+    if not is_web_retrieved(retrieval_origin):
+        return False
+    return license_class is None or license_class in UNREVIEWED_LICENSE_CLASSES
 
 
 def _is_textual(content_type: str | None, body: bytes) -> bool:
@@ -402,6 +513,11 @@ def _zero_counters() -> dict[str, int]:
         "text_extracted": 0,
         "text_extract_failed": 0,
         "skipped_license": 0,
+        # R-3b — kept DISTINCT from skipped_license so an operator can measure
+        # what fail-closed costs, which is the question that decides whether to
+        # move to ledger-on-first-sight.
+        "skipped_license_unreviewed": 0,
+        "web_origin_examined": 0,
         "skipped_size": 0,
         "fetch_failed": 0,
         "egress_blocked": 0,
@@ -445,6 +561,7 @@ async def _record(
     media_sha256: str | None = None,
     media_size_bytes: int | None = None,
     license_class: str | None = None,
+    retrieval_origin: str | None = None,
     text_extracted: bool = False,
     last_error: str | None = None,
 ) -> None:
@@ -455,6 +572,7 @@ async def _record(
             fetched_url, media_object_ref, media_sha256, media_size_bytes,
             license_class, text_extracted, attempts,
             str(last_error)[:2048] if last_error else None,
+            retrieval_origin,
         )
 
 
@@ -470,20 +588,45 @@ async def _archive_one(
     max_bytes: int,
     max_text_chars: int,
     max_attempts: int,
+    web_origin_fail_closed: bool = True,
 ) -> None:
     """Fetch + store + record ONE candidate signal (all outcomes recorded)."""
     signal_id = row["id"]
     url = str(row["canonical_url"])
     attempts = int(row.get("prior_attempts") or 0) + 1
     license_class = resolve_license_class(row)
+    retrieval_origin = resolve_signal_retrieval_origin(row)
+    if is_web_retrieved(retrieval_origin):
+        counters["web_origin_examined"] += 1
 
-    # ---- P2-2 license gate (recorded, never silent) ----
+    # ---- P2-2 license gate — a REVIEWED forbidding class (never silent) ----
     if license_forbids_retention(license_class, forbid):
         counters["skipped_license"] += 1
         await _record(
             pool, signal_id=signal_id, status="skipped_license",
             attempts=attempts - 1, fetched_url=url, license_class=license_class,
+            retrieval_origin=retrieval_origin,
             last_error=f"license_class {license_class!r} forbids retention",
+        )
+        return
+
+    # ---- R-3b fail-closed gate — web origin + NO affirmative licence ----
+    # Runs BEFORE the fetch: the bytes are never downloaded, so nothing has to
+    # be discarded afterwards. Metadata (URL, class, origin) is still recorded.
+    if web_origin_license_unreviewed(
+        license_class, retrieval_origin, fail_closed=web_origin_fail_closed,
+    ):
+        counters["skipped_license_unreviewed"] += 1
+        await _record(
+            pool, signal_id=signal_id,
+            status=STATUS_SKIPPED_LICENSE_UNREVIEWED,
+            attempts=attempts - 1, fetched_url=url, license_class=license_class,
+            retrieval_origin=retrieval_origin,
+            last_error=(
+                f"retrieval_origin {retrieval_origin!r} is web-retrieved and "
+                f"license_class is {license_class!r} — bytes NOT archived "
+                "(fail-closed for unreviewed open-web domains); metadata kept"
+            ),
         )
         return
 
@@ -498,7 +641,7 @@ async def _archive_one(
         await _record(
             pool, signal_id=signal_id, status="skipped_size",
             attempts=attempts, fetched_url=url, license_class=license_class,
-            last_error=str(exc),
+            retrieval_origin=retrieval_origin, last_error=str(exc),
         )
         return
     except EgressBlockedError as exc:
@@ -509,7 +652,8 @@ async def _archive_one(
         await _record(
             pool, signal_id=signal_id, status="failed",
             attempts=max(attempts, max_attempts), fetched_url=url,
-            license_class=license_class, last_error=f"egress blocked: {exc}",
+            license_class=license_class, retrieval_origin=retrieval_origin,
+            last_error=f"egress blocked: {exc}",
         )
         return
     except Exception as exc:
@@ -517,7 +661,7 @@ async def _archive_one(
         await _record(
             pool, signal_id=signal_id, status="failed",
             attempts=attempts, fetched_url=url, license_class=license_class,
-            last_error=repr(exc),
+            retrieval_origin=retrieval_origin, last_error=repr(exc),
         )
         return
 
@@ -529,6 +673,7 @@ async def _archive_one(
         await _record(
             pool, signal_id=signal_id, status="failed",
             attempts=attempts, fetched_url=url, license_class=license_class,
+            retrieval_origin=retrieval_origin,
             last_error=f"store failed: {exc}",
         )
         return
@@ -577,6 +722,7 @@ async def _archive_one(
         content_type=content_type, fetched_url=url,
         media_object_ref=media_object_ref, media_sha256=media_sha256,
         media_size_bytes=media_size, license_class=license_class,
+        retrieval_origin=retrieval_origin,
         text_extracted=archived_text is not None,
     )
     async with pool.acquire() as conn:
@@ -609,6 +755,17 @@ async def _sweep(pool: Any, options: Mapping[str, Any]) -> dict[str, int]:
         if isinstance(forbid_raw, (list, tuple, set))
         else FORBID_RETENTION_CLASSES
     )
+    # R-3b — the web-origin posture, overridable per run without a code change
+    # (same discipline as forbid_license_classes). Anything other than the
+    # explicit "inherit" keeps the fail-closed default: a typo must not silently
+    # re-open the gate.
+    if WEB_ORIGIN_UNKNOWN_LICENSE_ARCHIVES:
+        web_origin_fail_closed = False
+    else:
+        gate = str(
+            options.get("web_origin_license_gate", WEB_ORIGIN_GATE_FAIL_CLOSED)
+        )
+        web_origin_fail_closed = gate != WEB_ORIGIN_GATE_INHERIT
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -635,6 +792,7 @@ async def _sweep(pool: Any, options: Mapping[str, Any]) -> dict[str, int]:
                 root=root, politeness=politeness, counters=counters,
                 forbid=forbid, max_bytes=max_bytes,
                 max_text_chars=max_text_chars, max_attempts=max_attempts,
+                web_origin_fail_closed=web_origin_fail_closed,
             )
     return counters
 
@@ -644,12 +802,18 @@ def _build_finding(counters: Mapping[str, int]) -> FindingPayload:
         f"Evidence archiver: archived {counters.get('archived', 0)} of "
         f"{counters.get('examined', 0)} cited signal(s), "
         f"{counters.get('skipped_license', 0)} license-skipped, "
+        # R-3b — surfaced in the TITLE, not buried in the body: a fail-closed
+        # skip is a decision the operator took, and it should be visible in the
+        # cadence receipt without opening the row.
+        f"{counters.get('skipped_license_unreviewed', 0)} web-unreviewed-skipped, "
         f"{counters.get('fetch_failed', 0)} failed"
     )
     body = "\n".join(f"{k}={v}" for k, v in counters.items())
     tags = ["deterministic", "evidence_archiver"]
     if counters.get("archived", 0):
         tags.append("archived")
+    if counters.get("skipped_license_unreviewed", 0):
+        tags.append("web_origin_license_unreviewed")
     return FindingPayload(
         title=title[:2048],
         body=body[:65536],
@@ -691,10 +855,17 @@ __all__ = [
     "ARCHIVE_ROOT_ENV",
     "DEFAULT_ARCHIVE_ROOT",
     "FORBID_RETENTION_CLASSES",
+    "STATUS_SKIPPED_LICENSE_UNREVIEWED",
+    "UNREVIEWED_LICENSE_CLASSES",
+    "WEB_ORIGIN_GATE_FAIL_CLOSED",
+    "WEB_ORIGIN_GATE_INHERIT",
+    "WEB_ORIGIN_UNKNOWN_LICENSE_ARCHIVES",
     "CAS_PREFIX",
     "cas_object_ref",
     "cas_path",
     "sha256_from_object_ref",
     "resolve_license_class",
+    "resolve_signal_retrieval_origin",
     "license_forbids_retention",
+    "web_origin_license_unreviewed",
 ]

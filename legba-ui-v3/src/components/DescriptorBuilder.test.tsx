@@ -28,6 +28,7 @@ import {
   starterByKey,
   VERSION_SENTINEL,
 } from '@/lib/starter-descriptors'
+import { mockErrorResponse } from '@/test/apiMocks'
 
 beforeEach(() => {
   vi.restoreAllMocks()
@@ -257,13 +258,11 @@ describe('DescriptorBuilder component', () => {
   })
 
   it('surfaces the registry 422 message inline without losing input', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 422,
-      json: async () => ({
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockErrorResponse(422, {
         detail: { error: 'pydantic_validation', message: 'scope.geo invalid' },
       }),
-    })
+    )
     vi.stubGlobal('fetch', fetchMock)
 
     render(<DescriptorBuilder family="target" />)

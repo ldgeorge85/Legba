@@ -105,6 +105,30 @@ def _pin_composition_floor_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _pin_retention_ttl_defaults(monkeypatch):
+    """Same class as ``_pin_composition_floor_default`` (W-2, 2026-07): the
+    LIVE .env may set the retention TTL opt-ins (the operator enabled the
+    traces TTL live) and ``legba.data.config._load_env`` auto-loads the live
+    .env as a fallback — which flips every disabled-by-default retention
+    assertion. Strip both; a test that wants a TTL sets it explicitly via
+    monkeypatch.setenv."""
+    monkeypatch.delenv("LEGBA_ANALYST_TRACES_TTL_DAYS", raising=False)
+    monkeypatch.delenv("LEGBA_SIGNALS_RETENTION_TTL_DAYS", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _pin_tiered_evidence_default(monkeypatch):
+    """Same class as ``_pin_composition_floor_default`` (C-TIER, 2026-07): the
+    LIVE .env sets ``LEGBA_COMPOSITION_TIERED_EVIDENCE=1`` and
+    ``config._load_env`` pulls it into the suite env — flipping every
+    READ_SLICE assertion written against the code default (flag OFF ⇒ the
+    legacy single verify-floored gather; ON adds the periphery complement and
+    moves the basis bar). Strip it; the tiered-evidence tests set it
+    explicitly via monkeypatch.setenv."""
+    monkeypatch.delenv("LEGBA_COMPOSITION_TIERED_EVIDENCE", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _pin_structural_verify_gate_default(monkeypatch):
     """Same class as ``_pin_composition_floor_default`` (P2-1 wave, 2026-07):
     the LIVE .env sets ``LEGBA_STRUCTURAL_VERIFY_GATE=1`` and
@@ -113,6 +137,28 @@ def _pin_structural_verify_gate_default(monkeypatch):
     written against the code default (compute-and-show, no demotion). Strip it;
     a test that wants the gate sets it explicitly via monkeypatch.setenv."""
     monkeypatch.delenv("LEGBA_STRUCTURAL_VERIFY_GATE", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _pin_alert_sink_cooldown_default(monkeypatch):
+    """Same class again (W-3g, 2026-07): the LIVE .env sets
+    ``LEGBA_ALERT_SINK_COOLDOWN_SECONDS`` (15) and ``config._load_env`` pulls
+    it into the suite env, where ``AlertSinkDispatcher.__init__`` lets the env
+    knob override any caller value that EQUALS the 60s code default — so the
+    cooldown-coalescing assertions written against an explicit 60s window
+    silently ran on a 15s one. Strip it; ``test_env_cooldown_knob`` sets it
+    explicitly via monkeypatch.setenv."""
+    monkeypatch.delenv("LEGBA_ALERT_SINK_COOLDOWN_SECONDS", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _pin_contention_earned_weight_default(monkeypatch):
+    """Same class (W-3g): the LIVE .env sets ``LEGBA_CONTENTION_EARNED_WEIGHT``
+    (1), activating the A6 earned-track-record weight (code default 0.0 = OFF)
+    — which adds a track-record read to the arbiter pass and shifts every
+    scripted-fetch test's query order (the cached-verdict test was the bitten
+    case). Strip it; ``test_source_track_record`` sets it explicitly."""
+    monkeypatch.delenv("LEGBA_CONTENTION_EARNED_WEIGHT", raising=False)
 
 
 # ---------------------------------------------------------------------------

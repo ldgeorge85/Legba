@@ -1658,9 +1658,10 @@ class PostgresQdrantSubstrateQueryPort:
         """The ingest sources and their freshness/coverage.
 
         Joins each head source descriptor to its most-recent signal time and its
-        most-recent poll outcome (``source_poll_outcomes``: 'empty'|'error' rollup,
-        migration 0046). Use to qualify a 'no signal on X' answer — no coverage vs
-        a quiet feed. ``silent_only`` filters to sources silent > ``silent_hours``.
+        most-recent poll outcome (``source_poll_outcomes``:
+        'success'|'empty'|'error' rollup — migration 0046, success added by
+        0114). Use to qualify a 'no signal on X' answer — no coverage vs a quiet
+        feed. ``silent_only`` filters to sources silent > ``silent_hours``.
         """
         clauses: list[str] = ["s.is_head = TRUE"]
         if active_only:
@@ -3002,11 +3003,17 @@ class PostgresQdrantSubstrateQueryPort:
         """Source-poll HEALTH — which feeds are quiet or erroring (plan §5).
 
         Joins each head source descriptor to its most-recent ``signals`` time and
-        its most-recent ``source_poll_outcomes`` row (migration 0046: only silent
-        / failed polls are logged, so a NULL outcome with fresh signals = healthy).
-        Lets the journal tell "no coverage on X" apart from "a quiet feed" and
-        narrate the platform's intake honestly. ``refs`` is empty (source rows are
-        descriptors, not chip-linked substrate rows).
+        its most-recent ``source_poll_outcomes`` row (migration 0046 + 0114: one
+        row per poll, 'success' | 'empty' | 'error'). Lets the journal tell "no
+        coverage on X" apart from "a quiet feed" and narrate the platform's
+        intake honestly. ``refs`` is empty (source rows are descriptors, not
+        chip-linked substrate rows).
+
+        The ``erroring`` aggregate below counts sources whose NEWEST outcome row
+        is 'error'. Before 0114 that over-counted structurally: a productive
+        poll wrote no row, so a source that failed once and then recovered kept
+        reporting its old error as the newest outcome forever. Now the first
+        productive poll writes 'success' and the count self-corrects.
 
         HEAD COVERAGE (W2-T6 / M4): the old ``LIMIT 40`` default scanned 40
         of ~48 active heads, so the row list (and its silent/error tallies)

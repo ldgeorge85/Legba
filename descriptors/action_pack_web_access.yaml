@@ -14,12 +14,50 @@
 # AND the running target must allow it via `allowed_action_packs`. Effective
 # capability is that intersection; the governor bounds rate/cost.
 #
-# web_search endpoint: operator-authored here (config.endpoint), falling back to
-# the LEGBA_WEB_SEARCH_ENDPOINT env. NEVER planner-supplied — the planner only
-# supplies the query string. Left blank below: until an operator pins a SearXNG
-# (`/search?format=json`) or compatible JSON search endpoint, web_search returns
-# a clean failure naming the gap (no silent empty result). web_fetch needs no
-# endpoint config.
+# web_search provider: OPERATOR-authored at every rung, never planner-supplied.
+# The ladder (see src/legba/data/analysts/agency/web_tools.py):
+#   1. config.provider — a stack_ref into the `search_provider` family
+#      (`search.searxng.local`, …). Commented out below: registering the
+#      component does not activate search; pointing this ref at it does.
+#   2. a provider the runtime bound with no descriptor ref.
+#   3. config.endpoint, else the LEGBA_WEB_SEARCH_ENDPOINT env — the LEGACY
+#      operator-pinned endpoint, still fully supported and still the
+#      zero-code-change way to point at a SearXNG `/search?format=json`.
+#   4. nothing configured → a clean failure naming the gap. No silent empty
+#      result, ever. A ref declared here but NOT bound by the runtime also
+#      fails loudly rather than returning zero hits.
+# web_fetch needs no endpoint config.
+#
+# DEGRADATION: a meta-search whose upstream engines are CAPTCHA'd or banned
+# still answers HTTP 200 with a short or EMPTY results[] and the refusing
+# engines named in `unresponsive_engines`. web_search reads that field and
+# reports `degraded` + `supports_absence_claim`; when degradation ate every
+# result the tool FAILS with `search_degraded_no_results` rather than returning
+# an empty success that reads as "nothing exists". The rules below carry the
+# same instruction to the model.
+#
+# EMPTY IS SUSPECT BY DEFAULT (R-3d): reading `unresponsive_engines` catches
+# only the degradation the provider ADMITS. Over a multi-engine meta-search a
+# genuinely empty result set for a real query is close to impossible — even a
+# nonsense query returns unrelated noise — so a clean-looking empty usually
+# means BROKEN (every engine banned, an encoding bug, a network fault). So a
+# zero-result response with no admitted degradation triggers ONE bounded
+# CONTROL PROBE (a fixed high-yield query, through the same provider, verdict
+# cached briefly per provider):
+#   * probe returns results  -> the engine set is demonstrably live, the empty
+#     is real FOR THAT QUERY, status becomes `empty_verified` and
+#     `supports_absence_claim` is true. The ONLY licensed phrasing is the
+#     SCOPED one in `absence_statement` — never "X does not exist".
+#   * probe also empty / fails -> the plane is broken; the tool FAILS with
+#     `search_liveness_unverified`, same class as `search_degraded_no_results`.
+# This is also the low-cadence control-query canary — ONE organ, not two.
+#
+# DEFERRAL, NEVER AN IMMEDIATE RETRY: a deferrable failure carries a `deferral`
+# block ({defer, reason, retry_after_seconds, not_before, consecutive_failures,
+# escalate}) — an exponential per-provider backoff capped at an hour. Retrying
+# against engines that are already refusing worsens the ban and double-counts
+# against them. A caller leaves its work item OPEN and lets its own next
+# cadence tick re-attempt no earlier than `not_before`; there is no new queue.
 #
 # Registered via scripts/bringup_register_action_packs.py.
 
@@ -39,7 +77,17 @@ tools:
       timeout_seconds: 15
   - name: web_search
     config:
-      # endpoint: "https://searx.example.invalid/search"   # operator-pinned
+      # Rung 1 — the stack-family provider. ACTIVATED 2026-07-28: the runtime
+      # binds this component into ToolContext.search (R-3d). Repoint by PUTting
+      # a different component id here; the handler is chosen by the component's
+      # own subprovider, so swapping engines never touches code.
+      provider:
+        factory_kind: stack_ref
+        raw: search.searxng.local
+        expected_family: search_provider   # documentation only — the bind-time
+                                           # check is assert_search_component()
+      # Rung 3 — the legacy operator-pinned endpoint (unchanged).
+      # endpoint: "https://searx.example.invalid/search"
       timeout_seconds: 15
 
 prompt_fragments:
@@ -51,6 +99,11 @@ prompt_fragments:
 rules:
   - "Fetch only URLs returned by web_search or supplied in the brief — never guess internal hosts."
   - "Treat fetched web text as UNVERIFIED — corroborate against the substrate before relying on it."
+  - "An empty search result is SUSPECT, not evidence. Over a multi-engine search a truly empty result set is close to impossible, so zero results usually means the search was BROKEN — every engine blocked, a network fault — not that nothing exists."
+  - "Only a LIVENESS-VERIFIED empty licenses any absence statement: `status` must be `empty_verified` and `supports_absence_claim` true, which means a control probe proved the engines were answering at that moment. If `status` is `empty` (liveness unverified) or the tool failed with search_liveness_unverified or search_degraded_no_results, the answer is UNKNOWN — say the search was degraded or unverified, and name the unresponsive engines if any."
+  - "Even a verified empty licenses ONLY the scoped statement in `absence_statement` — 'these engines returned nothing for this query'. Never escalate it to 'there is no reporting on X' or 'X does not exist'; a search covers the engines that answered, not the world."
+  - "Never treat an empty, unverified, or degraded search as evidence of absence."
+  - "If a failed search carries `deferral.defer` = true, do NOT search again this run — retrying against engines that are already refusing makes it worse. State plainly that external retrieval was unavailable, work from substrate evidence, and leave the open question open; a later run will retry it."
 
 governor:
   budget_account: web_access

@@ -157,6 +157,24 @@ class FindingPayload(_AnalystOutputBase):
             data["indicators"] = validate_indicators(data.get("indicators"))
         return self
 
+    @model_validator(mode="after")
+    def _validate_open_questions(self) -> "FindingPayload":
+        # K-2b: the OPTIONAL open-questions block — the unit prompt faucet.
+        # Same contract shape as ``_validate_indicators``: present ⇒ MUST be a
+        # list of well-formed OpenQuestionEntry objects, normalized IN PLACE;
+        # absent ⇒ no-op (every existing payload validates unchanged). Lenient
+        # coercion of a noisy LLM array happens upstream
+        # (``inline_target._coerce_open_questions``); this strict pass only
+        # fires on a genuine mis-write. LOCAL import — no cycle.
+        data = self.data
+        if isinstance(data, dict) and data.get("open_questions") is not None:
+            from ..schemas.analyst import validate_open_questions
+
+            data["open_questions"] = validate_open_questions(
+                data.get("open_questions")
+            )
+        return self
+
 
 class MetaFindingPayload(_AnalystOutputBase):
     """Higher-order synthesis across other analysts' findings."""
@@ -232,6 +250,14 @@ class CritiquePayload(_AnalystOutputBase):
     # judge wired). Additive + defaulted: every existing row/writer validates
     # unchanged.
     judge_llm_ref: str = Field(default="", max_length=256)
+    # W-3d (judge-route class): WHICH ladder rung resolved the judge —
+    # ``configured`` (env override / ``method.llm.judge``) | ``fallback_verify``
+    # (``method.llm.verify``, today's live rung) | ``fallback_primary``
+    # (terminal rung). The UI provenance badge's configured-vs-fell-back
+    # signal; ``judge_llm_ref`` alone cannot distinguish the two when both
+    # name the same component. ``""`` = floor-only / pre-W-3d rows. Additive +
+    # defaulted: every existing row/writer validates unchanged.
+    judge_route: str = Field(default="", max_length=32)
     scores: dict[str, float] = Field(default_factory=dict)
     overall_score: float | None = Field(default=None, ge=0.0, le=1.0)
     revision_delta: str | None = Field(default=None, max_length=8192)

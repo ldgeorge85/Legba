@@ -35,6 +35,21 @@ async def pg_pool(migrated_pg: PostgresConfig):
     await pool.close()
 
 
+# ISOLATION: the migrated DB is session-shared across the whole suite. The
+# facts these tests seed (notably the OPEN 'FDGUARD_Subj' row) would otherwise
+# leak into every later test that scans/aggregates facts globally (the
+# fact_decay_scan sidecar counts were the bitten case) — so every row this
+# module inserts carries the FDGUARD_ subject prefix and is deleted again
+# after each test.
+@pytest_asyncio.fixture(autouse=True)
+async def _fdguard_cleanup(pg_pool):
+    async with pg_pool.acquire() as conn:
+        await conn.execute("DELETE FROM facts WHERE subject LIKE 'FDGUARD_%'")
+    yield
+    async with pg_pool.acquire() as conn:
+        await conn.execute("DELETE FROM facts WHERE subject LIKE 'FDGUARD_%'")
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_facts_decay_columns_present(pg_pool):
@@ -59,7 +74,7 @@ async def test_decay_stale_confidence_runs_and_decrements(pg_pool):
             """
             INSERT INTO facts (id, subject, predicate, value, confidence,
                                source_type, data, updated_at)
-            VALUES ($1, 'Subj', 'pred', 'Val', 0.8, 'ingestion',
+            VALUES ($1, 'FDGUARD_Subj', 'pred', 'Val', 0.8, 'ingestion',
                     '{}'::jsonb, $2)
             """,
             fact_id, stale,
@@ -90,7 +105,7 @@ async def test_expire_past_valid_until_runs(pg_pool):
             """
             INSERT INTO facts (id, subject, predicate, value, confidence,
                                source_type, data, valid_until)
-            VALUES ($1, 'ExpSubj', 'pred', 'Val', 1.0, 'ingestion',
+            VALUES ($1, 'FDGUARD_ExpSubj', 'pred', 'Val', 1.0, 'ingestion',
                     '{}'::jsonb, $2)
             """,
             fact_id, past,
@@ -125,7 +140,7 @@ async def test_superseded_rows_are_not_decayed_or_expired(pg_pool):
             INSERT INTO facts (id, subject, predicate, value, confidence,
                                source_type, data, updated_at,
                                valid_until, superseded_by)
-            VALUES ($1, 'Acmestan_fd', 'led by', 'Alice', 0.8, 'ingestion',
+            VALUES ($1, 'FDGUARD_Acmestan_fd', 'led by', 'Alice', 0.8, 'ingestion',
                     '{}'::jsonb, $2, $3, $4)
             """,
             superseded_id, stale, closed, successor_id,

@@ -1,0 +1,86 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Supply-chain pack — Tier-A desk 4/6: the Black Sea grain corridor + the
+# Turkish Straits. planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §1.1.
+#
+# The full shape rationale (the 360-row pre-filter, why scope.geo is the SQL
+# pushdown and contains_any only a refiner, why no US in the geo set, why no
+# inline `analyst:` block, why no g20/watch tag, why no source_id pin) is written
+# out once in descriptors/target_lane_hormuz.yaml — read that header first.
+#
+# WHY THIS DESK: the only FOOD-trade lane with real measured volume (grain 18 +
+# wheat 7 titles / 30d plus heavy ukrinform shipping reporting). It doubles as the
+# Turkish-Straits watch: `bosporus` as a term measured ZERO hits in 30 days, so a
+# standalone straits desk would be dishonest — the Bosphorus/Dardanelles
+# vocabulary lives here as a refiner term instead (plan §1.2 rationale for what
+# does NOT get its own desk).
+#
+# MEASURED: ~320 canonical rows / 24h against the geo set below — the TIGHTEST
+# Tier-A lane against the 360 cap. If the preflight shows it over, trim GE or BG
+# before activation rather than widening the window.
+#
+# Ships `state: draft`; activation is a deliberate main-session FSM step after
+# scripts/preflight_supply_chain_lanes.py.
+
+identity:
+  id: lane_black_sea
+  name: "Lane — Black Sea & Turkish Straits"
+  schema_uri: legba/target/2.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  inherits: []
+  state: draft
+  owner: supply_chain_pack
+  created: "2026-07-29T00:00:00Z"
+
+scope:
+  domain: thematic
+  themes: [supply_chain, maritime, chokepoint, shipping, agriculture]
+  # THE SQL PUSHDOWN — the Black Sea littoral + the straits state.
+  geo: [UA, RU, TR, RO, BG, GE]
+  entity_classes:
+    - country
+    - organization
+    - corporation
+    - infrastructure
+    - commodity
+    - location
+    - international_org
+    - event_series
+    - person
+    - military_unit
+    - armed_group
+    - concept
+  relationship_types:
+    - TradesWith
+    - SanctionsAgainst
+    - HostileTo
+    - OperatesIn
+    - LocatedIn
+    - PartOf
+    - Targets
+    - MilitaryPresenceIn
+    - PartnersWith
+    - CompetesWith
+  time_horizon_days: 90
+  predicate: >-
+    contains_any(["black sea", "grain", "wheat", "corridor", "port", "odesa",
+                  "novorossiysk", "bosphorus", "dardanelles", "strait",
+                  "vessel", "tanker", "shadow fleet", "insurance", "export"])
+  tags: [supply_chain, disruption, lane]
+
+sources:
+  - source_selector:
+      tags: [news]
+      kinds: [rss]
+      owner_tenant: shared
+    subscription:
+      canonical_only: true
+
+allowed_action_packs: []
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  routing: []

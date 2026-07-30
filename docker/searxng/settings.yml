@@ -1,0 +1,119 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Minimal SearXNG settings for the local external-retrieval (R-3) plane.
+#
+# THE ONE LOAD-BEARING LINE is `search.formats: [html, json]` — JSON output is
+# OFF in SearXNG's stock settings, and without it every programmatic query
+# returns HTML and the caller parses nothing (silently, with HTTP 200).
+#
+# Everything else here is deliberately close to upstream defaults: this file
+# exists to enable JSON and to bound the instance, not to tune ranking. It is
+# mounted read-only at /etc/searxng/settings.yml (SEARXNG_SETTINGS_PATH).
+#
+# The instance is loopback-bound and profile-gated (`--profile search`), and it
+# is INERT with respect to analysis until an operator both points a search
+# component at it and grants the `web_access` pack to a specific analyst.
+
+use_default_settings: true
+
+general:
+  # No public instance chrome; this is an internal service.
+  instance_name: "legba-search"
+  # Do not phone home about errors.
+  enable_metrics: false
+
+search:
+  # ── the load-bearing line ────────────────────────────────────────────────
+  formats:
+    - html
+    - json
+  # Neutral safe-search: an intelligence corpus must not silently drop
+  # conflict/casualty results as "unsafe".
+  safe_search: 0
+  # Keep the language unset so multilingual desks (fr/ar/ru/es sources) are
+  # not implicitly narrowed to English.
+  autocomplete: ""
+
+server:
+  # Overridden by SEARXNG_SECRET from the environment; never commit a real one.
+  secret_key: "change-me-via-SEARXNG_SECRET"
+  limiter: false
+  image_proxy: false
+
+# Bound the outbound behavior: a self-hosted meta-search that hammers upstream
+# engines gets banned faster (R-3a risk 3 — bans surface as an HTTP 200 with an
+# empty results[] plus entries in `unresponsive_engines`, which the provider
+# handler MUST read to distinguish "engines refused us" from "nothing exists").
+outgoing:
+  request_timeout: 10.0
+  max_request_timeout: 15.0
+  pool_connections: 10
+  pool_maxsize: 10
+
+# ── Engine diversity: the anti-single-point-of-failure measure ─────────────
+#
+# Measured on this host 2026-07-28: of the stock general-category engines,
+# brave / duckduckgo / startpage all refused us immediately (rate-limit and
+# CAPTCHA — a datacenter IP is the cause, not our query rate), leaving
+# `google cse` as the ONLY engine returning results. 100% of results from one
+# scraped engine is exactly the posture that produces a silent zero-result day
+# (HTTP 200, empty results[], reads as "nothing exists").
+#
+# The durable fix is not to beat the CAPTCHAs — it is to spread across engines
+# that answer datacenter traffic without one, several of which run their OWN
+# index rather than reselling Google/Bing (Mojeek, Marginalia-class, mwmbl).
+# Independent indexes also widen genuine coverage: they surface pages the
+# majors rank away, which is the point for OSINT.
+#
+# Engines that need an operator API key (Brave Search API, Google Programmable
+# Search) are NOT configured here — those are an operator decision and, being
+# licensed rather than scraped, are the ToS-cleanest way to restore the banned
+# names. See planning/SEARCH_PROVIDER_REVIEW_2026-07-28.md.
+engines:
+  # Independent indexes — the reliability backbone.
+  - name: mojeek
+    disabled: false
+  - name: mojeek news
+    disabled: false
+  - name: mwmbl
+    disabled: false
+  # DuckDuckGo's alternate implementation: the stock `duckduckgo` engine posts
+  # to the html.duckduckgo.com no-JS form and gets served the "not a robot"
+  # challenge from our IP. `duckduckgo web` takes a different door — it reads
+  # the links.duckduckgo.com/d.js API URL off a normal result page — so it is
+  # worth measuring rather than assuming. If it is challenged too, leave it:
+  # DuckDuckGo publishes NO official web-search API (their public API returns
+  # instant answers only), and DDG's web index is substantially Bing-derived,
+  # which we now query directly — so the coverage loss is small.
+  - name: duckduckgo web
+    disabled: false
+  # MEASURED: `duckduckgo web` returns results from this host; the stock
+  # `duckduckgo` stays CAPTCHA'd. Disable the stock one — it is now redundant
+  # coverage that only adds a failed request and per-query latency.
+  - name: duckduckgo
+    disabled: true
+  # mwmbl times out consistently (a small volunteer index) — pure latency cost.
+  - name: mwmbl
+    disabled: true
+  # Broad-coverage keyless engines that generally answer datacenter traffic.
+  - name: qwant
+    disabled: false
+  - name: qwant news
+    disabled: false
+  - name: bing
+    disabled: false
+  - name: yahoo
+    disabled: false
+  - name: presearch
+    disabled: false
+  - name: presearch news
+    disabled: false
+  # Regional/native-language news — our desks are multilingual, and these are
+  # the outlets a Google-only view under-weights.
+  - name: tagesschau
+    disabled: false
+  - name: ansa
+    disabled: false
+  - name: abcnyheter
+    disabled: false

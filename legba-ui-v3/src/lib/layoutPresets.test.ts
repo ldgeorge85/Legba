@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import type { DockviewApi, SerializedDockview } from 'dockview-react'
 import {
   LAYOUT_PRESETS,
+  DEFAULT_BOOT_LAYOUT,
   applyPreset,
   findPreset,
   hasCustomLayout,
@@ -101,6 +102,128 @@ describe('layout presets', () => {
     const fake = fakeApi()
     applyPreset(fake.api, findPreset('operations')!, () => {})
     expect(fake.cleared).toBe(1)
+  })
+})
+
+describe('U-4 — the cold-boot default layout answers "what changed"', () => {
+  it('includes the movers-since-last-visit tile', () => {
+    expect(DEFAULT_BOOT_LAYOUT.map((p) => p.kind)).toContain('system.wall_movers')
+  })
+
+  it('every boot-layout kind is a real, non-binding singleton (same integrity bar as the named presets)', () => {
+    for (const placement of DEFAULT_BOOT_LAYOUT) {
+      const entry = PANEL_REGISTRY[placement.kind]
+      expect(entry, placement.kind).toBeDefined()
+      expect(entry.definition.requiresBinding).toBe(false)
+    }
+  })
+
+  it('the anchor (v4.kpi) comes first; every other placement references an earlier panel', () => {
+    expect(DEFAULT_BOOT_LAYOUT[0]).toEqual({ kind: 'v4.kpi' })
+    const seen = new Set<string>()
+    DEFAULT_BOOT_LAYOUT.forEach((placement, i) => {
+      if (i === 0) {
+        expect(placement.position).toBeUndefined()
+      } else {
+        expect(placement.position, placement.kind).toBeDefined()
+        expect(seen.has(placement.position!.referencePanel), placement.kind).toBe(true)
+      }
+      seen.add(placement.kind)
+    })
+  })
+
+  it('movers sits directly under the KPI strip, above the feed — a full-width band, not a cramped extra column', () => {
+    const movers = DEFAULT_BOOT_LAYOUT.find((p) => p.kind === 'system.wall_movers')!
+    expect(movers.position).toEqual({ referencePanel: 'v4.kpi', direction: 'below' })
+    const feed = DEFAULT_BOOT_LAYOUT.find((p) => p.kind === 'system.findings')!
+    expect(feed.position).toEqual({ referencePanel: 'system.wall_movers', direction: 'below' })
+  })
+
+  it('every pre-U-4 boot surface is still seeded (nothing already on boot was dropped to make room)', () => {
+    const kinds = DEFAULT_BOOT_LAYOUT.map((p) => p.kind)
+    expect(kinds).toEqual(
+      expect.arrayContaining([
+        'v4.kpi',
+        'system.findings',
+        'v4.map',
+        'v4.assessment',
+        'system.inspector',
+        'system.timeline',
+      ]),
+    )
+  })
+
+  it('applyPreset-style seeding (the mechanism App.tsx boot reuses) walks the boot layout in order', () => {
+    const calls: string[] = []
+    const open: SingletonOpener = (kind) => calls.push(kind)
+    for (const placement of DEFAULT_BOOT_LAYOUT) open(placement.kind, placement.position)
+    expect(calls).toEqual(DEFAULT_BOOT_LAYOUT.map((p) => p.kind))
+  })
+
+  it('is NOT one of the user-selectable named presets — it is the automatic cold-boot seed, not an opt-in', () => {
+    expect(LAYOUT_PRESETS.some((p) => p.panels === DEFAULT_BOOT_LAYOUT)).toBe(false)
+    expect(LAYOUT_PRESETS.map((p) => p.id)).not.toContain('boot')
+    expect(findPreset('boot')).toBeUndefined()
+    expect(findPreset('default')).toBeUndefined()
+  })
+})
+
+describe('U-4 — a saved custom layout is never touched by the boot-grid change', () => {
+  // The acceptance bar: a returning user who saved a layout BEFORE this
+  // feature shipped (so their serialized layout has no idea `system.
+  // wall_movers` exists) must get that EXACT layout back, unmodified, when
+  // they restore it — the boot-grid change only affects what seeds on a
+  // COLD boot (no saved layout / before Restore is clicked).
+  const PRE_U4_SAVED_LAYOUT = {
+    grid: {
+      root: { type: 'leaf', data: { views: ['system.findings', 'system.inspector'] } },
+      width: 1600,
+      height: 900,
+    },
+  } as unknown as SerializedDockview
+
+  it('loadCustomLayout restores the pre-existing layout byte-for-byte, with no system.wall_movers merged in', () => {
+    const save = fakeApi(PRE_U4_SAVED_LAYOUT)
+    saveCustomLayout(save.api, 'personal')
+
+    const restore = fakeApi()
+    const ok = loadCustomLayout(restore.api, 'personal')
+    expect(ok).toBe(true)
+    expect(restore.state).toEqual(PRE_U4_SAVED_LAYOUT)
+    // The literal serialized JSON must not mention the new kind anywhere —
+    // proves nothing in the load path injects it.
+    expect(JSON.stringify(restore.state)).not.toContain('wall_movers')
+  })
+
+  it("restoring replaces the workspace wholesale (fromJSON), so whatever the boot effect already seeded is fully superseded — the new movers tile can't leak into a restored saved layout", () => {
+    // Simulate: boot already seeded DEFAULT_BOOT_LAYOUT's kinds into the live
+    // api (as App.tsx's effect would), THEN the user clicks Restore.
+    const restore = fakeApi()
+    // Pretend the boot effect already wrote something (any prior state) —
+    // loadCustomLayout must not merge with it, only replace it.
+    restore.api.fromJSON({ grid: { pretend: 'boot-seeded-state' } } as unknown as SerializedDockview)
+    expect(restore.state).not.toEqual(PRE_U4_SAVED_LAYOUT)
+
+    const save = fakeApi(PRE_U4_SAVED_LAYOUT)
+    saveCustomLayout(save.api, 'personal')
+    const ok = loadCustomLayout(restore.api, 'personal')
+    expect(ok).toBe(true)
+    expect(restore.state).toEqual(PRE_U4_SAVED_LAYOUT)
+  })
+
+  it('saveCustomLayout / loadCustomLayout / hasCustomLayout are untouched by DEFAULT_BOOT_LAYOUT — no shared state, no auto-merge hook', () => {
+    // The persistence trio only ever touches CUSTOM_LAYOUT_KEY via
+    // toJSON/fromJSON; DEFAULT_BOOT_LAYOUT is a plain, unimported-by-them
+    // constant. Prove they're independent: saving/loading a layout that
+    // NEVER mentions any boot-grid kind still round-trips cleanly.
+    localStorage.clear()
+    expect(hasCustomLayout('personal')).toBe(false)
+    const save = fakeApi(PRE_U4_SAVED_LAYOUT)
+    saveCustomLayout(save.api, 'personal')
+    expect(hasCustomLayout('personal')).toBe(true)
+    const restore = fakeApi()
+    expect(loadCustomLayout(restore.api, 'personal')).toBe(true)
+    expect(restore.state).toEqual(PRE_U4_SAVED_LAYOUT)
   })
 })
 

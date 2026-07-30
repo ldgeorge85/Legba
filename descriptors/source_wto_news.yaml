@@ -1,0 +1,87 @@
+# Supply-chain domain — top-10 first registrations (2026-07-29). Draft
+# SourceDescriptor. Ships DRAFT (operator activates).
+#
+# REGISTRATION STEP (main session): register via a Wave-A-style direct-DB
+# registrar — see scripts/bringup_register_supply_chain_sources.py in this
+# same commit — then, on the live instance:
+#   docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
+#     python scripts/bringup_register_supply_chain_sources.py
+#
+# WTO — Latest news (World Trade Organization). Official trade-policy body;
+# per the pack plan's T-1 gap slot
+# (planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §5.2), trade-measure /
+# trade-policy content feeds the existing `economic_coercion` unit (already
+# live on all 32 country desks) as cross-domain input, NOT a new
+# supply-chain lane/flow desk directly — see §1.3's explicit NO on a
+# `trade_export_controls` desk. Verified live 2026-07-29 per
+# planning/SUPPLY_CHAIN_SOURCES_2026-07-29.md §2.F (§5 rank #8): HTTP 200,
+# latest item 2026-07-28, robots.txt clean, free/no-auth, official body.
+#
+# source_class: official — primary-source multilateral trade institution
+# (like un.org / state.gov). Credibility host wto.org (seeded 0.85/gov by the
+# registrar, state_affiliation True — an intergovernmental body, same
+# treatment as un.org).
+
+identity:
+  id: source.wto.news
+  name: WTO — Latest News
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: supply_chain_top10
+  created: "2026-07-29T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  # Global multilateral trade-policy body — no single-country focus (mirrors
+  # un_press.geo == []).
+  geo: []
+  languages: [en]
+  tags: [supply_chain, trade, gov, economic]
+  source_class: official
+
+acquisition: poll
+
+cadence:
+  # "several/week" — the every-6h "daily-tier" bucket (matches un_press/
+  # stategov_press for lower-cadence official bodies), not the every-2h wire
+  # bucket.
+  schedule:
+    factory_kind: cron
+    raw: "24 5-23/6 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.wto.org/library/rss/latest_news_e.xml"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming the
+    # route yields full article text (mirrors the Wave-A conservative default).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

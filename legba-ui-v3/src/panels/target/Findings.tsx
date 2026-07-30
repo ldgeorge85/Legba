@@ -26,6 +26,7 @@ import { cn } from '@/lib/cn'
 import { selectRow } from '@/state/selection'
 import CitedProse from '@/components/CitedProse'
 import { extractCitations } from '@/lib/citationsModel'
+import { humanizeAnalystId } from '@/lib/analystNames'
 
 interface FindingRow {
   id: string
@@ -226,8 +227,8 @@ function FindingItem({
             </div>
           )}
 
-          <div className="text-[10px] text-slate-500">
-            {f.analyst_id ?? 'unknown analyst'} · {new Date(f.produced_at).toLocaleString()}
+          <div className="text-[10px] text-slate-500" title={f.analyst_id ?? undefined}>
+            {humanizeAnalystId(f.analyst_id)} · {new Date(f.produced_at).toLocaleString()}
           </div>
 
           <div>

@@ -494,6 +494,10 @@ async def verify_inline_target_finding(
     # provenance records which model judged, forever. "" = floor-only (no judge
     # wired); judge_status in the report says whether the judge actually graded.
     judge_llm_ref = str(getattr(deps, "verify_judge_ref", "") or "")
+    # W-3d: the judge-route CLASS (configured|fallback_verify|fallback_primary)
+    # the host resolved alongside the ref — the badge's configured-vs-fell-back
+    # signal. "" = floor-only (no judge wired), same contract as the ref.
+    judge_route = str(getattr(deps, "verify_judge_route", "") or "")
 
     payload = build_faithfulness_critique_payload(
         report,
@@ -503,6 +507,7 @@ async def verify_inline_target_finding(
         analyzed_model=analyzed_model,
         judge_model=judge_model,
         judge_llm_ref=judge_llm_ref,
+        judge_route=judge_route,
     )
 
     # The verify pass IS the critic here — stamp the analyst_ctx with this

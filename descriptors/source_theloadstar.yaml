@@ -1,0 +1,86 @@
+# Supply-chain domain — top-10 first registrations (2026-07-29). Draft
+# SourceDescriptor. Ships DRAFT (operator activates).
+#
+# REGISTRATION STEP (main session): register via a Wave-A-style direct-DB
+# registrar — see scripts/bringup_register_supply_chain_sources.py in this
+# same commit — then, on the live instance:
+#   docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
+#     python scripts/bringup_register_supply_chain_sources.py
+#
+# The Loadstar — core freight/logistics trade press, beat spans ocean/air/rail
+# freight (broader multimodal scope than Splash247's maritime focus). Feeds
+# the F-1 freight/logistics-press gap slot
+# (planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §5.2) generically across the
+# lane_* desks; global beat, no single-country focus, geo stays empty.
+# Verified live 2026-07-29 per planning/SUPPLY_CHAIN_SOURCES_2026-07-29.md §2.B
+# (§5 rank #4): HTTP 200, same-day items, robots.txt clean. Free — deep
+# analysis pieces are sometimes paywalled on-site, but the RSS feed itself
+# (headline + summary) is open.
+#
+# source_class: reporting — independent commercial trade press. Credibility
+# host theloadstar.com (seeded 0.68/wire by the registrar) — regarded within
+# the freight/logistics trade as one of the more analytically substantive
+# outlets (comparable rationale to breakingdefense/defensenews in the Wave-A
+# defense-press band).
+
+identity:
+  id: source.theloadstar.news
+  name: The Loadstar
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: supply_chain_top10
+  created: "2026-07-29T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  # Global ocean/air/rail freight-logistics trade press — no single-country
+  # editorial focus; consuming lane_* targets narrow by scope.geo/predicate.
+  geo: []
+  languages: [en]
+  tags: [supply_chain, freight, logistics, maritime]
+  source_class: reporting
+
+acquisition: poll
+
+cadence:
+  # "several/day, very active" — the every-2h wire bucket.
+  schedule:
+    factory_kind: cron
+    raw: "16 0-23/2 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://theloadstar.com/feed/"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming the
+    # route yields full article text (mirrors the Wave-A conservative default).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

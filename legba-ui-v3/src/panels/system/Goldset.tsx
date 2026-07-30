@@ -20,9 +20,11 @@ import { useState } from 'react'
 import { CheckCircle2 } from 'lucide-react'
 import { PanelChrome } from '@/components/PanelChrome'
 import CitedProse from '@/components/CitedProse'
+import { InfoTip } from '@/components/InfoTip'
 import { RecordLink } from '@/components/inspector/RecordLink'
 import { extractCitations } from '@/lib/citationsModel'
 import { relTime } from '@/lib/evalOps'
+import { FAITHFULNESS_EXPLAIN } from '@/lib/verdictModel'
 import {
   emptyStateMessage,
   fetchGoldsetWorksheet,
@@ -173,9 +175,13 @@ export default function GoldsetPanel({ registration }: PanelProps) {
                 />
               )}
               {item.faithfulness !== null && (
-                <span className="font-mono text-slate-500" title="faithfulness verify score">
+                <InfoTip
+                  text={`${FAITHFULNESS_EXPLAIN} This read: ${item.faithfulness.toFixed(2)}.`}
+                  className="font-mono text-slate-500"
+                  testId={`goldset-faith-${item.finding_id}`}
+                >
                   faith {item.faithfulness.toFixed(2)}
-                </span>
+                </InfoTip>
               )}
               {item.superseded && (
                 <span

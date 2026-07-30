@@ -99,6 +99,8 @@ from ..data.analysts.deterministic_handlers.finding_supersession import (
     fold_prior_composition_heads,
     fold_prior_correlation_heads,
 )
+from ..data.provenance.bearing import record_bearing_edge
+from ..data.provenance.consumption import record_output_consumption
 from ..data.provenance.writes import write_analyst_output
 from ..data.schemas.analyst import AnalystDescriptor
 from ..data.schemas.target import TargetDescriptor
@@ -144,6 +146,113 @@ def _is_organic_trigger(trigger_kind: str) -> bool:
     """True when a run is an ORGANIC schedule/reactive fire (stamps the cadence
     cooldown), False only for the manual/forced 'method' path."""
     return trigger_kind not in _FORCED_TRIGGERS
+
+
+#: X-1 receipt phase name. Appears in ``analyst_traces.intermediate_steps``
+#: whenever a descriptor declared ``method.options`` — stating what was applied
+#: AND what was dropped, so a knob that silently failed to take effect is a
+#: query away rather than an invisible non-event.
+HANDLER_OPTIONS_RECEIPT_PHASE = "handler_options"
+
+
+def _merge_descriptor_options(
+    options: dict[str, Any],
+    descriptor: Any,
+    *,
+    actor_id: str = "",
+) -> dict[str, Any] | None:
+    """Merge a deterministic descriptor's ``method.options`` into ``options``.
+
+    THE X-1 repair: before this existed the runtime built ``options`` from
+    scratch at fire time and ``MethodBlock`` had no ``options`` field, so every
+    ``options.get(knob, DEFAULT)`` in every deterministic handler resolved to
+    its in-source default forever — declared, documented, unreachable config.
+
+    Mutates ``options`` in place using ``setdefault``, so anything the runtime
+    or an explicit ad-hoc invocation already placed wins. Returns the receipt
+    dict to attach to the run trace, or ``None`` when the descriptor declared
+    no options — the byte-identical path, which touches neither the mapping nor
+    the trace.
+
+    Never raises: an unknown or out-of-range key is dropped with a WARNING and
+    a receipt entry, and the handler default stands.
+    """
+    method = getattr(descriptor, "method", None)
+    raw = dict(getattr(method, "options", None) or {})
+    if not raw:
+        return None
+
+    identity = getattr(descriptor, "identity", None)
+    analyst_id = str(getattr(identity, "id", "") or "")
+    if str(getattr(identity, "kind", "")) != "deterministic":
+        # Refused at registration; a legacy registry row could still carry one.
+        logger.warning(
+            "dapr_actors.analyst.handler_options.ignored actor_id=%s "
+            "analyst_id=%s kind=%s — method.options is read only for "
+            "deterministic analysts",
+            actor_id, analyst_id, getattr(identity, "kind", None),
+        )
+        return {
+            "phase": HANDLER_OPTIONS_RECEIPT_PHASE,
+            "status": "ignored_non_deterministic",
+            "applied": {},
+            "rejected": [
+                {"key": k, "cause": "non_deterministic_kind", "detail": ""}
+                for k in sorted(raw)
+            ],
+        }
+
+    from ..data.analysts.handler_options import resolve_handler_options
+
+    sub_handler = str(options.get("sub_handler") or analyst_id)
+    resolution = resolve_handler_options(
+        sub_handler,
+        raw,
+        log_context=f"{analyst_id}@{getattr(identity, 'version', '')}",
+    )
+    for key, value in resolution.accepted.items():
+        options.setdefault(key, value)
+    if resolution.rejected:
+        logger.warning(
+            "dapr_actors.analyst.handler_options.degraded actor_id=%s "
+            "sub_handler=%s applied=%d rejected=%d — see the per-key "
+            "handler_options.rejected lines above",
+            actor_id, sub_handler, len(resolution.accepted),
+            len(resolution.rejected),
+        )
+    else:
+        logger.info(
+            "dapr_actors.analyst.handler_options.applied actor_id=%s "
+            "sub_handler=%s keys=%s",
+            actor_id, sub_handler, sorted(resolution.accepted),
+        )
+    return {
+        "phase": HANDLER_OPTIONS_RECEIPT_PHASE,
+        "status": "degraded" if resolution.degraded else "applied",
+        "sub_handler": sub_handler,
+        "applied": dict(resolution.accepted),
+        "rejected": [r.as_dict() for r in resolution.rejected],
+    }
+
+
+def _attach_option_receipt(method_result: Any, receipt: dict[str, Any] | None) -> None:
+    """Stamp the X-1 option receipt onto the run's ``intermediate_steps``.
+
+    ``intermediate_steps`` is what the receipt chain writes to
+    ``analyst_traces.intermediate_steps``, so this is the durable, per-run
+    answer to "which knobs actually took effect, and which were dropped".
+    Best-effort — a result object without the field never breaks a run.
+    """
+    if not receipt or method_result is None:
+        return
+    try:
+        steps = list(getattr(method_result, "intermediate_steps", None) or [])
+        steps.append(dict(receipt))
+        method_result.intermediate_steps = steps
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning(
+            "dapr_actors.analyst.handler_options.receipt_failed err=%s", exc
+        )
 
 
 _FACTORY_KEY_HINTS = (
@@ -338,6 +447,14 @@ class _AnalystDeps(BaseModel):
     # faithfulness critique row (``judge_llm_ref``) so provenance records which
     # model judged, forever. ``""`` = no judge wired (floor-only).
     verify_judge_ref: str = ""
+    # W-3d — the judge-route CLASS (``JudgeRoute.route_class``) behind
+    # ``verify_judge``: ``configured`` (env override / method.llm.judge) |
+    # ``fallback_verify`` (method.llm.verify — today's live rung) |
+    # ``fallback_primary`` (terminal rung). Stamped alongside
+    # ``judge_llm_ref`` (``judge_route`` on the critique) so the UI provenance
+    # badge can tell an explicit judge choice from a ladder fallback without
+    # re-deriving the resolution. ``""`` = no judge wired (floor-only).
+    verify_judge_route: str = ""
 
 
 _TARGET_DEPS: dict[str, _TargetDeps] = {}
@@ -2241,6 +2358,22 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                         getattr(deps_bundle.descriptor.method, "sub_handler", None)
                         or deps_bundle.descriptor.identity.id
                     )
+                # X-1 — descriptor-declared handler options. THE channel that
+                # makes every deterministic handler's ``options.get(knob,
+                # DEFAULT)`` reachable: without this merge the descriptor's
+                # ``method.options`` block never touched the mapping the handler
+                # reads, so the in-source default always won and the knob was
+                # dead config no operator could move.
+                #
+                # Placed AFTER both the runtime-built keys and the per-run
+                # payload pass-through, and merged with ``setdefault``, so the
+                # precedence ladder is: runtime provenance > an explicit ad-hoc
+                # invocation > the descriptor > the handler's own default.
+                # An explicit force-run parameter must still beat the standing
+                # descriptor config.
+                option_receipt = _merge_descriptor_options(
+                    options, deps_bundle.descriptor, actor_id=actor_id
+                )
                 # S5: re-point the agentic inline_target GATHER binding to the
                 # RUNNING target's allow-list (the three-way gate's allow leg is
                 # per-target). The host wired the base binding (assessor grant
@@ -2425,6 +2558,11 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                     # sets method_result or re-raises. Re-raise to keep the
                     # outer handler in charge of classification.
                     raise last_exc
+
+                # X-1 receipt: which descriptor-declared knobs took effect this
+                # run, and which were dropped. No options declared → no step
+                # appended (the byte-identical path).
+                _attach_option_receipt(method_result, option_receipt)
 
                 # Kinds that read their own substrate (consult_on_demand
                 # ReAct tool calls) collect refs DURING run_method and
@@ -2632,6 +2770,85 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                             "error": "analyst output failed validation, sent to DLQ",
                         }
 
+                    # KW-1 — forward-consumption index (migration 0106).
+                    # Kinds that stamp ``consumed_edges`` at their consumption
+                    # points (the composition basis/periphery split in
+                    # meta_findings_synthesizer._run; the journal's rendered
+                    # slice selection in journal_assessor.run_method) get those
+                    # edges materialized HERE — same conn/flow as the output
+                    # write, with the just-written row as the consumer.
+                    # Data-driven (result attribute, no kind switch): kinds
+                    # that don't stamp it are byte-for-byte unchanged.
+                    # Degrade-not-break at BOTH layers: the writer never
+                    # raises, and this guard mirrors the composition-fold
+                    # discipline so a failure can never fail the run.
+                    _consumed_edges = getattr(
+                        method_result, "consumed_edges", None
+                    )
+                    if _consumed_edges:
+                        try:
+                            await record_output_consumption(
+                                conn,
+                                consumer_id=output_row.id,
+                                consumer_kind=(
+                                    deps_bundle.descriptor.identity.kind
+                                ),
+                                edges=_consumed_edges,
+                            )
+                        except Exception as exc:  # pragma: no cover - defensive
+                            logger.warning(
+                                "dapr_actors.output_consumption.failed "
+                                "run_id=%s err=%s", run_id, exc,
+                            )
+
+                    # R-1 — corpus_researcher backlog answer-link (bearing_edges,
+                    # migration 0107). Data-driven, no kind switch: ANY finding
+                    # whose payload.data carries 'addressed_question' (stamped by
+                    # inline_target.run_method's REFLECT phase when it resolved the
+                    # model's addressed_question TAG against the GROUND-phase
+                    # standing-question sink) gets ONE bearing_edges row
+                    # finding -> question. APPEND-ONLY POINTER ONLY: this NEVER
+                    # touches the question's status or content — see
+                    # data.provenance.bearing's module docstring. Kinds that never
+                    # stamp it (every analyst outside this backlog path) are
+                    # byte-for-byte unchanged. Degrade-not-break: the writer never
+                    # raises, and this guard mirrors the consumption-fold
+                    # discipline above so a failure can never fail the run.
+                    _addressed_q = (
+                        output_payload.data.get("addressed_question")
+                        if isinstance(getattr(output_payload, "data", None), dict)
+                        else None
+                    )
+                    if (
+                        isinstance(_addressed_q, Mapping)
+                        and _addressed_q.get("hypothesis_id")
+                    ):
+                        try:
+                            _dst_id = UUID(str(_addressed_q["hypothesis_id"]))
+                            _dst_as_of_raw = _addressed_q.get("produced_at")
+                            _dst_as_of = (
+                                datetime.fromisoformat(str(_dst_as_of_raw))
+                                if _dst_as_of_raw
+                                else output_row.produced_at
+                            )
+                            await record_bearing_edge(
+                                conn,
+                                src_kind="finding",
+                                src_id=output_row.id,
+                                src_as_of=output_row.produced_at,
+                                dst_kind="hypothesis",
+                                dst_id=_dst_id,
+                                dst_as_of=_dst_as_of,
+                                weight=1.0,
+                                planes=["corpus_research"],
+                                matcher_version="corpus_researcher_backlog/1.0.0",
+                            )
+                        except Exception as exc:  # pragma: no cover - defensive
+                            logger.warning(
+                                "dapr_actors.bearing_edge.failed "
+                                "run_id=%s err=%s", run_id, exc,
+                            )
+
                     # FU6 — LIVE composition-head fold. A composition finding
                     # (country/region/world/thematic) stamps a stable
                     # ``data['situation_signature']`` but is EXCLUDED from the
@@ -2688,6 +2905,44 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                                     "dapr_actors.correlation_fold.failed run_id=%s "
                                     "err=%s", run_id, exc,
                                 )
+
+                    # K-2b (open-question faucet) — a FINDING payload carrying
+                    # the OPTIONAL ``data.open_questions`` block (the inline
+                    # units' single-shot JSON route; validated by the payload
+                    # schema) is converted post-persist into first-class
+                    # queryable ``hypotheses`` rows (status='open_question',
+                    # lineage = the finding + its resolved citation signals,
+                    # the unit + target stamped via analyst_ctx). Idempotent
+                    # per (finding, question-text). DEGRADE-NOT-BREAK: any
+                    # failure logs and the run completes unchanged.
+                    _oq_data = getattr(output_payload, "data", None)
+                    if (
+                        output_kind == OutputKind.FINDING
+                        and isinstance(_oq_data, dict)
+                        and _oq_data.get("open_questions")
+                    ):
+                        try:
+                            from ..data.analysts.inline_target import (
+                                convert_open_questions,
+                            )
+
+                            _oq_written = await convert_open_questions(
+                                conn,
+                                finding_data=_oq_data,
+                                finding_id=output_row.id,
+                                analyst_ctx=analyst_ctx,
+                            )
+                            if _oq_written:
+                                logger.info(
+                                    "dapr_actors.open_questions.converted "
+                                    "run_id=%s finding=%s rows=%d",
+                                    run_id, output_row.id, _oq_written,
+                                )
+                        except Exception as exc:  # pragma: no cover - defensive
+                            logger.warning(
+                                "dapr_actors.open_questions.convert_failed "
+                                "run_id=%s err=%s", run_id, exc,
+                            )
 
                 # Extend the per-analyst receipt chain (L-107 §7) when one
                 # is wired. The chain INSERT lands in ``analyst_traces``
@@ -3250,9 +3505,12 @@ from .actor_substrate_slice import (  # noqa: F401  -- re-export: public API sta
 __all__ = [
     "AnalystActor",
     "AnalystActorInterface",
+    "HANDLER_OPTIONS_RECEIPT_PHASE",
     "TargetActor",
     "TargetActorInterface",
     "_AnalystDeps",
+    "_attach_option_receipt",
+    "_merge_descriptor_options",
     "_PAYLOAD_SELECTORS",
     "_TargetDeps",
     "_bucket_end_iso",

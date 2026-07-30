@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Supply-chain pack — Tier-A desk 2/6: the Red Sea / Bab el-Mandeb / Suez corridor.
+# planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §1.1.
+#
+# The full shape rationale (the 360-row pre-filter, why scope.geo is the SQL
+# pushdown and contains_any only a refiner, why no US in the geo set, why no
+# inline `analyst:` block, why no g20/watch tag, why no source_id pin) is written
+# out once in descriptors/target_lane_hormuz.yaml — read that header first.
+#
+# WHY THIS DESK: 270 titles / 30d (houthi 177, red sea 86, bab el-mandeb 7,
+# suez 6) across 25-28 sources. The LOWEST-volume Tier-A lane (measured 47
+# canonical rows / 24h against the geo set below — ample headroom under the 360
+# cap) but the cleanest disruption-vs-baseline contrast in the corpus: the
+# rerouting signal (Cape of Good Hope diversions) is explicit in the reporting.
+#
+# Ships `state: draft`; activation is a deliberate main-session FSM step after
+# scripts/preflight_supply_chain_lanes.py.
+
+identity:
+  id: lane_red_sea
+  name: "Lane — Red Sea / Bab el-Mandeb / Suez"
+  schema_uri: legba/target/2.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  inherits: []
+  state: draft
+  owner: supply_chain_pack
+  created: "2026-07-29T00:00:00Z"
+
+scope:
+  domain: thematic
+  themes: [supply_chain, maritime, chokepoint, shipping, canal]
+  # THE SQL PUSHDOWN — the Red Sea littoral + the Suez terminus.
+  geo: [YE, ER, DJ, EG, SD, SO]
+  entity_classes:
+    - country
+    - organization
+    - corporation
+    - infrastructure
+    - commodity
+    - location
+    - international_org
+    - event_series
+    - person
+    - military_unit
+    - armed_group
+    - concept
+  relationship_types:
+    - TradesWith
+    - SanctionsAgainst
+    - HostileTo
+    - OperatesIn
+    - LocatedIn
+    - PartOf
+    - Targets
+    - MilitaryPresenceIn
+    - PartnersWith
+    - CompetesWith
+  time_horizon_days: 90
+  predicate: >-
+    contains_any(["red sea", "bab el-mandeb", "suez", "houthi", "tanker",
+                  "vessel", "shipping", "transit", "attack", "drone",
+                  "missile", "rerouting", "cape of good hope"])
+  tags: [supply_chain, disruption, lane]
+
+sources:
+  - source_selector:
+      tags: [news]
+      kinds: [rss]
+      owner_tenant: shared
+    subscription:
+      canonical_only: true
+
+allowed_action_packs: []
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  routing: []

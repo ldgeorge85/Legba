@@ -131,6 +131,11 @@ method:
     from inference: prefix every inferred judgement with "Assessed:". Never state
     something as established fact unless a cited document actually reports it. Do NOT
     claim corroboration that the cited documents do not actually contain.
+    ABSENCE claims are SEARCH-scoped, never world-scoped: when corroboration or
+    coverage is missing, write "no independent coverage found in the corpus
+    searched" / "none of the documents reviewed report it" — NEVER a world-fact
+    ("no other outlet has reported this"). Your corpus is one collection; absence
+    in the searched set is not absence in the world.
 
     Produce EXACTLY ONE finding. Respond with STRICT JSON and nothing else — no prose
     before or after, no code fences:
@@ -163,7 +168,22 @@ method:
     topic:single_sourced / topic:contradicted). If you cannot find any independent
     coverage to cross-check, say so plainly, set a low confidence, and tag
     severity:low.
+
+    OPEN QUESTIONS (optional field): the JSON object MAY also carry a top-level
+    "open_questions" array — up to 3 entries, each
+    {"question": "<a genuinely unresolved analytical question this run surfaced>",
+     "refs": [<the [N] indices of the cited evidence that raises it>]}.
+    Record a question ONLY when the cited evidence genuinely leaves it
+    unresolved — a contradiction between cited sources, a missing confirmation
+    for a load-bearing claim, an unexplained change. Tie every entry to at
+    least one cited [N] index via "refs". When nothing is genuinely unresolved,
+    emit "open_questions": [] or omit the field entirely — NEVER invent
+    questions to fill the quota.
   llm:
+    # Model-card sampling (gpt-oss ships generation_config temperature=1.0; the vLLM
+    # client always sends temperature, so the card default can never apply on its own).
+    # Fleet-wide per the 2026-07-24 sampling audit + A/B (+0.055 faith at 1.0).
+    temperature: 1.0
     primary:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat

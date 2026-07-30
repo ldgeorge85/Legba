@@ -288,6 +288,100 @@ async def test_meta_findings_synthesizer_builds() -> None:
     assert kind_deps is not None
     assert kind_deps.llm is llm
     assert output_kind == OutputKind.FINDING
+    # No descriptor temperature ⇒ the carrier says "descriptor didn't say"
+    # (None) and the kind module's own DEFAULT_TEMPERATURE governs.
+    assert kind_deps.temperature is None
+
+
+@pytest.mark.asyncio
+async def test_meta_findings_synthesizer_honors_descriptor_temperature() -> None:
+    """2026-07-24 sampling-audit fix: ``method.llm.temperature`` on a
+    composition descriptor reaches the kind_deps carrier (the unit
+    inline_target path already honored it; this kind silently dropped it)."""
+    descriptor = _llm_descriptor(AnalystKind.META_FINDINGS_SYNTHESIZER)
+    descriptor.method.llm["temperature"] = 0.7
+    llm = _StubLLMHandler()
+    _run_method, kind_deps, _output_kind, _rc, _rs = await build_analyst_run_method(
+        descriptor,
+        deps=_standard_deps(),
+        registry_client=RegistryHTTPClient(base_url="http://invalid"),
+        pg_pool=object(),  # type: ignore[arg-type]
+        llm_handler_factory=AsyncMock(return_value=llm),
+    )
+    assert kind_deps is not None
+    assert kind_deps.temperature == pytest.approx(0.7)
+
+
+@pytest.mark.asyncio
+async def test_meta_findings_synthesizer_descriptor_temperature_reaches_llm_call() -> None:
+    """End-to-end through the kind's run_method: the deps-carried temperature
+    lands on the actual chat_complete call; absent ⇒ the kind default."""
+    from legba.data.analysts.meta_findings_synthesizer import (
+        DEFAULT_TEMPERATURE,
+        run_method as meta_rm,
+    )
+
+    class _CapturingLLM:
+        subprovider = "capture"
+
+        def __init__(self) -> None:
+            self.temperatures: list[float | None] = []
+
+        async def chat_complete(
+            self, messages, *, max_tokens=None, temperature=None, system=None, **kw,
+        ):
+            self.temperatures.append(temperature)
+
+            class _Usage:
+                prompt_tokens = 1
+                completion_tokens = 1
+                reasoning_tokens = 0
+
+            class _Resp:
+                content = (
+                    '{"title": "t", "body": "b", "confidence": 0.5,'
+                    ' "evidence": [], "tags": []}'
+                )
+                usage = _Usage()
+
+            return _Resp()
+
+    inputs = [{
+        "id": "11111111-1111-1111-1111-111111111111",
+        "kind": "finding",
+        "title": "x",
+        "body": "y",
+        "confidence": 0.5,
+        "analyst_id": "a1",
+        "produced_at": "2026-07-01T00:00:00+00:00",
+        "data": {},
+    }]
+
+    descriptor = _llm_descriptor(AnalystKind.META_FINDINGS_SYNTHESIZER)
+    descriptor.method.llm["temperature"] = 0.7
+    llm = _CapturingLLM()
+    _rm, kind_deps, _ok, _rc, _rs = await build_analyst_run_method(
+        descriptor,
+        deps=_standard_deps(),
+        registry_client=RegistryHTTPClient(base_url="http://invalid"),
+        pg_pool=object(),  # type: ignore[arg-type]
+        llm_handler_factory=AsyncMock(return_value=llm),
+    )
+    await meta_rm(inputs, {"analyst_id": "meta"}, kind_deps)
+    assert llm.temperatures == [pytest.approx(0.7)]
+
+    # Default path: no descriptor temperature ⇒ the kind default governs.
+    descriptor2 = _llm_descriptor(AnalystKind.META_FINDINGS_SYNTHESIZER)
+    llm2 = _CapturingLLM()
+    _rm2, kind_deps2, _ok2, _rc2, _rs2 = await build_analyst_run_method(
+        descriptor2,
+        deps=_standard_deps(),
+        registry_client=RegistryHTTPClient(base_url="http://invalid"),
+        pg_pool=object(),  # type: ignore[arg-type]
+        llm_handler_factory=AsyncMock(return_value=llm2),
+    )
+    await meta_rm(inputs, {"analyst_id": "meta"}, kind_deps2)
+    assert llm2.temperatures == [pytest.approx(DEFAULT_TEMPERATURE)]
 
 
 @pytest.mark.asyncio

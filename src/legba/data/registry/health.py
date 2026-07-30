@@ -49,6 +49,7 @@ from ..schemas.stack import (
     PostgresClusterConfig,
     ProxyPoolConfig,
     RedisClusterConfig,
+    SearchProviderConfig,
     VectorStoreConfig,
 )
 from .credentials import CredentialResolverProtocol, MissingSecretError
@@ -534,12 +535,104 @@ def _split_full_endpoint(
     return scheme, host or None, port
 
 
+class SearchProviderChecker:
+    """TCP reachability of the search endpoint. NEVER a real query.
+
+    Rationale mirrors ``LLMProviderChecker``'s no-token-burn rule, with a
+    different currency: a meta-search provider forwards every query to upstream
+    engines that ban it for looking like a bot, so a query-per-poll healthcheck
+    would spend the exact resource (upstream goodwill) that keeps the instance
+    usable.
+
+    HONEST LIMIT, recorded in ``extra['caveat']``: this probe reports HEALTHY
+    while every upstream engine is banned, because the service genuinely IS up.
+    The state that actually matters — "is it still returning results?" — is
+    detectable only by a separate LOW-CADENCE canary (a fixed control query
+    with a known-nonzero expected count, alerting on zero) wired into the
+    watchdog cron, and by the per-response ``degraded`` flag the handler sets
+    from ``unresponsive_engines``. Do not read HEALTHY here as "search works".
+    """
+
+    kind = "search_provider"
+
+    async def check(self, component_id, resolved):
+        cfg: SearchProviderConfig = resolved.config
+        endpoint = cfg.endpoint.raw
+        subprovider = cfg.subprovider.raw
+        scheme, host, port = _split_endpoint_scheme(endpoint, default_port=8080)
+        if not host:
+            return StackComponentHealth(
+                component_id=component_id, kind=self.kind,
+                state=HealthState.UNHEALTHY, checked_at=_now(),
+                detail=f"unparseable endpoint {endpoint!r}",
+                extra={"subprovider": subprovider},
+            )
+        try:
+            # Optional: keyless subproviders (searxng) resolve nothing here.
+            await resolved.secret(cfg.api_key)
+        except Exception as exc:
+            return StackComponentHealth(
+                component_id=component_id, kind=self.kind,
+                state=HealthState.UNHEALTHY, checked_at=_now(),
+                detail=f"credential resolve failed: {exc}",
+                extra={"subprovider": subprovider},
+            )
+        reachable = _tcp_reachable(host, port)
+        return StackComponentHealth(
+            component_id=component_id, kind=self.kind,
+            state=HealthState.HEALTHY if reachable else HealthState.UNHEALTHY,
+            checked_at=_now(),
+            detail=f"tcp {host}:{port} reachable={reachable}",
+            last_success_at=_now() if reachable else None,
+            extra={
+                "endpoint": endpoint,
+                "subprovider": subprovider,
+                "scheme": scheme,
+                "probe": "tcp_only",
+                "caveat": (
+                    "reachable != serving results; upstream engines can all be "
+                    "banned while this reports healthy — see the control-query "
+                    "canary, not this check"
+                ),
+            },
+        )
+
+
+def _split_endpoint_scheme(
+    endpoint: str, default_port: int,
+) -> tuple[str, str | None, int]:
+    """``(scheme, host, port)`` — the 3-tuple variant this checker needs.
+
+    ``_split_endpoint`` above returns ``(host, port)`` and defaults the port to
+    ``default_port`` regardless of scheme; the search endpoint is commonly a
+    plain ``http://host:8080/search``, so parse the scheme explicitly.
+    """
+    if not endpoint:
+        return "https", None, default_port
+    scheme = "https"
+    rest = endpoint
+    if "://" in endpoint:
+        scheme, rest = endpoint.split("://", 1)
+    rest = rest.split("/", 1)[0].split("?", 1)[0]
+    if ":" in rest:
+        host, _, port_str = rest.partition(":")
+        try:
+            port = int(port_str)
+        except ValueError:
+            port = default_port
+    else:
+        host = rest
+        port = 80 if scheme == "http" else 443 if scheme == "https" else default_port
+    return scheme, (host or None), port
+
+
 # Register the in-tree default checkers eagerly.
 for _checker in (
     LLMProviderChecker(), VectorStoreChecker(), EmbeddingChecker(),
     NLPServiceChecker(),
     PostgresChecker(), RedisChecker(),
     NATSChecker(), ProxyPoolChecker(),
+    SearchProviderChecker(),
 ):
     register_health_checker(_checker)
 

@@ -1,0 +1,84 @@
+# Supply-chain domain — top-10 first registrations (2026-07-29). Draft
+# SourceDescriptor. Ships DRAFT (operator activates).
+#
+# REGISTRATION STEP (main session): register via a Wave-A-style direct-DB
+# registrar — see scripts/bringup_register_supply_chain_sources.py in this
+# same commit — then, on the live instance:
+#   docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
+#     python scripts/bringup_register_supply_chain_sources.py
+#
+# DIGITIMES — Taiwan-based semiconductor/electronics trade press, explicitly
+# billed as "Global Supply Chain" news. Fills the S-1 semiconductor
+# trade-press gap slot (planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §5.2)
+# feeding `flow_semiconductors` (geo TW,KR,JP,NL,SG). Verified live 2026-07-29
+# per planning/SUPPLY_CHAIN_SOURCES_2026-07-29.md §2.C (§5 rank #6): HTTP 200,
+# same-day items, robots.txt clean. Free daily tier — deeper proprietary
+# research is paywalled separately, but the RSS headline/summary feed is open
+# (same posture as JOC in the shortlist's NICE tier).
+#
+# source_class: reporting — independent commercial trade press (Taiwan-based
+# publisher, not state-affiliated). Credibility host digitimes.com (seeded
+# 0.65/wire by the registrar) — sector-standard for Taiwan/APAC electronics
+# supply-chain trade coverage.
+
+identity:
+  id: source.digitimes.news
+  name: DIGITIMES
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: supply_chain_top10
+  created: "2026-07-29T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  # Taiwan-based semiconductor/electronics trade press — single-editorial-hub
+  # voice, mirrors the taipeitimes/38north single-country-focus convention.
+  geo: [TW]
+  languages: [en]
+  tags: [supply_chain, semiconductor, technology, economic]
+  source_class: reporting
+
+acquisition: poll
+
+cadence:
+  # "several/day, very active" — the every-2h wire bucket.
+  schedule:
+    factory_kind: cron
+    raw: "45 0-23/2 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.digitimes.com/rss/daily.xml"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming the
+    # route yields full article text (mirrors the Wave-A conservative default).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

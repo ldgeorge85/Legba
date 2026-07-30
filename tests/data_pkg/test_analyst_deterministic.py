@@ -126,10 +126,12 @@ async def test_run_method_each_real_sub_handler_returns_method_result():
             # calibration run without reading the substrate") — was missing
             # from this list when it landed; surfaced once the loop reached it.
             "band_calibration_tracker",
-            # A7: same refuse-loud contract ("never report a zero-convergence
-            # scan without reading the substrate"); exercised with a real pool
-            # in test_geo_convergence_scan.py.
-            "geo_convergence_scan",
+            # A7: geo_convergence_scan's alert emission folded into
+            # alert_trigger_scan (2026-07-29 consolidation) — its OWN
+            # handle() is now a deprecation stub that no longer refuses loud
+            # without a pool (it does no scanning at all), so it runs fine in
+            # THIS generic loop and no longer needs the exclusion; see
+            # test_geo_convergence_scan.py::test_stub_is_a_quiet_noop.
             # C4: same refuse-loud contract ("never report a decay distribution
             # without reading the substrate"); exercised with a real pool in
             # test_fact_decay_scan.py.
@@ -148,6 +150,10 @@ async def test_run_method_each_real_sub_handler_returns_method_result():
             # reached it (E-1 suite run). Exercised with a real pool in
             # test_narrative_mapper_db.py.
             "narrative_mapper",
+            # KW-3: same refuse-loud contract ("never report a zero-match run
+            # without reading the substrate"); exercised with a real pool in
+            # test_claim_watch.py.
+            "claim_watch",
         ):
             # These REFUSE LOUD without a live pg_pool by design — they must never
             # emit a zeroed clean finding without actually running their checks

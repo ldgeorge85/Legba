@@ -9,6 +9,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
 import TargetFindingsPanel from './Findings'
 import type { PanelRegistration } from '@/types'
+import { mockErrorResponse } from '@/test/apiMocks'
 
 function reg(): PanelRegistration {
   return {
@@ -95,7 +96,7 @@ describe('TargetFindingsPanel', () => {
   it('degrades to the empty state on a 404', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => ({ ok: false, status: 404, json: async () => ({ detail: 'nope' }) })),
+      vi.fn(async () => mockErrorResponse(404, { detail: 'nope' })),
     )
     render(wrap(<TargetFindingsPanel registration={reg()} scope={{ target_id: 'brazil' }} mode="personal" />))
     await waitFor(() => {

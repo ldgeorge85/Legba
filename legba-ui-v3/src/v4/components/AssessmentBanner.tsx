@@ -23,6 +23,7 @@ import { useQuery } from '@tanstack/react-query'
 import { formatDistanceToNow } from 'date-fns'
 import { Globe, ChevronRight } from 'lucide-react'
 import { apiGet } from '@/lib/api'
+import { humanizeAnalystId } from '@/lib/analystNames'
 
 const ASSESSOR_ID = 'world_assessor'
 
@@ -91,7 +92,9 @@ export default function AssessmentBanner({ onOpen }: AssessmentBannerProps) {
       className="flex h-9 w-full items-center gap-2 border-b border-slate-800 bg-surface-200 px-3 text-left text-xs transition-colors hover:bg-surface-100"
     >
       <Globe className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden />
-      <span className="shrink-0 font-medium text-slate-300">world_assessor finding</span>
+      <span className="shrink-0 font-medium text-slate-300">
+        {humanizeAnalystId(ASSESSOR_ID)} finding
+      </span>
       <span aria-hidden className="shrink-0 text-slate-700">·</span>
       <span className="min-w-0 flex-1 truncate text-slate-400">{title}</span>
       {hasTime && (

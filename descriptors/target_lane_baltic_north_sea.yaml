@@ -1,0 +1,98 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Supply-chain pack — TIER-B desk 10/10: the Baltic & North Sea.
+# planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §1.2.
+#
+# ============================ ACTIVATION GATE =============================
+# TIER B: registered so the topology is DECLARED and the collection gap is
+# VISIBLE — NOT activated. It stays `state: draft` so the reconciler never wires
+# it (source_first_runtime.py:901 boot-wires only `active` targets) and the
+# disruption_status unit never fans onto it.
+#
+#   GATE (plan §1.2): needs a maritime-advisory feed — the plan's §5.2 slot M-1
+#   (UKMTO-class: `official`, tags [maritime, advisory, gov], >= 5 items/week with
+#   >= 80% carrying a position or corridor name).
+#   ACTIVATE AT: >= 80 titles / 30d matching this desk's vocabulary.
+#   MEASURED 2026-07-29 (live, read-only): 38 titles / 30d across the
+#   baltic / undersea-cable / shadow-fleet vocabulary, and 25 canonical rows /
+#   24h on the geo set below. UNDER THE GATE, and the 24h slice yields only ONE
+#   predicate hit — the thinnest desk in the pack.
+#
+#   NOTE: slot M-1 is STILL UNFILLED. The 2026-07-29 source batch filled M-2
+#   (pancanal), F-1 (splash247/theloadstar), S-1 (digitimes) and C-1
+#   (northernminer) — all now `state: active` — but NOT M-1: no
+#   maritime-advisory descriptor exists yet. This desk is therefore the furthest
+#   from activation of the four Tier-B desks.
+# ==========================================================================
+#
+# The full shape rationale (the 360-row pre-filter, why scope.geo is the SQL
+# pushdown and contains_any only a refiner, why no US in the geo set, why no
+# inline `analyst:` block, why no g20/watch tag, why no source_id pin) is written
+# out once in descriptors/target_lane_hormuz.yaml — read that header first.
+
+identity:
+  id: lane_baltic_north_sea
+  name: "Lane — Baltic & North Sea"
+  schema_uri: legba/target/2.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  inherits: []
+  state: draft
+  owner: supply_chain_pack
+  created: "2026-07-29T00:00:00Z"
+
+scope:
+  domain: thematic
+  themes: [supply_chain, maritime, shipping, infrastructure, energy]
+  # THE SQL PUSHDOWN — the Baltic littoral + the Danish straits + the North Sea
+  # energy/cable states. No US (plan §0.3).
+  # "NO" MUST be quoted — YAML 1.1 parses a bare NO as the boolean false, which
+  # fails the _GeoCode string pattern at registration.
+  geo: [SE, FI, EE, LV, LT, DK, "NO", PL]
+  entity_classes:
+    - country
+    - organization
+    - corporation
+    - infrastructure
+    - commodity
+    - location
+    - international_org
+    - event_series
+    - person
+    - military_unit
+    - concept
+  relationship_types:
+    - TradesWith
+    - SanctionsAgainst
+    - HostileTo
+    - OperatesIn
+    - LocatedIn
+    - PartOf
+    - Targets
+    - MilitaryPresenceIn
+    - PartnersWith
+  time_horizon_days: 90
+  # Undersea infrastructure (cables, pipelines) is the distinguishing content
+  # here — this lane's disruption mode is sabotage/anchor-drag, not interdiction.
+  predicate: >-
+    contains_any(["baltic", "north sea", "undersea cable", "subsea cable",
+                  "pipeline", "gulf of finland", "shadow fleet", "sabotage",
+                  "cable damage", "anchor", "tanker", "vessel", "port",
+                  "danish straits", "icebreaker"])
+  tags: [supply_chain, disruption, lane]
+
+sources:
+  - source_selector:
+      tags: [news]
+      kinds: [rss]
+      owner_tenant: shared
+    subscription:
+      canonical_only: true
+
+allowed_action_packs: []
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  routing: []

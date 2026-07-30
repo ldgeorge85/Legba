@@ -5,14 +5,16 @@
 
 Plain answers to the questions a newcomer actually asks. Terms in **bold** are
 defined in the [Glossary](GLOSSARY.md) — this page stays narrative and links there
-rather than re-defining anything. For current numbers and per-feature status, see
+rather than re-defining anything. Counts are generated — see
+[docs/RELEASE_STATE.md](RELEASE_STATE.md). For per-feature status, see
 [RELEASE_STATE_MATRIX.md](RELEASE_STATE_MATRIX.md) and [SEAMS.md](SEAMS.md).
 
 ## What it is
 
 ### In one sentence, what is Legba?
 A **source-first**, decompositional analysis system: it turns a firehose of sources
-into **cited, verified, drillable reports** over whatever domain you configure. It
+into **cited, grounding-verified, drillable reports** (the claim follows from its
+cited evidence — groundedness, not world truth) over whatever domain you configure. It
 ingests data into a provenance-tracked **substrate** (signals → facts/entities →
 **nexuses** / **situations**), then reasons over it in small steps — narrow reasoning
 **units** → a per-country synthesis → a world synthesis → a banded scorecard — where
@@ -25,7 +27,7 @@ Acquisition belongs to **sources**, not to the things that consume data. A sourc
 ingests an observation once, enriches it once, and publishes one canonical,
 target-agnostic **signal**; the **fan-out** plane then routes that single signal to
 every interested **target** — *"ingest once, enrich once, match many."* One BBC feed
-serves every country desk (all twenty-five) without re-fetching. (It is unrelated to
+serves every country desk (all thirty-two) without re-fetching. (It is unrelated to
 the AGPL "source-available" license.)
 
 ### Is this an OSINT / "intelligence" tool?
@@ -63,19 +65,24 @@ cite → verify → audit — is the point, not the model.
 ## How it works
 
 ### What does the analysis actually produce?
-A stack of cited, verified reports, built bottom-up:
+A stack of cited, grounding-verified reports, built bottom-up:
 
-1. **Seven bounded reasoning units** — `leadership_transition`, `energy_security`,
+1. **Nine bounded reasoning units** — seven broad ones, `leadership_transition`, `energy_security`,
    `escalation`, `narrative_coordination`, `internal_stability`, `military_posture`,
    `economic_coercion` — each an LLM **analyst** (kind
    `inline_target`) scoped to every country desk via a `has_tag("g20") or has_tag("watch")`
-   fan-out (the 19 G20 plus a 6-country **watch** tier = 25 desks), each
+   fan-out (the 19 G20 plus a 13-country **watch** tier = 32 desks), plus an eighth,
+   narrower unit, `proliferation_watch`, tag-scoped instead to the 8
+   nuclear-relevant desks via `has_tag("nuclear_watch")`, plus a ninth,
+   `disruption_status`, tag-scoped off the country plane entirely to the thematic
+   supply-chain lane/flow desks (`has_tag("supply_chain")`) — each
    answering **one narrow question**. A run assembles a cited 72h signal slice plus a
    grounding preamble of accumulated facts/nexuses/situations from the substrate,
    synthesizes a strict-JSON **finding** whose prose carries `[N]` citation markers
    mapped to signal ids, then runs the **mandatory faithfulness verify**.
-2. **Per-country composition** (`country_composition`) reads a country's seven *verified*
-   units and writes one hedged, cited synthesis; an unverified sub-claim never enters it
+2. **Per-country composition** (`country_composition`) reads a country's seven broad
+   *verified* units, plus `proliferation_watch` on nuclear desks, and writes one
+   hedged, cited synthesis; an unverified sub-claim never enters it
    (it joins on the faithfulness critique).
 3. **Per-region composition** (`region_composition`) folds the per-country reads into
    **five region frames** (Africa, Americas, Europe, Indo-Pacific, MENA); a thematic
@@ -130,11 +137,16 @@ You declare descriptors; the runtime stands up **actors** from them.
 
 ### Do I have to write code for each source or each country?
 No. There is no code to write per feed, per target, or per analysis. You register
-descriptors and the **Dapr virtual-actor** runtime instantiates them. The 25 country desks
-(the 19 G20 plus a 6-country **watch** tier) are materialized from one **discovery**
-template — there is no per-country code, and the seven reasoning units fan out to all of them
-via one `has_tag("g20") or has_tag("watch")` predicate. Adding a country is just registering
-a target, no code.
+descriptors and the **Dapr virtual-actor** runtime instantiates them. The 32 country desks
+(the 19 G20 plus a 13-country **watch** tier) are materialized from one **discovery**
+template — there is no per-country code, and the seven broad reasoning units fan out to all of them
+via one `has_tag("g20") or has_tag("watch")` predicate (an eighth, narrower unit,
+`proliferation_watch`, instead fans out to just the 8 nuclear-relevant desks).
+Adding a country is just registering
+a target, no code. Nor does a desk have to be a country: the supply-chain pack
+registers 10 thematic shipping-lane and commodity-flow desks plus one unit
+scoped `has_tag("supply_chain")`, which reached production through the same
+register-a-descriptor path with no new analyst kind and no new code path.
 
 ### What is the substrate?
 The shared storage layer every actor reads from and writes to: **Postgres + Apache AGE**
@@ -188,9 +200,9 @@ or its **cadence** heartbeat fires.
 ## Scope & honesty
 
 ### What is proven versus experimental?
-The **proven core** is now the full cited-and-verified spine, demonstrated end-to-end on the
+The **proven core** is now the full cited-and-grounding-verified spine, demonstrated end-to-end on the
 G20 exemplar from a cold start: source acquisition → **baseline enrichment** → predicate
-**fan-out** → the seven bounded **units** → **per-country composition** → **per-region composition** → **world composition**,
+**fan-out** → the bounded **units** → **per-country composition** → **per-region composition** → **world composition**,
 with each claim cited, faithfulness-verified, and folded through `effective_confidence`, plus
 the deterministic **banded scorecard** and full **lineage** / provenance and **temporal facts**.
 

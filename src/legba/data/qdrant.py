@@ -211,6 +211,35 @@ class QdrantStore:
         await self.client.upsert(collection_name=collection_name, points=structs)
         return len(structs)
 
+    async def retrieve_vectors(
+        self, collection_name: str, ids: Iterable[str]
+    ) -> dict[str, list[float]]:
+        """Stored vectors for the given point ids: ``{point_id: vector}``.
+
+        Points not present are simply absent from the result (the caller
+        degrades per-point). Named-vector points return their first vector.
+        Used by the ``claim_watch`` matcher to read signal vectors BACK by id
+        (point id = signal id, the signal_embedder contract) instead of
+        re-embedding bodies.
+        """
+        id_list = [str(i) for i in ids]
+        if not id_list:
+            return {}
+        points = await self.client.retrieve(
+            collection_name=collection_name,
+            ids=id_list,
+            with_payload=False,
+            with_vectors=True,
+        )
+        out: dict[str, list[float]] = {}
+        for p in points or []:
+            vec = getattr(p, "vector", None)
+            if isinstance(vec, dict):  # named-vector collections
+                vec = next(iter(vec.values()), None)
+            if vec:
+                out[str(getattr(p, "id", ""))] = list(vec)
+        return out
+
     def _doc_filter(self, corpus: str, doc_id: str) -> "qmodels.Filter":
         """Payload filter selecting every chunk of one ``(corpus, doc_id)``."""
         return qmodels.Filter(

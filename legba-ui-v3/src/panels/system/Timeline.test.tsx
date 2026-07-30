@@ -17,6 +17,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
 import type { PanelRegistration } from '@/types'
 import type { TimelineResponse } from '@/lib/timelineWindows'
+import { DockviewPanelApiProvider } from '@/components/DockviewPanelApiContext'
+import type { TilePanelApi } from '@/components/DockviewPanelApiContext'
 import TimelinePanel from './Timeline'
 
 function reg(): PanelRegistration {
@@ -115,5 +117,85 @@ describe('TimelinePanel', () => {
 
     // The per-kind tally reflects the same rows (honest counts, no cap hit).
     expect(screen.getByTestId('timeline-tally-situation').textContent).toContain('1')
+  })
+
+  it('recovers plot width when a hidden-mounted Dockview tile becomes visible', async () => {
+    // The SECOND blank-canvas class (the callback-ref fix above doesn't
+    // cover it): a panel mounted into a Dockview tile that starts hidden (a
+    // background tab, or a tile Dockview hasn't laid out yet). A fake tile
+    // api that starts NOT visible, with the visibility-change subscription
+    // `useDockviewTileRedraw` registers.
+    let tileVisible = false
+    const visHandlers: Array<(e: { isVisible: boolean }) => void> = []
+    const fakeApi = {
+      get isVisible() {
+        return tileVisible
+      },
+      onDidVisibilityChange(cb: (e: { isVisible: boolean }) => void) {
+        visHandlers.push(cb)
+        return { dispose: () => {} }
+      },
+      onDidDimensionsChange() {
+        return { dispose: () => {} }
+      },
+    } as unknown as TilePanelApi
+
+    // A ResizeObserver that reports the tile's REAL box on `observe()` (0
+    // while hidden, 800 once visible) but never fires again on its own once
+    // observed — exactly the "misses the hidden→visible transition" failure
+    // useTileRedraw.ts documents. Only a FRESH observe() call (the
+    // callback-ref detach/reattach a `key` remount forces) picks up the
+    // tile's current size.
+    class TileAwareResizeObserver {
+      constructor(private cb: ResizeObserverCallback) {}
+      observe() {
+        const width = tileVisible ? 800 : 0
+        this.cb(
+          [{ contentRect: { width } } as unknown as ResizeObserverEntry],
+          this as unknown as ResizeObserver,
+        )
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(globalThis as any).ResizeObserver = TileAwareResizeObserver
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (String(url).includes('/v3/timeline')) return { ok: true, json: async () => TIMELINE }
+        return { ok: true, json: async () => ({}) }
+      }),
+    )
+
+    render(
+      wrap(
+        <DockviewPanelApiProvider value={fakeApi}>
+          <TimelinePanel registration={reg()} scope={{}} mode="personal" />
+        </DockviewPanelApiProvider>,
+      ),
+    )
+
+    // Data lands and the plot div mounts, but the tile is still hidden — the
+    // subtitle honestly reports the item count (shaped from the fetch,
+    // independent of measurement) while the canvas stays blank. This is the
+    // exact gallery-2 "278 ranged items" + empty-plot symptom.
+    await waitFor(() => expect(screen.getByTestId('timeline-plot')).toBeInTheDocument())
+    expect(
+      screen.queryByRole('img', { name: 'validity-window timeline' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByTestId('timeline-bar-situation')).not.toBeInTheDocument()
+
+    // The Dockview tile activates (tab switch / layout settles).
+    tileVisible = true
+    visHandlers.forEach((h) => h({ isVisible: true }))
+
+    // The bars must draw WITHOUT any remount or manual interaction from here.
+    await waitFor(() => {
+      expect(screen.getByTestId('timeline-bar-situation')).toBeInTheDocument()
+      expect(screen.getByTestId('timeline-bar-finding')).toBeInTheDocument()
+      expect(screen.getByTestId('timeline-bar-fact')).toBeInTheDocument()
+    })
   })
 })

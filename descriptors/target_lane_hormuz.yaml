@@ -1,0 +1,128 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Supply-chain pack — Tier-A desk 1/6: the Strait of Hormuz corridor.
+# planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §1.1.
+#
+# `lane_*` = a geo-anchored PHYSICAL corridor (chokepoint / sea lane). A new
+# functional target family alongside country_g20_* / country_watch_* / region_* /
+# situation_*.
+#
+# WHY THIS SHAPE (the plan's §0.2 rule, measured):
+# `_read_substrate_slice` (runtime/actor_substrate_slice.py:164-445) pre-filters
+# the newest `fetch_limit = max(200, LEGBA_SLICE_ROW_CAP*3)` = 360 rows in SQL and
+# only THEN applies `scope.predicate` as a post-query residual
+# (subscription/filter.filter_rows_by_residual). So the free-text predicate is a
+# REFINER, never the selector. The SQL-pushdown discriminator here is
+# `scope.geo` — the slice reader reads scope.geo regardless of domain
+# (`geo && $n::text[]`), so a thematic desk still gets a real geo pushdown.
+# Measured 24h canonical volume for this geo set: ~300 rows, i.e. inside the 360
+# cap. That is why the unit's `time_window` is 24h, not the 72h the
+# proliferation_watch precedent uses (at 72h this lane blows through the cap and
+# silently drops ~half its evidence).
+#
+# NO `US` IN THE GEO SET (plan §0.3): `source.nws.active_alerts` is 25.9% of the
+# 30-day corpus, and the per-source diversity cap (`_diversify_by_source`) sits on
+# the `elif` branch — it does NOT run when a scope.predicate is present, so a
+# predicate-bearing desk has ZERO firehose protection. Measured top-source
+# concentration on this lane is healthy (source.gdelt.files 80/312 = 26%).
+#
+# NO explicit `sources[].source_id` PIN: the slice reader turns explicit ids into
+# `source_id = ANY($n)`, which would AND with the geo pushdown and shrink this
+# lane to only the pinned feeds. A geo-anchored lane must ride the broad
+# selector; only the non-geo Tier-B desk (flow_container_freight) pins ids.
+#
+# NO INLINE `analyst:` BLOCK (plan §0.1): `TargetDescriptor.analyst`
+# (schemas/target.py:213-227) is never read by any runtime code — the live proof
+# is target_situation_iran_war.yaml, which declares one and has produced ZERO
+# analyst_outputs rows. Fan-out is driven ONLY from the analyst side
+# (`AnalystActor._cadence_targets`, runtime/dapr_actors.py:1591-1650, evaluating
+# `subscription.targets.predicate` against active head targets). This desk exists
+# because analyst_disruption_status.yaml subscribes to `has_tag("supply_chain")`.
+#
+# NO `g20` / `watch` TAG (plan §1.3): those two tags are the subscription key for
+# all 7 broad geopolitics units. Tagging a lane `watch` to inherit
+# scorecards/alerts would fan all seven country units onto non-country desks.
+#
+# Ships `state: draft`. Activation (draft -> configured -> active) is a deliberate
+# operator/main-session FSM step AFTER the preflight
+# (scripts/preflight_supply_chain_lanes.py) confirms this lane is under the 360
+# cap and free of single-source concentration.
+
+identity:
+  id: lane_hormuz
+  name: "Lane — Strait of Hormuz"
+  schema_uri: legba/target/2.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  inherits: []
+  state: draft
+  owner: supply_chain_pack
+  created: "2026-07-29T00:00:00Z"
+
+scope:
+  domain: thematic
+  themes: [supply_chain, maritime, chokepoint, energy, shipping]
+  # THE SQL PUSHDOWN. Littoral + transiting states of the strait. No US, no SA
+  # (SA was measured in the §0.2 volume table but is dropped from the desk to
+  # keep the 24h slice inside the 360-row pre-filter).
+  geo: [IR, OM, AE, QA, KW, IQ, BH]
+  entity_classes:
+    - country
+    - organization
+    - corporation
+    - infrastructure
+    - commodity
+    - location
+    - international_org
+    - event_series
+    - person
+    - military_unit
+    - armed_group
+    - concept
+  relationship_types:
+    - TradesWith
+    - SanctionsAgainst
+    - HostileTo
+    - OperatesIn
+    - LocatedIn
+    - PartOf
+    - Targets
+    - MilitaryPresenceIn
+    - PartnersWith
+    - CompetesWith
+  time_horizon_days: 90
+  # REFINER over the geo-pushed-down rows (word-boundary matched, case-folded —
+  # helpers._contains_any). Corridor terms + the physical-flow vocabulary the
+  # disruption_status unit's six vectors read.
+  predicate: >-
+    contains_any(["hormuz", "strait", "tanker", "vessel", "shipping", "crude",
+                  "lng", "oil export", "port", "insurance", "convoy",
+                  "seizure", "escort"])
+  # `supply_chain` = the disruption_status unit's fan-out key (the ONE new
+  # fan-out tag in the pack); `disruption` = the pack surface label; `lane` = the
+  # family tag.
+  tags: [supply_chain, disruption, lane]
+
+# Broad shared-news selector — the same permissive selector the thematic
+# situation/region targets use, satisfying the "an active target must declare at
+# least one source" schema constraint (target.py:_state_constraints). The
+# narrowing is scope.geo (SQL) + scope.predicate (residual), not the source set.
+sources:
+  - source_selector:
+      tags: [news]
+      kinds: [rss]
+      owner_tenant: shared
+    subscription:
+      canonical_only: true
+
+# No agency grant. `descriptors/action_pack_escalate.yaml:63-65` declares
+# `applies_to_tags: [g20, watch]`, so an escalate grant on a supply-chain desk
+# would deny with a visible governor BLOCK. Widening that pack is plan §6 step 7a,
+# operator-gated after two weeks of findings.
+allowed_action_packs: []
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  routing: []

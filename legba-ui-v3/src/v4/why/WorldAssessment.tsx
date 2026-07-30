@@ -22,9 +22,22 @@ import { selectRow, useSelection } from '@/state/selection'
 import type { WorldAssessment as WorldAssessmentT } from '@/v4/why/types'
 import { CountryUnitsAssessment } from '@/v4/why/CountryUnitsAssessment'
 import CitedAssessment from '@/components/inspector/CitedAssessment'
+import { InfoTip } from '@/components/InfoTip'
 import { extractCitations, type Citation } from '@/lib/citationsModel'
 import { stripCitationMarkers, stripMarkdown, unwrapEnvelope } from '@/lib/proseText'
 import { downloadReportMarkdown, printReportPdf, type ReportDoc } from '@/lib/reportDownload'
+
+// U-5 — the desk card's own honest-absence / delta tokens, explained in place
+// (this card had NO explainer at all before — not even the Inspector's `?`).
+const UNBANDED_EXPLAIN =
+  'No severity/confidence band has been computed for this desk yet — an ' +
+  'honest absence (nothing to show), not an error.'
+const CONF_EXPLAIN =
+  "This desk's composition confidence — the same likelihood-style probability " +
+  "VerdictBadge's L chip reports, rolled up for the whole desk read."
+const CONF_DELTA_EXPLAIN =
+  "How much this desk's composition confidence moved since its previous run " +
+  '(▲ up / ▼ down) — a trend signal, not a new measurement.'
 
 // Re-export the shared markdown map from its own module so existing importers of
 // `MD_COMPONENTS` from this path keep working (it moved to break an import cycle).
@@ -259,23 +272,31 @@ function DeskIntelligenceCard({
           {band ? (
             <span className={`rounded border px-2 py-0.5 font-medium ${band.tone}`}>{band.label}</span>
           ) : (
-            <span className="rounded border border-line bg-surf-3 px-2 py-0.5 text-ink-2">
+            <InfoTip
+              text={UNBANDED_EXPLAIN}
+              className="rounded border border-line bg-surf-3 px-2 py-0.5 text-ink-2"
+              testId="desk-unbanded"
+            >
               unbanded
-            </span>
+            </InfoTip>
           )}
           {current?.confidence != null && (
-            <span className="font-mono text-ink-2" title="composition confidence">
+            <InfoTip
+              text={`${CONF_EXPLAIN} This read: ${(current.confidence * 100).toFixed(0)}%.`}
+              className="font-mono text-ink-2"
+              testId="desk-confidence"
+            >
               conf {(current.confidence * 100).toFixed(0)}%
-            </span>
+            </InfoTip>
           )}
           {delta != null && Math.abs(delta) >= 0.005 && (
-            <span
+            <InfoTip
+              text={CONF_DELTA_EXPLAIN}
               className={`font-mono ${delta > 0 ? 'text-emerald-400' : 'text-rose-400'}`}
-              title="change vs the previous composition run"
-              data-testid="desk-delta"
+              testId="desk-delta"
             >
               {delta > 0 ? '▲' : '▼'} {Math.abs(delta * 100).toFixed(0)}%
-            </span>
+            </InfoTip>
           )}
           {current && Number.isFinite(current.producedAt) && (
             <span className="text-ink-3">as of {formatDistanceToNow(current.producedAt)} ago</span>

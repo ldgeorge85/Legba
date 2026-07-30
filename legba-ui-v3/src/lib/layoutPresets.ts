@@ -76,7 +76,11 @@ export const LAYOUT_PRESETS: LayoutPreset[] = [
         position: { referencePanel: 'system.findings', direction: 'below' },
       },
       {
-        kind: 'system.alert_center',
+        // U-3 merge — alert_center is now the "Triggers" tab of the merged
+        // Alerts & Watches surface; point the preset at the visible survivor,
+        // not the hidden original (both still render, but this is the one
+        // the sidebar actually shows).
+        kind: 'system.alerts_watches',
         position: { referencePanel: 'system.inspector', direction: 'below' },
       },
     ],
@@ -84,7 +88,7 @@ export const LAYOUT_PRESETS: LayoutPreset[] = [
   {
     id: 'workspace',
     label: 'Workspace',
-    description: 'The combined intel desk — live feed, Inspector detail, the Why graph, and Consult.',
+    description: 'The combined intel desk — live feed, Inspector detail, Provenance, and Consult.',
     // Operator's "pretty awesome" view (#90): scan the feed (anchor), drill the
     // selection in the Inspector, see its provenance in the Why graph, and ask
     // the substrate in Consult — one 2×2 desk, all brushed by the shared selection.
@@ -99,7 +103,9 @@ export const LAYOUT_PRESETS: LayoutPreset[] = [
         position: { referencePanel: 'system.findings', direction: 'below' },
       },
       {
-        kind: 'v4.why',
+        // U-3 merge — v4.why is now the "Why" tab of the merged Provenance
+        // surface; point the preset at the visible survivor.
+        kind: 'system.provenance',
         position: { referencePanel: 'system.inspector', direction: 'below' },
       },
     ],
@@ -127,7 +133,7 @@ export const LAYOUT_PRESETS: LayoutPreset[] = [
   {
     id: 'analysis',
     label: 'Analysis',
-    description: 'Optimizer, eval scorecard, deep + interactive consult workbench.',
+    description: 'Optimizer, eval scorecard, and the consult workbench (chat + deep-analysis toggle).',
     panels: [
       { kind: 'system.optimizer' },
       {
@@ -135,12 +141,10 @@ export const LAYOUT_PRESETS: LayoutPreset[] = [
         position: { referencePanel: 'system.optimizer', direction: 'below' },
       },
       {
+        // U-3 merge — Deep Consult is now a depth toggle ON this same panel,
+        // so the preset no longer opens a separate system.deep_consult tile.
         kind: 'system.consult',
         position: { referencePanel: 'system.optimizer', direction: 'right' },
-      },
-      {
-        kind: 'system.deep_consult',
-        position: { referencePanel: 'system.consult', direction: 'below' },
       },
     ],
   },
@@ -172,6 +176,62 @@ export const LAYOUT_PRESETS: LayoutPreset[] = [
     // for an undistracted single-record read. The current selection drives it;
     // every referenced id is still a RecordLink, so drilling continues from here.
     panels: [{ kind: 'system.inspector' }],
+  },
+]
+
+/**
+ * The COLD-BOOT default grid (S7-T2 mission control + U-4's "what changed"
+ * fix, COHERENCE_WAVES_PLAN_2026-07-28 §U-4).
+ *
+ * NOT a member of `LAYOUT_PRESETS` — it isn't user-selectable from the preset
+ * picker/⌘K, it's what `App.tsx`'s boot effect seeds automatically on first
+ * ready (before this list existed, that effect had its own hardcoded
+ * addSingleton calls; this constant is the same sequence, pulled out here so
+ * it's colocated with and tested the same way the named presets are —
+ * `layoutPresets.test.ts` asserts every kind is real, every position
+ * references an earlier panel, etc.).
+ *
+ * A hostile UX review found this grid answered "what's happening now" (KPI
+ * strip, live feed, world map, world assessment, timeline) but never "what
+ * moved while I was away" — the Wall's own movers-since-last-visit quadrant
+ * already existed and worked, just reachable only via the opt-in "wall"
+ * preset above or a sidebar row. `system.wall_movers` is a standalone mount
+ * of JUST that quadrant (see `panels/system/WallMovers.tsx`) inserted as a
+ * full-width slim band between the KPI strip and the feed/map/report row —
+ * NOT the whole 2×2 Wall: the Wall's other three quadrants (world-at-a-glance
+ * band grid, newest verified, health corner) already have close analogues in
+ * the Map, the Feed, and the KPI strip that sit on this same screen, so
+ * mounting the whole Wall here would duplicate content and, at 1920×1080
+ * with the map/feed/report columns already filling the screen, force a
+ * cramped extra split. This is the less-invasive of the two shapes U-4
+ * considered (the other being "boot IS the Wall preset", which would drop
+ * the feed/map/report/timeline from the first screenful entirely).
+ */
+export const DEFAULT_BOOT_LAYOUT: PresetPlacement[] = [
+  { kind: 'v4.kpi' },
+  {
+    kind: 'system.wall_movers',
+    position: { referencePanel: 'v4.kpi', direction: 'below' },
+  },
+  {
+    kind: 'system.findings',
+    position: { referencePanel: 'system.wall_movers', direction: 'below' },
+  },
+  {
+    kind: 'v4.map',
+    position: { referencePanel: 'system.findings', direction: 'right' },
+  },
+  {
+    kind: 'v4.assessment',
+    position: { referencePanel: 'v4.map', direction: 'right' },
+  },
+  {
+    kind: 'system.inspector',
+    position: { referencePanel: 'v4.assessment', direction: 'within' },
+  },
+  {
+    kind: 'system.timeline',
+    position: { referencePanel: 'system.findings', direction: 'below' },
   },
 ]
 

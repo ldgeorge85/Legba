@@ -52,5 +52,11 @@ cadence:
 
 # Agency grant — substrate_read (the acquire stage's tool calls are resolved +
 # governed + ledgered through the agency plane, same as consult).
+#
+# R-3d — `web_access` is the GRANT leg only, mirroring consult. Same honest
+# limit: dapr_workflow/deep_consult_workflow.py builds ONE AgencyToolBinding
+# over substrate_read, so the grant is INERT until the acquire stage binds the
+# web_access pack too.
 action_packs:
   - pack_id: substrate_read
+  - pack_id: web_access

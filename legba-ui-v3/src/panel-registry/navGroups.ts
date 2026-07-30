@@ -5,11 +5,15 @@
  * mission-control UI (UI_UX_DIRECTION_2026-07-02 §"what the original got right"
  * #1): five verb-grouped sections the analyst scans top to bottom —
  *
- *   AWARENESS      — what's happening now (feed, map, alerts, the detail rail)
- *   INVESTIGATION  — dig into the why (entities, graph, lineage, search, flow)
+ *   AWARENESS      — what's happening now (Wall, Live Feed, World Map,
+ *                    Timeline, Alerts & Watches, the detail rail)
+ *   INVESTIGATION  — dig into the why (Entities, Provenance, search)
  *   ANALYSIS       — reason over it (consult, optimizer, eval)
  *   PRODUCTS       — the finished intelligence (World Assessment, Journal)
- *   OPERATIONS     — the plumbing that runs it (registries, health, ledgers)
+ *   ENGINE ROOM    — the plumbing that runs it (registries, health, ledgers,
+ *                    id stays `operations` — see NAV_GROUP_DEFS); U-3 also
+ *                    nests the raw Targets/Analysts instance groups inside it
+ *                    (Sidebar.tsx), collapsed by default
  *
  * This REPLACES the prior two-level Intelligence/Operations split + Monitor/
  * Investigate/Configure/Operate sub-buckets: one flat, five-headed tree.
@@ -19,8 +23,11 @@
  *   1. an explicit per-kind override (`KIND_GROUP`), then
  *   2. a prefix fallback (`PREFIX_GROUP`) keyed on the leading kind segment, so
  *      a NEW panel kind auto-slots with no change here, then
- *   3. an `operations` catch-all (the plumbing bucket) so every panel is always
+ *   3. an `operations` (Engine Room) catch-all so every panel is always
  *      reachable.
+ *
+ * Within a group, kinds sort by task order where U-3 §3 pins one (`TASK_ORDER`),
+ * alphabetical-by-title otherwise (`compareInGroup`) — NOT purely alphabetical.
  *
  * Only singleton (non-binding) panels flow through here; per-target and
  * per-analyst panels keep their instance-scoped grouping in the Sidebar.
@@ -42,13 +49,19 @@ export interface NavGroupDef {
   label: string
 }
 
-/** Ordered group catalog. Order here = render order in the sidebar. */
+/**
+ * Ordered group catalog. Order here = render order in the sidebar. The
+ * `operations` group is labeled "Engine Room" (U-3 §2) — all 14 Operations
+ * rows PLUS the raw Targets/Analysts instance groups nest inside it (see
+ * Sidebar.tsx); the id stays `operations` so `legba_nav_collapsed` /
+ * `DEFAULT_COLLAPSED` need no migration.
+ */
 export const NAV_GROUP_DEFS: readonly NavGroupDef[] = [
   { id: 'awareness', label: 'Awareness' },
   { id: 'investigation', label: 'Investigation' },
   { id: 'analysis', label: 'Analysis' },
   { id: 'products', label: 'Products' },
-  { id: 'operations', label: 'Operations' },
+  { id: 'operations', label: 'Engine Room' },
 ]
 
 const GROUP_ORDER: Record<NavGroupId, number> = NAV_GROUP_DEFS.reduce(
@@ -63,34 +76,34 @@ const GROUP_ORDER: Record<NavGroupId, number> = NAV_GROUP_DEFS.reduce(
  * Explicit per-kind group assignment. The sidebar is organized by what the
  * analyst is *doing*, so the `system.*` family (which spans all five) is pinned
  * here; registry.* / source.* fall to Operations via the prefix fallback.
+ *
+ * Hidden kinds (panel-registry/registry.ts HIDDEN_KINDS — the U-3 merge-set
+ * originals folded away behind a tabbed/moded survivor) are deliberately
+ * ABSENT here: they never reach `buildNavGroups` (SINGLETON_PANELS excludes
+ * hidden kinds), so their group assignment is moot; they fall through to the
+ * prefix fallback below, which stays total over every `PanelKind`.
  */
 const KIND_GROUP: Partial<Record<PanelKind, NavGroupId>> = {
   // --- Awareness: the live surfaces + the detail rail ---
   'system.wall': 'awareness',
   'system.findings': 'awareness',
-  'system.alert_center': 'awareness',
-  'system.watchlist': 'awareness',
-  'system.escalations': 'awareness',
   'system.inspector': 'awareness',
   'v4.map': 'awareness',
   'v4.kpi': 'awareness',
-  'v4.timeline': 'awareness',
+  // The merged Timeline (U-3 — Events/Validity mode switch) reads as a live
+  // awareness surface, not an investigate one; the merged Alerts & Watches
+  // (U-3 — Watches/Triggers/Deliveries tabs) likewise.
+  'system.timeline': 'awareness',
+  'system.alerts_watches': 'awareness',
 
   // --- Investigation: dig into the why ---
   'system.entities': 'investigation',
-  'system.entity_graph': 'investigation',
-  'system.lineage': 'investigation',
   'system.search': 'investigation',
-  'system.notable_structure': 'investigation',
-  // The validity-window Timeline (P4-4) — a temporal investigate surface, pinned
-  // here rather than left to the system.* → operations prefix fallback.
-  'system.timeline': 'investigation',
-  'v4.why': 'investigation',
-  'v4.flow': 'investigation',
+  // The merged Provenance surface (U-3 — Why/Lineage/Flow tabs).
+  'system.provenance': 'investigation',
 
   // --- Analysis: reason over the substrate ---
   'system.consult': 'analysis',
-  'system.deep_consult': 'analysis',
   'system.optimizer': 'analysis',
   'system.optimizer.diff': 'analysis',
   'system.eval_scorecard': 'analysis',
@@ -100,14 +113,30 @@ const KIND_GROUP: Partial<Record<PanelKind, NavGroupId>> = {
   'system.journal': 'products',
   'system.report_export': 'products',
 
-  // --- Operations: the weekly operator chores ---
+  // --- Engine Room (id stays `operations`): the weekly operator chores ---
   // The gold-set labeling worksheet is an OPERATE surface (a weekly operator
   // duty, not an analysis read) — pinned explicitly rather than left to the
   // prefix fallback so the intent survives a fallback change.
   'system.goldset': 'operations',
 
   // Everything else system.* (settings, status, actor_health, dead_letter,
-  // governor, audit, budget, stream_lag) → Operations via PREFIX_GROUP.
+  // governor, audit, budget, stream_lag) → Engine Room via PREFIX_GROUP.
+}
+
+/**
+ * Task-order overrides (U-3 §3): within a group, a handful of kinds read in
+ * WORKFLOW order rather than alphabetical — "Awareness reads Wall → Live Feed
+ * → World Map → Timeline → Alerts & Watches → Inspector → the rest." Kinds
+ * absent here fall back to alphabetical-by-title, appended after the ordered
+ * ones (see `buildNavGroups`).
+ */
+const TASK_ORDER: Partial<Record<PanelKind, number>> = {
+  'system.wall': 0,
+  'system.findings': 1,
+  'v4.map': 2,
+  'system.timeline': 3,
+  'system.alerts_watches': 4,
+  'system.inspector': 5,
 }
 
 /**
@@ -148,11 +177,28 @@ export interface NavGroup {
 }
 
 /**
+ * Order two kinds within a group: an explicit `TASK_ORDER` entry always beats
+ * one without (task order reads top-to-bottom as the analyst's workflow, not
+ * the alphabet); kinds with no override fall back to alphabetical-by-title
+ * among themselves, appended after every ordered kind ("… → the rest").
+ */
+function compareInGroup(a: PanelKind, b: PanelKind): number {
+  const oa = TASK_ORDER[a]
+  const ob = TASK_ORDER[b]
+  if (oa !== undefined && ob !== undefined) return oa - ob
+  if (oa !== undefined) return -1
+  if (ob !== undefined) return 1
+  const titleOf = (k: PanelKind) => PANEL_REGISTRY[k].definition.defaultTitle
+  return titleOf(a).localeCompare(titleOf(b))
+}
+
+/**
  * Bucket a list of singleton panel kinds into ordered, non-empty nav groups.
  *
- * Within a group, kinds are sorted by their registry `defaultTitle` so the list
- * is stable and alphabetical regardless of registry declaration order. Empty
- * groups are omitted so the sidebar never renders a header with no rows.
+ * Within a group, kinds sort by `compareInGroup` — task order where U-3 §3
+ * pins one, alphabetical-by-title otherwise — so the list is stable
+ * regardless of registry declaration order. Empty groups are omitted so the
+ * sidebar never renders a header with no rows.
  */
 export function buildNavGroups(kinds: readonly PanelKind[]): NavGroup[] {
   const byGroup = new Map<NavGroupId, PanelKind[]>()
@@ -163,13 +209,11 @@ export function buildNavGroups(kinds: readonly PanelKind[]): NavGroup[] {
     else byGroup.set(gid, [kind])
   }
 
-  const titleOf = (k: PanelKind) => PANEL_REGISTRY[k].definition.defaultTitle
-
   const out: NavGroup[] = []
   for (const def of NAV_GROUP_DEFS) {
     const bucket = byGroup.get(def.id)
     if (!bucket || bucket.length === 0) continue
-    bucket.sort((a, b) => titleOf(a).localeCompare(titleOf(b)))
+    bucket.sort(compareInGroup)
     out.push({ id: def.id, label: def.label, kinds: bucket })
   }
   // Defensive: surface any group id produced by groupForKind that isn't in
@@ -177,7 +221,7 @@ export function buildNavGroups(kinds: readonly PanelKind[]): NavGroup[] {
   // panel reachable if the catalog and the resolver ever drift).
   for (const [gid, bucket] of byGroup) {
     if (GROUP_ORDER[gid] === undefined && bucket.length > 0) {
-      bucket.sort((a, b) => titleOf(a).localeCompare(titleOf(b)))
+      bucket.sort(compareInGroup)
       out.push({ id: gid, label: gid, kinds: bucket })
     }
   }

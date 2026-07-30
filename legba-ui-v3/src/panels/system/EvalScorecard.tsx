@@ -31,8 +31,11 @@ import {
   YAxis,
 } from 'recharts'
 import { PanelChrome } from '@/components/PanelChrome'
+import { InfoTip } from '@/components/InfoTip'
 import { apiGet, ApiError } from '@/lib/api'
 import {
+  bandCalibrationEmpty,
+  bandRateLabel,
   bandTone,
   buildScorecards,
   calibrationBanner,
@@ -40,6 +43,7 @@ import {
   evalBadge,
   insufficientLabel,
   isInsufficient,
+  orderedBandHorizons,
   relTime,
   scoreBand,
   type AcuteTag,
@@ -54,6 +58,16 @@ import type { PanelProps } from '@/types'
 import { RecordLink } from '@/components/inspector/RecordLink'
 import { ProvenanceStateBadge } from '@/components/ProvenanceBadge'
 import { resolveNumberProvenance } from '@/lib/provenance'
+import { humanizeId } from '@/lib/deskNames'
+import { FAITHFULNESS_EXPLAIN } from '@/lib/verdictModel'
+
+/** U-5 — reused wherever this panel shows a raw "faithfulness N | correctness
+ *  N (n=k)" / "unmeasured" badge, so the honest-absence idiom (never a
+ *  fabricated score) reads as "nothing measured yet", not as an error. */
+const EVAL_BADGE_EXPLAIN =
+  `${FAITHFULNESS_EXPLAIN} Correctness (when shown) is graded against operator ` +
+  'gold labels. "Unmeasured" means neither has been computed yet for this ' +
+  'basis claim — an honest absence, not a broken score.'
 
 const BAND_PILL: Record<ScoreBand, string> = {
   good: 'bg-emerald-900 text-emerald-200',
@@ -107,34 +121,13 @@ function orderedDimensions(
   return [...known, ...extras]
 }
 
-// Target ids arrive as `country_<tier>_<iso2>` (e.g. country_g20_tr); map the
-// ISO-2 code (and a few aliases) to a readable country name. Anything else is
-// humanized generically (drop the plumbing prefix, split, title-case).
-const COUNTRY_CODE_NAMES: Record<string, string> = {
-  // G20 + watch-tier roster (ISO 3166-1 alpha-2).
-  ar: 'Argentina', au: 'Australia', br: 'Brazil', ca: 'Canada', cn: 'China',
-  de: 'Germany', fr: 'France', gb: 'United Kingdom', id: 'Indonesia',
-  in: 'India', it: 'Italy', jp: 'Japan', kr: 'South Korea', mx: 'Mexico',
-  ru: 'Russia', sa: 'Saudi Arabia', tr: 'Turkey', us: 'United States',
-  za: 'South Africa', il: 'Israel', ir: 'Iran', kp: 'North Korea', tw: 'Taiwan',
-  // Common aliases.
-  usa: 'United States', uk: 'United Kingdom', uae: 'United Arab Emirates',
-  prc: 'China', roc: 'Taiwan', nkorea: 'North Korea', skorea: 'South Korea',
-  drc: 'DR Congo',
-}
-
-/** Humanize a raw substrate id (target/analyst/unit) into a DISPLAY name: drop
- *  the plumbing prefix, split on separators, title-case; a bare country code
- *  resolves to its name. The raw id is still used for keys / RecordLink drills. */
-function displayName(id: string): string {
-  const stripped = id
-    .replace(/^country_(?:g20_|watch_|tier[0-9]*_)?/i, '')
-    .replace(/^analyst_/i, '')
-  const key = stripped.toLowerCase().replace(/[^a-z0-9]/g, '')
-  if (COUNTRY_CODE_NAMES[key]) return COUNTRY_CODE_NAMES[key]
-  const words = stripped.replace(/[._-]+/g, ' ').trim()
-  return words ? words.replace(/\b\w/g, (c) => c.toUpperCase()) : id
-}
+// Target ids arrive as `country_<tier>_<iso2>` (e.g. country_g20_tr); a
+// g20/watch desk id resolves to its country name, anything else (unit/analyst
+// ids) is humanized generically (drop the plumbing prefix, split, title-case).
+// The shared `lib/deskNames.ts` util is the ONE place this mapping lives (the
+// Desks nav group and the Wall's movers list use the same resolver — U-2).
+// The raw id is still used for keys / RecordLink drills.
+const displayName = humanizeId
 
 // Tone severity ordering — for rolling per-dimension bands up to one headline.
 const TONE_SEVERITY: BandTone[] = ['insufficient', 'good', 'watch', 'elevated', 'high', 'critical']
@@ -226,7 +219,10 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
     treatAsAbsent: banner.absent,
   })
   const countryCards = useMemo(
-    () => [...(scorecards ?? [])].sort((a, b) => a.target_id.localeCompare(b.target_id)),
+    () =>
+      [...(scorecards ?? [])].sort((a, b) =>
+        (a.target_id ?? '').localeCompare(b.target_id ?? ''),
+      ),
     [scorecards],
   )
 
@@ -292,6 +288,85 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
           <div className="text-slate-600 text-[10px]">
             computed {relTime(cal.produced_at)}
           </div>
+        )}
+      </div>
+
+      {/* Band-calibration harness (P2-3) — persistence/reversal rates over
+          hard band-ladder transitions at fixed 14d/28d horizons, graded
+          held/reverted/worsened against LATER scorecard rows only. HONESTLY
+          NOT a Brier score (bands are ordinal risk categories, not
+          probabilities) — the route's own honesty_note states this, and this
+          panel never relabels a rate as a skill/probability number. An
+          honest awaiting state renders until the tracker has graded at least
+          one claim. */}
+      <div
+        className="bg-surface-100 border border-slate-800 rounded p-2 mb-2 space-y-1.5 text-xs"
+        data-testid="eval-band-calibration"
+      >
+        <div className="flex items-baseline gap-2 flex-wrap">
+          <span className="text-slate-500 text-[10px] uppercase tracking-wide">
+            band calibration
+          </span>
+          <span
+            className="text-slate-600 text-[10px]"
+            title="Ordinal band-persistence stability — NOT a probability or Brier score."
+          >
+            persistence / reversal rate (not a Brier score)
+          </span>
+        </div>
+        {bandCalibrationEmpty(cal?.band_calibration) ? (
+          <div className="text-slate-500 text-[10px] py-1" data-testid="band-calibration-empty">
+            no band transitions graded yet
+          </div>
+        ) : (
+          <>
+            <div className="text-slate-600 text-[10px]">
+              {cal!.band_calibration!.claims_total} claim
+              {cal!.band_calibration!.claims_total === 1 ? '' : 's'} logged
+              {cal!.band_calibration!.produced_at &&
+                ` · ${relTime(cal!.band_calibration!.produced_at)}`}
+            </div>
+            {orderedBandHorizons(cal!.band_calibration!.horizons).map(([label, h]) => (
+              <div
+                key={label}
+                className="flex items-baseline gap-2 flex-wrap"
+                data-testid={`band-calibration-horizon-${label}`}
+              >
+                <span className="w-10 shrink-0 text-slate-400 font-mono">{label}</span>
+                <span className="text-slate-300">
+                  persistence{' '}
+                  <span
+                    className="font-mono text-slate-200"
+                    data-testid={`band-calibration-persistence-${label}`}
+                  >
+                    {bandRateLabel(h.persistence_rate)}
+                  </span>
+                </span>
+                <span className="text-slate-300">
+                  reversal{' '}
+                  <span
+                    className="font-mono text-slate-200"
+                    data-testid={`band-calibration-reversal-${label}`}
+                  >
+                    {bandRateLabel(h.reversal_rate)}
+                  </span>
+                </span>
+                <span
+                  className="text-slate-600 text-[10px]"
+                  title={
+                    `confirmed=${h.confirmed} reverted=${h.reverted} (n_scored=${h.scored}) · ` +
+                    `excluded: insufficient=${h.excluded_insufficient} unresolvable=${h.excluded_unresolvable}`
+                  }
+                >
+                  n={h.scored}
+                </span>
+              </div>
+            ))}
+            <div className="text-slate-600 text-[10px] italic" data-testid="band-calibration-honesty-note">
+              {cal!.band_calibration!.honesty_note ??
+                'Ordinal band-persistence stability — not a Brier score.'}
+            </div>
+          </>
         )}
       </div>
 
@@ -415,13 +490,13 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
                                 </div>
                               ))
                             )}
-                            <div
-                              className={
-                                flagged ? 'text-rose-300 text-[10px]' : 'text-slate-500 text-[10px]'
-                              }
+                            <InfoTip
+                              text={EVAL_BADGE_EXPLAIN}
+                              className={flagged ? 'text-rose-300 text-[10px]' : 'text-slate-500 text-[10px]'}
+                              testId={`scorecard-eval-badge-${sc.target_id}-${unit}`}
                             >
                               {evalBadge(dim.eval)}
-                            </div>
+                            </InfoTip>
                           </div>
                         )}
                       </div>
@@ -466,9 +541,17 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
                               >
                                 {displayName(unit)}
                               </span>
-                              <span className="text-slate-500 text-[10px]">
+                              <InfoTip
+                                text={
+                                  'No band has been computed for this dimension yet — an honest ' +
+                                  'absence (nothing measured), not an error. ' +
+                                  `Reason: ${insufficientLabel(dim.reason)}.`
+                                }
+                                className="text-slate-500 text-[10px]"
+                                testId={`scorecard-insufficient-reason-${sc.target_id}-${unit}`}
+                              >
                                 {insufficientLabel(dim.reason)}
-                              </span>
+                              </InfoTip>
                             </div>
                           ))}
                         </div>

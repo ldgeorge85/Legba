@@ -51,6 +51,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 from uuid import UUID
 
+from ..provenance.consumption import CONSUMPTION_CONTEXT_JOURNAL
 from ..provenance.kinds import OutputKind
 from ..provenance.models import JournalClaim, JournalPayload
 from .agency.journal_propose import JOURNAL_PROPOSE_TOOLS
@@ -2394,11 +2395,34 @@ async def run_method(
     # write path (_insert_journal_entry) also hard-forces the column empty.
     steps.append({"phase": "persist", "kind": "envelope", "derived_from": 0})
 
+    # KW-1 forward-consumption index (migration 0106): the journal's
+    # consumption point is its RENDERED slice — ``_select_journal_slice`` is
+    # what every tier's renderer actually put in front of the narrator (a
+    # deterministic pure function of ``inputs``, so re-applying it here yields
+    # exactly the set the render used). Stamped as ``consumed_edges``; the
+    # runtime materializes them into ``output_consumption`` alongside the
+    # journal row write (context='journal_slice'), best-effort. This is a
+    # SIDECAR index, deliberately NOT ``derived_from`` — the journal stays the
+    # off-chain node (§3.5); the forward index is how "this entry read row F"
+    # survives without putting the journal on the lineage chain.
+    consumed_edges: list[tuple[UUID, str]] = []
+    for _row in _select_journal_slice(inputs):
+        _rid = _row.get("id")
+        if _rid is None:
+            continue
+        try:
+            consumed_edges.append(
+                (UUID(str(_rid)), CONSUMPTION_CONTEXT_JOURNAL)
+            )
+        except (ValueError, AttributeError, TypeError):
+            continue  # malformed row id — the render tolerated it; so do we
+
     return AnalystMethodResult(
         finding=payload,            # the runtime forwards this to write_analyst_output(kind=JOURNAL)
         usage=usage,
         derived_from=[],            # OFF the chain (§3.5)
         intermediate_steps=steps,
+        consumed_edges=consumed_edges,
     )
 
 

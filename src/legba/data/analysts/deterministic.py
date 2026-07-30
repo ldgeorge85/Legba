@@ -70,6 +70,7 @@ from .deterministic_handlers import (
     anomaly_detection,
     band_calibration_tracker,
     calibration_tracking,
+    claim_watch,
     collection_gap,
     composition_lineage_sweep,
     corpus_indexer,
@@ -222,12 +223,19 @@ OUTPUT_KIND_BY_SUB_HANDLER: dict[str, object] = {
     # reads + the P1-3 baseline_deviation trigger can consume, never a forecast.
     "desk_baseline": OutputKind.FINDING,
     # Signals TTL purge — NOT in the operator-confirmed trace-only list;
-    # disabled by default (ttl_days<=0). Left FINDING (unchanged).
+    # disabled by default (ttl_days<=0). Left FINDING (unchanged). C2 "one
+    # janitor" (2026-07-28 coherence pass, migration 0109): the handler now
+    # DELEGATES to the shared deterministic_handlers._retention_sweep engine
+    # (executes the "signals_retention" retention_policies row) instead of
+    # carrying its own purge SQL — the sub_handler NAME + this OUTPUT_KIND
+    # entry are unchanged, so no dispatch/descriptor change was needed.
     "signals_retention": OutputKind.FINDING,
     # S-6 analyst_traces TTL purge — mirrors signals_retention exactly: an
     # honest per-run summary FINDING (traces/critiques counts; zero-state
     # honest), disabled by default (ttl_days<=0). Keeps this handler in the
     # FINDING-emitters set the STRUCTURAL_VERIFY_EXEMPT drift guard asserts.
+    # C2 "one janitor": also now delegates to _retention_sweep (the
+    # "analyst_traces_retention" policy row) — same unchanged name/kind.
     "analyst_traces_retention": OutputKind.FINDING,
 
     # --- TRACE-ONLY (real product is side-written; run audited in the trace;
@@ -322,6 +330,15 @@ OUTPUT_KIND_BY_SUB_HANDLER: dict[str, object] = {
     # FINDING-emitters set the STRUCTURAL_VERIFY_EXEMPT_ANALYSTS drift guard
     # asserts equality against.
     "alert_trigger_scan": TRACE_ONLY,
+    # claim_watch — flag-only new-evidence-vs-open-question matcher. The REAL
+    # product = the side-written append-only markers (bearing_edges +
+    # review_flags, migration 0107); the returned summary (per-run match counts
+    # + the staleness_debt gauge) is a RECEIPT fully audited in analyst_traces.
+    # TRACE_ONLY (the alert_trigger_scan precedent) keeps the receipt off
+    # analyst_outputs AND keeps this handler out of the FINDING-emitters set
+    # the STRUCTURAL_VERIFY_EXEMPT_ANALYSTS drift guard asserts equality
+    # against.
+    "claim_watch": TRACE_ONLY,
 }
 
 # READ_SLICE defaults to the signals reader — graph_mining + anomaly +
@@ -425,11 +442,17 @@ SUB_HANDLERS: dict[str, Any] = {
     "integrity_sweep": integrity_sweep.handle,
     # Signals TTL purge (graph-and-data Wave-1b item 3 / D4). Disabled by
     # default (ttl_days<=0); operator opts in with a positive TTL on options.
+    # C2 "one janitor" (migration 0109): the entry point stays this same
+    # function object (identity-checked by several tests) — it now delegates
+    # to deterministic_handlers._retention_sweep, the shared engine also
+    # backing analyst_traces_retention below.
     "signals_retention": signals_retention.handle,
     # S-6 analyst_traces TTL purge — bounds the unbounded debug/telemetry
     # table (~470MB/164k rows, +5.4k/day; disk-creep source). Disabled by
     # default (ttl_days<=0); FK children DB-handled (critiques CASCADE, DLQ
     # run_id SET NULL). TTL must stay above the 7-day cadence-health window.
+    # C2 "one janitor": delegates to the same shared _retention_sweep engine
+    # as signals_retention (both execute a retention_policies config row).
     "analyst_traces_retention": analyst_traces_retention.handle,
     # Proposed-edge governance (FIX P3-1) — promotes corroborated co_occurs
     # proposed_edges to nexuses + flips status; ages out thin stale ones.
@@ -449,6 +472,15 @@ SUB_HANDLERS: dict[str, Any] = {
     # kind=alert rows + fans them through the shared P1-1 sink dispatcher;
     # durable watermarks (migration 0091) make every transition fire-once.
     "alert_trigger_scan": alert_trigger_scan.handle,
+    # claim_watch — ~30-min flag-only matcher of NEW signals (since the durable
+    # trigger_class='claim_watch' cursor in alert_trigger_watermarks — the 0091
+    # table ridden as a new consumer class, no new watermark table) against the
+    # open-question set (hypotheses status='open_question'). Three fused planes
+    # (stored signal vectors + question-embed cache / canonical entity overlap
+    # / desk-geo overlap); above-threshold matches side-write append-only
+    # bearing_edges + (for questions tracing FORWARD over output_consumption to
+    # live products) review_flags. Zero LLM; never mutates any output.
+    "claim_watch": claim_watch.handle,
     # A7 geographic convergence detector — ~30-min LLM-free scan that bins the
     # rolling 24h of geolocated signals (1°×1° cells for point-trustworthy
     # coordinates; country bins for ISO2-tagged signals) and fires a medium

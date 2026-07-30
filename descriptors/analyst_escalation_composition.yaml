@@ -105,6 +105,9 @@ method:
   kind: llm_planner
   prompt_module: "legba.prompts.meta_findings_synthesizer.v1"
   llm:
+    # Model-card sampling (fleet-wide 1.0 per the 2026-07-24 audit + A/B). Honored by
+    # the meta kind since the W-3 deps-builder fix (descriptor-else-kind-default).
+    temperature: 1.0
     # MODEL POLICY (operator): synthesis on the CORE plane via a stack_ref ($0).
     # NEVER hardcode a model — keeping it a stack_ref makes switching later a
     # one-line descriptor PUT.

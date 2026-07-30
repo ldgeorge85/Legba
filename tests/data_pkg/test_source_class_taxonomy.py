@@ -27,6 +27,7 @@ import yaml
 
 from legba.data.schemas.source import SourceClass, SourceDescriptor, SourceScope
 from legba.data.sources.rss import RSSConfig
+from legba.data.sources.telegram import TelegramChannelSourceConfig
 from legba.runtime.source_factory import _unwrap_factory_dict
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -108,6 +109,32 @@ EXPECTED_YAML_CLASS: dict[str, str] = {
     "source_spiegel_international.yaml": "reporting",
     "source_bangkokpost.yaml": "reporting",
     "source_dawn.yaml": "reporting",
+    # Supply-chain domain top-10 first registrations (2026-07-29):
+    # planning/SUPPLY_CHAIN_SOURCES_2026-07-29.md §5.
+    "source_pancanal.yaml": "official",
+    "source_splash247.yaml": "reporting",
+    "source_theloadstar.yaml": "reporting",
+    "source_maritime_executive.yaml": "reporting",
+    "source_digitimes.yaml": "reporting",
+    "source_wto_news.yaml": "official",
+    "source_northernminer.yaml": "reporting",
+}
+
+# 2026-07-29 Ansar Allah decision — source_telegram_ansarallah.yaml (a
+# separate descriptor + Telegram account) is RETIRED. @Almasirah_En +
+# @ansarollah1 ride source_telegram_monitor.yaml's EXISTING account instead,
+# classed via the NEW `config.channels.classes` per-channel override
+# (TelegramChannelSourceConfig.classes) rather than the whole-descriptor
+# `scope.source_class` (which stays `reporting` — see EXPECTED_YAML_CLASS
+# above). Pinned here so an override can't silently vanish (a channel
+# dropped from this map without anyone noticing would re-fall to the batch
+# `reporting` default and quietly lose its state_media framing-not-fact
+# treatment).
+EXPECTED_YAML_CHANNEL_CLASS_OVERRIDES: dict[str, dict[str, str]] = {
+    "source_telegram_monitor.yaml": {
+        "Almasirah_En": "state_media",
+        "ansarollah1": "state_media",
+    },
 }
 
 NEW_STATE_MEDIA_FILES = [
@@ -200,6 +227,63 @@ def test_every_committed_source_yaml_is_classified_in_vocab():
         assert desc.scope.source_class in VOCAB, path.name
         # And every committed file is pinned in the expected map above.
         assert path.name in EXPECTED_YAML_CLASS, f"unmapped source descriptor: {path.name}"
+
+
+# ---------------------------------------------------------------------------
+# 2c. Per-channel source_class overrides (2026-07-29 Ansar Allah decision) —
+# pinned so a channel can't silently lose its override, and the file-level
+# class (EXPECTED_YAML_CLASS above) stays the honest batch default.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "fname,expected_overrides", sorted(EXPECTED_YAML_CHANNEL_CLASS_OVERRIDES.items())
+)
+def test_yaml_descriptor_channel_class_overrides(
+    fname: str, expected_overrides: dict[str, str]
+):
+    """The descriptor's config.channels.classes map — parsed through the SAME
+    production unwrap + real handler config schema as activation would use —
+    matches exactly the pinned overrides, and every overridden channel is
+    still in config.channels (the config's own cross-field validator already
+    enforces this at construction; re-asserted here so a future edit that
+    silently drops a channel from `channels` fails this pin, not just a
+    ValidationError inside the fixture)."""
+    desc = _load_descriptor(fname)
+    assert desc.identity.kind == "telegram_channel"
+    cfg = TelegramChannelSourceConfig.model_validate(_unwrap_factory_dict(desc.config))
+    assert cfg.classes == expected_overrides
+    known_channels = {c.lstrip("@") for c in cfg.channels}
+    for channel in expected_overrides:
+        assert channel in known_channels, f"{channel} not in {fname}'s config.channels"
+    # And every overridden class is itself in the closed vocabulary — the
+    # SAME choice-lock the file-level source_class is held to.
+    for cls in expected_overrides.values():
+        assert cls in VOCAB
+
+
+def test_telegram_monitor_file_level_class_is_reporting_not_the_override():
+    """The descriptor's OWN scope.source_class stays the honest batch
+    default (`reporting`) even though two of its channels are overridden to
+    `state_media` — the override lives in config.channels.classes, NOT the
+    file-level class (S1-T8: source_class is otherwise a whole-descriptor
+    field)."""
+    desc = _load_descriptor("source_telegram_monitor.yaml")
+    assert desc.scope.source_class == "reporting"
+    cfg = TelegramChannelSourceConfig.model_validate(_unwrap_factory_dict(desc.config))
+    assert cfg.classes.get("Almasirah_En") == "state_media"
+    assert cfg.classes.get("ansarollah1") == "state_media"
+    # A non-overridden channel on the same descriptor has NO entry — it
+    # falls back to scope.source_class at the S-1 stamping path.
+    assert "bloomberg" not in cfg.classes
+
+
+def test_ansarallah_descriptor_is_retired():
+    """source_telegram_ansarallah.yaml's separate-descriptor approach is
+    retired (2026-07-29 decision: ride the existing account via a
+    per-channel override instead of a second Telethon session/account)."""
+    assert not (DESCRIPTORS_DIR / "source_telegram_ansarallah.yaml").exists()
+    assert "source_telegram_ansarallah.yaml" not in EXPECTED_YAML_CLASS
 
 
 # ---------------------------------------------------------------------------

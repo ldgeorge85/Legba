@@ -1,14 +1,41 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``geo_convergence_scan`` sub-handler — A7 geographic convergence detector
-(worldmonitor pattern, LLM-free).
+"""``geo_convergence_scan`` — A7 geographic convergence detector (worldmonitor
+pattern, LLM-free). ALERT-EMISSION PLANE, FOLDED (2026-07-29).
 
-A deterministic META analyst on a ~30-minute cadence that bins the last
-``window_hours`` (24h) of geolocated signals into geographic bins and fires a
-``medium`` ``kind='alert'`` row when signals from **at least
-``min_distinct_families`` (3) DISTINCT source families** converge in one bin —
-diversity is the signal; a same-family pile-on (20 quake feed rows, or one
-outlet's syndication burst) never fires.
+Alert-plane consolidation note
+------------------------------
+This module used to be a STANDALONE deterministic analyst (its own ``handle()``
+entry point, ~30-minute cadence, descriptor ``analyst_geo_convergence_scan.
+yaml``) that emitted its own ``kind='alert'`` rows through the shared P1-1
+dispatcher via an ad-hoc path that only ever reused ``alert_trigger_scan``'s
+PRIMITIVES (``AlertCandidate``, the watermark helpers, ``apply_desk_cap``,
+``_write_alert_row``, ``_resolve_dispatcher``) rather than its class machinery.
+As of 2026-07-29 the alert EMISSION folded into ``alert_trigger_scan`` as its
+trigger class 6 (``trigger_class='geo_convergence'`` — the SAME watermark
+namespace this module always used, so no migration and no watermark
+discontinuity): see :func:`scan_geo_convergence`, which
+``alert_trigger_scan.handle()`` now calls directly, exactly the way it already
+called :func:`legba.data.analysts.deterministic_handlers._watchlist_scan.
+scan_watchlist` for trigger class 5. Firing conditions (the formation/
+dissolution edge over the diversity bar below), payload content, and the
+per-bin watermark dedup are BYTE-IDENTICAL to the pre-fold behavior; the ONE
+disclosed semantic change is that this class's alerts now share ONE combined
+per-desk cap with the other five classes (previously an isolated per-analyst
+budget) — the same anti-noise unification the watchlist_hit fold already
+established.
+
+This module now holds ONLY the pure binning/candidate-building logic + the
+SQL the scan runs; :func:`handle` is a deprecation stub (kept dispatchable so
+a live descriptor still on the old cadence does not hit an unknown-sub_handler
+dispatch error before the operator retires it) that does no scanning and
+emits no alert.
+
+A deterministic scan that bins the last ``window_hours`` (24h) of geolocated
+signals into geographic bins and fires a ``medium`` ``kind='alert'`` row when
+signals from **at least ``min_distinct_families`` (3) DISTINCT source
+families** converge in one bin — diversity is the signal; a same-family
+pile-on (20 quake feed rows, or one outlet's syndication burst) never fires.
 
 What the geo data actually supports — the two-tier honesty split
 -----------------------------------------------------------------
@@ -74,30 +101,50 @@ Output path
 -----------
 Fired transitions land as ``kind='alert'`` rows (payload lists the
 contributing signals: ids + sources + families; ``derived_from`` carries up to
-``_MAX_DERIVED_REFS`` contributing signal ids) with the shared per-desk cap +
-honest rollup (``alert_trigger_scan.apply_desk_cap``), then fan outward
-through the shared P1-1 dispatcher. ``target_id`` is the desk whose
-``scope.geo`` covers the bin's country when one matches. The run's returned
-summary is a genuine FINDING when something happened (formations /
-dissolutions / first-scan seeding) and ``force_trace_only`` on a quiet sweep —
-the indicator_tracker pattern, which keeps this handler in the
-FINDING-emitting set the STRUCTURAL_VERIFY_EXEMPT drift guard asserts.
+``_MAX_DERIVED_REFS`` contributing signal ids), analyst_id='alert_trigger_scan'
+post-fold, sharing that handler's per-desk cap + honest rollup
+(``alert_trigger_scan.apply_desk_cap``) across ALL six trigger classes, then
+fan outward through the shared P1-1 dispatcher — with ``channel_name`` still
+``"geo_convergence"`` (``CHANNEL_NAME`` below), preserved by
+``alert_trigger_scan._sink_payload``'s per-class channel override so ledger /
+log filtering by source is unaffected by the fold. ``target_id`` is the desk
+whose ``scope.geo`` covers the bin's country when one matches.
 
-Registered via ``scripts/bringup_register_geo_convergence_scan.py`` (descriptor
-``descriptors/analyst_geo_convergence_scan.yaml``, ships ``state: draft``).
+Pre-fold, this module's own run summary was a genuine FINDING when something
+happened and ``force_trace_only`` on a quiet sweep (the indicator_tracker
+pattern). Post-fold that role belongs to ``alert_trigger_scan``'s own
+TRACE_ONLY receipt (``counts_by_class['geo_convergence']`` carries the same
+figures: ``currently_formed_bins`` / ``cell_bins_formed`` /
+``country_bins_formed`` / ``point_signals`` / ``country_signal_rows``); this
+module's own :func:`handle` never emits a real finding any more (see its
+deprecation-stub docstring).
+
+Was registered via ``scripts/bringup_register_geo_convergence_scan.py``
+(descriptor ``descriptors/analyst_geo_convergence_scan.yaml``, ships
+``state: draft``) — retire that descriptor at the operator's convenience;
+:func:`handle` stays a safe no-op dispatch target in the meantime.
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping, Optional
-from uuid import UUID, uuid4
+from typing import TYPE_CHECKING, Any, Iterable, Mapping, Optional
+from uuid import UUID
 
 from ....runtime.analyst_method import AnalystMethodResult
 from ...provenance.models import FindingPayload
-from . import alert_trigger_scan as ats
+
+if TYPE_CHECKING:  # pragma: no cover — annotation-only, never imported at
+    # runtime: alert_trigger_scan imports THIS module at its own top level
+    # (the way it already imports ._watchlist_scan), so a real top-level
+    # import here would cycle. Runtime access to alert_trigger_scan's
+    # symbols (AlertCandidate, watermark helpers) is deferred to call time
+    # inside scan_geo_convergence() / _formation_candidate() /
+    # _dissolution_candidate() below, mirroring _watchlist_scan.py.
+    from . import alert_trigger_scan as ats
 
 logger = logging.getLogger(__name__)
 
@@ -318,6 +365,22 @@ def _uuid_or_none(raw: Any) -> Optional[UUID]:
         return None
 
 
+def _parse_jsonish(raw: Any) -> Any:
+    """JSONB columns arrive as dict/list (asyncpg codec) or str — normalise.
+
+    A local copy of ``alert_trigger_scan._parse_jsonish`` (trivial, 8 lines) —
+    the SAME duplication precedent as ``_watchlist_scan._parse_jsonish``, kept
+    to avoid a top-level import back onto ``alert_trigger_scan`` (see the
+    TYPE_CHECKING note at the top of the imports).
+    """
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+    return raw
+
+
 # ---------------------------------------------------------------------------
 # SQL
 # ---------------------------------------------------------------------------
@@ -392,7 +455,7 @@ async def _load_desk_by_iso2(conn: Any) -> dict[str, str]:
     rows = await conn.fetch(_DESK_GEO_SQL)
     out: dict[str, str] = {}
     for row in rows:
-        geo = ats._parse_jsonish(row["geo"])
+        geo = _parse_jsonish(row["geo"])
         if not isinstance(geo, list):
             continue
         for code in geo:
@@ -412,7 +475,10 @@ def _formation_candidate(
     window_hours: int,
     min_families: int,
     desk_by_iso2: Mapping[str, str],
-) -> ats.AlertCandidate:
+) -> "ats.AlertCandidate":
+    # Deferred import — see the TYPE_CHECKING note at the top of the file.
+    from .alert_trigger_scan import AlertCandidate
+
     families = sorted(agg.families)
     contributors = [
         {"id": sid, "source_id": src, "family": fam}
@@ -437,7 +503,7 @@ def _formation_candidate(
         if agg.bin_kind == "cell"
         else "country bin over signals.geo ISO2 tags (no sub-country claim)"
     )
-    return ats.AlertCandidate(
+    return AlertCandidate(
         trigger_class=TRIGGER_CLASS,
         severity="medium",
         title=(
@@ -480,7 +546,10 @@ def _dissolution_candidate(
     window_hours: int,
     min_families: int,
     desk_by_iso2: Mapping[str, str],
-) -> ats.AlertCandidate:
+) -> "ats.AlertCandidate":
+    # Deferred import — see the TYPE_CHECKING note at the top of the file.
+    from .alert_trigger_scan import AlertCandidate
+
     iso2 = bin_key[8:] if bin_key.startswith("country:") else None
     prev_families = [
         f for f in (prev_state.get("families") or []) if isinstance(f, str)
@@ -492,7 +561,7 @@ def _dissolution_candidate(
         "count": 0,
         "last_families": prev_families,
     }
-    return ats.AlertCandidate(
+    return AlertCandidate(
         trigger_class=TRIGGER_CLASS,
         severity="info",
         title=(
@@ -520,237 +589,118 @@ def _dissolution_candidate(
     )
 
 
-def _sink_payload(alert_row_id: UUID, cand: ats.AlertCandidate) -> Any:
-    from ...alerts.sinks import AlertSinkPayload, receipt_link, unverified_state
-
-    path, url = receipt_link(str(alert_row_id), row_kind="alert")
-    return AlertSinkPayload(
-        summary=cand.title[:512],
-        detail=cand.body[:4000],
-        severity=cand.severity,
-        channel_name=CHANNEL_NAME,
-        target_id=cand.target_id,
-        effective_confidence=None,
-        verify_state=unverified_state(
-            "deterministic geographic-convergence trigger (source-family "
-            "diversity count over binned signals; no LLM prose)"
-        ),
-        event_at=None,
-        alert_row_id=str(alert_row_id),
-        receipt_path=path,
-        receipt_url=url,
-    )
+# _sink_payload moved to alert_trigger_scan.py (2026-07-29 fold): that
+# module's own _sink_payload now handles every trigger class, including this
+# one, with a per-class channel_name override
+# (alert_trigger_scan._CHANNEL_BY_CLASS) that preserves this class's
+# CHANNEL_NAME ("geo_convergence") exactly. The unverified-reason text above
+# moved to alert_trigger_scan._UNVERIFIED_REASONS[TRIGGER_GEO_CONVERGENCE]
+# byte-for-byte.
 
 
 # ---------------------------------------------------------------------------
-# Summary finding
+# Trigger-class scan (folded into alert_trigger_scan.handle() — 2026-07-29)
 # ---------------------------------------------------------------------------
 
 
-def _build_summary(
+async def scan_geo_convergence(
+    conn: Any,
     *,
-    seeded_now: bool,
-    formed_fired: int,
-    dissolved_fired: int,
-    rollups: int,
-    suppressed: int,
-    write_failures: int,
-    active_bins: int,
-    cell_bins_formed: int,
-    country_bins_formed: int,
-    point_signals: int,
-    country_signal_rows: int,
-    window_hours: int,
-    min_families: int,
-    per_desk_cap: int,
-) -> FindingPayload:
-    if seeded_now:
-        title = (
-            f"Geo convergence scan seeded: {active_bins} already-converging "
-            f"bin(s) recorded silently (no history paged)"
-        )
-    else:
-        title = (
-            f"Geo convergence scan: {formed_fired} formation(s), "
-            f"{dissolved_fired} dissolution(s), {rollups} rollup(s)"
-        )
-    body_lines = [
-        f"window_hours={window_hours} min_distinct_families={min_families}",
-        (
-            f"formed_fired={formed_fired} dissolved_fired={dissolved_fired} "
-            f"rollups={rollups} suppressed_into_rollups={suppressed} "
-            f"write_failures={write_failures}"
-        ),
-        (
-            f"currently_formed_bins={active_bins} "
-            f"(cell={cell_bins_formed}, country={country_bins_formed})"
-        ),
-        (
-            f"window_signals: point_trustworthy={point_signals} "
-            f"country_tag_rows={country_signal_rows}"
-        ),
-        (
-            "binning: 1°×1° cells for sub-country-precision/geometry points; "
-            "country bins for ISO2-tagged signals (country-centroid geocodes "
-            "are NEVER cell-binned)"
-        ),
-    ]
-    return FindingPayload(
-        title=title[:2048],
-        body="\n".join(body_lines)[:65536],
-        confidence=1.0,
-        evidence=[],
-        tags=["deterministic", SUB_HANDLER_NAME],
-        data={
-            "sub_handler": SUB_HANDLER_NAME,
-            "seeded": seeded_now,
-            "formed_fired": formed_fired,
-            "dissolved_fired": dissolved_fired,
-            "rollups": rollups,
-            "suppressed_into_rollups": suppressed,
-            "write_failures": write_failures,
-            "currently_formed_bins": active_bins,
-            "cell_bins_formed": cell_bins_formed,
-            "country_bins_formed": country_bins_formed,
-            "point_signals": point_signals,
-            "country_signal_rows": country_signal_rows,
-            "window_hours": window_hours,
-            "min_distinct_families": min_families,
-            "per_desk_cap": per_desk_cap,
-            # C2b (P4-6) — the structural_claims verify CONTRACT. This handler is
-            # in STRUCTURAL_CLAIMS_VERIFY_ANALYSTS, so the deterministic
-            # re-derivation profile (verify.verify_structural_claims) checks each
-            # declared claim after the finding lands and stamps a
-            # ``structural_verified`` critique. The rollup identity below —
-            # currently_formed_bins == cell_bins_formed + country_bins_formed — is
-            # an always-true internal invariant (formed bins are ONLY cell- or
-            # country-tier), so a future miscount bug surfaces as a FLAGGED
-            # structural critique instead of silently shipping a wrong headline.
-            "structural_claims": [
-                {
-                    "id": "formed_bins_rollup",
-                    "statement": (
-                        f"currently_formed_bins ({active_bins}) = "
-                        f"cell_bins_formed ({cell_bins_formed}) + "
-                        f"country_bins_formed ({country_bins_formed})"
-                    ),
-                    "op": "sum",
-                    "asserted": active_bins,
-                    "basis": [cell_bins_formed, country_bins_formed],
-                },
-            ],
-        },
-    )
+    window_hours: int = DEFAULT_WINDOW_HOURS,
+    min_families: int = DEFAULT_MIN_DISTINCT_FAMILIES,
+) -> tuple[list[Any], list[tuple[str, str, dict[str, Any]]], bool, dict[str, Any]]:
+    """One geo-convergence scan pass — ``alert_trigger_scan``'s trigger class 6.
 
+    Ported byte-for-byte (firing conditions + payload content unchanged) from
+    this module's former standalone ``handle()``. Same call shape as
+    :func:`legba.data.analysts.deterministic_handlers._watchlist_scan.
+    scan_watchlist`: returns ``(candidates, silent_watermarks, was_seeded,
+    stats)`` — ``alert_trigger_scan.handle()`` extends its own candidate/silent
+    lists with these and folds ``stats`` into ``counts_by_class['geo_convergence']``.
 
-# ---------------------------------------------------------------------------
-# Public handler entry point
-# ---------------------------------------------------------------------------
+    ``stats`` carries exactly the figures the former standalone summary
+    finding reported: ``currently_formed_bins`` / ``cell_bins_formed`` /
+    ``country_bins_formed`` / ``point_signals`` / ``country_signal_rows`` /
+    ``window_hours`` / ``min_distinct_families``.
 
-
-async def handle(
-    inputs: list[dict[str, Any]],
-    options: Mapping[str, Any],
-    deps: Any | None,
-) -> AnalystMethodResult:
-    """Sub-handler entry point — one global convergence scan (module docstring).
-
-    REFUSES LOUD on a missing pool (the sibling trigger-scan contract): a scan
-    that cannot read the substrate must error visibly, never report a quiet
-    zero-convergence run.
+    Watermark upserts for SILENT transitions (first-scan seeding + family-set
+    refreshes on persisting bins) are RETURNED for the caller to batch-apply
+    (the alert_trigger_scan.handle() pattern for every other class) rather
+    than applied inline — the one behavioral difference from the pre-fold
+    code, which applied them eagerly inside its own connection block; the
+    net effect on the watermark table is identical (same rows, same values,
+    same fired=False), only the write is now batched alongside the other five
+    classes'.
     """
-    pool = getattr(deps, "pg_pool", None) if deps is not None else None
-    if pool is None:
-        raise RuntimeError(
-            "geo_convergence_scan requires a live deps.pg_pool — refusing to "
-            "report a zero-convergence scan without reading the substrate"
-        )
+    # Deferred import — see the TYPE_CHECKING note at the top of the file.
+    from .alert_trigger_scan import SEED_KEY, _load_class_watermarks
 
-    analyst_id = str(options.get("analyst_id") or SUB_HANDLER_NAME)
-    analyst_version = options.get("analyst_version")
-    raw_run_id = options.get("run_id")
-    try:
-        run_uuid = UUID(str(raw_run_id)) if raw_run_id else uuid4()
-    except (ValueError, TypeError):
-        run_uuid = uuid4()
+    min_families = max(2, int(min_families))
 
-    window_hours = int(options.get("window_hours", DEFAULT_WINDOW_HOURS))
-    min_families = max(
-        2, int(options.get("min_distinct_families", DEFAULT_MIN_DISTINCT_FAMILIES))
+    seeded, prev_states = await _load_class_watermarks(conn, TRIGGER_CLASS)
+    point_rows = await conn.fetch(
+        _POINT_SIGNALS_SQL, window_hours, _MAX_SIGNALS_PER_TIER
     )
-    per_desk_cap = max(1, int(options.get("per_desk_cap", DEFAULT_PER_DESK_CAP)))
+    country_rows = await conn.fetch(
+        _COUNTRY_SIGNALS_SQL, window_hours, _MAX_SIGNALS_PER_TIER
+    )
+    fam_rows = await conn.fetch(_SOURCE_FAMILIES_SQL)
+    desk_by_iso2 = await _load_desk_by_iso2(conn)
 
-    async with pool.acquire() as conn:
-        seeded, prev_states = await ats._load_class_watermarks(
-            conn, TRIGGER_CLASS
-        )
-        point_rows = await conn.fetch(
-            _POINT_SIGNALS_SQL, window_hours, _MAX_SIGNALS_PER_TIER
-        )
-        country_rows = await conn.fetch(
-            _COUNTRY_SIGNALS_SQL, window_hours, _MAX_SIGNALS_PER_TIER
-        )
-        fam_rows = await conn.fetch(_SOURCE_FAMILIES_SQL)
-        desk_by_iso2 = await _load_desk_by_iso2(conn)
+    families_by_source = {
+        str(r["source_id"]): _parse_jsonish(r["scope_tags"]) for r in fam_rows
+    }
+    bins = build_bins(point_rows, country_rows, families_by_source)
+    formed = {
+        k: agg for k, agg in bins.items() if len(agg.families) >= min_families
+    }
+    fire_formed, fire_dissolved, silent_seed = edge_actions(
+        seeded, prev_states, formed.keys()
+    )
 
-        families_by_source = {
-            str(r["source_id"]): ats._parse_jsonish(r["scope_tags"])
-            for r in fam_rows
-        }
-        bins = build_bins(point_rows, country_rows, families_by_source)
-        formed = {
-            k: agg for k, agg in bins.items() if len(agg.families) >= min_families
-        }
-        fire_formed, fire_dissolved, silent_seed = edge_actions(
-            seeded, prev_states, formed.keys()
-        )
+    silent: list[tuple[str, str, dict[str, Any]]] = []
+    seeded_now = not seeded
+    for key in silent_seed:
+        agg = formed[key]
+        silent.append((
+            TRIGGER_CLASS,
+            key,
+            {
+                "active": True,
+                "families": sorted(agg.families),
+                "count": agg.signal_count,
+            },
+        ))
+    if not seeded_now:
+        for key, agg in formed.items():
+            prev = prev_states.get(key)
+            if (
+                prev is not None
+                and bool(prev.get("active"))
+                and key not in fire_formed
+                and sorted(agg.families) != sorted(
+                    f for f in (prev.get("families") or [])
+                    if isinstance(f, str)
+                )
+            ):
+                silent.append((
+                    TRIGGER_CLASS,
+                    key,
+                    {
+                        "active": True,
+                        "families": sorted(agg.families),
+                        "count": agg.signal_count,
+                    },
+                ))
 
-        # Silent bookkeeping inside the same connection: first-scan seeding,
-        # and family-set refreshes on persisting (active, still-formed) bins.
-        seeded_now = not seeded
-        for key in silent_seed:
-            agg = formed[key]
-            await ats._upsert_watermark(
-                conn,
-                TRIGGER_CLASS,
-                key,
-                {
-                    "active": True,
-                    "families": sorted(agg.families),
-                    "count": agg.signal_count,
-                },
-                fired=False,
-            )
-        if seeded_now:
-            await ats._mark_seeded(conn, TRIGGER_CLASS)
-        else:
-            for key, agg in formed.items():
-                prev = prev_states.get(key)
-                if (
-                    prev is not None
-                    and bool(prev.get("active"))
-                    and key not in fire_formed
-                    and sorted(agg.families) != sorted(
-                        f for f in (prev.get("families") or [])
-                        if isinstance(f, str)
-                    )
-                ):
-                    await ats._upsert_watermark(
-                        conn,
-                        TRIGGER_CLASS,
-                        key,
-                        {
-                            "active": True,
-                            "families": sorted(agg.families),
-                            "count": agg.signal_count,
-                        },
-                        fired=False,
-                    )
-        await conn.execute(
-            _WM_PRUNE_INACTIVE_SQL, TRIGGER_CLASS, ats.SEED_KEY, _WM_PRUNE_DAYS
-        )
+    # Inactive-watermark prune — mirrors alert_trigger_scan's own per-class
+    # maintenance queries (e.g. _scan_verified_findings's finding-watermark
+    # prune): each class runs its own upkeep inline.
+    await conn.execute(
+        _WM_PRUNE_INACTIVE_SQL, TRIGGER_CLASS, SEED_KEY, _WM_PRUNE_DAYS
+    )
 
-    candidates: list[ats.AlertCandidate] = [
+    candidates = [
         _formation_candidate(
             formed[key],
             window_hours=window_hours,
@@ -769,104 +719,75 @@ async def handle(
         for key in fire_dissolved
     ]
 
-    kept, rollup_cands = ats.apply_desk_cap(candidates, per_desk_cap)
-    suppressed = sum(
-        int(r.data.get("suppressed_count", 0)) for r in rollup_cands
-    )
-
-    dispatcher = ats._resolve_dispatcher(deps)
-    formed_fired = 0
-    dissolved_fired = 0
-    rollups_written = 0
-    write_failures = 0
-    to_fan_out: list[tuple[UUID, ats.AlertCandidate]] = []
-
-    async with pool.acquire() as conn:
-        for cand in kept + rollup_cands:
-            row_id = await ats._write_alert_row(
-                conn,
-                cand,
-                analyst_id=analyst_id,
-                analyst_version=analyst_version,
-                run_uuid=run_uuid,
-            )
-            if row_id is None:
-                # Watermark NOT advanced: the transition retries next scan.
-                write_failures += 1
-                continue
-            if cand.trigger_class == "rollup":
-                rollups_written += 1
-            elif cand.data.get("event") == "dissolved":
-                dissolved_fired += 1
-            else:
-                formed_fired += 1
-            for wm_class, wm_key, wm_state in cand.watermarks:
-                await ats._upsert_watermark(
-                    conn, wm_class, wm_key, wm_state, fired=True
-                )
-            to_fan_out.append((row_id, cand))
-
-    if dispatcher is None and to_fan_out:
-        logger.warning(
-            "geo_convergence_scan.fanout_unavailable alerts=%d — no "
-            "alert_sink_dispatcher wired (rows persisted; outward delivery "
-            "skipped this run)",
-            len(to_fan_out),
-        )
-    elif dispatcher is not None:
-        for row_id, cand in to_fan_out:
-            try:
-                await dispatcher.fan_out(_sink_payload(row_id, cand))
-            except Exception as exc:  # noqa: BLE001 — never-raise fan-out contract
-                logger.warning(
-                    "geo_convergence_scan.fanout_failed alert_row=%s err=%s",
-                    row_id,
-                    exc,
-                )
-
-    if formed_fired or dissolved_fired or seeded_now:
-        logger.info(
-            "geo_convergence_scan.done formed=%d dissolved=%d rollups=%d "
-            "seeded=%s formed_bins=%d write_failures=%d",
-            formed_fired,
-            dissolved_fired,
-            rollups_written,
-            seeded_now,
-            len(formed),
-            write_failures,
-        )
-
-    finding = _build_summary(
-        seeded_now=seeded_now,
-        formed_fired=formed_fired,
-        dissolved_fired=dissolved_fired,
-        rollups=rollups_written,
-        suppressed=suppressed,
-        write_failures=write_failures,
-        active_bins=len(formed),
-        cell_bins_formed=sum(
-            1 for a in formed.values() if a.bin_kind == "cell"
-        ),
-        country_bins_formed=sum(
+    stats = {
+        "currently_formed_bins": len(formed),
+        "cell_bins_formed": sum(1 for a in formed.values() if a.bin_kind == "cell"),
+        "country_bins_formed": sum(
             1 for a in formed.values() if a.bin_kind == "country"
         ),
-        point_signals=len(point_rows),
-        country_signal_rows=len(country_rows),
-        window_hours=window_hours,
-        min_families=min_families,
-        per_desk_cap=per_desk_cap,
+        "point_signals": len(point_rows),
+        "country_signal_rows": len(country_rows),
+        "window_hours": window_hours,
+        "min_distinct_families": min_families,
+    }
+    return candidates, silent, seeded, stats
+
+
+# ---------------------------------------------------------------------------
+# Public handler entry point — DEPRECATED (2026-07-29)
+# ---------------------------------------------------------------------------
+
+
+async def handle(
+    inputs: list[dict[str, Any]],
+    options: Mapping[str, Any],
+    deps: Any | None,
+) -> AnalystMethodResult:
+    """Deprecated no-op stub — the alert-emission scan folded into
+    ``alert_trigger_scan`` (trigger_class='geo_convergence'); see
+    :func:`scan_geo_convergence` and the module docstring's consolidation
+    note.
+
+    Retained ONLY so the ``geo_convergence_scan`` sub_handler name stays
+    dispatchable: an operator's live descriptor still ticking on its old
+    ~30-minute cadence must not hit ``DeterministicDispatchError`` before it
+    is deactivated. This stub reads nothing, writes nothing, and ALWAYS
+    reports quiet (``force_trace_only=True``) — it can never race or
+    double-fire against the folded scan sharing the SAME
+    ``alert_trigger_watermarks`` / ``trigger_class='geo_convergence'`` rows,
+    because it never touches them. Retire the standalone descriptor
+    (``descriptors/analyst_geo_convergence_scan.yaml``) at the operator's
+    convenience; this stub is a safety net, not a long-term entry point.
+    """
+    logger.info(
+        "geo_convergence_scan.deprecated_stub — alert emission folded into "
+        "alert_trigger_scan (trigger_class=%r); this standalone analyst run "
+        "did nothing this tick",
+        TRIGGER_CLASS,
     )
-    # Quiet steady-state sweep (nothing fired, nothing seeded) → trace-only:
-    # the feed only ever carries real convergence events (indicator_tracker
-    # pattern; the FINDING kind itself is what the structural-exempt drift
-    # guard keys on).
-    quiet = not (
-        seeded_now or formed_fired or dissolved_fired or write_failures
+    finding = FindingPayload(
+        title="geo_convergence_scan: folded into alert_trigger_scan (no-op)",
+        body=(
+            "This standalone analyst's alert emission folded into "
+            "alert_trigger_scan's trigger_class='geo_convergence' class "
+            "machinery (2026-07-29 consolidation). This run performed no "
+            "scan and emitted no alert. Deactivate this analyst's descriptor "
+            "when convenient — alert_trigger_scan now covers this trigger."
+        ),
+        confidence=1.0,
+        evidence=[],
+        tags=["deterministic", SUB_HANDLER_NAME, "deprecated"],
+        data={
+            "sub_handler": SUB_HANDLER_NAME,
+            "deprecated": True,
+            "folded_into": "alert_trigger_scan",
+            "folded_trigger_class": TRIGGER_CLASS,
+        },
     )
     return AnalystMethodResult(
         finding=finding,
         usage={"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0},
-        force_trace_only=quiet,
+        force_trace_only=True,
     )
 
 
@@ -879,5 +800,6 @@ __all__ = [
     "country_key",
     "edge_actions",
     "handle",
+    "scan_geo_convergence",
     "source_family",
 ]

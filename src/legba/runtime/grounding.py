@@ -82,17 +82,23 @@ __all__ = [
     "GroundingFact",
     "GroundingGraphStructure",
     "GroundingInterestingItem",
+    "GroundingNarrative",
     "GroundingNexus",
+    "GroundingOpenQuestion",
     "GroundingSituation",
     "GroundingWorldContextChunk",
     "SubstrateGroundingResolver",
     "build_graph_structure_block",
     "build_grounding_preamble",
+    "build_narratives_block",
+    "build_open_questions_block",
     "build_situations_block",
     "build_world_context_block",
     "collect_grounding_candidates",
     "finding_is_off_target",
+    "harvest_class_of",
     "is_non_event_situation_name",
+    "open_question_priority_key",
     "situation_grounding_min_intensity",
     "situation_scope_for_target",
     "target_country_name",
@@ -182,6 +188,126 @@ def _row_get(row: Any, key: str, default: Any = None) -> Any:
         return default
 
 
+# ---------------------------------------------------------------------------
+# R-1 — standing-question backlog ranking (pure, DB-free — unit-testable)
+# ---------------------------------------------------------------------------
+#
+# The corpus_researcher (and any other backlog-draining analyst that opts into
+# the ``open_questions`` grounding source) needs a BOUNDED, DETERMINISTIC
+# priority order over the standing question set
+# (``hypotheses.status='open_question'``) so the model is handed a real
+# choice rather than inventing its own topic. The ordering is intentionally a
+# pure function of (live_reach, harvest_class, desk_salience, age, id) — no
+# LLM, no randomness, reproducible run-to-run and unit-testable without a DB.
+
+# Harvest-class priority (see scripts/harvest_open_questions.py K-2a + the
+# K-2b unit-payload faucet in inline_target.convert_open_questions). Ordinal,
+# smaller = higher priority. The ordering reasons about which classes are
+# actually answerable by RE-MINING OUR OWN full-text corpus (the tool this
+# analyst has) vs. classes that need something else:
+#   * below_floor / fact_contention / freshness_advisory / scorecard_
+#     disagreement — each is a question about whether EXISTING evidence
+#     supports a claim; a deeper corpus read is exactly the right instrument.
+#   * unit_payload — a per-finding uncertainty a unit flagged live (K-2b);
+#     concrete but not yet vetted by a harvest sweep, so ranks after the
+#     four harvested classes.
+#   * collection_gap — by DEFINITION a desk×dimension our sources are
+#     starved on; re-mining what we already ingested is the LEAST likely of
+#     the six to resolve it (that is R-2/R-3's job — collection requirements /
+#     external retrieval). Still eligible: a plain "the corpus does not cover
+#     this" is itself a legitimate, informative finding — it just ranks last.
+_HARVEST_CLASS_PRIORITY: dict[str, int] = {
+    "below_floor": 0,
+    "fact_contention": 1,
+    "freshness_advisory": 2,
+    "scorecard_disagreement": 3,
+    "unit_payload": 4,
+    "collection_gap": 5,
+}
+# A harvest class this table has never seen (schema drift / a future class) —
+# still eligible, ranked after every known class rather than crashing.
+_UNKNOWN_HARVEST_CLASS_PRIORITY = 6
+
+# The idempotency-marker key both the K-2a harvest script and the K-2b
+# unit-payload converter stamp into ``hypotheses.diagnostic_evidence``.
+_OPEN_QUESTION_MARKER_KEY = "open_question_origin"
+
+
+def _parse_diagnostic_evidence(raw: Any) -> list[Any]:
+    """``hypotheses.diagnostic_evidence`` as a list, tolerating asyncpg's
+    str-or-native jsonb shape. Malformed/absent -> ``[]`` (never raises)."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
+            return []
+    return raw if isinstance(raw, list) else []
+
+
+def harvest_class_of(diagnostic_evidence: Any) -> str:
+    """The harvest-class label for one standing question, from its
+    ``open_question_origin`` marker (see the module-level K-2a/K-2b note).
+
+    ``origin='harvest'`` carries an explicit ``harvest_class`` (one of
+    :data:`_HARVEST_CLASS_PRIORITY`'s five harvested keys); ``origin=
+    'unit_payload'`` (the K-2b per-finding faucet) has none, so it is labeled
+    directly; anything else — a marker-less row, a future origin, malformed
+    jsonb — reads as ``'unknown'`` rather than raising. Pure + DB-free.
+    """
+    for entry in _parse_diagnostic_evidence(diagnostic_evidence):
+        if not isinstance(entry, Mapping):
+            continue
+        if entry.get("marker") != _OPEN_QUESTION_MARKER_KEY:
+            continue
+        origin = entry.get("origin")
+        if origin == "harvest":
+            cls = entry.get("harvest_class")
+            return str(cls) if cls else "unknown"
+        if origin == "unit_payload":
+            return "unit_payload"
+    return "unknown"
+
+
+def open_question_priority_key(
+    *,
+    live_reach: int,
+    harvest_class: str,
+    desk_salience: float,
+    age_days: float,
+    question_id: str,
+) -> tuple[int, int, int, float, float, str]:
+    """Deterministic sort key for standing-question priority (ASCENDING sort
+    == highest priority first). Pure + DB-free — unit-testable directly.
+
+    Tiers, in order:
+      1. Traces FORWARD to a live (non-superseded) product
+         (``live_reach > 0``, the ``output_consumption`` forward walk) —
+         these are the questions actually driving ``staleness_debt``;
+         resolving one retires live product debt, not just backlog trivia.
+      2. Among those, bigger ``live_reach`` (more live products resting on
+         it) first — the highest-leverage question to research.
+      3. Harvest-class ordinal (:data:`_HARVEST_CLASS_PRIORITY`) — see that
+         table's docstring for the "answerable by re-mining our own corpus"
+         reasoning.
+      4. Desk salience — the question's target desk's hottest OPEN
+         situation intensity (0.0 when the question has no target_id, or its
+         desk has no open situation) — a hotter desk's open question is more
+         consequential to resolve first.
+      5. Question age — OLDER first: the longer a question has stood
+         unresolved, the more backlog debt it represents.
+      6. Question id — final deterministic tie-break so the ordering is
+         100% reproducible (and testable) when every other key ties.
+    """
+    return (
+        0 if live_reach > 0 else 1,
+        -live_reach,
+        _HARVEST_CLASS_PRIORITY.get(harvest_class, _UNKNOWN_HARVEST_CLASS_PRIORITY),
+        -desk_salience,
+        -age_days,
+        question_id,
+    )
+
+
 # A name shorter than this is too generic to ground on (drops "US", bare
 # initials, junk NER 1-2 char tags). 3 keeps real country/person names.
 _MIN_CANDIDATE_LEN = 3
@@ -200,6 +326,35 @@ _MAX_SITUATIONS = 8
 # into the (separate, clearly-labelled) ASSESSED STRUCTURE block — the headline
 # interesting structures the knowledge graph surfaced, not the full enumeration.
 _MAX_GRAPH_STRUCTURE = 6
+# How many reified narratives (mig 0102 — contested-claim families the
+# narrative_mapper derived from the contention sidecar + carrier lineage) we
+# fold into the (separate, clearly-labelled) ASSESSED NARRATIVES block. Small:
+# the block is a contested-claims heads-up for the narrative_coordination unit,
+# not a narrative dump.
+_MAX_NARRATIVES = 8
+# Per-country narrative scoping over-fetch: subject_key scope-matching runs in
+# Python (post-fetch, whole-word against the target's geo names), so the SQL
+# fetch takes headroom the way the situations non-event filter does.
+_NARRATIVES_SCOPED_FETCH = 64
+# R-1 (the corpus_researcher backlog source) — how many STANDING open
+# questions we fold into the (separate, clearly-labelled) STANDING OPEN
+# QUESTIONS block. Small + fixed regardless of the descriptor's ``max_facts``
+# (a backlog-draining researcher answers ONE question per tick; offering it
+# hundreds would blow the token budget for no benefit) — see
+# ``resolve_open_questions``.
+_MAX_OPEN_QUESTIONS_GROUNDING = 8
+# How many OPEN (``status='open_question'``) hypotheses rows we fetch as
+# ranking candidates before truncating to _MAX_OPEN_QUESTIONS_GROUNDING. Set
+# comfortably above the live backlog size (hundreds, per the K-2a harvest) so
+# the SAFETY cap never silently excludes a genuinely older/higher-priority
+# question from consideration; it exists only to bound a runaway backlog.
+_OPEN_QUESTION_CANDIDATE_FETCH_CAP = 1000
+# Forward-consumption walk depth for the "does this question trace to a LIVE
+# product" signal (mirrors claim_watch.FORWARD_WALK_MAX_DEPTH — the same
+# bounded-BFS discipline over output_consumption, migration 0106).
+_OPEN_QUESTION_FORWARD_WALK_MAX_DEPTH = 6
+# Per-question thesis text cap in the rendered block line (token budget).
+_OPEN_QUESTION_THESIS_CHAR_CAP = 400
 # Opportunistic RAG (S5-T3) — how many retrieved ``world_context`` chunks we fold
 # into the (separate, clearly-labelled) BACKGROUND PRIORS block. Small: this is a
 # few framing priors, NOT an evidence dump; it rides alongside the token-heavy
@@ -537,6 +692,131 @@ class GroundingSituation:
             )
         meta = f" [{'; '.join(bits)}]" if bits else ""
         return f"{self.name}{meta}"
+
+
+class GroundingNarrative:
+    """One reified NARRATIVE (a contested-claim family, mig 0102) for the
+    (separate, clearly-labelled) ASSESSED NARRATIVES block — detect-only,
+    analysis-derived propagation context, NOT ground truth. Mirrors the
+    narrative_mapper's honesty contract: echo/lead ordering is DESCRIPTIVE
+    publish-order timing, never a coordination verdict."""
+
+    __slots__ = (
+        "subject_key", "predicate_key", "status", "surfaced_value",
+        "variant_count", "carrier_source_count", "publish_dated_source_count",
+        "first_seen_at", "last_seen_at", "lead_source_id", "max_echo_lag_hours",
+    )
+
+    def __init__(
+        self,
+        *,
+        subject_key: str,
+        predicate_key: str,
+        status: str | None,
+        surfaced_value: str | None,
+        variant_count: int,
+        carrier_source_count: int,
+        publish_dated_source_count: int = 0,
+        first_seen_at: datetime | None = None,
+        last_seen_at: datetime | None = None,
+        lead_source_id: str | None = None,
+        max_echo_lag_hours: float | None = None,
+    ) -> None:
+        self.subject_key = subject_key
+        self.predicate_key = predicate_key
+        self.status = status
+        self.surfaced_value = surfaced_value
+        self.variant_count = variant_count
+        self.carrier_source_count = carrier_source_count
+        self.publish_dated_source_count = publish_dated_source_count
+        self.first_seen_at = first_seen_at
+        self.last_seen_at = last_seen_at
+        self.lead_source_id = lead_source_id
+        self.max_echo_lag_hours = max_echo_lag_hours
+
+    def render(self) -> str:
+        head = (
+            f"[{self.status or 'contested'}] "
+            f"'{self.subject_key}' {self.predicate_key}: "
+            f"{self.variant_count} competing variant(s) across "
+            f"{self.carrier_source_count} source(s)"
+        )
+        bits: list[str] = []
+        if isinstance(self.first_seen_at, datetime) and isinstance(
+            self.last_seen_at, datetime
+        ):
+            bits.append(
+                f"active {self.first_seen_at.date().isoformat()} -> "
+                f"{self.last_seen_at.date().isoformat()}"
+            )
+        elif isinstance(self.last_seen_at, datetime):
+            bits.append(f"last seen {self.last_seen_at.date().isoformat()}")
+        if self.lead_source_id:
+            lead = f"first published by {self.lead_source_id}"
+            if self.max_echo_lag_hours is not None:
+                lead += (
+                    f", echoed up to {self.max_echo_lag_hours:.0f}h later "
+                    "(publish-order timing only — NOT evidence of copying)"
+                )
+            bits.append(lead)
+        if self.surfaced_value:
+            bits.append(f"arbiter-surfaced winner='{self.surfaced_value}'")
+        else:
+            bits.append("no surfaced winner — do not treat any variant as settled")
+        meta = f" [{'; '.join(bits)}]" if bits else ""
+        return f"{head}{meta}"
+
+
+class GroundingOpenQuestion:
+    """One STANDING open question (``hypotheses.status='open_question'``) for
+    the (separate, clearly-labelled) STANDING OPEN QUESTIONS block (R-1) — the
+    corpus_researcher's backlog source. Analysis-derived (harvested via K-2a
+    or unit-flagged via the K-2b per-finding faucet), NEVER laundered into the
+    ground-truth block: the analyst is told to PREFER answering one of these,
+    but a null result (the corpus does not resolve it) is an equally
+    legitimate finding — this never asserts the question IS answerable."""
+
+    __slots__ = (
+        "id", "thesis", "harvest_class", "target_id", "produced_at",
+        "live_reach", "desk_salience",
+    )
+
+    def __init__(
+        self,
+        *,
+        id: Any,
+        thesis: str,
+        harvest_class: str,
+        target_id: str | None,
+        produced_at: datetime | None,
+        live_reach: int,
+        desk_salience: float,
+    ) -> None:
+        self.id = id
+        self.thesis = thesis
+        self.harvest_class = harvest_class
+        self.target_id = target_id
+        self.produced_at = produced_at
+        self.live_reach = live_reach
+        self.desk_salience = desk_salience
+
+    def render(self, *, tag: str, now: datetime | None = None) -> str:
+        ref = now or datetime.now(timezone.utc)
+        bits: list[str] = [self.harvest_class]
+        if isinstance(self.produced_at, datetime):
+            p = (
+                self.produced_at if self.produced_at.tzinfo
+                else self.produced_at.replace(tzinfo=timezone.utc)
+            )
+            age_days = max(0, (ref - p).days)
+            bits.append("opened today" if age_days == 0 else f"opened {age_days}d ago")
+        if self.live_reach > 0:
+            bits.append(f"live_reach={self.live_reach}")
+        thesis = (self.thesis or "").strip()
+        if len(thesis) > _OPEN_QUESTION_THESIS_CHAR_CAP:
+            thesis = thesis[:_OPEN_QUESTION_THESIS_CHAR_CAP].rstrip() + "…"
+        meta = f" ({'; '.join(bits)})" if bits else ""
+        return f"[{tag}]{meta} {thesis}"
 
 
 class GroundingInterestingItem:
@@ -1033,6 +1313,21 @@ def target_scope_names(target_id: str | None) -> set[str]:
     return names
 
 
+def _subject_matches_scope(subject_key: str, names: set[str]) -> bool:
+    """Whole-word, casefolded test: does a narrative's ``subject_key`` (the
+    lowercased disputed subject) mention any of the target's geo names? Guards
+    the per-country ASSESSED NARRATIVES scope — substring-safe ('us' never
+    matches inside 'thus'), mirroring the off-target guard's word-boundary
+    discipline."""
+    subj = subject_key.casefold()
+    for name in names:
+        if not name:
+            continue
+        if re.search(rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])", subj):
+            return True
+    return False
+
+
 def target_country_name(target_id: str | None) -> str | None:
     """The canonical DISPLAY country name for a per-country target id, or ``None``.
 
@@ -1278,6 +1573,64 @@ def _target_id_geo_names(target_id: str | None) -> Iterable[str]:
     if len(token) >= 2:
         return (token,)
     return ()
+
+
+# R-1 — the standing-question backlog candidate fetch (SubstrateGroundingResolver
+# .resolve_open_questions). ONE round trip computes, for every OPEN question:
+#   * live_reach   — how many LIVE (non-superseded) products trace FORWARD to
+#                    it via output_consumption (mig 0106), bounded-BFS to
+#                    _OPEN_QUESTION_FORWARD_WALK_MAX_DEPTH hops — the exact
+#                    set claim_watch's staleness_debt gauge counts flags
+#                    against, so a question with live_reach > 0 is one where
+#                    resolving it retires REAL product debt, not backlog
+#                    trivia.
+#   * desk_salience — the question's target desk's hottest OPEN situation
+#                     intensity (0 when the question has no target_id, or its
+#                     desk has none) — reuses the SAME situations.intensity_score
+#                     signal resolve_situations() grounds other analysts with.
+# The final ranking + truncation happen in Python (open_question_priority_key)
+# so the ordering is unit-testable without a DB; this SQL only needs to fetch a
+# generously-bounded candidate SET, not the final order.
+_OPEN_QUESTIONS_BACKLOG_SQL = """
+    WITH RECURSIVE walk AS (
+        SELECT q.id AS qid, oc.consumer_id, 1 AS depth
+          FROM hypotheses q
+          JOIN output_consumption oc ON oc.consumed_id = q.id
+         WHERE q.status = 'open_question'
+        UNION
+        SELECT w.qid, oc.consumer_id, w.depth + 1
+          FROM output_consumption oc
+          JOIN walk w ON oc.consumed_id = w.consumer_id
+         WHERE w.depth < $1
+    ), reach AS (
+        SELECT w.qid,
+               count(DISTINCT w.consumer_id) FILTER (
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM analyst_outputs ao
+                        WHERE ao.id = w.consumer_id
+                          AND ao.superseded_by IS NOT NULL
+                   )
+               ) AS live_reach
+          FROM walk w
+         GROUP BY w.qid
+    ), salience AS (
+        SELECT target_id, max(intensity_score) AS max_intensity
+          FROM situations
+         WHERE status <> 'closed'
+           AND (valid_until IS NULL OR valid_until > now())
+           AND target_id IS NOT NULL
+         GROUP BY target_id
+    )
+    SELECT q.id, q.thesis, q.target_id, q.produced_at, q.diagnostic_evidence,
+           COALESCE(r.live_reach, 0) AS live_reach,
+           COALESCE(s.max_intensity, 0.0) AS desk_salience
+      FROM hypotheses q
+      LEFT JOIN reach r ON r.qid = q.id
+      LEFT JOIN salience s ON s.target_id = q.target_id
+     WHERE q.status = 'open_question'
+     ORDER BY q.produced_at DESC, q.id
+     LIMIT $2
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -1612,6 +1965,157 @@ class SubstrateGroundingResolver:
             if len(out) >= limit:
                 break
         return out
+
+    async def resolve_narratives(
+        self, *, target_id: str | None, limit: int,
+    ) -> list[GroundingNarrative]:
+        """Return the LIVE reified narratives (mig 0102) for the scope, most
+        recently active first — the ASSESSED NARRATIVES grounding source.
+
+        Reads the ``narratives`` sidecar the ``narrative_mapper`` deterministic
+        analyst wholesale-refreshes (contested-claim families + publish-order
+        propagation detail). ``collapsed`` families are excluded — the block is
+        a heads-up on LIVE disputes, not an archive.
+
+        Scope: a PER-COUNTRY run (``country_*`` target) keeps only narratives
+        whose ``subject_key`` mentions one of the target's geo names
+        (whole-word, casefolded — the ``target_scope_names`` gazetteer), so an
+        India desk never grounds against an unrelated country's dispute; the
+        match runs in Python over an over-fetched recency window (the
+        situations non-event-filter idiom). A meta / no-target run keeps the
+        global recency top.
+
+        Degrade-not-drop: any read failure (including the sidecar table not
+        existing on a pre-0102 database) logs + yields ``[]`` — no block, never
+        an error into the run. Honest empty: an empty sidecar yields ``[]`` and
+        the caller renders NO block (no fabricated header).
+        """
+        limit = min(int(limit), _MAX_NARRATIVES)
+        if limit <= 0:
+            return []
+        scope_names = target_scope_names(target_id) if target_id else set()
+        fetch_n = _NARRATIVES_SCOPED_FETCH if scope_names else limit
+        sql = """
+            SELECT subject_key, predicate_key, status, surfaced_value,
+                   variant_count, carrier_source_count,
+                   publish_dated_source_count, first_seen_at, last_seen_at,
+                   lead_source_id, max_echo_lag_hours
+            FROM narratives
+            WHERE status <> 'collapsed'
+            ORDER BY last_seen_at DESC NULLS LAST
+            LIMIT $1
+        """
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(sql, int(fetch_n))
+        except Exception as exc:  # degrade-not-drop — grounding is enrichment
+            logger.warning("grounding.resolve_narratives.failed err=%s", exc)
+            return []
+        out: list[GroundingNarrative] = []
+        for r in rows:
+            subject = str(r["subject_key"] or "")
+            if scope_names and not _subject_matches_scope(subject, scope_names):
+                continue
+            out.append(
+                GroundingNarrative(
+                    subject_key=subject,
+                    predicate_key=str(r["predicate_key"] or ""),
+                    status=r["status"],
+                    surfaced_value=r["surfaced_value"],
+                    variant_count=int(r["variant_count"] or 0),
+                    carrier_source_count=int(r["carrier_source_count"] or 0),
+                    publish_dated_source_count=int(
+                        r["publish_dated_source_count"] or 0
+                    ),
+                    first_seen_at=r["first_seen_at"],
+                    last_seen_at=r["last_seen_at"],
+                    lead_source_id=r["lead_source_id"],
+                    max_echo_lag_hours=(
+                        float(r["max_echo_lag_hours"])
+                        if r["max_echo_lag_hours"] is not None
+                        else None
+                    ),
+                )
+            )
+            if len(out) >= limit:
+                break
+        return out
+
+    async def resolve_open_questions(
+        self, *, limit: int,
+    ) -> list[GroundingOpenQuestion]:
+        """R-1 — the bounded, DETERMINISTICALLY-ordered standing-question
+        backlog for a backlog-draining analyst (corpus_researcher).
+
+        ONE round trip: a recursive CTE walks ``output_consumption`` (mig
+        0106, bounded to :data:`_OPEN_QUESTION_FORWARD_WALK_MAX_DEPTH` hops —
+        the SAME bounded-BFS shape ``claim_watch``'s forward review-flag walk
+        uses) to compute each open question's ``live_reach`` — how many
+        LIVE (non-superseded) products trace forward to it, i.e. the exact
+        set driving ``staleness_debt`` — fused with a ``desk_salience`` read
+        (the target desk's hottest OPEN situation intensity, 0 when the
+        question carries no target_id or its desk has none). Candidates are
+        over-fetched (:data:`_OPEN_QUESTION_CANDIDATE_FETCH_CAP`, comfortably
+        above the live backlog size) so the safety cap can never silently
+        exclude a genuinely higher-priority question; the actual ranking
+        (:func:`open_question_priority_key`) and truncation to ``limit``
+        (hard-capped at :data:`_MAX_OPEN_QUESTIONS_GROUNDING`) happen in pure
+        Python — deterministic, reproducible, unit-testable without a DB.
+
+        Degrade-not-drop: any read failure logs + returns ``[]`` — the caller
+        (:func:`build_open_questions_block`) then renders no block, and the
+        analyst falls back to self-selection, BYTE-IDENTICAL to its behavior
+        before this source existed.
+        """
+        limit = min(max(0, int(limit)), _MAX_OPEN_QUESTIONS_GROUNDING)
+        if limit <= 0:
+            return []
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    _OPEN_QUESTIONS_BACKLOG_SQL,
+                    _OPEN_QUESTION_FORWARD_WALK_MAX_DEPTH,
+                    _OPEN_QUESTION_CANDIDATE_FETCH_CAP,
+                )
+        except Exception as exc:  # degrade-not-drop — grounding is enrichment
+            logger.warning("grounding.resolve_open_questions.failed err=%s", exc)
+            return []
+
+        now = datetime.now(timezone.utc)
+        ranked: list[tuple[tuple, GroundingOpenQuestion]] = []
+        for r in rows:
+            produced_at = r["produced_at"]
+            age_days = 0.0
+            if isinstance(produced_at, datetime):
+                ref = (
+                    produced_at if produced_at.tzinfo
+                    else produced_at.replace(tzinfo=timezone.utc)
+                )
+                age_days = max(0.0, (now - ref).total_seconds() / 86400.0)
+            harvest_class = harvest_class_of(r["diagnostic_evidence"])
+            live_reach = int(r["live_reach"] or 0)
+            desk_salience = float(r["desk_salience"] or 0.0)
+            key = open_question_priority_key(
+                live_reach=live_reach,
+                harvest_class=harvest_class,
+                desk_salience=desk_salience,
+                age_days=age_days,
+                question_id=str(r["id"]),
+            )
+            ranked.append((
+                key,
+                GroundingOpenQuestion(
+                    id=r["id"],
+                    thesis=str(r["thesis"] or ""),
+                    harvest_class=harvest_class,
+                    target_id=r["target_id"],
+                    produced_at=produced_at,
+                    live_reach=live_reach,
+                    desk_salience=desk_salience,
+                ),
+            ))
+        ranked.sort(key=lambda pair: pair[0])
+        return [gq for _key, gq in ranked[:limit]]
 
     async def resolve_graph_structure(
         self, candidates: Sequence[str], *, limit: int,
@@ -1976,6 +2480,93 @@ def build_situations_block(
     lines: list[str] = [_SITUATIONS_HEADER]
     for s in situations:
         lines.append(f"- {s.render(now=now)}")
+    lines.append("")  # blank separator before the slice
+    return "\n".join(lines)
+
+
+# The ASSESSED NARRATIVES block — the reified contested-claim families (mig
+# 0102) the narrative_mapper derives from the contention sidecar + carrier
+# lineage, rendered for the narrative_coordination unit (and any other opted-in
+# analyst). Like ASSESSED SITUATIONS it is analysis-DERIVED, NOT operator-vetted
+# ground truth, so it is rendered in its OWN fenced block and NEVER laundered
+# into the AUTHORITATIVE block. The header carries the mapper's honesty
+# contract verbatim: detect-only; echo-lead is DESCRIPTIVE publish-order
+# timing, never itself a coordination/copying claim.
+_NARRATIVES_HEADER = (
+    "ASSESSED NARRATIVES (detect-only, analysis-derived — contested-claim "
+    "families the platform reified from its own contention sidecar plus "
+    "publish-order carrier timing; NOT operator-vetted ground truth. "
+    "Echo/lead ordering is DESCRIPTIVE: 'source B published after source A' "
+    "is a timing observation, never by itself evidence of copying or "
+    "coordination. Use these to see WHICH claims are currently contested and "
+    "how they spread; do not treat any variant as established fact):"
+)
+
+
+def build_narratives_block(
+    narratives: Sequence[GroundingNarrative],
+) -> str | None:
+    """Render the reified-narrative rows into the dedicated ASSESSED NARRATIVES
+    block (analysis-derived, clearly fenced off from ground truth).
+
+    Returns ``None`` when there is nothing to inject — the honest empty state:
+    no narratives ⇒ no header, no fabricated 'no narratives' filler. One
+    compact line per narrative; bounded upstream by :data:`_MAX_NARRATIVES`.
+    """
+    if not narratives:
+        return None
+    lines: list[str] = [_NARRATIVES_HEADER]
+    for n in narratives:
+        lines.append(f"- {n.render()}")
+    lines.append("")  # blank separator before the slice
+    return "\n".join(lines)
+
+
+# R-1 — the STANDING OPEN QUESTIONS block (the corpus_researcher backlog
+# source). Analysis-derived (harvested / unit-flagged), NEVER laundered into
+# the ground-truth block. The header carries the field-name contract
+# ("addressed_question") the descriptor's own system prompt also documents —
+# reinforcement, not the sole source of truth (mirrors how the world_context
+# block's own header reinforces its "do not cite" contract) — and the honesty
+# discipline: preferring the backlog is a NUDGE, not a requirement, and a null
+# result is a legitimate, complete finding in its own right.
+_OPEN_QUESTIONS_HEADER = (
+    "STANDING OPEN QUESTIONS (backlog — the system's own unresolved analytical "
+    "questions, priority-ordered; analysis-derived, NOT ground truth, NOT a "
+    "topic you are forced to force an answer to). If one of these can be "
+    "meaningfully investigated against the corpus, PREFER IT over "
+    "self-selecting a topic, and set the top-level \"addressed_question\" "
+    "field in your response to its exact tag (e.g. \"Q2\"). A NULL RESULT is a "
+    "legitimate, complete finding: if the corpus does not contain the evidence "
+    "to resolve a question, say so plainly — that is evidence about OUR "
+    "COLLECTION, not a failure. If none of these apply, self-select a topic as "
+    "usual and omit the field:"
+)
+
+
+def build_open_questions_block(
+    questions: Sequence[GroundingOpenQuestion],
+    *,
+    now: datetime | None = None,
+) -> str | None:
+    """Render the priority-ordered standing-question backlog into the
+    dedicated STANDING OPEN QUESTIONS block (analysis-derived, clearly fenced
+    off from ground truth).
+
+    Returns ``None`` when there is nothing to inject — the honest empty
+    state: no open questions ⇒ no header, no fabricated filler, and the
+    caller's analyst falls back to self-selection UNCHANGED. One numbered
+    line per question, tagged ``[Q1]``, ``[Q2]``, … in the CALLER's supplied
+    order (the priority order :meth:`SubstrateGroundingResolver
+    .resolve_open_questions` already computed) — the tag is positional, so
+    the caller's sink (mapping tag -> hypothesis id) must be built from the
+    SAME ``questions`` sequence, in the SAME order, as this render.
+    """
+    if not questions:
+        return None
+    lines: list[str] = [_OPEN_QUESTIONS_HEADER]
+    for i, q in enumerate(questions, start=1):
+        lines.append(f"- {q.render(tag=f'Q{i}', now=now)}")
     lines.append("")  # blank separator before the slice
     return "\n".join(lines)
 

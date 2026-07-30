@@ -1,7 +1,9 @@
 # Legba — Data Sources
 
 This doc catalogs Legba's data sources: how many there are and at what scope
-(the three-tier model and the 46-source catalog), the fifteen source-handler
+(the three-tier model, the 46-source repo catalog, and the breadth batches
+layered on top of it — the live active count is generated in
+[RELEASE_STATE.md](RELEASE_STATE.md), not repeated here), the fifteen source-handler
 kinds a descriptor can use, the editorial `source_class` taxonomy a descriptor
 declares, and how to register a source or add a new handler
 kind. It is written for operators deciding what to register and for developers
@@ -35,16 +37,19 @@ are being counted. Anchor every scope claim to these:
 |---|---|---|---|
 | **1 — Minimal cold-start** | **3** shared RSS | The smallest loop that proves the path from empty volumes: BBC World, Al Jazeera World, Deutsche Welle. This is *all a fresh deploy gets* if it stops at the documented working-set. | `scripts/bringup_register_sources.py` (standalone 3-source registrar) and the working-set script `scripts/bringup_register_p17_workingset.py` (RUNBOOK §7) |
 | **2 — Full repo catalog** | **46** sources | The full catalog of independently-verified, no-auth feeds: **43 `rss` + 3 `geojson`** hazard feeds. **NOT auto-run on deploy and NOT part of the working-set bring-up** — a separate manual step a fresh operator currently misses. Running it is how you reach current/full scope. | `scripts/bringup_register_source_catalog.py` (the `CATALOG` tuple — 46 `CatalogEntry`, owner `s1_catalog`) |
-| **3 — Live-productive** | **53** sources | The real "productive scope" of a representative running deployment: distinct `source_id` values that have actually emitted signals — the 46-catalog sources **plus** the operator-pinned standalone descriptors (state-media, Telegram, …; §2.3) **plus** seed / world-baseline curated adapters. | Live reconcile against the production `signals` table |
+| **3 — Live-productive** | **110** sources | The real "productive scope" of a representative running deployment: distinct `source_id` values that have actually emitted signals — the catalog sources **plus** the operator-pinned standalone descriptors (state-media, Telegram, …; §2.3) **plus** the activated breadth batches (§2.5–§2.7) **plus** seed / world-baseline curated adapters. Exceeds the active-registered count because retired and paused feeds keep the signals they already produced. | Live reconcile against the production `signals` table |
 
 Two adjacent counts round out the picture (neither is a different set of
 *feeds* — they are registry / fan-out bookkeeping):
 
-- **50 registered head source descriptors** — distinct non-autowired **active**
+- **107 registered head source descriptors** — distinct non-autowired **active**
   head `source_descriptors` rows in the registry (the catalog plus the
-  operator-pinned `descriptors/source_*.yaml` and seed sources; a further 4 are
-  registered but **paused** and 3 **retired**, which is why the active-registered
-  count and the live-productive count differ).
+  operator-pinned `descriptors/source_*.yaml`, the activated breadth batches and
+  seed sources; a further 2 are registered but **paused**, 7 **retired**, and 1
+  is a `configured` manual-ingest lane, which is why the active-registered count
+  and the live-productive count differ). **This number moves** — it is generated
+  from the live registry, never hand-maintained here: see
+  [RELEASE_STATE.md](RELEASE_STATE.md) for the current breakdown by kind.
 - **Autowired per-target fan-out templates** (`src_autowire*` / `src_tmpl*`) —
   these are **generated, not hand-authored** feeds, materialized on demand by the
   discovery/auto-wire machinery; they are not new upstreams, and this reference
@@ -53,17 +58,20 @@ Two adjacent counts round out the picture (neither is a different set of
   re-fetching anything; see `ACQUISITION.md` §6). Do **not** count them as ingest
   sources.
 
-> **Why three numbers.** A fresh deploy that stops at the documented
+> **Why three numbers.** (The live ACTIVE count is a fourth, moving number —
+> generated, not documented here: see [RELEASE_STATE.md](RELEASE_STATE.md).)
+> A fresh deploy that stops at the documented
 > working-set gets **only 3 RSS feeds** — the minimal cold-start verification
 > set, not the catalog and not the live scope. The full 46-source catalog
 > lives in a separate, manually-run registration script that the working-set
 > bring-up does **not** invoke (§4). A review that sees "only 3 RSS feeds" is
 > reading the cold-start set.
 
-**The one-line answer.** *3 minimal · 46 catalog · 53 live-productive* — plus
-50 active-registered head descriptors (and no autowired fan-out templates
+**The one-line answer.** *3 minimal · 46 catalog · 110 live-productive* — plus
+107 active-registered head descriptors (and no autowired fan-out templates
 materialized in this deployment). The fix for the "only 3 feeds" state is to
-register the 46-source catalog (§4).
+register the 46-source catalog (§4), then the breadth batches (§2.5–§2.7) an
+operator activates deliberately.
 
 ---
 
@@ -160,17 +168,20 @@ bounded-unit waves:
 | Source id | Kind | Auth | `source_class` | Live status |
 |---|---|---|---|---|
 | `source.irna.english` | `rss` | none | `state_media` | **Active** — polls healthy (empty windows in the observed period). Islamic Republic News Agency (Iran). |
-| `source.presstv.english` | `rss` | none | `state_media` | **Active** — registered and polling. Press TV (Iran, English). |
+| `source.presstv.english` | `rss` | none | `state_media` | **Paused** (was active). Press TV (Iran, English). The descriptor records no pause reason — read it as an operator disposition, not a documented verdict on the feed. |
 | `source.ukrinform.english` | `rss` | none | `state_media` | **Active** — registered and polling (has hit transient feed errors). Ukrinform (Ukraine state wire). |
-| `source.ucdp.ged` | `ucdp` (§7.15) | none *(designed)* | `analysis` | **Registered active but NOT productive.** The descriptor ships as a no-auth public GED API, but the live endpoint currently returns **`401 Unauthorized`** — so it writes zero signals and is effectively **paused pending an access token / upstream authorization**. Feeds the `escalation` + `military_posture` units once it clears. |
+| `source.ucdp.ged` | `ucdp` (§7.15) | none *(designed)* | `analysis` | **RETIRED** (live head `state='retired'`). The descriptor shipped as a no-auth public GED API, but the live endpoint returned **`401 Unauthorized`** — it never wrote a signal, and rather than leaving a permanently-unhealthy feed registered it has been retired outright. The handler kind (§7.15) remains built; re-registering is the path if upstream authorization is ever obtained. |
 
 The state-media feeds exist precisely so the `narrative_coordination` unit (and
 the `source_class` weighting, §2.4) can read them as **framing** — an
 official-position signal, LOW-tier for establishing facts — rather than as
-neutral reporting. **Honest note:** these are recent additions; their productive
-signal volume is still thin (IRNA/Press TV/Ukrinform windows have largely been
-empty or transient-error in the observed period), and UCDP is blocked upstream as
-noted.
+neutral reporting. The **two Ansar Allah / Houthi channels** added with the
+supply-chain wave (§2.7) belong to the same doctrine and are pinned `state_media`
+by the per-channel override in §2.4 rather than by their descriptor's class.
+**Honest note:** productive signal volume on this class is thin
+(IRNA/Press TV/Ukrinform windows have largely been empty or transient-error in
+the observed period), Press TV is now paused, and UCDP has been retired outright
+as noted above.
 
 ### 2.4 The `source_class` editorial taxonomy
 
@@ -190,9 +201,32 @@ still validates unchanged:
 
 The `narrative_coordination` unit weighs `state_media == framing`, and the
 `collection_gap` I&W analyst names which `source_class` would plausibly feed a
-starved desk × dimension cell (see `ANALYSIS.md` §3.11).
+starved desk × dimension cell (see `ANALYSIS.md` §3.11). The class is also what
+the hourly `signal_salience` sweep turns into a signal's deterministic
+`authority` rank (`official` 4 · `reporting` 3 · `analysis` 2 · `state_media` 1)
+— never model-chosen.
 
-### 2.5 The RSSHub lane (profile-gated, draft — a starved-desk booster)
+**Per-channel override (multi-publisher descriptors).** One `source_class` per
+descriptor is the right granularity for a feed, and the wrong granularity for a
+descriptor that fronts *many* publishers. The Telegram monitor is one descriptor
+carrying 28 channels; classing the whole thing `reporting` would launder a state
+outlet riding alongside Bloomberg and the Guardian into neutral reporting. So a
+`telegram_channel` descriptor may carry an optional **`config.classes`** map —
+channel handle → `source_class` — and `signal_salience` prefers that override
+over the descriptor's own class when stamping `authority`. Two channels use it
+today, both official Ansar Allah media pinned to `state_media` (§2.7), which
+demotes them from authority rank 3 to rank 1.
+
+Three properties make it safe rather than another place for truth to drift:
+the map is **choice-locked** to the `SourceClass` vocabulary, so an
+off-vocabulary value fails at registration rather than silently degrading; a
+validator **rejects any key that is not a configured channel**, so a typo or a
+removed channel fails loud instead of quietly overriding nothing; and handles
+are normalized identically (`@`-prefix and `telegram://` stripped) on both the
+config side and the payload side, so a match cannot be missed on formatting.
+Absent an override, the descriptor's own class applies unchanged.
+
+### 2.5 The RSSHub lane (profile-gated — a starved-desk booster; all 10 now ACTIVE)
 
 Many credible **regional / gov / major-media** outlets publish **no native
 RSS** (or only a homepage feed), so the worst-covered watch desks stay thin no
@@ -207,10 +241,14 @@ outlet **route** into a standard RSS feed the existing `rss` handler polls.
   (512 MB), and dependency-free by default (`CACHE_TYPE=memory`; it can be
   pointed at the substrate redis via env). The curated descriptors poll it over
   the compose network at `http://rsshub:1200/<route>`.
-- **Ships inert.** The ten `descriptors/source_rsshub_*.yaml` feeds all ship
-  **`state: draft`**, so bulk registration creates **no live actor** — even with
-  the sidecar up, nothing polls until the operator activates each descriptor
-  (`draft → configured → active`). Registrar (idempotent, house pattern):
+- **Ships inert; since activated.** The ten `descriptors/source_rsshub_*.yaml`
+  feeds all ship **`state: draft`**, so bulk registration creates **no live
+  actor** — even with the sidecar up, nothing polls until the operator activates
+  each descriptor (`draft → configured → active`). All **ten have since been
+  activated** in this deployment (live head `state='active'`), so the lane is no
+  longer inert here; the descriptors on disk still read `draft`, which is the
+  intended shape — the repo ships the safe default and the FSM records the
+  operator's decision. Registrar (idempotent, house pattern):
   `scripts/bringup_register_rsshub_sources.py`, which also seeds host-level
   `source_credibility` rows for the upstream outlets (the feed's article links
   are the *real* outlet URLs, so the credibility filter keys on `apnews.com` /
@@ -237,7 +275,7 @@ outlet **route** into a standard RSS feed the existing `rss` handler polls.
   → `python scripts/bringup_register_rsshub_sources.py` (registers drafts +
   seeds credibility) → verify each route on the instance → activate per desk.
 
-### 2.6 The Wave-A breadth batch (draft — 41 no-auth feeds)
+### 2.6 The Wave-A breadth batch (41 no-auth feeds — 40 now ACTIVE, 1 paused)
 
 The **Wave-A** batch is the additive-breadth slice of the 2026-07-02/03
 new-source research sweep (`planning/SOURCE_RESEARCH_2026-07-02.md`,
@@ -246,14 +284,17 @@ independently verified, keyless feeds** — **38 `rss` + 3 `json_api`** — with
 new source kind and no sidecar, straight onto the existing handlers. It is
 **additive breadth, not revival**: the roster is otherwise healthy.
 
-- **Ships inert.** Every `descriptors/source_*.yaml` in the batch ships
-  **`state: draft`**, so bulk registration creates **no live actor** — nothing
-  polls until the operator activates each descriptor (`draft → configured →
-  active`) after verifying the route live on the instance. The three `json_api`
-  feeds (WHO Disease Outbreak News, NHK World, ISW) carry field paths marked
-  **VERIFY** in-descriptor — probe the live JSON and correct any before
+- **Ships inert; since activated.** Every `descriptors/source_*.yaml` in the
+  batch ships **`state: draft`**, so bulk registration creates **no live actor**
+  — nothing polls until the operator activates each descriptor (`draft →
+  configured → active`) after verifying the route live on the instance. The three
+  `json_api` feeds (WHO Disease Outbreak News, NHK World, ISW) carry field paths
+  marked **VERIFY** in-descriptor — probe the live JSON and correct any before
   activating (a wrong path makes the handler emit nothing + report `unhealthy`;
-  it never fabricates).
+  it never fabricates). **Live state in this deployment: 40 active, 1 paused**
+  (`source.nhk.world_news` — one of the three `json_api` feeds; the descriptor
+  records no pause reason, so treat the pause as an operator disposition, not a
+  documented verdict on the route).
 - **Registrar (idempotent, house pattern):**
   `scripts/bringup_register_wave_a_sources.py` — registers the 41 drafts and
   seeds host-level `source_credibility` rows for the upstream outlets
@@ -288,6 +329,54 @@ new source kind and no sidecar, straight onto the existing handlers. It is
   Deploy (operator-paced): `python scripts/bringup_register_wave_a_sources.py`
   (registers drafts + seeds credibility) → verify each route on the instance
   (the `json_api` field paths especially) → activate per desk.
+
+### 2.7 The supply-chain domain batch (8 registrations — 7 live RSS + a Telegram fold)
+
+The collection half of the 2026-07-29 supply-chain wave: the feeds the
+`disruption_status` unit and its thematic `lane_*` / `flow_*` desks need. Eight
+registrations, of which seven are new `rss` descriptors that went **active**, and
+the eighth is a Telegram descriptor that was registered and then deliberately
+**retired** in favour of folding its channels into the existing monitor (below).
+All seven carry `owner: supply_chain_top10` and a `supply_chain` scope tag, and
+the registrar seeds host-level `source_credibility` rows the same
+`ON CONFLICT DO NOTHING` way every other batch does.
+
+| Source id | Feed URL | `source_class` | Scope tags (beyond `supply_chain`) | Notes |
+|---|---|---|---|---|
+| `source.pancanal.news` | `https://pancanal.com/en/feed/` | `official` | `maritime`, `canal`, `gov` | Panama Canal Authority (ACP) — the operator of the waterway, primary source for draft restrictions and slot auctions |
+| `source.splash247.news` | `https://splash247.com/feed/` | `reporting` | `freight`, `logistics`, `maritime` | shipping trade press |
+| `source.theloadstar.news` | `https://theloadstar.com/feed/` | `reporting` | `freight`, `logistics`, `maritime` | container/air-freight trade press |
+| `source.maritimeexecutive.news` | `https://www.maritime-executive.com/articles.rss` | `reporting` | `maritime`, `shipping`, `news` | maritime industry reporting |
+| `source.digitimes.news` | `https://www.digitimes.com/rss/daily.xml` | `reporting` | `semiconductor`, `technology`, `economic` | semiconductor supply chain — the `flow_semiconductors` desk's spine |
+| `source.wto.news` | `https://www.wto.org/library/rss/latest_news_e.xml` | `official` | `trade`, `gov`, `economic` | IGO primary source for trade measures/disputes |
+| `source.northernminer.news` | `https://www.northernminer.com/feed/` | `reporting` | `minerals`, `mining`, `economic` | critical-minerals production — feeds `flow_critical_minerals` |
+
+Registrar: `scripts/bringup_register_supply_chain_sources.py` (idempotent, house
+pattern). The trade-press cadences are 2-hourly on staggered minutes; the two
+`official` feeds poll 6-hourly (they publish rarely, and polling a
+low-volume IGO feed every two hours buys nothing but request count).
+
+**Telegram channel additions — and why there is no second Telegram descriptor.**
+Three channels joined the existing `source.telegram.org_channels` monitor
+(25 → 28): `TankerTrackers` (vessel-tracking OSINT, left at the descriptor's
+default `reporting`) and the two Ansar Allah / Houthi official media channels,
+`Almasirah_En` and `ansarollah1`. A separate
+`source.telegram.ansarallah_channels` descriptor *was* registered first and is
+now **retired**: a second concurrent Telegram client on the same session
+triggers an `AUTH_KEY_DUPLICATED` session kill, so one descriptor per session is
+not a style preference but a protocol constraint.
+
+That fold created a problem worth naming, because it is the reason the
+`source_class` taxonomy grew a per-channel override (§2.4): the monitor
+descriptor is `source_class: reporting`, and appending two state-media channels
+to it would have laundered official Houthi media into neutral reporting for
+every downstream consumer that reads the descriptor's class. Both channels are
+therefore pinned `state_media` in the descriptor's `config.classes` map — the
+doctrine §2.3 states for the state-media feeds applies unchanged here: these are
+read as **framing**, an official-position signal, LOW-tier for establishing
+facts, and deliberately ingested rather than excluded because the
+`narrative_coordination` unit and the Red Sea lane desk both need to see what
+the party to the conflict is *claiming*.
 
 ---
 

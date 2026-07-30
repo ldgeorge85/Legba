@@ -129,7 +129,7 @@ from uuid import UUID
 
 from ..provenance.kinds import OutputKind
 from ..provenance.models import FindingPayload
-from ..schemas.analyst import IndicatorEntry
+from ..schemas.analyst import IndicatorEntry, MAX_OPEN_QUESTIONS, OpenQuestionEntry
 # S5 GATHER reuses consult's JSON-extraction + tool-ref helpers rather than
 # re-implementing them — same shape, one source of truth.
 from .consult_on_demand import (
@@ -231,6 +231,15 @@ class AnalystMethodResult:
     # situations, or thematic_proposal whose proposal set is unchanged from the
     # last emission) — so an idempotent re-run doesn't repeat the same finding.
     force_trace_only: bool = False
+    # KW-1 forward-consumption index (migration 0106): ``(consumed_id,
+    # context)`` pairs a kind stamps at its OWN consumption points (the
+    # composition basis/periphery split; the journal's rendered slice
+    # selection). When non-empty, the runtime materializes them into
+    # ``output_consumption`` on the same flow as the output write, with the
+    # new row's id as consumer — best-effort, degrade-not-break (see
+    # ``legba.data.provenance.consumption``). Default empty: kinds that don't
+    # stamp it get no consumption rows and are byte-for-byte unchanged.
+    consumed_edges: list[tuple[UUID, str]] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -847,6 +856,79 @@ def _coerce_indicators(raw: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _coerce_open_questions(raw: Any) -> list[dict[str, Any]]:
+    """Lenient per-entry coercion of the LLM's ``open_questions`` array (K-2b).
+
+    Mirrors :func:`_coerce_indicators`: coerce each entry into the typed
+    :class:`OpenQuestionEntry` shape and DROP any malformed one (an empty /
+    non-string question, a non-list/non-int ``refs``) so a single bad entry
+    never DLQs an otherwise-good finding; the strict ``FindingPayload``
+    validator then re-checks what survives. Non-int-able ref values are
+    dropped FROM the entry (the question itself survives with the refs that
+    parse — honest degradation, never fabrication). Duplicate questions
+    (case-insensitive) collapse to the first occurrence; the list is capped at
+    :data:`MAX_OPEN_QUESTIONS`. Returns ``[]`` when absent / not a list.
+    """
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in raw:
+        if len(out) >= MAX_OPEN_QUESTIONS:
+            break
+        if not isinstance(entry, dict):
+            continue
+        refs_raw = entry.get("refs")
+        refs: list[int] = []
+        if isinstance(refs_raw, (list, tuple)):
+            for r in refs_raw:
+                try:
+                    n = int(r)
+                except (TypeError, ValueError):
+                    continue
+                if n >= 1 and n not in refs:
+                    refs.append(n)
+        try:
+            coerced = OpenQuestionEntry(
+                question=str(entry.get("question") or "").strip(),
+                refs=refs[:32],
+            ).model_dump(mode="json")
+        except Exception as exc:  # noqa: BLE001 — degrade-not-drop; skip the bad one
+            logger.debug(
+                "inline_target.open_question.dropped err=%s entry=%s", exc, entry
+            )
+            continue
+        key = coerced["question"].lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(coerced)
+    return out
+
+
+# R-1 — a bare (optionally bracketed) standing-question tag: "Q2" or "[Q2]".
+_ADDRESSED_QUESTION_TAG_RE = re.compile(r"^Q\d{1,3}$")
+
+
+def _coerce_addressed_question_tag(raw: Any) -> str | None:
+    """Lenient coercion of the LLM's OPTIONAL ``addressed_question`` field
+    (R-1) — the tag (e.g. ``"Q2"``) naming which STANDING QUESTION, from the
+    GROUND-phase STANDING OPEN QUESTIONS block (see
+    ``grounding.build_open_questions_block``), this finding addresses.
+
+    Tolerates a bracket-wrapped tag (``"[Q2]"`` — the same shape the block
+    itself renders) and surrounding whitespace. Anything that doesn't reduce
+    to ``Q<digits>`` is DROPPED — never fabricate a tag. A model that answers
+    without the block present, or invents an out-of-range tag, resolves to
+    nothing downstream: ``run_method`` looks the tag up in the run's
+    ``question_sink`` and silently finds no entry (degrade-not-break).
+    """
+    if not isinstance(raw, str):
+        return None
+    tag = raw.strip().strip("[]").strip()
+    return tag if _ADDRESSED_QUESTION_TAG_RE.match(tag) else None
+
+
 # --- S3-T1 EMIT FALLBACK: derive structured indicators from prose ----------
 #
 # The core plane USUALLY populates the JSON ``indicators`` array (reliably, once
@@ -1170,6 +1252,32 @@ def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
             indicators = _coerce_indicators(_derive_indicators_from_prose(body))
         if indicators:
             data["indicators"] = indicators
+        # K-2b: the OPTIONAL open-questions block. The unit prompts emit it as a
+        # top-level `open_questions` array; tolerate a model that nested it
+        # under `data`. Lenient coercion (drop malformed entries) so a bad
+        # entry never DLQs an otherwise-good finding. Absent / empty → no key
+        # (never fabricate a question). The post-persist conversion
+        # (``convert_open_questions``) turns the surviving entries into
+        # queryable hypotheses rows.
+        oq_raw = parsed.get("open_questions")
+        if oq_raw is None and isinstance(parsed.get("data"), dict):
+            oq_raw = parsed["data"].get("open_questions")
+        open_questions = _coerce_open_questions(oq_raw)
+        if open_questions:
+            data["open_questions"] = open_questions
+        # R-1: the OPTIONAL ``addressed_question`` tag naming which STANDING
+        # QUESTION (from the GROUND-phase block, when the descriptor opted
+        # into the ``open_questions`` grounding source) this finding
+        # addresses. Stored as the RAW tag — resolving it against the run's
+        # tag->hypothesis mapping happens in ``run_method`` (REFLECT), which
+        # holds the per-run ``question_sink`` this pure parser does not.
+        # Absent / unparseable -> no key (never fabricate a linkage).
+        aq_raw = parsed.get("addressed_question")
+        if aq_raw is None and isinstance(parsed.get("data"), dict):
+            aq_raw = parsed["data"].get("addressed_question")
+        addressed_tag = _coerce_addressed_question_tag(aq_raw)
+        if addressed_tag:
+            data["addressed_question_tag"] = addressed_tag
         return FindingPayload(
             title=title[:2048],
             body=body[:65536],
@@ -1351,6 +1459,20 @@ GROUNDING_RAG_CHUNK_SINK_KEY = "_grounding_rag_chunk_sink"
 # id sink above so that sink's flat-id contract (and its tests) are unchanged; a
 # hook that ignores this key leaves the dict empty → no extra trace fields.
 GROUNDING_RAG_STATS_SINK_KEY = "_grounding_rag_stats_sink"
+
+
+# R-1 — the standing-question backlog sink. A THIRD per-run sink (a mutable
+# dict) the grounding hook fills — ONLY when the descriptor's
+# ``grounding.sources`` includes ``open_questions`` — with the tag -> question
+# mapping it rendered into the STANDING OPEN QUESTIONS block:
+# ``{"Q1": {"id": <hypothesis uuid str>, "produced_at": <iso str|None>,
+# "harvest_class": <str>}, "Q2": {...}, ...}``. REFLECT (below) resolves the
+# model's optional ``addressed_question`` tag against this sink to attach
+# lineage + the finding->question bearing-edges pointer — see
+# ``run_method``'s backlog answer-link. A hook that ignores this key (every
+# non-backlog / legacy hook) leaves the dict empty, so the resolution is a
+# no-op and the run is byte-for-byte unchanged.
+GROUNDING_QUESTION_SINK_KEY = "_grounding_question_sink"
 
 
 # PER-PHASE LLM SPLIT — the gpt-oss "Reasoning: high" directive. vLLM does NOT
@@ -2235,6 +2357,12 @@ async def run_method(
     # authoritative substrate facts about the target geo + slice entities —
     # the fix for stale-cutoff models backfilling e.g. "former president".
     # Degrade-not-drop: a resolver failure leaves the prompt untouched.
+    #
+    # R-1: ``question_sink`` is declared OUTSIDE the grounding-hook branch so
+    # it stays in scope for REFLECT below even when grounding is off (stays
+    # an empty dict — the backlog answer-link resolution then no-ops, byte-
+    # for-byte unchanged for every non-backlog analyst).
+    question_sink: dict[str, Any] = {}
     if deps.grounding_hook is not None:
         # S5-T3: hand the hook a per-run mutable sink (in a shallow copy of
         # options so the caller's options stay untouched) for the opportunistic
@@ -2247,6 +2375,11 @@ async def run_method(
             **options,
             GROUNDING_RAG_CHUNK_SINK_KEY: rag_chunk_ids,
             GROUNDING_RAG_STATS_SINK_KEY: rag_stats,
+            # R-1: the standing-question tag -> {id, produced_at, harvest_class}
+            # sink — filled ONLY by a hook whose descriptor opted the
+            # ``open_questions`` grounding source in; every other hook ignores
+            # the key and this stays empty.
+            GROUNDING_QUESTION_SINK_KEY: question_sink,
         }
         try:
             preamble = await deps.grounding_hook(sliced, hook_options)
@@ -2436,6 +2569,45 @@ async def run_method(
         sal_data = dict(finding.data) if isinstance(finding.data, dict) else {}
         sal_data["salience"] = _finding_salience
         finding = finding.model_copy(update={"data": sal_data})
+
+    # R-1 — backlog answer-link: resolve the model's OPTIONAL
+    # ``addressed_question`` TAG (stamped into ``finding.data
+    # ['addressed_question_tag']`` by ``_coerce_finding``) against THIS run's
+    # ``question_sink`` (the tag -> {id, produced_at, harvest_class} mapping
+    # the GROUND-phase grounding hook filled — see ``GROUNDING_QUESTION_SINK_
+    # KEY``). On a resolved hit: (a) the standing question's hypothesis id
+    # extends this finding's ``derived_from`` lineage (folded in at PERSIST,
+    # alongside the GATHER refs — same append-only discipline), and (b) an
+    # ``addressed_question`` pointer lands in ``finding.data`` for the actor
+    # host's data-driven ``bearing_edges`` write (finding -> question,
+    # ``edge_kind='bears_on'`` — see ``dapr_actors.py`` + ``data.provenance.
+    # bearing``). NEVER touches the question's status/content — append-only
+    # pointers only, on BOTH legs. A model that answers without the block
+    # present, cites an unknown/invented tag, or when no grounding hook ran
+    # at all (``question_sink`` stays ``{}``) resolves to nothing here — the
+    # finding still lands, unlinked, exactly as it would have before R-1.
+    backlog_question_id: UUID | None = None
+    addressed_tag = (
+        finding.data.get("addressed_question_tag")
+        if isinstance(finding.data, dict) else None
+    )
+    if isinstance(addressed_tag, str) and question_sink:
+        q_entry = question_sink.get(addressed_tag)
+        if isinstance(q_entry, Mapping):
+            try:
+                backlog_question_id = UUID(str(q_entry.get("id")))
+            except (ValueError, TypeError):
+                backlog_question_id = None
+        if backlog_question_id is not None:
+            link_data = dict(finding.data) if isinstance(finding.data, dict) else {}
+            link_data["addressed_question"] = {
+                "hypothesis_id": str(backlog_question_id),
+                "produced_at": q_entry.get("produced_at"),
+                "harvest_class": q_entry.get("harvest_class"),
+                "tag": addressed_tag,
+            }
+            finding = finding.model_copy(update={"data": link_data})
+
     steps.append({
         "phase": "reflect",
         "kind": "coerce_finding",
@@ -2446,6 +2618,8 @@ async def run_method(
         # sequence is unchanged (no extra reflect step).
         "citation_markers": marker_count,
         "citations_resolved": resolved_count,
+        # R-1 — whether this run resolved a backlog answer-link (see above).
+        "backlog_question_addressed": backlog_question_id is not None,
     })
 
     # --- NARRATE -------------------------------------------------------
@@ -2464,6 +2638,11 @@ async def run_method(
     for r in gather_refs:
         if r not in full_derived:
             full_derived.append(r)
+    # R-1: the resolved backlog question's hypothesis id extends derived_from
+    # too — "put the question id in the finding's derived_from" (append-only;
+    # never touches the question row itself).
+    if backlog_question_id is not None and backlog_question_id not in full_derived:
+        full_derived.append(backlog_question_id)
     steps.append({
         "phase": "persist",
         "kind": "envelope",
@@ -2513,6 +2692,148 @@ async def run_method(
         intermediate_steps=steps,
         force_trace_only=force_trace_only,
     )
+
+
+# ---------------------------------------------------------------------------
+# K-2b — post-persist open-question conversion (payload → hypotheses rows)
+# ---------------------------------------------------------------------------
+#
+# The unit is a single-shot JSON emitter (no tool loop), so its unresolved
+# questions arrive as the OPTIONAL ``data.open_questions`` payload block
+# (validated by ``schemas.analyst.validate_open_questions``). The actor run
+# path calls this AFTER the finding row lands (``dapr_actors`` — the same conn)
+# to turn each entry into the SAME first-class, queryable object the
+# ``open_question`` agency tool writes: a ``hypotheses`` row with
+# ``status='open_question'``, lineage to the resolved citation signals + the
+# producing finding, the unit + target stamped via the run's AnalystContext.
+#
+# Contract:
+#   * DEGRADE-NOT-BREAK — no failure in here may fail the run; the caller
+#     wraps the call, and each entry is additionally isolated so one bad entry
+#     never sinks its siblings.
+#   * IDEMPOTENT per (finding, question-text) — a durable marker object in the
+#     persisted ``diagnostic_evidence`` jsonb (the hypotheses table has no
+#     ``data`` column; ``writes._insert_hypothesis`` drops payload extras), the
+#     same ``open_question_origin`` marker key the K-2a harvest uses, deduped
+#     by jsonb containment.
+
+#: The shared marker key — one containment-queryable vocabulary for every
+#: harvested/converted open-question row (K-2a uses origin='harvest').
+OPEN_QUESTION_MARKER_KEY = "open_question_origin"
+
+
+def _citation_signal_map(finding_data: Mapping[str, Any]) -> dict[int, UUID]:
+    """``{N -> signal UUID}`` from the finding's persisted ``data.citations``."""
+    out: dict[int, UUID] = {}
+    citations = finding_data.get("citations")
+    if not isinstance(citations, list):
+        return out
+    for c in citations:
+        if not isinstance(c, Mapping):
+            continue
+        marker = str(c.get("marker") or "")
+        m = re.fullmatch(r"\[(\d+)\]", marker)
+        if not m:
+            continue
+        try:
+            out[int(m.group(1))] = UUID(str(c.get("signal_id")))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+async def convert_open_questions(
+    conn: Any,
+    *,
+    finding_data: Mapping[str, Any] | None,
+    finding_id: UUID,
+    analyst_ctx: Any,
+) -> int:
+    """Convert a persisted finding's ``data.open_questions`` into hypotheses rows.
+
+    Returns how many rows were written (0 when the block is absent/empty, every
+    entry already exists, or every entry degraded). Never raises on malformed
+    payload data; an unexpected substrate error propagates to the caller's
+    degrade guard (the actor wraps this call in try/except).
+    """
+    import hashlib
+
+    from ..provenance.models import HypothesisPayload
+    from ..provenance.writes import write_hypothesis
+
+    if not isinstance(finding_data, Mapping):
+        return 0
+    entries = finding_data.get("open_questions")
+    if not isinstance(entries, list) or not entries:
+        return 0
+    signal_by_ref = _citation_signal_map(finding_data)
+
+    written = 0
+    for entry in entries[:MAX_OPEN_QUESTIONS]:
+        try:
+            if not isinstance(entry, Mapping):
+                continue
+            question = str(entry.get("question") or "").strip()
+            if not question:
+                continue
+            qhash = hashlib.sha256(question.lower().encode("utf-8")).hexdigest()[:16]
+            source_id = f"{finding_id}:{qhash}"
+            probe = json.dumps([{
+                "marker": OPEN_QUESTION_MARKER_KEY,
+                "origin": "unit_payload",
+                "source_id": source_id,
+            }])
+            exists = await conn.fetchval(
+                "SELECT 1 FROM hypotheses "
+                "WHERE status = 'open_question' "
+                "AND diagnostic_evidence @> $1::jsonb LIMIT 1",
+                probe,
+            )
+            if exists is not None:
+                continue
+            # Lineage: the producing finding + every citation signal the
+            # question's refs resolve to (an unresolvable ref degrades to
+            # finding-only lineage — counted nowhere, fabricated never).
+            derived: list[UUID] = [finding_id]
+            refs_raw = entry.get("refs")
+            refs: list[int] = []
+            if isinstance(refs_raw, (list, tuple)):
+                for r in refs_raw:
+                    try:
+                        refs.append(int(r))
+                    except (TypeError, ValueError):
+                        continue
+            for n in refs:
+                sid = signal_by_ref.get(n)
+                if sid is not None and sid not in derived:
+                    derived.append(sid)
+            payload = HypothesisPayload(
+                thesis=question[:4096],
+                status="open_question",
+                diagnostic_evidence=[{
+                    "marker": OPEN_QUESTION_MARKER_KEY,
+                    "origin": "unit_payload",
+                    "source_id": source_id,
+                    "finding_id": str(finding_id),
+                    "question_sha256": qhash,
+                    "refs": refs[:32],
+                }],
+            )
+            row, _dlq = await write_hypothesis(
+                conn,
+                analyst_ctx=analyst_ctx,
+                payload=payload,
+                derived_from=derived,
+            )
+            if row is not None:
+                written += 1
+        except Exception as exc:  # noqa: BLE001 — one bad entry never sinks siblings
+            logger.warning(
+                "inline_target.open_question.convert_entry_failed finding=%s "
+                "err=%s", finding_id, exc,
+            )
+            continue
+    return written
 
 
 # ---------------------------------------------------------------------------

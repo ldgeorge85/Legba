@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
@@ -141,6 +141,10 @@ class DescriptorRow:
     retire_after: datetime | None = None
     kind: str | None = None
     type_signature: dict[str, Any] | None = None
+    # Non-fatal, registration-time notes (X-1 dead-config warnings etc.) — NOT
+    # persisted to the row; attached by `register()`/`update()` on top of the
+    # freshly-fetched row so the caller sees them exactly once, at write time.
+    warnings: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -323,8 +327,9 @@ class DescriptorRegistry:
         descriptor_id = descriptor.identity.id
 
         # Validate (raises DescriptorValidationError on failure, after
-        # routing to DLQ).
-        await self._validate_or_dlq(descriptor, family, actor)
+        # routing to DLQ). Non-fatal registration-time warnings (X-1
+        # dead-config notes) come back for the caller to see.
+        warnings = await self._validate_or_dlq(descriptor, family, actor)
 
         # Compute hash, stamp it onto the model.
         hash_hex = content_hash(descriptor)
@@ -371,7 +376,10 @@ class DescriptorRegistry:
             schema_uri=descriptor.identity.schema_uri,
         )
 
-        return await self._fetch_row(family, descriptor_id, hash_hex)
+        row = await self._fetch_row(family, descriptor_id, hash_hex)
+        if warnings:
+            row = replace(row, warnings=warnings)
+        return row
 
     # ------------------------------------------------------------------
     # register_raw — accepts a dict body, runs conversion before pydantic
@@ -502,7 +510,7 @@ class DescriptorRegistry:
         family = _family_of(new_descriptor)
 
         # Validate before we touch any rows.
-        await self._validate_or_dlq(new_descriptor, family, actor)
+        update_warnings = await self._validate_or_dlq(new_descriptor, family, actor)
 
         # Look up prior head BEFORE hashing so we can carry the live state
         # into the new descriptor — state is part of content_hash input
@@ -565,7 +573,10 @@ class DescriptorRegistry:
                     "update no-op: %s/%s already at version %s",
                     family.value, descriptor_id, new_hash,
                 )
-                return await self._fetch_row(family, descriptor_id, new_hash)
+                row = await self._fetch_row(family, descriptor_id, new_hash)
+                if update_warnings:
+                    row = replace(row, warnings=update_warnings)
+                return row
 
             # Content-addressable idempotency: the recomputed hash may already
             # exist as a PRIOR (is_head=false) version. The canonical case is a
@@ -639,7 +650,10 @@ class DescriptorRegistry:
             to_version=new_hash,
             schema_uri=new_descriptor.identity.schema_uri,
         )
-        return await self._fetch_row(family, descriptor_id, new_hash)
+        row = await self._fetch_row(family, descriptor_id, new_hash)
+        if update_warnings:
+            row = replace(row, warnings=update_warnings)
+        return row
 
     # ------------------------------------------------------------------
     # retire
@@ -1011,15 +1025,25 @@ class DescriptorRegistry:
         descriptor: DescriptorT,
         family: Family,
         actor: str,
-    ) -> None:
+    ) -> list[str]:
         """Run vocabulary validation against the live cache.
 
         On failure: write to descriptor_dead_letter (separate connection so
         the failure doesn't poison the caller's transaction), publish DLQ
         NATS event, raise DescriptorValidationError.
+
+        Returns non-fatal registration-time WARNINGS (X-1 dead-config notes)
+        for the caller to log/attach to the response — never raises for
+        these; they describe config that is inert, not invalid.
         """
         descriptor_id = descriptor.identity.id
         schema_uri = descriptor.identity.schema_uri
+        warnings = _inert_inline_analyst_block_warning(descriptor)
+        for msg in warnings:
+            logger.warning(
+                "registry.target.inert_inline_analyst_block descriptor_id=%s: %s",
+                descriptor_id, msg,
+            )
         try:
             # Vocabulary checks per family. Only target descriptors carry
             # scope-level vocab references; analyst descriptors reference
@@ -1098,6 +1122,7 @@ class DescriptorRegistry:
         # registry has moved past it). Conservative — never block
         # registration on missing webhook for a freshly-seen schema.
         await self._check_webhook_if_obsolete(family, schema_uri)
+        return warnings
 
     async def _check_webhook_if_obsolete(
         self,
@@ -1501,6 +1526,61 @@ class DescriptorRegistry:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _inert_inline_analyst_block_warning(descriptor: DescriptorT) -> list[str]:
+    """X-1 LOUD-WARNING (not refusal) — a target descriptor body carrying an
+    inline ``analyst`` block is (almost always) DEAD CONFIG.
+
+    Of the block's fields (``use``, ``analyst_ref``, ``cycle_types``,
+    ``cadence``, ``method``, ``rubric``), the fan-out wiring
+    (:func:`legba.runtime.source_first_runtime._analyst_ids_for_target`) reads
+    ONLY ``analyst_ref`` — a pointer to a *separately registered* analyst
+    descriptor, used purely to coalesce this target under that other
+    descriptor's own dispatch. ``method``/``cadence``/``rubric``/anything else
+    on this block is never read by anything — there is no code path that
+    builds a running analyst FROM the inline body. So a block with no
+    ``analyst_ref`` is 100% inert, and even a block WITH ``analyst_ref`` set
+    still has all its other fields ignored. The live ``target_situation_iran_war``
+    carried a (ref-less) block from registration onward with zero outputs ever
+    produced — an X-1 defect-class instance nobody was told about at write
+    time.
+
+    Per the X-1 refuse-vs-degrade doctrine this does NOT refuse the write —
+    registry rows outlive code, and a future runtime change could make more
+    of the block meaningful again — it only makes the dead-config LOUD: a
+    WARNING log line plus a note threaded into the registration response so
+    the caller sees it immediately rather than discovering it via zero
+    invocations months later.
+
+    Returns a single-element list (the warning message) when ``descriptor``
+    is a :class:`TargetDescriptor` with a non-``None`` ``analyst`` block,
+    else an empty list — callers extend a running warnings list with the
+    result.
+    """
+    if not (isinstance(descriptor, TargetDescriptor) and descriptor.analyst is not None):
+        return []
+    ref = getattr(descriptor.analyst, "analyst_ref", None)
+    if ref:
+        detail = (
+            f"only its `analyst_ref` ({ref!r}) is consulted (to coalesce this "
+            "target under that SEPARATELY registered analyst descriptor's own "
+            "dispatch) — every other field on this inline block (`method`, "
+            "`cadence`, `grounding`, `rubric`, `use`) is ignored"
+        )
+    else:
+        detail = (
+            "it has no `analyst_ref`, so nothing on it is read at all: "
+            "`method`, `cadence`, `grounding`, `rubric`, and `use` are all "
+            "ignored"
+        )
+    return [
+        f"target {descriptor.identity.id!r} declares an inline `analyst` "
+        f"block in its body — {detail}. Units subscribe to a target via a "
+        "separate analyst descriptor's `subscription.targets` selector "
+        "instead. Remove the inline block, or register the corresponding "
+        "analyst descriptor and (if needed) point `analyst_ref` at it."
+    ]
 
 
 def _family_of(descriptor: DescriptorT) -> Family:

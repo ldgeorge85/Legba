@@ -161,10 +161,19 @@ class LLMHandlerLike(Protocol):
 class CrossAnalystCorrelatorDeps:
     """Deps bundle the host injects at activation time.
 
-    Resolved from the analyst descriptor's ``method.llm.primary`` StackRef
-    + ``method.options``. The runtime stores this on
-    ``_AnalystDeps.run_method`` via :class:`CrossAnalystCorrelatorRunner`'s
-    closure — handlers don't reach into the descriptor directly.
+    Resolved from the analyst descriptor's ``method.llm.primary`` StackRef.
+    The runtime stores this on ``_AnalystDeps.run_method`` via
+    :class:`CrossAnalystCorrelatorRunner`'s closure — handlers don't reach into
+    the descriptor directly.
+
+    ``max_tokens`` / ``temperature`` / ``system_prompt`` below are NOT
+    descriptor-settable: the builder constructs this bundle as
+    ``CrossAnalystCorrelatorDeps(llm=llm)`` (``analyst_deps_builder``), so the
+    dataclass defaults are the only reachable values. X-1 made
+    ``method.options`` real, but scoped it to ``kind=deterministic`` — this is
+    an LLM kind, and the schema refuses an options block on it rather than
+    letting one sit silently inert. Widening that is a declared follow-on, not
+    an implied capability.
     """
 
     llm: LLMHandlerLike

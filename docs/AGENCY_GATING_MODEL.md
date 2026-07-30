@@ -124,11 +124,33 @@ private / loopback / link-local / cloud-metadata / RFC-1918 address is REFUSED
 before connect. A planner pointing the tool at `127.0.0.1` or
 `169.254.169.254` is blocked exactly as an ingress fetcher would be, and the
 `EgressBlockedError` is classified as a **clean tool failure**, not a crash —
-the loop folds it back to the planner. The `web_search` endpoint is
-operator-authored (pack `config['endpoint']` / `LEGBA_WEB_SEARCH_ENDPOINT`),
+the loop folds it back to the planner. The `web_search` provider is
+operator-authored at every rung (the pack ToolSpec's `config['provider']`
+`stack_ref` into the `search_provider` family, bound by the runtime into
+`ToolContext.search`; else `config['endpoint']` / `LEGBA_WEB_SEARCH_ENDPOINT`),
 never planner-supplied; the planner controls only the query string. Fetched web
 text is flagged UNVERIFIED in the pack rules — it is evidence to corroborate,
 not truth to assert.
+
+**Absence is measured, not assumed.** A search that returns nothing is not
+evidence that nothing exists — over a multi-engine meta-search an empty result
+set is far more likely to mean *broken* (every engine banned, an encoding bug, a
+network fault). So a zero-result response with no admitted degradation triggers
+one bounded **control probe** (a fixed high-yield query through the same
+provider, verdict cached per provider for a short TTL). Only a
+liveness-verified empty (`status: empty_verified`) sets
+`supports_absence_claim`, and even that licenses a **scoped** statement — "these
+engines returned nothing for this query" — never "X does not exist". A dead or
+unrunnable probe is a loud tool failure (`search_liveness_unverified`), the same
+class as `search_degraded_no_results`. This matters for the same reason the
+write gate does: a broken search that reads as absence manufactures false
+evidence that other analysts then reason over.
+
+**Failure defers; it never retries.** Retrying immediately against engines
+already refusing worsens the ban, so a deferrable failure carries a `deferral`
+block (exponential per-provider backoff, capped, escalating). The caller leaves
+its work item open and re-attempts on its own next cadence tick — there is no
+retry loop and no new queue.
 
 ---
 

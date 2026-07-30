@@ -132,6 +132,28 @@ class ToolContext:
     emit: "ChannelEmitter | None" = None
     substrate: Any | None = None
     writeback: "WritebackContext | None" = None
+    #: A CONFIGURED ``legba.data.stack.search.SearchProviderHandler``, bound by
+    #: the runtime from the component id the ``web_search`` ToolSpec's
+    #: ``provider`` StackRef resolves to. Wired in
+    #: ``runtime/dapr_host.py::_analyst_deps_resolver`` where the ``web_access``
+    #: GATHER binding's ToolContext is assembled, via
+    #: ``_search_handler_factory`` (which resolves the component through the
+    #: registry exactly as ``_llm_handler_factory`` resolves an LLM one).
+    #: ``None`` = no provider bound on this run; ``web_search`` then falls
+    #: through to the legacy operator-pinned endpoint, and if a route WAS
+    #: declared it fails loudly rather than returning an empty result set (an
+    #: unresolved provider must never look like "nothing found").
+    search: Any | None = None
+    #: The ``SearchRoute`` the handler above was bound from, carried so a
+    #: finding's provenance can record WHICH provider introduced which claims —
+    #: the same discipline as ``judge_llm_ref`` on the critique row.
+    search_route: Any | None = None
+    #: Optional ``SearchLivenessCache`` override (control-probe verdicts + the
+    #: deferral backoff ladder). ``None`` = the process-wide default, which is
+    #: what production wants: ONE probe budget and ONE verdict shared by every
+    #: analyst, so a run with several empty searches costs one upstream query.
+    #: Injected only by tests and by a caller that needs an isolated budget.
+    search_liveness: Any | None = None
 
 
 ToolHandler = Callable[[ToolCall, ActionPack, ToolContext], Awaitable[ToolResult]]
@@ -302,6 +324,12 @@ class ChannelEmitter:
             "requested_by": payload.get("requested_by"),
             "delivered": delivered,
         }
+        # Only present when a caller-side config degrade occurred, so a clean
+        # emit's payload_summary stays byte-identical to every row already on
+        # the ledger.
+        _config_note = payload.get("config_note")
+        if _config_note:
+            summary["config_note"] = str(_config_note)[:500]
         sql = """
             INSERT INTO alert_sink_deliveries (
                 alert_row_id, channel_name, sink_kind, sink_target,
@@ -493,6 +521,12 @@ async def _emit_to_channels(
         # its verify posture explicitly — "faithfulness=<score>" vs
         # "unverified — <reason>". None when nothing was verified.
         "faithfulness_score": call.args.get("faithfulness_score"),
+        # Stage 1 — a caller-side config degrade note (e.g. the escalation
+        # edge's configured ``action_tool`` named no tool on the pack, so it
+        # fell back to the default). None on every clean path; when set it
+        # rides into the durable alert_sink_deliveries.payload_summary so a
+        # config typo is queryable on the delivery ledger, not just a log line.
+        "config_note": call.args.get("config_note"),
     }
     emitted = []
     for ch in targets:

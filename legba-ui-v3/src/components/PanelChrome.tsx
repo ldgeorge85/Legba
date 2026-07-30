@@ -11,6 +11,7 @@ import { cn } from '@/lib/cn'
 import { RotateCw } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { usePanelTier } from '@/components/PanelTierContext'
+import { usePanelEmbedded } from '@/components/PanelEmbedContext'
 import { useDebugMode } from '@/lib/debugMode'
 
 export interface PanelChromeProps {
@@ -58,6 +59,41 @@ export function PanelChrome({
   // a bare "(singleton)@00000000" for a singleton — so hide it unless debug
   // chrome is on (item 5).
   const debug = useDebugMode()
+  // Mounted inside a `panels/merged/*.tsx` wrapper, which already hoisted its
+  // OWN single header above this (otherwise-standalone) panel — drop the
+  // title/subtitle/border-bearing header bar (the "double chrome" fix), but
+  // keep any FUNCTIONAL affordances (`onRefresh`, `actions`, `budget`) — those
+  // are real controls a sub-panel may depend on (e.g. Watchlist's
+  // "show inactive" toggle rides `actions`), not decorative framing, and
+  // dropping them would be a functionality regression, not a chrome fix.
+  const embedded = usePanelEmbedded()
+  if (embedded) {
+    const hasBar = Boolean(onRefresh || actions || budget)
+    return (
+      <div className="flex flex-col h-full w-full bg-surf-2 text-ink-1">
+        {hasBar && (
+          <div className="flex items-center justify-end gap-1 px-density py-1">
+            {budget && <BudgetPill budget={budget} />}
+            {onRefresh && (
+              <button
+                onClick={() => {
+                  void onRefresh()
+                }}
+                className="inline-flex items-center justify-center text-ink-2 hover:text-ink-1 p-1 rounded border border-line hover:border-line-strong"
+                title="Refresh"
+                aria-label="Refresh panel"
+                data-testid="panel-refresh"
+              >
+                <RotateCw className="h-3.5 w-3.5" aria-hidden />
+              </button>
+            )}
+            {actions}
+          </div>
+        )}
+        <div className="flex-1 overflow-auto pad-density">{children}</div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col h-full w-full bg-surf-2 text-ink-1">

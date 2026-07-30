@@ -53,6 +53,7 @@ from legba.data.schemas import (
     AnalystKind,
     CadenceBlock,
     GeoScope,
+    InlineAnalystBlock,
     LifecycleState,
     MethodBlock,
     SourceRef,
@@ -78,11 +79,14 @@ def _draft_target(
     relationship_types: tuple[str, ...] = ("LocatedIn",),
     name: str = "Brazil Energy",
     state: LifecycleState = LifecycleState.DRAFT,
+    analyst: "InlineAnalystBlock | None" = None,
 ) -> TargetDescriptor:
     """Build a syntactically-valid target descriptor for the test suite.
 
     Vocabulary terms default to seeded values so the descriptor registers
-    cleanly. Override `entity_classes` to force a DLQ event.
+    cleanly. Override `entity_classes` to force a DLQ event. `analyst` is
+    the X-1 inline-analyst-block dead-config case (defect C) — None by
+    default (every other test in this file exercises the clean path).
     """
     identity = TargetIdentity(
         id=descriptor_id,
@@ -112,6 +116,7 @@ def _draft_target(
             time_horizon_days=90,
         ),
         sources=sources,
+        analyst=analyst,
     )
 
 
@@ -312,6 +317,63 @@ async def test_target_register_returns_row_with_content_hash(
     assert row.state == "draft"
     assert row.abstraction_level == "L1"
     assert row.body["scope"]["entity_classes"] == ["organization", "country"]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_target_register_with_inline_analyst_block_warns(
+    registry_no_nats: DescriptorRegistry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Defect C — a target body carrying an inline ``analyst`` block is dead
+    config (the runtime never builds a running analyst from it; only
+    ``analyst_ref`` is ever consulted, and this block doesn't set one). The
+    registry does NOT refuse the write (X-1 refuse-vs-degrade: registry rows
+    outlive code) but it MUST warn loudly — in the log and in the returned
+    row — so this doesn't silently sit inert forever the way the live
+    ``target_situation_iran_war`` did from registration onward.
+    """
+    desc = _draft_target(
+        descriptor_id=f"t_inline_analyst_{uuid4().hex[:8]}",
+        analyst=InlineAnalystBlock(
+            use="inline_target",
+            cadence={"fallback_schedule": "*/15 * * * *"},
+            method={"kind": "llm_planner"},
+        ),
+    )
+    with caplog.at_level("WARNING", logger="legba.data.registry.descriptor"):
+        row = await registry_no_nats.register(desc, actor="lewis@local")
+
+    assert len(row.warnings) == 1
+    assert desc.identity.id in row.warnings[0]
+    assert "inline `analyst`" in row.warnings[0]
+    assert "subscription.targets" in row.warnings[0]
+
+    assert any(
+        "inert_inline_analyst_block" in rec.getMessage()
+        and desc.identity.id in rec.getMessage()
+        for rec in caplog.records
+    ), "expected a loud WARNING log line naming the inert inline analyst block"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_target_register_without_inline_analyst_block_is_silent(
+    registry_no_nats: DescriptorRegistry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Defect C counterpart — a clean target body (no inline ``analyst``
+    block) registers with zero warnings, silently, exactly as before."""
+    desc = _draft_target(descriptor_id=f"t_no_inline_analyst_{uuid4().hex[:8]}")
+    assert desc.analyst is None
+
+    with caplog.at_level("WARNING", logger="legba.data.registry.descriptor"):
+        row = await registry_no_nats.register(desc, actor="lewis@local")
+
+    assert row.warnings == []
+    assert not any(
+        "inert_inline_analyst_block" in rec.getMessage() for rec in caplog.records
+    )
 
 
 @pytest.mark.integration

@@ -36,7 +36,11 @@ import {
   tokenizeProse,
   type Citation,
 } from '@/lib/citationsModel'
-import { claimVerdictForMarker, type ClaimVerdict } from '@/lib/claimVerdicts'
+import {
+  CLAIM_VERDICT_ABSENCE_EXPLAIN,
+  claimVerdictForMarker,
+  type ClaimVerdict,
+} from '@/lib/claimVerdicts'
 import { stripMarkdown, unwrapEnvelope } from '@/lib/proseText'
 
 export interface CitedProseProps {
@@ -45,11 +49,13 @@ export interface CitedProseProps {
   /** The citation list extracted from the finding/composition body. */
   citations: Citation[]
   /**
-   * The finding-level faithfulness `verification` block (P1-8). When present,
-   * each chip's hover card derives its per-claim verdict from
-   * `unsupported_spans` (the ONLY per-claim record the verify pass persists —
-   * flags carry the flagged claim text + the citation ordinals it rested on;
-   * per-claim SUPPORTED verdicts are not recorded). Absent → the card shows an
+   * The finding-level faithfulness `verification` block (P1-8/P2-4). When
+   * present, each chip's hover card derives its per-claim verdict — preferring
+   * the persisted `claim_verdicts` LEDGER (every graded claim, supported
+   * included) when it names the chip's ordinal, falling back to
+   * `unsupported_spans` (flag-only, no positive "supported" record) for
+   * critiques written before the ledger existed. See @/lib/claimVerdicts for
+   * the full derivation + fallback contract. Absent → the card shows an
    * honest `claim-level verdict not recorded` line, never a fabricated one.
    */
   verification?: Record<string, unknown> | null
@@ -88,20 +94,29 @@ function defaultCiteClick(c: Citation): void {
  */
 function CardVerdictLine({ verdict }: { verdict: ClaimVerdict }) {
   if (verdict.kind === 'not-recorded' || verdict.kind === 'not-checked') {
+    // U-5 — this reads like an error to a first-time analyst ("not recorded")
+    // without the plain-language gloss; the card is already a hover-revealed
+    // surface, so the gloss renders as always-visible caption text rather
+    // than a second nested tooltip.
     return (
-      <span
-        className="mt-1.5 block text-[10px] italic text-ink-3"
-        data-testid="citation-card-verdict"
-        data-verdict={verdict.kind}
-      >
-        {verdict.label}
+      <span data-testid="citation-card-verdict" data-verdict={verdict.kind}>
+        <span className="mt-1.5 block text-[10px] italic text-ink-3">{verdict.label}</span>
+        <span className="mt-0.5 block text-[10px] leading-snug text-ink-3">
+          {CLAIM_VERDICT_ABSENCE_EXPLAIN}
+        </span>
       </span>
     )
   }
-  if (verdict.kind === 'not-flagged') {
+  if (verdict.kind === 'supported' || verdict.kind === 'not-flagged') {
+    // P2-4: 'supported' is the ledger-backed positive verdict for THIS chip;
+    // 'not-flagged' is the legacy (pre-ledger) silence — visually distinct
+    // (accent-ok vs muted) so the reader can tell a real verdict from an
+    // absence of one.
     return (
       <span
-        className="mt-1.5 block text-[10px] text-ink-2"
+        className={`mt-1.5 block text-[10px] ${
+          verdict.kind === 'supported' ? 'text-accent-ok' : 'text-ink-2'
+        }`}
         data-testid="citation-card-verdict"
         data-verdict={verdict.kind}
       >

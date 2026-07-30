@@ -8,8 +8,10 @@ start. This page is the index: pick your path.
 ## Reading paths
 
 **"Show me." (10 minutes)**
-[TOUR.md](TOUR.md) — read a finding, check its verification, drill it to
-source. Then [FAQ.md](FAQ.md) for the questions you're already forming.
+[TOUR.md](TOUR.md) — the UI keystone path: boot, pick a desk, read a finding,
+check its verification, drill it to source, ask a question, export what you
+found (curl equivalents live in its appendix). Then [FAQ.md](FAQ.md) for the
+questions you're already forming.
 
 **"I'm standing one up." (operator)**
 [SETUP.md](SETUP.md) (from-zero bootstrap) → [RUNBOOK.md](RUNBOOK.md) (day-2
@@ -41,7 +43,7 @@ mutation rules) → [ACQUISITION.md](ACQUISITION.md) (the ingest plane) →
 
 | Document | One line |
 |---|---|
-| [TOUR.md](TOUR.md) | Your first ten minutes: see, distrust, verify, drill. |
+| [TOUR.md](TOUR.md) | Your first ten minutes in the UI: boot, pick a desk, distrust, verify, drill, ask, export. API appendix included. |
 | [FAQ.md](FAQ.md) | Plain answers to a newcomer's actual questions. |
 | [SETUP.md](SETUP.md) | From-zero bootstrap to a running instance. |
 | [RUNBOOK.md](RUNBOOK.md) | Day-2 operations: migrations, registration, troubleshooting. |
@@ -58,6 +60,7 @@ mutation rules) → [ACQUISITION.md](ACQUISITION.md) (the ingest plane) →
 | [CODE_MAP.md](CODE_MAP.md) | Navigational map of the codebase. |
 | [SEAMS.md](SEAMS.md) | THE registry of declared not-built seams (fail-loud contract). |
 | [STATUS.md](STATUS.md) | Release boundary table + where it is weak today. |
+| [RELEASE_STATE.md](RELEASE_STATE.md) | Generated release-state manifest — live counts (sources, desks, units), migration head, verify mode. Regenerate via `scripts/generate_release_manifest.py`. |
 | [RELEASE_STATE_MATRIX.md](RELEASE_STATE_MATRIX.md) | Route/panel-level maturity classification. |
 | [DIRECTION.md](DIRECTION.md) | Designed-not-built: RBAC/SSO, tenancy, STIX/TAXII, MCP, multimodal, scale-out. |
 | [AGENCY_GATING_MODEL.md](AGENCY_GATING_MODEL.md) | The trust model for agentic analyst tools. |

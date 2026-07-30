@@ -39,6 +39,10 @@ method:
   kind: llm_planner
   prompt_module: "legba.prompts.lens_baserate:LENS_SYSTEM"
   llm:
+    # Model-card sampling (gpt-oss ships generation_config temperature=1.0; the vLLM
+    # client always sends temperature, so the card default can never apply on its own).
+    # Fleet-wide per the 2026-07-24 sampling audit + A/B (+0.055 faith at 1.0).
+    temperature: 1.0
     primary:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat

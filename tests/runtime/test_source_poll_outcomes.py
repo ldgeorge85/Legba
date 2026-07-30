@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""DQ-H5b (#88) — non-productive-poll provenance at the source poll path.
+"""DQ-H5b (#88) + migration 0114 — per-poll provenance at the source poll path.
 
 Exercises ``SourceCore._record_poll_outcome`` via ``pull_once``, driven against
 in-memory substrate doubles (no live Postgres / Dapr — the outcome-classification
@@ -13,7 +13,19 @@ Covered:
     transient → 'degraded') → outcome='error' with the health state + last_error
     surfaced (the case ``errored`` can't see because no exception escapes);
   * an escaped exception → outcome='error' with the exception string;
-  * a PRODUCTIVE poll (>=1 signal) → NO row (signals are self-evidencing);
+  * a PRODUCTIVE poll (>=1 signal) → outcome='success' carrying its
+    ``signals_written`` count. This is migration 0114: the original design
+    wrote NOTHING here, on the premise that signals rows are self-evidencing —
+    which is true of one poll and false of any reader that walks a RUN, because
+    an absence cannot break a run. A repaired source therefore kept presenting
+    its historical 'error' rows as the leading run and ``entity_gc`` op 4
+    re-paused it mid-ingest;
+  * 'empty' STILL means exactly "polled fine, nothing new" — the two are not
+    collapsed;
+  * a productive poll that ALSO failed part-way → 'success' (it produced), with
+    the error text preserved on the row rather than discarded;
+  * a poll that wrote 0 rows but COLLAPSED an intra-source duplicate → 'success'
+    with signals_written=0 (it saw current content and bumped recency);
   * a capped 0-written poll → outcome='empty' + capped, and the (possibly stale)
     handler health is NOT consulted;
   * a provenance-write failure NEVER masks the pull result.
@@ -258,13 +270,92 @@ async def test_escaped_exception_writes_error_outcome() -> None:
 
 
 @pytest.mark.asyncio
-async def test_productive_poll_writes_no_outcome() -> None:
-    # >=1 signal written → the signals rows are self-evidencing; no outcome row.
-    sid_marker = "source.test"
-    core, pool, _store, source_id = _build(_StubHandler([_entry(sid_marker)]))
+async def test_productive_poll_writes_success_outcome() -> None:
+    # >=1 signal written → ONE row, outcome='success', carrying the count.
+    # (Migration 0114 — this used to write nothing at all, which is what let a
+    # recovered source's historical error run stay the LEADING run forever.)
+    core, pool, _store, source_id = _build(_StubHandler([_entry("source.test")]))
     result = await core.pull_once()
     assert result["signals_written"] == 1
-    assert pool.outcome_writes == []
+
+    writes = pool.outcome_writes
+    assert len(writes) == 1
+    row = writes[0]
+    assert row["source_id"] == source_id
+    assert row["outcome"] == "success"
+    assert row["signals_written"] == 1
+    assert row["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_success_row_carries_the_real_signal_count() -> None:
+    core, pool, _store, _sid = _build(
+        _StubHandler([_entry("source.test") for _ in range(7)])
+    )
+    result = await core.pull_once()
+    assert result["signals_written"] == 7
+
+    row = pool.outcome_writes[0]
+    assert row["outcome"] == "success"
+    assert row["signals_written"] == 7
+
+
+@pytest.mark.asyncio
+async def test_empty_and_success_stay_distinct_outcomes() -> None:
+    # "polled and found nothing" and "polled and ingested items" are DIFFERENT
+    # facts — the empty-streak watchdog and the freshness reads depend on the
+    # distinction, so 0114 must not have collapsed them.
+    core_quiet, pool_quiet, _s1, _i1 = _build(_StubHandler([]))
+    await core_quiet.pull_once()
+    core_busy, pool_busy, _s2, _i2 = _build(_StubHandler([_entry("source.test")]))
+    await core_busy.pull_once()
+
+    assert pool_quiet.outcome_writes[0]["outcome"] == "empty"
+    assert pool_quiet.outcome_writes[0]["signals_written"] == 0
+    assert pool_busy.outcome_writes[0]["outcome"] == "success"
+    assert pool_busy.outcome_writes[0]["signals_written"] == 1
+
+
+@pytest.mark.asyncio
+async def test_partial_failure_after_writing_is_success_but_keeps_the_error() -> None:
+    # Wrote a signal, THEN the handler raised. The source produced, so this is
+    # not a failing poll (counting it as one is exactly how a producing source
+    # gets latched), but the error detail must survive on the row.
+    core, pool, _store, _sid = _build(
+        _StubHandler(
+            [_entry("source.test")], raise_exc=RuntimeError("connection reset"),
+        )
+    )
+    result = await core.pull_once()
+    assert result["signals_written"] == 1
+
+    row = pool.outcome_writes[0]
+    assert row["outcome"] == "success"
+    assert row["signals_written"] == 1
+    assert "connection reset" in (row["error"] or "")
+
+
+@pytest.mark.asyncio
+async def test_dedup_collapsed_poll_is_success_not_empty() -> None:
+    # S-4: 0 rows written but >=1 intra-source duplicate collapsed — the poll
+    # saw current content and bumped recency. It is productive, so it records
+    # 'success' with a 0 count; recording 'empty' would let a hazard feed that
+    # healthily re-serves active events trip the empty-streak degradation.
+    core, pool, _store, _sid = _build(_StubHandler([_entry("source.test")]))
+
+    async def _collapse(conn, ctx, raw, *, dedup_stats=None):
+        if dedup_stats is not None:
+            dedup_stats["deduped"] = dedup_stats.get("deduped", 0) + 1
+        return None
+
+    core._process_one = _collapse  # type: ignore[method-assign]
+
+    result = await core.pull_once()
+    assert result["signals_written"] == 0
+
+    row = pool.outcome_writes[0]
+    assert row["outcome"] == "success"
+    assert row["signals_written"] == 0
 
 
 @pytest.mark.asyncio
@@ -363,3 +454,31 @@ async def test_health_bad_newest_entry_ts_degrades_to_null() -> None:
     row = pool.outcome_writes[0]
     assert row["outcome"] == "empty"
     assert row["newest_entry_ts"] is None
+
+
+# ---------------------------------------------------------------------------
+# Schema drift guard: every outcome the writer can emit must be admitted by the
+# table's CHECK constraint. A value the poll path emits but the constraint
+# rejects does not fail loudly — the provenance INSERT is best-effort and only
+# logs a warning, so the poll would go unrecorded again, which is exactly the
+# invisible-poll class migration 0114 exists to end.
+# ---------------------------------------------------------------------------
+
+
+def test_writer_outcome_vocabulary_matches_the_check_constraint() -> None:
+    import re
+
+    from legba.data.migrations import MIGRATIONS_DIR
+
+    sql = (
+        MIGRATIONS_DIR / "0114_source_poll_outcome_success.sql"
+    ).read_text(encoding="utf-8")
+    match = re.search(
+        r"CHECK\s*\(\s*outcome\s+IN\s*\(([^)]*)\)", sql, re.IGNORECASE,
+    )
+    assert match, "0114 must (re)state the outcome CHECK constraint"
+    admitted = set(re.findall(r"'([a-z_]+)'", match.group(1)))
+
+    # The exact vocabulary — 'success' added, 'empty'/'error' preserved with
+    # their existing meanings (every row already on disk stays valid).
+    assert admitted == {"empty", "error", "success"}

@@ -7,6 +7,7 @@ import {
   DEFAULT_LOOKBACK_HOURS,
   MAX_LOOKBACK_DAYS,
   WALL_CURSOR_KEY,
+  bandChangeDeskLabel,
   bandDirectionTone,
   buildMovers,
   healthRollup,
@@ -133,6 +134,17 @@ describe('bandDirectionTone', () => {
     expect(bandDirectionTone('evidence-gained')).toBe('neutral')
     expect(bandDirectionTone('evidence-lost')).toBe('neutral')
     expect(bandDirectionTone('indeterminate')).toBe('neutral')
+  })
+})
+
+describe('bandChangeDeskLabel', () => {
+  it('humanizes a g20/watch desk target id to its country name', () => {
+    expect(bandChangeDeskLabel('country_g20_br')).toBe('Brazil')
+    expect(bandChangeDeskLabel('country_watch_sd')).toBe('Sudan')
+  })
+
+  it('never renders the raw snake_case id for a non-desk target', () => {
+    expect(bandChangeDeskLabel('japan_news')).toBe('Japan News')
   })
 })
 
@@ -269,6 +281,8 @@ function srcRow(over: Partial<SourceFiringRow>): SourceFiringRow {
     last_poll_outcome: null,
     recent_error_count: 0,
     status: 'firing',
+    freshness_grade: 'ungraded',
+    budget_minutes: null,
     ...over,
   }
 }

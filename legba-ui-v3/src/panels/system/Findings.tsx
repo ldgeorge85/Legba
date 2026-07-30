@@ -46,6 +46,7 @@ import { VerdictBadge } from '@/components/VerdictBadge'
 import CitedProse from '@/components/CitedProse'
 import { FeedFilterBar } from '@/components/FeedFilterBar'
 import { extractCitations } from '@/lib/citationsModel'
+import { humanizeAnalystId } from '@/lib/analystNames'
 import type { Severity } from '@/v4/world/types'
 import { apiGet } from '@/lib/api'
 import { feedPreview } from '@/lib/proseText'
@@ -744,7 +745,9 @@ function FeedCard({
           <>
             <span className="truncate">{row.target_id ?? '(no target)'}</span>
             <span className="shrink-0">·</span>
-            <span className="truncate">{row.analyst_id ?? '(no analyst)'}</span>
+            <span className="truncate" title={row.analyst_id ?? undefined}>
+              {humanizeAnalystId(row.analyst_id, '(no analyst)')}
+            </span>
             {row.derived_from.length > 0 && (
               <span className="shrink-0">
                 · ←{row.derived_from.length} input{row.derived_from.length === 1 ? '' : 's'}
@@ -757,7 +760,10 @@ function FeedCard({
       {/* verdict — findings only (signals are raw intake, not verify-assessed) */}
       {!isSignal && (
         <div className="mt-1">
-          <VerdictBadge verdict={verdict} />
+          {/* This row is itself a <button onClick={onOpen}> — interactiveParent
+              stops a tap on either InfoTip chip from also bubbling into
+              onOpen (see InfoTip's interactive-parent mode doc). */}
+          <VerdictBadge verdict={verdict} interactiveParent />
         </div>
       )}
 

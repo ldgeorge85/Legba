@@ -323,8 +323,18 @@ async def test_days_validation(client: AsyncClient):
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_empty_window_is_valid_envelope(client: AsyncClient):
-    """A window with nothing in it returns a 200 all-empty envelope, not 404."""
-    r = await client.get("/api/v1/v3/timeline", params={"days": 7})
+    """A window with nothing in it returns a 200 all-empty envelope, not 404.
+
+    ISOLATION: scoped to a unique never-seeded desk — the migrated DB is
+    session-shared, so an UNSCOPED 7d window is only empty when no earlier
+    test file left a recent fact/situation/finding behind (order-fragile;
+    this was the bitten case). An unused target_id makes emptiness a property
+    of THIS test, not of suite ordering.
+    """
+    desk = f"country_timeline_empty_{uuid4().hex[:8]}"
+    r = await client.get(
+        "/api/v1/v3/timeline", params={"target_id": desk, "days": 7},
+    )
     assert r.status_code == 200
     body = r.json()
     assert body["items"] == []

@@ -97,6 +97,12 @@ method:
     above announcements and intentions. If the cited signals show little or
     nothing bearing on standing posture, say so PLAINLY, set a LOW confidence, and
     tag severity:low.
+    SCOPE ABSENCE TO THE COLLECTION, never the world: a negative MUST read "no
+    exercise activity appears in the collected signals" / "not observed in this
+    desk's sources" — NEVER a world-fact ("no large-scale exercise is underway"):
+    an announced exercise can be widely covered yet absent from this slice. A
+    "not_observed" indicator means not observed in THIS desk's collection window;
+    when the slice is thin, say so plainly.
 
     BOUNDARY — this unit owns the SLOW-MOVING BASE RATE of military posture, NOT
     event-driven escalation. A routine exercise, a long-lead procurement program,
@@ -165,7 +171,22 @@ method:
     "not_observed" / "expired" carry an empty "citations". Keep each id a short
     stable slug so it can be tracked run-over-run. Output nothing but the single
     JSON object.
+
+    OPEN QUESTIONS (optional field): the JSON object MAY also carry a top-level
+    "open_questions" array — up to 3 entries, each
+    {"question": "<a genuinely unresolved analytical question this run surfaced>",
+     "refs": [<the [N] indices of the cited evidence that raises it>]}.
+    Record a question ONLY when the cited evidence genuinely leaves it
+    unresolved — a contradiction between cited sources, a missing confirmation
+    for a load-bearing claim, an unexplained change. Tie every entry to at
+    least one cited [N] index via "refs". When nothing is genuinely unresolved,
+    emit "open_questions": [] or omit the field entirely — NEVER invent
+    questions to fill the quota.
   llm:
+    # Model-card sampling (gpt-oss ships generation_config temperature=1.0; the vLLM
+    # client always sends temperature, so the card default can never apply on its own).
+    # Fleet-wide per the 2026-07-24 sampling audit + A/B (+0.055 faith at 1.0).
+    temperature: 1.0
     primary:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat

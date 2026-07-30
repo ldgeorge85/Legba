@@ -35,6 +35,19 @@ consumers that read private rows without going through this filter.
 
 HARD rule (A6): assurance grades feed display today and weighting / flags /
 tie-breaks later — NEVER the faithfulness score.
+
+DEPRECATED (C3, deprecation window)
+-----------------------------------
+``GET /sources/{id}/assurance`` is superseded by ``GET /sources/{id}/quality``
+(:mod:`legba.data.registry.source_quality_api`), which serves this content plus
+the asserted host-credibility and computed freshness legs in one typed
+envelope. This route KEEPS SERVING its exact original wire shape until the
+sunset date — a redirect was rejected because the merged body is a different
+shape and a 3xx would break callers silently. It is stamped ``Deprecation`` /
+``Sunset`` / ``Link: rel=successor-version`` and marked deprecated in the
+OpenAPI doc. The wire models and helpers here remain the canonical ones: the
+new surface IMPORTS them rather than restating them, so the two can never
+disagree about a rating's shape.
 """
 
 from __future__ import annotations
@@ -48,10 +61,19 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
-from .api import RegistryAPIDeps, load_assurance_grades, require_bearer
+from .api import (
+    RegistryAPIDeps,
+    load_assurance_grades,
+    require_bearer,
+    sunset_headers,
+)
 from .descriptor import DescriptorPredicate, Family
 
 logger = logging.getLogger(__name__)
+
+#: C3 successor — the merged source-quality ledger, which serves this route's
+#: content plus the asserted host-credibility and computed freshness legs.
+SUCCESSOR_ROUTE = "/api/v1/v3/sources/{source_id}/quality"
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +252,10 @@ def build_source_assurance_router(deps: RegistryAPIDeps) -> APIRouter:
     router = APIRouter(tags=["source-assurance"])
 
     @router.get(
-        "/sources/{source_id}/assurance", response_model=SourceAssuranceOut,
+        "/sources/{source_id}/assurance",
+        response_model=SourceAssuranceOut,
+        deprecated=True,
+        dependencies=[Depends(sunset_headers(SUCCESSOR_ROUTE))],
     )
     async def get_source_assurance(
         source_id: str,

@@ -221,6 +221,54 @@ COMPONENTS: list[tuple[str, dict]] = [
             },
         },
     ),
+    (
+        # The DISCOVERY leg. Registering this component does NOT activate
+        # search — an analyst still has to grant `web_access` AND its target
+        # has to allow it (the three-way agency gate), and the `web_search`
+        # ToolSpec has to carry a `provider` StackRef pointing here. Registered
+        # so the component exists to point at; INERT until both are done.
+        #
+        # Endpoint is the compose-network service name. Two operator steps this
+        # will NOT work without, both of which fail LOUDLY rather than silently:
+        #   1. `docker compose --profile search up -d searxng`
+        #   2. `searxng` on LEGBA_EGRESS_ALLOW_HOSTS — the SSRF egress guard
+        #      refuses RFC-1918 targets, so every query returns egress_blocked
+        #      until the single exact hostname is permitted (never a subnet).
+        # And SearXNG's JSON format is OFF by default: without
+        # `search.formats: [html, json]` every query returns HTML and the
+        # handler raises "search response not JSON".
+        "search.searxng.local",
+        {
+            "id": "search.searxng.local",
+            "name": "SearXNG metasearch (local)",
+            "schema_uri": "legba/stack/search_provider/1.0.0",
+            "state": "active",
+            "owner": "lewis@local",
+            "config": {
+                "subprovider": _dd(
+                    "searxng",
+                    ["searxng", "json", "firecrawl", "jina", "tavily", "brave",
+                     "agent"],
+                ),
+                "endpoint": _t(
+                    os.environ.get(
+                        "LEGBA_SEARXNG_ENDPOINT", "http://searxng:8080/search",
+                    )
+                ),
+                "timeout_seconds": _n(15),
+                "max_results": _n(10),
+                # Empty = the instance's own configured engine set. WHICH
+                # engines survive sustained automated use is an empirical
+                # first-week question measured by the control-query canary —
+                # not a value to guess in a registrar.
+                "engines": _list([]),
+                "categories": _list(["general", "news"]),
+                "language": _t(""),
+                "results_key": _t("results"),
+                "query_param": _t("q"),
+            },
+        },
+    ),
 ]
 
 

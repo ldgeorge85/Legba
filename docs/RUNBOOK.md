@@ -30,7 +30,8 @@ specs under `docs/` for context. New here? Start with the
 [21 Release checklist](#21-release-checklist-pre-tag) ·
 [22 Multi-replica proof](#22-multi-replica-local-proof-scaling-multinode) ·
 [23 Backup & restore](#23-backup--restore-resilience-observability-w-1b-5) ·
-[24 Host stall watchdog](#24-host-stall-watchdog-actor-plane-auto-recovery)
+[24 Host stall watchdog](#24-host-stall-watchdog-actor-plane-auto-recovery) ·
+[24.1 LLM/search plane heartbeats](#241-llm--search-plane-heartbeats)
 
 ## 0. Critical operator notes (read these first)
 
@@ -77,7 +78,7 @@ specs under `docs/` for context. New here? Start with the
 
 - **Deploy a fresh instance to CURRENT scope (not just the 3-feed cold-start).** The canonical one-command path (`deploy/deploy.sh --seed`, §2) does all of this; the steps below are what it automates, for reference / partial re-runs. The minimal cold-start verification set is 3 shared world-news sources (BBC / Deutsche Welle / Al Jazeera) — that is the cold-start *smoke test*, NOT the deployed scope and NOT a proven-live limit. The live system runs the full source catalog (the catalog defines 46 handler integrations in `scripts/bringup_register_source_catalog.py`; ~57 registered source descriptors, ~50 live/active including seed/baseline plus the standalone state-media feeds IRNA / PressTV / Ukrinform and the UCDP GED adapter — the latter currently **paused pending an access token**). To stand a fresh instance up to current scope:
   1. Empty substrate up + schema (§2–§3): a fresh deploy applies the single proven baseline `deploy/baseline/0001_baseline.sql` (ledger pre-seeded to head **0053**), then `migrate` applies any future (`0054`+) migrations — currently `0054`…`0105` (live head **0105**; `0095`/`0100` intentionally unused — the runner discovers by sorted glob, so gaps are harmless).
-  2. Vault + stack components (§6–§7), then the source-first working set — packs, the 3 minimal sources, 19 G20 targets, the analysts. **`deploy.sh` registers the LIVE analysis spine via the split registrars** — `bringup_register_analysts.py` registers the seven bounded units + the composition tower (`country_composition` / `region_composition` / `world_assessor` / thematic `escalation_composition`) + the deterministic I&W pair (`indicator_tracker` / `collection_gap`); `bringup_register_watch_country_targets.py` adds the watch tier (13 desks today — extend its `WATCH_ISO2` list to add more); `bringup_register_region_targets.py` adds the 5 region frames. (The older combined `scripts/bringup_register_p17_workingset.py` is a **frozen legacy path** that registers the RETIRED `country_assessor` monolith set — it does NOT bring up the current spine; prefer `deploy.sh`.)
+  2. Vault + stack components (§6–§7), then the source-first working set — packs, the 3 minimal sources, 19 G20 targets, the analysts. **`deploy.sh` registers the LIVE analysis spine via the split registrars** — `bringup_register_analysts.py` registers the eight bounded units + the composition tower (`country_composition` / `region_composition` / `world_assessor` / thematic `escalation_composition`) + the deterministic I&W pair (`indicator_tracker` / `collection_gap`); `bringup_register_watch_country_targets.py` adds the watch tier (13 desks today — extend its `WATCH_ISO2` list to add more); `bringup_register_region_targets.py` adds the 5 region frames. (The older combined `scripts/bringup_register_p17_workingset.py` is a **frozen legacy path** that registers the RETIRED `country_assessor` monolith set — it does NOT bring up the current spine; prefer `deploy.sh`.)
   3. **Then the FULL source catalog** — run `scripts/bringup_register_source_catalog.py` to register the 46-source catalog (this is what takes the instance from the 3-feed cold-start to current scope), plus the deterministic cadence analysts + the budget envelope (§7).
   4. Seed the knowledge roots (§7.2) and verify ingestion (§9). A current-scope instance reaches order-of-magnitude tens-of-thousands of signals and tens-of-thousands of findings — the 3-feed set will not.
 
@@ -305,7 +306,54 @@ Also set in the gitignored `.env`. These reach the containers via `env_file`
 | `LEGBA_ALERT_SINK_COOLDOWN_SECONDS` | per-sink cooldown in the `AlertSinkDispatcher`. Suppressed alerts are **coalesced, never dropped**: the next delivery carries "+N more alert(s) during cooldown" with a bounded preview | `60` |
 | `LEGBA_PUBLIC_BASE_URL` | makes the receipt link on every outbound alert an absolute URL (`<base>/api/v1/lineage/…`) | unset → the payload carries the relative lineage path only (ntfy omits `X-Click`) |
 | `LEGBA_ARCHIVE_ROOT` | filesystem root of the evidence-archive CAS store (`data/archive.py`) | `/var/lib/legba/archive` (the compose-mounted `legba_archive` volume) |
-| `LEGBA_ANALYST_TRACES_TTL_DAYS` | TTL for the `analyst_traces_retention` purge handler (draft; mig 0101 adds its age-only purge-scan index; FK-safe — critiques cascade, DLQ rows null out). Keep the TTL **well above 7 days** (30+ recommended — the telemetry API aggregates a 7-day window over `analyst_traces`; documented guidance, not code-enforced) | `0` → **disabled** (ships inert; a positive value is the operator opt-in). The env var is the real config path: the descriptor schema forbids a `method.options` block, so the TTL cannot ride the descriptor. `signals_retention` has the **same options-only read with NO env fallback** — it currently cannot be enabled at all; tracked as the same-class gap |
+| `LEGBA_ANALYST_TRACES_TTL_DAYS` | TTL for the `analyst_traces_retention` purge handler (draft; mig 0101 adds its age-only purge-scan index; FK-safe — critiques cascade, DLQ rows null out). Keep the TTL **well above 7 days** (30+ recommended — the telemetry API aggregates a 7-day window over `analyst_traces`; documented guidance, not code-enforced) | `0` → **disabled** (ships inert; a positive value is the operator opt-in). Since X-1 (2026-07-29) the TTL can ALSO ride the descriptor as `method.options.ttl_days` — a `PUT /api/v1/descriptors/analyst/analyst_traces_retention` with no rebuild and no container recreate, which is now the preferred path. Resolution order: run options (which the descriptor block feeds) → this env var → the `retention_policies` row |
+| `LEGBA_SIGNALS_RETENTION_TTL_DAYS` | TTL for the `signals_retention` purge handler (same env-fallback class as the traces TTL — SEAMS #43 RESOLVED). Purges aged signals + their `signal_entity_links` / `signal_aliases` children; `retain_always` / `evidence_hold` rows are NEVER purged regardless of age. **Deleting signals is a bigger call than telemetry — leave unset until deliberately decided**; deliberately not present in any shipped .env or descriptor | `0` → **disabled** (the shipped posture). Since X-1 also settable as `method.options.ttl_days` on the descriptor; the shipped descriptor carries no options block, so the default stands |
+
+### 4.0.2 Default-OFF / opt-in flag audit (C5-3, 2026-07-28)
+
+Every `LEGBA_*` env var in `src/legba` whose code default is OFF (or that
+otherwise gates a feature on an explicit opt-in), audited during the
+2026-07-28 registry-hygiene pass. "Code default" is what a **fresh
+install with no `.env` overrides** gets — this repo's `.env.example` and
+an operator's actual `.env` may set some of these ON; where that's
+known it's called out. Retention-TTL flags (`LEGBA_ANALYST_TRACES_TTL_DAYS`,
+`LEGBA_SIGNALS_RETENTION_TTL_DAYS`) are documented in full in §4.0.1 above
+and aren't repeated here.
+
+| Flag | Code default | Purpose | Decision |
+|---|---|---|---|
+| `LEGBA_A2A_ENABLED` (+ `LEGBA_A2A_TRUSTED_KEYS`) | OFF | Mounts the inter-agent `/a2a/skills` surface | **KEEP.** Declared seam #15 (fail-closed B-2 posture) — exposing an unauthenticated skill surface must stay an explicit operator decision. |
+| `LEGBA_AGE_DERIVED_FROM` | OFF | Opt-in Apache AGE `:DerivedFrom` graph-edge mirror alongside the relational `derived_from[]` lineage array | **KEEP** (investigated; not deleted). Zero code paths anywhere in `src/legba` or `legba-ui-v3` read the AGE `:DerivedFrom` edges — the relational recursive-CTE lineage is the sole consumer. That is NOT an oversight: `docs/ARCHITECTURE.md` §5.5's 2026-06-23 AGE re-evaluation already decided to keep the whole AGE graph "retained but dormant" (an optional acceleration path, not depended on), with a documented revisit trigger (~250k nexus edges or ~2s p95 traversal latency). That same writeup recommends *eventually* dropping AGE outright, but explicitly as a separate **operator-gated** change spanning more than this one flag (also `fact_extractor.py`'s `emit_graph_edges`) — out of scope for a single-flag decision here. |
+| `LEGBA_COMPOSITION_TIERED_EVIDENCE` | OFF | Two-tier (verified basis + labeled periphery) composition evidence split (SEAMS #44/#45, resolved) | **KEEP.** ON in the operator's live `.env`; the code default stays OFF so a fresh install / test run gets byte-identical legacy behavior until the operator opts in deliberately. |
+| `LEGBA_FACT_DECAY_WEIGHTING` | OFF | Decay-weighted fact evaluation in the eval/calibration paths | **KEEP.** Same rationale as above — ON live, OFF by code default for fresh installs. |
+| `LEGBA_FACT_CONTENTION_LLM_TIEBREAK` | OFF | Bounded self-hosted-vLLM call to break a NEAR-TIE abstain in `fact_contention_arbiter` (never Anthropic/Opus) | **KEEP.** Opt-in per design (`fact_contention_arbiter.py`); the operator's `.env` has it. OFF-safe: with it off the arbiter is byte-for-byte the deterministic Wave-2 handler. |
+| `LEGBA_FACT_CONTENTION` | OFF (code); **ON is the live default** per `manual_batch.py`'s own docstring | The write-path COEXISTENCE carve-out: a same-tier, fuzzy-distinct prior is NOT closed on a new write, so both stay open for the detect-only arbiter to surface as a contention rather than one silently overwriting the other | **KEEP.** Load-bearing prerequisite for the two contention flags above — turning it off collapses the contested-claims arbiter's input (nothing would ever coexist to arbitrate). |
+| `LEGBA_CONTENTION_SURFACING_PREFER` | OFF | Additionally REORDERS grounding to prefer disputed facts (stronger than just annotating them) | **KEEP** — deliberate second gate. The sibling `LEGBA_CONTENTION_SURFACING` (default ON) only annotates a disputed fact CONTESTED/DISPUTED in the grounding preamble; this flag changes WHAT an analyst actually reads, which the code's own docstring says "never ships silently" — correctly kept a separate, harder opt-in. |
+| `LEGBA_DEV_MODE` | OFF | Bypasses the registry-API bearer-token requirement and the A2A trusted-keys allowlist requirement | **KEEP, never flip.** This is the one flag in this table where flipping the default would be a straight security regression — the B-2 fail-closed posture depends on it staying an explicit, visible opt-in for local/dev bring-up only. |
+| `LEGBA_LEADER_ELECTION` | OFF (single-node posture) | Enables the Postgres advisory-lock leader election for multi-replica safety (seam #17) | **KEEP.** Correct default for the current single-replica deployment; flipping to always-on would add advisory-lock overhead with no benefit until a real multi-replica topology exists (a direction item, not decided here). |
+| `LEGBA_PROXY_DEEP_HEALTHCHECK_ENABLED` | OFF | Bright Data residential-proxy deep healthcheck (one `ipinfo.io/json` call through the proxy) | **KEEP.** Explicitly cost-gated in the code comment — Bright Data bills per byte even for a tiny probe; enabling by default would silently add operator cost. |
+| `LEGBA_REGISTRY_HEALTH_LOOP` | OFF | Background stack-component health-poll loop in the registry server | **KEEP, but flag for operator attention.** The `False` default's stated rationale (`server.py:create_app` docstring) is test-isolation — "so unit/integration tests don't spin a probe thread unless they ask for it" — but the production CLI entrypoint (`server.py:main`) inherits that SAME default via a bare `os.getenv(..., "")`, and it isn't in `.env.example` at all. The test rationale doesn't obviously apply to the production container. Not flipped here (a production-behavior default shouldn't change without the operator seeing it) — recommend the operator confirm whether this loop is wanted live and either set it or split the CLI default from the test default. |
+| `LEGBA_REIFY_DISCOVERED_CHAINS` | OFF | Lets `graph_mining` emit a NEW `nexus` row for a discovered (no-direct-edge) negative-polarity proxy chain, not just score existing edges | **KEEP.** This WRITES an inferred (not directly observed) relationship into the substrate; the code's own docstring calls it "Operator-gated" by design — the inference-noise risk belongs behind an explicit opt-in, same reasoning as the AGE-edge and structural-verify-gate flags below. |
+| `LEGBA_OPTIMIZER_DAPR_WORKFLOW` | OFF | Opt-in gate to attempt the durable Dapr-Workflow client for the GEPA optimizer's compile dispatch | **KEEP.** Unset (the fresh-install default) always uses the in-process GEPA fallback, which has zero extra infra dependencies (no `dapr.ext.workflow`, no worker container required) — the safer default for portability. SEAMS #23 proved the durable round-trip *works* for this optimizer, but making it the ambient default is a topology decision (needs the worker image + sidecar actually healthy) better left to the operator, especially since the optimizer's own cadence stays frozen (seam #30) so this path barely fires in production today anyway. |
+| `LEGBA_OPTIMIZER_IN_PROCESS` | OFF | Forces the in-process GEPA fallback even when a Dapr Workflow client could be built | **KEEP** — the documented escape hatch for when the durable path misbehaves; a no-op unless `LEGBA_OPTIMIZER_DAPR_WORKFLOW` was also set. |
+| `LEGBA_STRUCTURAL_VERIFY_GATE` | OFF | Lets a structural-claims critique's score actually DEMOTE `effective_confidence` (vs. compute-and-show only) | **KEEP.** `docs/STATUS.md` already documents this as the deliberate "compute-and-show first, gate later" posture (C2b) — the same incremental-rollout pattern used for the tiered-evidence and decay-weighting flags above, just not yet graduated. |
+| `LEGBA_VERIFY_LLM_JUDGE` | OFF (code); **`.env.example` ships it `=1`** | Enables the optional LLM judge inside the faithfulness verify pass (deterministic citation-presence floor runs regardless) | **KEEP.** Core to the product's verify/judge system — the code default only protects a bare install / unit test from needing a judge LLM wired; the shipped template turns it on. |
+| `LEGBA_WORLD_CONTEXT_DISABLED_UNITS` | empty (nothing disabled) | Per-unit kill-switch list for the Tier-2 `vector:world_context` grounding pilot (SEAMS #20); read alongside the persisted auto-rollback state file | **KEEP.** The whole point is a cheap manual override sitting beside the automatic per-run rollback guard while the pilot is still single-unit and unproven — removing it would remove the operator's manual lever exactly while the pilot is least mature. |
+
+**Excluded from the table (reserved name, not yet a working flag):**
+`LEGBA_REMINDER_GC_SCHEDULER_SCAN` appears only in a docstring in
+`src/legba/runtime/reminder_gc.py` — no `os.getenv` call reads it yet. It's
+the reserved name for SEAMS #16 part 2 (scheduler-side etcd reminder scan),
+which is not built. Nothing to flip or delete because nothing runs on it.
+
+**Noted for completeness, opposite polarity (default-ON / opt-out — not this
+audit's "default-OFF/opt-in" scope, no action taken):** `LEGBA_CONTENTION_SURFACING`
+(disputed-fact annotation in grounding, on unless explicitly turned off),
+`LEGBA_DEPS_FALLBACK_ENABLED` (reconcile-loop deps-fallback resolver after a
+restart), `LEGBA_INTRASOURCE_DEDUP` (exact-hash intra-source collapse before
+ingest), `LEGBA_EMBED_WORKFLOW_WORKER` (embedded-vs-external GEPA workflow
+worker topology). Each already defaults to the safe/expected behavior for a
+standard single-process deployment.
 
 ### 4.1 Endpoint surface (as of 2026-05-29)
 
@@ -329,7 +377,7 @@ endpoints for the UI + operator tooling:
 | `GET /api/v1/analysts/runtime` | analyst roster + 7d aggregates |
 | `GET /api/v1/analysts/{id}/runs|outputs|critiques` | per-analyst views |
 | `GET /api/v1/budget/ledger|envelope|demotions` | budget surfaces |
-| `GET /api/v1/source_credibility[/{host}]` | host-credibility CRUD |
+| `GET /api/v1/source_credibility[/{host}]` | host-credibility reads — **deprecated**, superseded by `/api/v1/v3/source-quality` (still serving; `Sunset` header carries the date) |
 | `PUT /api/v1/source_credibility/{host}` | upsert single host |
 | `POST /api/v1/source_credibility/bulk` (CSV) | bulk import |
 | `GET/WS /api/v1/registry/events?filter=<NATS subject>` | live multiplexer (`descriptor.>`, `stack.>`, `legba.dlq.>`, `analyst.<id>.>`, etc.) |
@@ -338,7 +386,10 @@ The 2026-07-28 wave added a further `/api/v1/v3` read family — `since` /
 `timeline` / `export` / `narratives`(+`/echo`) / `eval/goldset/*` /
 `eval/desk_baselines` / `eval/band_trajectory` / `sources/{id}/assurance` /
 `watchlist` (the family's first write surface) — and freshness grades on
-`system/source-firing`; the per-route table is `ARCHITECTURE.md` §8.7.
+`system/source-firing`. Since then: `source-quality` (+
+`sources/{id}/quality`) — the merged source-quality ledger that supersedes
+`sources/{id}/assurance` and the `source_credibility` reads — and
+`system/staleness-debt`. The per-route table is `ARCHITECTURE.md` §8.7.
 
 All gated by `Authorization: Bearer <LEGBA_REGISTRY_API_TOKEN>` —
 fail-closed (503) when the token is unset, unless `LEGBA_DEV_MODE=1` (§4).
@@ -568,6 +619,98 @@ absence of bearer auth does not expose it publicly. Do NOT route it through
 caddy basic_auth: scrapers can't carry creds and the rules would silently stop
 firing.)
 
+### 4.0.3 Handler thresholds without a rebuild (`method.options`, X-1)
+
+Every deterministic handler reads its thresholds out of the run `options`
+mapping (`options.get("per_desk_cap", DEFAULT_PER_DESK_CAP)` and ~60
+siblings). Until 2026-07-29 nothing fed descriptor values into that mapping —
+`MethodBlock` had no `options` field and the runtime built `options` from
+scratch at fire time — so all of them were **dead config**: the in-source
+default always won, and several descriptors documented knobs an operator
+could not actually move. X-1 connected the channel.
+
+**How to set one.** Add a `method.options` block to the analyst descriptor:
+
+```yaml
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: alert_trigger_scan
+  options:
+    per_desk_cap: 5
+    baseline_sigma: 2.5
+```
+
+Live-editable with no code edit, no schema change and no image rebuild —
+the runtime reads the descriptor from its **registry DB row**, not the YAML:
+
+```bash
+curl -sS -X PUT "$REG/api/v1/descriptors/analyst/alert_trigger_scan" \
+  -H "Authorization: Bearer $LEGBA_REGISTRY_API_TOKEN" \
+  -H 'Content-Type: application/json' -d @body.json
+```
+
+**Precedence** (highest first): runtime-stamped provenance → an explicit
+forced-run `payload.options` → `method.options` → the handler's own default.
+An ad-hoc force always beats the standing descriptor config.
+
+**Which knobs exist:** `src/legba/data/analysts/handler_options.py` —
+`HANDLER_OPTIONS` maps each sub-handler to its declared knobs with types and
+ranges. It carries no default VALUES on purpose: the handler's own
+`options.get(key, DEFAULT)` stays the single source of truth, so a descriptor
+with no options block is byte-identical to the pre-X-1 behavior.
+
+**Failure mode is loud, never fatal.** An undeclared key, a key the runtime
+owns (`analyst_id`, `run_id`, `target_id`, `sub_handler`, …), or a value
+outside its range is **dropped** — the handler default stands — with a
+`handler_options.rejected` WARNING and a durable receipt entry. Read it back:
+
+```sql
+SELECT analyst_id, run_started_at, step
+FROM analyst_traces, LATERAL jsonb_array_elements(intermediate_steps) AS step
+WHERE step->>'phase' = 'handler_options'
+ORDER BY run_started_at DESC LIMIT 20;
+```
+
+`status` is `applied` or `degraded`; `applied` lists the knobs that took
+effect and `rejected` lists every dropped key with its cause. Registration
+does NOT refuse an unknown key (it warns): registry rows outlive code, so a
+knob renamed in a later release must not brick activation for descriptors
+still carrying the old name.
+
+**Scope.** `kind: deterministic` only — an options block on any other kind is
+refused at registration rather than sitting silently inert. The LLM kinds'
+tunables (e.g. `LEGBA_COMPOSITION_VERIFY_FLOOR`) stay env-var-driven.
+
+### 4.0.4 Escalation action selection (`action_tool`)
+
+The escalation edge — the one threshold→action rule that runs in production —
+invoked a hardcoded `escalate`. It now reads the tool name from the same
+`escalate` tool config the gates come from, in
+`descriptors/action_pack_escalate.yaml`:
+
+```yaml
+tools:
+  - name: escalate
+    config:
+      confidence_gate: 0.85
+      action_tool: escalate      # unset → escalate (unchanged behavior)
+```
+
+Validated against the pack's live tool list when the binding is built. To
+route crossings at a different action, add that tool to the pack's `tools:`
+and name it here — same `PUT /api/v1/descriptors/action_pack/escalate_finding`,
+no rebuild. An `action_tool` naming no tool on the pack **degrades loudly** to
+`escalate` (ERROR log + a `config_note` on every
+`alert_sink_deliveries.payload_summary` row) rather than taking the escalation
+edge offline over a typo:
+
+```sql
+SELECT attempted_at, payload_summary->>'action', payload_summary->>'config_note'
+FROM alert_sink_deliveries
+WHERE payload_summary ? 'config_note' ORDER BY attempted_at DESC LIMIT 10;
+```
+
 ## 5. Verify the UI
 
 Caddy serves the SPA + proxies the registry API on **:80 + :443** — the only
@@ -648,7 +791,7 @@ docker compose run --rm --no-deps -v "$PWD:$PWD" -w "$PWD" \
 # escalate), the 3 shared sources, 19 G20 targets, and the 4 LEGACY analysts
 # (country_assessor/critic/optimizer/consult_default). NOTE: p17_workingset is a
 # FROZEN legacy path that registers the RETIRED monolith set — it does NOT register
-# the live 7-unit spine + composition tower; use deploy.sh (bringup_register_analysts.py)
+# the live 8-unit spine + composition tower; use deploy.sh (bringup_register_analysts.py)
 # for the current spine. Kept here for reference on the one-pass dependency ordering:
 docker compose run --rm --no-deps -v "$PWD:$PWD" -w "$PWD" \
   -e LEGBA_DATA_PG_DB=legba \
@@ -665,7 +808,7 @@ docker compose run --rm --no-deps -v "$PWD:$PWD" -w "$PWD" \
 with the canonical demo set — 3 shared world-news sources, 19 G20 country
 targets (geo-predicate `source_selector` + per-country subscription + inline
 analyst), the action packs, and the analysts — use `deploy.sh` (which registers
-the LIVE spine: the seven bounded units + the composition tower + the I&W pair via
+the LIVE spine: the eight bounded units + the composition tower + the I&W pair via
 the split registrars). The frozen `p17_workingset` one-pass path below registers only
 the RETIRED `country_assessor` monolith set and is kept for dependency-ordering
 reference; run the deterministic analysts + the daily
@@ -676,7 +819,7 @@ clients against the now-seeded stack:
 
 ```
 docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
-  python scripts/bringup_register_p17_workingset.py        # LEGACY: packs + sources + 19 G20 targets + 4 RETIRED-monolith analysts (prefer deploy.sh for the live 7-unit spine)
+  python scripts/bringup_register_p17_workingset.py        # LEGACY: packs + sources + 19 G20 targets + 4 RETIRED-monolith analysts (prefer deploy.sh for the live 8-unit spine)
 for s in finding_supersession cross_source_dedup entity_resolution; do
   docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
     python scripts/bringup_register_$s.py                  # deterministic cadence analysts
@@ -701,7 +844,12 @@ with its enrichment chain (dedupe → language_detect → ner_multilingual →
 part of the working-set bringup** — it is a SEPARATE manual step that a fresh
 operator currently misses, which is why an under-bootstrapped instance sits at
 "only 3 RSS feeds." Run it to take the instance from the 3-feed cold-start to
-current/full scope. Idempotent; pin `LEGBA_DATA_PG_DB=legba` (defaults to
+the **base** catalog. The 46 are no longer the whole picture: the breadth
+batches layered on top of them (the RSSHub lane, the Wave-A batch, the
+supply-chain batch — `DATA_SOURCES.md` §2.5–§2.7) each ship `draft` and are
+activated deliberately, which is how this deployment reached its current active
+count. That count is generated, never hand-typed here — see
+`docs/RELEASE_STATE.md`. Idempotent; pin `LEGBA_DATA_PG_DB=legba` (defaults to
 `legba_pivot_test`); it also seeds host-level `source_credibility` rows
 (ON CONFLICT DO NOTHING):
 
@@ -994,6 +1142,42 @@ curl -X PUT -H "Authorization: Bearer dev" -H "Content-Type: application/json" \
      http://127.0.0.1:8090/api/v1/registry/descriptors/target/country_geopolitical_br \
      -d '{...body with identity.state=active...}'
 ```
+
+### Activate a thematic desk pack (the supply-chain lanes/flows)
+
+A thematic pack is a set of non-country desks plus one tag-scoped bounded unit —
+registered together, activated **one desk at a time**, because the whole point of
+a bounded unit is that it should not be pointed at a desk whose signal slice
+cannot support it. Order matters; do not skip the preflight.
+
+1. **Register (idempotent).** `python scripts/bringup_register_supply_chain_pack.py`
+   registers the 10 desks (`lane_*` / `flow_*`) and the `disruption_status` unit,
+   all at `state: draft` — nothing fans out yet. Needs
+   `scripts/_p17_registrar.py` alongside it. The registrar runs its own gate
+   **before touching the DB**: a bounded `inline_target` unit missing an
+   `eval.rubric` or a `method.llm.verify` block is refused outright, so an
+   unmeasurable or unverified unit cannot be registered by accident.
+   Sources: `python scripts/bringup_register_supply_chain_sources.py`
+   (7 `rss` descriptors + host credibility seeds; `DATA_SOURCES.md` §2.7).
+2. **Preflight — read-only, and it is the activation gate.**
+   `python scripts/preflight_supply_chain_lanes.py` SELECTs only. Per candidate
+   desk it reports rows available vs. the fetch cap, per-source concentration,
+   and the slice the unit would actually receive. Activate a desk only when
+   **`lost == 0`** (the cap is not silently truncating its slice); treat one
+   source supplying more than ~30% of a desk's rows as a single-source-dependency
+   flag, not a pass. It also asserts no desk carries `US` in `scope.geo` — a
+   chokepoint desk that quietly widens into a country desk would double-count
+   against the country plane.
+3. **Flip the desks, then the unit** (`draft → configured → active`, the normal
+   descriptor PUT). Desks first: activating the unit while every desk is still
+   draft gives it an empty predicate match and a pointless run.
+4. **Force one run per desk and read it.** Require ≥3 `[N]` citation markers and
+   a non-empty `data.indicators[]` on each finding, and check the paired
+   faithfulness critique cleared the floor. A unit that produces prose with no
+   indicators is not wired — it is talking.
+5. **Watch before widening.** Let the active desks run a cycle before flipping
+   the next one. Adding all ten at once buys ten unmeasured desks, not ten desks
+   of coverage.
 
 ### Inspect the dead-letter queue
 
@@ -2090,3 +2274,53 @@ print(m.__file__)                       # …/site-packages/legba/…
 print("suppressed_in_cooldown" in inspect.getsource(m))   # the marker you shipped
 EOF
 ```
+
+## 24.1 LLM / search plane heartbeats
+
+§24's watchdog watches the **actor plane** via signal freshness — it is blind
+to a class of failure where signals keep flowing but one specific downstream
+plane has quietly died, because deterministic ingestion keeps running through
+either outage. Two small, alert-only host-side scripts close that:
+
+- **`scripts/host_llm_heartbeat.sh`** — the LLM-plane silence alarm. Checks
+  the newest **successful** run across every LLM-bearing analyst (deterministic
+  analysts excluded by name); pages when none has succeeded within
+  `MAX_LLM_AGE_SECS` (default 90 min). Closes the gap a 9h core-model outage
+  (vLLM crashed, supervisord still reported RUNNING) left invisible to every
+  signal-freshness check.
+- **`scripts/host_search_canary.sh`** — the SEARCH-plane liveness canary
+  (`docs/SEAMS.md` #50, now closed). The control probe that measures whether the
+  `search_provider` engine set is actually answering
+  (`verify_engine_liveness`, `src/legba/data/stack/search/liveness.py`) exists
+  and fires reactively on an empty `web_search` call, but had no SCHEDULED
+  half — nothing refreshed the verdict on its own clock. This script is that
+  half: it docker-execs into the runtime container, resolves the registered
+  search component the same way the runtime does, and forces a fresh probe.
+  Pages only after **two consecutive** not-live probes (a persisted streak,
+  not a single blip), rate-limited by the same cooldown-stamp pattern as the
+  other watchdogs.
+
+Both scripts: never restart anything (the fix is elsewhere — a remote model
+host, or the local SearXNG/search-component config), respect
+`/etc/legba-watchdog.disabled`, log to `/var/log/legba-watchdog.log`, and page
+via the local ntfy **web UI** topic only (never the phone app).
+
+**Cron — all three host watchdogs share one file.** Neither heartbeat script
+installs its own line; they live beside the §24 stall watchdog in
+`/etc/cron.d/legba-watchdog`, on deliberately different intervals so three
+`docker exec`s never land on the same minute:
+
+```cron
+*/5  * * * * root /usr/local/deployments/active/legba/scripts/host_stall_watchdog.sh >> /var/log/legba_host_watchdog.log 2>&1
+*/10 * * * * root /usr/local/deployments/active/legba/scripts/host_llm_heartbeat.sh
+*/15 * * * * root /usr/local/deployments/active/legba/scripts/host_search_canary.sh >/dev/null 2>&1
+```
+
+All three are installed and running on this host. Verify with
+`cat /etc/cron.d/legba-watchdog` plus `tail /var/log/legba-watchdog.log`; note
+that the canary and heartbeat **exit silently when healthy**, so an empty log is
+the expected steady state and the absence of a streak file
+(`/tmp/legba-search-canary.streak`) is the positive signal, not a missing run.
+To confirm the canary can actually fire, run it once with a deliberately bogus
+component — `SEARCH_COMPONENT_ID=search.nonexistent.local
+scripts/host_search_canary.sh` — twice, and check the page lands.

@@ -639,7 +639,13 @@ export interface AnalystCadenceRow {
 /** One per-source firing row. Mirrors `GET /api/v1/v3/system/source-firing`.
  *  signals (count + max fetched_at by source_id) LEFT JOIN source_poll_outcomes
  *  + source_descriptors. status: 'firing' | 'silent' (active, 0 signals/24h) |
- *  'error' (recent poll errors) | 'paused'. */
+ *  'error' (recent poll errors) | 'paused'.
+ *
+ *  A7 (additive): `freshness_grade` grades the freshest signal's age against a
+ *  budget derived from the source's OWN declared cadence (see
+ *  `@/lib/sourceFreshness` + `legba.data.registry.source_freshness`) —
+ *  'ok' | 'stale' | 'warn' | 'empty' | 'ungraded'. `budget_minutes` is `null`
+ *  exactly when no honest budget was derivable (never a fabricated grade). */
 export interface SourceFiringRow {
   source_id: string
   state: string | null
@@ -650,6 +656,8 @@ export interface SourceFiringRow {
   last_poll_outcome: string | null
   recent_error_count: number
   status: 'firing' | 'silent' | 'error' | 'paused' | string
+  freshness_grade: 'ok' | 'stale' | 'warn' | 'empty' | 'ungraded' | string
+  budget_minutes: number | null
 }
 
 /** Per-analyst cadence truth (analyst_traces-backed). */

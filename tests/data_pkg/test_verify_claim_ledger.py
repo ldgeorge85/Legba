@@ -115,6 +115,9 @@ def test_fail_class_mapping_table() -> None:
         "unhedged_periphery_citation": FAIL_CLASS_SOFT,
         "double_counted": FAIL_CLASS_SOFT,
         "indicator_uncited_triggered": FAIL_CLASS_SOFT,
+        # W31: a world-scoped absence claim with no collection-scoping language
+        # — honesty-phrasing defect (overclaim family), not fabrication.
+        "unscoped_absence_claim": FAIL_CLASS_SOFT,
     }
     # Unknown reasons degrade conservatively (soft, never a fabricated hard).
     assert fail_class_for_reason("some_future_reason") == FAIL_CLASS_SOFT
@@ -310,6 +313,33 @@ async def test_payload_persists_ledger_and_judge_ref(monkeypatch) -> None:
     # judge_llm_ref is a real schema field, not a silently-dropped extra.
     validated = CritiquePayload.model_validate(payload)
     assert validated.judge_llm_ref == "llm.primary.openai_compat"
+
+
+async def test_payload_persists_judge_route_class(monkeypatch) -> None:
+    """W-3d: the judge-route CLASS (configured|fallback_verify|fallback_primary)
+    is stamped top-level (a real CritiquePayload field) AND into the
+    data.verification block the findings API projects wholesale — so the UI
+    badge can tell a configured judge from a ladder fallback."""
+    monkeypatch.delenv("LEGBA_VERIFY_LLM_JUDGE", raising=False)
+    report = await verify_finding_faithfulness(
+        body=_THREE_CLAIM_BODY, citations=_citations()
+    )
+    for route in ("configured", "fallback_verify", "fallback_primary"):
+        payload = build_faithfulness_critique_payload(
+            report,
+            analyzed_output_id=uuid4(),
+            judge_llm_ref="llm.primary.openai_compat",
+            judge_route=route,
+        )
+        assert payload["judge_route"] == route
+        assert payload["data"]["verification"]["judge_route"] == route
+        validated = CritiquePayload.model_validate(payload)
+        assert validated.judge_route == route
+    # Floor-only / pre-W-3d rows: empty top-level, honest None in the block.
+    bare = build_faithfulness_critique_payload(report, analyzed_output_id=uuid4())
+    assert bare["judge_route"] == ""
+    assert bare["data"]["verification"]["judge_route"] is None
+    assert CritiquePayload.model_validate(bare).judge_route == ""
 
 
 async def test_payload_ledger_truncation_flag(monkeypatch) -> None:

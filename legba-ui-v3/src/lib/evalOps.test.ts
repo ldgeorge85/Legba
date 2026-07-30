@@ -19,12 +19,17 @@ import {
   isInsufficient,
   insufficientLabel,
   evalBadge,
+  orderedBandHorizons,
+  bandRateLabel,
+  bandCalibrationEmpty,
   type ScorecardRow,
   type ConsumerLagRow,
   type GovernorEventRow,
   type AuditEntryRow,
   type CalibrationScoreboard,
   type DimensionEval,
+  type BandCalibrationSection,
+  type BandCalibrationHorizon,
 } from './evalOps'
 
 // A fully-populated, honest scoreboard we mutate per-case.
@@ -47,6 +52,43 @@ function cal(over: Partial<CalibrationScoreboard> = {}): CalibrationScoreboard {
     forecast_unproven: false,
     calibration_thin: false,
     refs: ['cal-1'],
+    band_calibration: null,
+    ...over,
+  }
+}
+
+function horizon(over: Partial<BandCalibrationHorizon> = {}): BandCalibrationHorizon {
+  return {
+    resolved: 10,
+    open: 2,
+    outcomes: { held: 6, reverted: 2, worsened: 2 },
+    confirmed: 8,
+    reverted: 2,
+    scored: 10,
+    excluded_insufficient: 0,
+    excluded_unresolvable: 0,
+    persistence_rate: 0.8,
+    reversal_rate: 0.2,
+    ...over,
+  }
+}
+
+function bandCalibration(over: Partial<BandCalibrationSection> = {}): BandCalibrationSection {
+  return {
+    available: true,
+    produced_at: '2026-07-27T00:00:00Z',
+    claims_total: 12,
+    resolution_spec: 'hard_band_at_horizon_v1',
+    horizons: { '14d': horizon(), '28d': horizon({ scored: 6, persistence_rate: 0.5 }) },
+    by_direction: {},
+    by_dimension: {},
+    no_brier: true,
+    honesty_note:
+      'Band-persistence and reversal rates are ordinal stability measures over ' +
+      'later scorecard rows. Bands are categorical risk verdicts, not ' +
+      'probabilities: no Brier score, Brier skill score, or forecast-skill ' +
+      'claim exists (or can exist) for this harness.',
+    refs: ['bc-1'],
     ...over,
   }
 }
@@ -229,6 +271,58 @@ const LAG: ConsumerLagRow[] = [
     ack_floor_stream_seq: 7500,
   },
 ]
+
+// --------------------------------------------------------------------------
+// band-calibration harness (P2-3, NOT a Brier score)
+// --------------------------------------------------------------------------
+
+describe('orderedBandHorizons', () => {
+  it('orders 14d before 28d, then any extras alphabetically', () => {
+    const h = { '28d': horizon(), '90d': horizon(), '14d': horizon() }
+    expect(orderedBandHorizons(h).map(([k]) => k)).toEqual(['14d', '28d', '90d'])
+  })
+
+  it('handles a section missing one of the known horizons', () => {
+    const h = { '28d': horizon() }
+    expect(orderedBandHorizons(h).map(([k]) => k)).toEqual(['28d'])
+  })
+
+  it('empty map → empty order', () => {
+    expect(orderedBandHorizons({})).toEqual([])
+  })
+})
+
+describe('bandRateLabel', () => {
+  it('formats a rate as a rounded percentage', () => {
+    expect(bandRateLabel(0.8)).toBe('80%')
+    expect(bandRateLabel(0.333)).toBe('33%')
+    expect(bandRateLabel(0)).toBe('0%')
+    expect(bandRateLabel(1)).toBe('100%')
+  })
+
+  it('a null rate (zero scored denominator) is an honest empty label, never a fabricated 0%', () => {
+    expect(bandRateLabel(null)).toBe('— (no scored claims yet)')
+  })
+})
+
+describe('bandCalibrationEmpty', () => {
+  it('absent section (no tracker finding yet) is empty', () => {
+    expect(bandCalibrationEmpty(null)).toBe(true)
+    expect(bandCalibrationEmpty(undefined)).toBe(true)
+    expect(bandCalibrationEmpty(bandCalibration({ available: false, claims_total: null }))).toBe(
+      true,
+    )
+  })
+
+  it('available but zero claims logged is still empty', () => {
+    expect(bandCalibrationEmpty(bandCalibration({ claims_total: 0 }))).toBe(true)
+    expect(bandCalibrationEmpty(bandCalibration({ claims_total: null }))).toBe(true)
+  })
+
+  it('available with graded claims is not empty', () => {
+    expect(bandCalibrationEmpty(bandCalibration({ claims_total: 12 }))).toBe(false)
+  })
+})
 
 describe('lagSeverity', () => {
   it('ok when pending low and no redeliveries', () => {

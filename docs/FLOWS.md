@@ -45,7 +45,7 @@ SOURCE ─► canonical Signal ─► predicate fan-out ─► the (analyst,targ
 
                          … then the product spine, bottom-up, over VERIFIED claims:
 
-  7 bounded UNITS ─► per-country COMPOSITION ─► per-region COMPOSITION ─► world COMPOSITION ─► banded SCORECARD
+  8 bounded UNITS ─► per-country COMPOSITION ─► per-region COMPOSITION ─► world COMPOSITION ─► banded SCORECARD
    (inline_target,     (country_composition,       (region_composition,        (world_assessor,      (scorecard_producer,
     cite + verify       INNER JOIN on the           5 region frames; +          composes region      deterministic rules
     each finding)       verify critique)            thematic escalation_comp)   reads)                over verified claims)
@@ -53,13 +53,13 @@ SOURCE ─► canonical Signal ─► predicate fan-out ─► the (analyst,targ
 
 For scale: the substrate is a continuously growing temporal knowledge graph —
 on the order of ~4.6k facts and ~4.9k nexuses at the time of writing, with
-`valid_from` / `valid_until` / decay — fed by ~50 poll sources (RSS / API /
+`valid_from` / `valid_until` / decay — fed by 100-plus poll sources (RSS / API /
 bulk) on cron. The three-feed set (BBC / Deutsche Welle / Al Jazeera) is the
 cold-start verification minimum, not the deployed scope; a fresh instance
 reaches current scope by running the full source catalog
 (`scripts/bringup_register_source_catalog.py`). The exemplar domain is
-geopolitics over 25 country desks — the 19 G20 countries plus a
-6-country high-consequence watch tier; a "desk" is a scoped subject a set of analysts
+geopolitics over 32 country desks — the 19 G20 countries plus a
+13-country high-consequence watch tier; a "desk" is a scoped subject a set of analysts
 work, not a surveilled entity — but the domain is configured by YAML
 descriptors, not baked into code.
 
@@ -109,7 +109,7 @@ plane (`ANALYSIS.md` §2) are not two systems — they are two ways the *same*
   reminder (`run_cadence`); on each tick it resolves the matched targets and
   fans them to worker actors. This is the floor — a quiet target still gets
   re-evaluated on schedule. (A `subscription.targets` block makes a run
-  per-target; its absence makes a single global META run — the seven units and
+  per-target; its absence makes a single global META run — the eight units and
   the per-country/per-region compositions fan out; `world_assessor` and
   `scorecard_producer` run globally.)
 - **Reactive door.** A matched signal (or a new upstream finding —
@@ -148,19 +148,24 @@ Bottom-up composition in which nothing rises to a higher altitude until it has
 been cited and verified at the lower one. Five layers, each reading only the
 verified output of the one below:
 
-1. **Seven bounded reasoning units** (`kind: inline_target`):
+1. **Eight bounded reasoning units** (`kind: inline_target`). Seven broad ones —
    `leadership_transition`, `energy_security`, `escalation`,
    `narrative_coordination`, `internal_stability`, `military_posture`,
-   `economic_coercion` — each scoped across the 25 desks by
-   `has_tag("g20") or has_tag("watch")` and answering one narrow question. Per
-   run it assembles a cited 72h signal slice plus a grounding preamble,
+   `economic_coercion` — each scoped across the 32 country desks by
+   `has_tag("g20") or has_tag("watch")` and answering one narrow question. An
+   eighth, narrower unit, `proliferation_watch` (narrow: tag-scoped to the ~8
+   nuclear-relevant desks via `has_tag("nuclear_watch")`, not the full 32),
+   answers the same way; a ninth, `disruption_status`, is tag-scoped to the
+   thematic `has_tag("supply_chain")` desks instead of the country plane. Per
+   run each assembles a cited 72h signal slice plus a grounding preamble,
    cite-synthesizes a strict-JSON finding whose prose carries `[N]` citation
    markers mapped to signal ids, runs the mandatory faithfulness verify, and
    folds `effective_confidence`. Skill is a per-unit number, not a platform
    one; the units stagger across the clock to spread the shared token budget.
    Flow 12.
 2. **Per-country composition** (`country_composition`): one hedged, cited
-   second-order finding per desk over that desk's seven verified units
+   second-order finding per desk over that desk's seven broad verified units,
+   plus `proliferation_watch` on nuclear desks
    (`[[ref:N]]` markers to the sub-claim findings). Its read slice INNER JOINs
    on the faithfulness critique above the floor, so an unverified sub-claim
    never enters the composition; an empty slice yields an honest
@@ -218,7 +223,7 @@ facts and polarity-signed nexuses seeded from the curated `world_baseline` and
 live `wikidata_leaders` adapters hold the temporally honest "who holds office
 now", and a **GROUND phase** between PLAN and REASON prepends a dated
 "AUTHORITATIVE CURRENT CONTEXT" preamble for `inline_target` analysts that
-declare `grounding.enabled: true` (all seven units do). The preamble is
+declare `grounding.enabled: true` (all eight units do). The preamble is
 restricted to `source_type IN ('seed','curated')`, so curated ground truth
 outranks a machine-extracted live fact; grounding is off — byte-for-byte
 unchanged — for any analyst that does not opt in. Two units
@@ -264,6 +269,28 @@ row. Web egress is guarded, not trusted; writes are operator-gated by default.
 This is the only place untrusted text can drive an effect.
 `AGENCY_GATING_MODEL.md`; `ANALYSIS.md` §5.
 
+### The search plane — measuring absence instead of assuming it
+
+`web_search` (behind the `web_access` pack, granted to `corpus_researcher`,
+`consult_default` and `deep_consult`) reaches an open-web `search_provider`
+component — a ninth stack-component kind, resolved through the same opt-in
+ladder as the judge route, off by default. Its whole design answers one
+failure mode: a search that quietly returns zero results reads to any
+downstream reader as "nothing exists". Five `SearchStatus` values keep that
+honest — `ok` / `degraded` (results usable), `empty` (zero results, engine
+liveness unmeasured — an *unknown*, never an absence), `empty_verified` (zero
+results AND a control probe just showed the engine set answering — the only
+status that licenses a scoped absence sentence), `degraded_empty` (dead or
+probe-failed — returned as a tool **failure**, not a result). Liveness itself
+is measured, not assumed: a fixed non-topical control probe
+(`verify_engine_liveness`) asks the engine set whether it is answering at all,
+cached per provider for 5 minutes. A row that came in this way is stamped
+`retrieval_origin='web_search:<component_id>'` (migration 0112, `NULL` =
+curated) and its evidence is demoted to a **weak calibration tier**, excluded
+from the headline Brier score — an exogenous resolution the system went and
+found for itself is a materially weaker claim than one that arrived
+independently. `ARCHITECTURE.md` §8.8.
+
 ### Provenance — the through-line
 
 Every stage stamps lineage. A signal carries immutable acquisition provenance
@@ -278,6 +305,43 @@ and a `chain_consistent` boolean, and the UI badge reads "chain-consistent
 cryptographic-signing claim (Ed25519 signing exists only on the descriptor
 audit log, not on analyst outputs). Flow 2 step 12 and Flow 12 step 6;
 `ANALYSIS.md` §6.1 / §7.7.
+
+### The coherence loop — has anything since arrived that bears on what we left open?
+
+Lineage answers "what did this finding rest on?"; a second, newer pair of
+mechanisms answers the forward question — "does anything change now?" —
+without ever letting a machine rewrite a settled claim:
+
+- **Open questions, watched.** `claim_watch` (deterministic, no LLM, `state:
+  draft` — built but **not yet part of the default live spine**; see
+  `SEAMS.md` #49) matches NEW signals against the standing `hypotheses`
+  `status='open_question'` set on a fused vector+entity+geo plane, and
+  side-writes `bearing_edges` ("this new evidence bears on that old question",
+  migration 0107) plus `review_flags` (one open flag per consumer whose
+  foundation just moved, for consumers still LIVE via the `output_consumption`
+  forward index, migration 0106) — detect-and-mark only: no correction
+  content, no write-back to the flagged output, no recomposition. There is
+  **no closer yet** (the K-5 stage) — a flag stays open until a future
+  match-precision gate is met and recorded — and **no read route either**: no
+  `/v3` endpoint, UI panel, or MCP tool surfaces `review_flags`,
+  `bearing_edges`, or the per-run `staleness_debt` gauge; today the only way
+  to read it is the producing run's `analyst_traces` receipt.
+- **Gaps, made durable.** `collection_gap` (deterministic, monthly, live)
+  drains two backlogs into one durable object — the scorecard's own
+  `insufficient-evidence` desk × dimension cells, and the `hypotheses
+  status='source_request'` backlog an analyst lands when it hits a coverage
+  wall — and writes both into `collection_requirements` (migration 0113):
+  desk/dimension, rationale, the evidence it came from, plausibly-feeding
+  source classes, and up to five deterministically SQL-matched candidate
+  sources (or an honest `fillable=false` / `no_known_feed`). The
+  `/v3/collection-requirements` route is disposition-only (`GET` + a
+  status/reviewed-by/note `PATCH`) — no route ever registers a source or
+  rewrites the content columns. `ACQUISITION.md` §6.1.
+
+These are parallel answers to the same "coherence over time" theme (the
+migrations `0106`–`0113` follow-on wave, `DATA_MODEL.md`), not one pipeline —
+`claim_watch` watches *open questions*, `collection_gap` watches *starved
+cells and source requests*; neither reads the other's output today.
 
 ### The journal — the reflective layer over the pipeline
 
@@ -349,9 +413,9 @@ claim below cites the producing `file:line`; the `OutputKind` enum has
 - **The analysis-spine roster is registered by descriptor** in
   `scripts/bringup_register_analysts.py` (the live set; `country_assessor` and
   `country_predictor` are commented out — RETIRED, see below). The spine
-  producers: the seven bounded UNITS `leadership_transition` / `energy_security` /
+  producers: the eight bounded UNITS `leadership_transition` / `energy_security` /
   `escalation` / `narrative_coordination` / `internal_stability` /
-  `military_posture` / `economic_coercion` (all `inline_target`, Flow 12), the
+  `military_posture` / `economic_coercion` / `proliferation_watch` (all `inline_target`, Flow 12), the
   composition tower `country_composition` → `region_composition` (5 region frames)
   → `world_assessor` plus the thematic `escalation_composition` (all
   `meta_findings_synthesizer`, Flow 13), the deterministic I&W pair
@@ -655,7 +719,7 @@ emits output bindings, and may escalate.
     (SUCCESS / TRANSIENT_FAIL / BUDGET_THROTTLED / HARD_FAIL / NOOP).
 
 **Producer note:** this ONE cadence + fan-out rail carries every LIVE analyst — the
-seven bounded `inline_target` UNITS and the `meta_findings_synthesizer` composition
+eight bounded `inline_target` UNITS and the `meta_findings_synthesizer` composition
 tower (`country_composition` / `region_composition` / `world_assessor` / thematic
 `escalation_composition`; target-bound → per-country/per-region fan-out; target-less → one global run), plus the
 `deterministic` META producers (`scorecard_producer`, `unit_correctness_scorer`,
@@ -1243,7 +1307,7 @@ temporal-triple uniqueness as an upsert no-op).
 
 ## 10. A grounded assessment (LIVE)
 
-**One sentence:** a bounded UNIT run (any of the seven `inline_target` units of Flow 12)
+**One sentence:** a bounded UNIT run (any of the eight `inline_target` units of Flow 12)
 opted INTO grounding (`descriptor.grounding.enabled`) runs a **GROUND phase** before its
 LLM call — a `SubstrateGroundingResolver` reads the CURRENT authoritative substrate facts
 (head of state, bloc memberships) about the target geo + the slice's top entities,
@@ -1270,7 +1334,7 @@ restates such background facts, so the model had no in-context correction
    pool) + a per-run `_hook` closure and install it on the `InlineTargetDeps.grounding_hook`
    field (`src/legba/runtime/analyst_deps_builder.py:367`, hook builder `:378-439`,
    `_build_inline_target` wiring `:368-374`). Off → `grounding_hook=None` → the run path
-   is byte-for-byte unchanged. **All seven bounded units opt in** (identical block, e.g.
+   is byte-for-byte unchanged. **All eight bounded units opt in** (identical block, e.g.
    `analyst_leadership_transition.yaml:48-52`): `scope: [target_geo, slice_entities]`,
    `sources: [substrate, situations, graph_structure]`, `max_facts: 30`. (The block was
    ported verbatim from the retired `country_assessor` monolith when the units took over
@@ -1349,7 +1413,7 @@ supersession gate. So the run integrates over accumulated substrate, not just to
   `src/legba/runtime/analyst_deps_builder.py:419-431`).
 - **Grounding only fires for `inline_target` analysts.** The hook lives on
   `InlineTargetDeps`; other LLM kinds (the `meta_findings_synthesizer` compositions,
-  consult, deep_consult) have no grounding wiring. The seven bounded units ARE
+  consult, deep_consult) have no grounding wiring. The eight bounded units ARE
   `kind: inline_target`, so they ground; `world_assessor` is now a
   `meta_findings_synthesizer` composition (Flow 13) and does NOT — it composes over
   already-grounded, already-verified country reads, so it inherits their ground truth
@@ -1508,11 +1572,15 @@ voice (Wave 5), gated on first building a critic actuator.
 
 ## 12. A bounded reasoning unit + the mandatory verify pass (LIVE)
 
-**One sentence:** each of the seven bounded UNITS — `leadership_transition`,
+**One sentence:** each of the eight bounded UNITS — seven broad ones,
+`leadership_transition`,
 `energy_security`, `escalation`, `narrative_coordination`, `internal_stability`,
-`military_posture`, `economic_coercion` — is an `inline_target`
-DESCRIPTOR (no new Python kind) scoped by a COVERAGE TAG to every desk via
-`has_tag("g20") or has_tag("watch")`, answering ONE narrow question per run by
+`military_posture`, `economic_coercion`, plus a narrower eighth,
+`proliferation_watch` — is an `inline_target`
+DESCRIPTOR (no new Python kind) scoped by a COVERAGE TAG to every desk (the
+seven broad ones via
+`has_tag("g20") or has_tag("watch")`; `proliferation_watch` instead via
+`has_tag("nuclear_watch")`, to only the ~8 nuclear-relevant desks), answering ONE narrow question per run by
 ASSEMBLING a cited 72h signal slice (+ the Flow 10 accumulated-facts grounding
 preamble), cite-SYNTHESIZING a strict-JSON `FindingPayload` whose prose carries `[N]`
 citation markers mapped to signal ids, then running the
@@ -1522,13 +1590,17 @@ rest of the spine composes bottom-up.
 
 > **A "desk" is a scoped subject-frame, not a surveilled entity.** A `target`
 > descriptor is really a named SCOPE-FRAME that a set of analysts work — a desk — not
-> a person or place under surveillance. The roster is now **25 desks**: the **19 G20
-> country desks** (`has_tag("g20")`) PLUS a high-consequence **`watch` tier** of 6
-> (`has_tag("watch")`) — Israel, Iran, Ukraine, Taiwan, North Korea, Pakistan (descriptor ids
-> `country_watch_il` / `_ir` / `_ua` / `_tw` / `_kp` / `_pk`,
-> `scripts/bringup_register_watch_country_targets.py`). Adding a country is
-> register-a-target, no code: the seven units + `country_composition` subscribe on
-> `has_tag("g20") or has_tag("watch")`, and the scorecard enumerates any active target
+> a person or place under surveillance. The roster is now **32 country desks**: the **19 G20
+> country desks** (`has_tag("g20")`) PLUS a high-consequence **`watch` tier** of 13
+> (`has_tag("watch")`) — Israel, Iran, Ukraine, Taiwan, North Korea, Pakistan plus the
+> escalation-risk band Sudan, Mali, Burkina Faso, Niger, DR Congo, Myanmar, Haiti
+> (`scripts/bringup_register_watch_country_targets.py`). Beside them sits a
+> **non-country** desk family — the 10 thematic supply-chain `lane_*` / `flow_*`
+> frames, 3 active — which is the sharpest proof of this whole paragraph: a desk is
+> whatever a tag predicate selects. Adding a country is
+> register-a-target, no code: the seven broad units + `country_composition` subscribe on
+> `has_tag("g20") or has_tag("watch")` (the eighth unit, `proliferation_watch`,
+> subscribes narrower on `has_tag("nuclear_watch")` instead), and the scorecard enumerates any active target
 > tagged g20/watch, so a new desk lights up the whole spine. (The composition tower
 > adds 5 `region_*` region-frame targets and the thematic `escalation_composition`.)
 
@@ -1549,13 +1621,15 @@ rest of the spine composes bottom-up.
    (`scripts/bringup_register_analysts.py`, `UnitDriftError`) so a coverage gap can't
    degrade silently at first run.
 
-2. **Cadences are staggered (budget discipline).** 7 units × 25 desks (19 G20 + 6
+2. **Cadences are staggered (budget discipline).** 7 broad units × 32 desks (19 G20 + 13
    watch) is a lot of LLM calls, so each unit fires 2×/day on a distinct hour pair —
    `leadership_transition` 01:00/13:00, `internal_stability` 02:00/14:00,
    `energy_security` 04:00/16:00, `military_posture` 05:00/17:00, `escalation`
    07:00/19:00, `economic_coercion` 09:00/21:00, `narrative_coordination` 10:00/22:00
    UTC — with an 11h cooldown (39600s)
-   and a per-unit `budget_tokens_per_day` cap (e.g. 300000). The seven spread across the
+   and a per-unit `budget_tokens_per_day` cap (e.g. 300000). The eighth, narrower
+   unit, `proliferation_watch`, slots in at 03:00/15:00 UTC over just its ~8
+   nuclear desks. All eight spread across the
    clock instead of stacking on one bucket.
 
 3. **ASSEMBLE + GROUND + cite-SYNTHESIZE.** The run reaches `inline_target.run_method`
@@ -1606,7 +1680,8 @@ rest of the spine composes bottom-up.
 ## 13. Composition — per-country → per-region → world (LIVE)
 
 **One sentence:** `country_composition` (kind `meta_findings_synthesizer`, per-country)
-reads the SEVEN verified units for a country and writes ONE hedged, cited synthesis over
+reads the seven broad verified units for a country, plus `proliferation_watch` on
+nuclear desks, and writes ONE hedged, cited synthesis over
 **only the faithfulness-verify-PASSED sub-claims**; `region_composition` (SAME kind) folds
 the per-country reads into **five region frames**; `world_assessor` (the SAME kind,
 repointed from its old raw-signal role, global) then composes over the per-REGION reads
@@ -1616,20 +1691,22 @@ reads cross-desk under a correlation guard.
 
 1. **Per-country composition.** `analyst_country_composition.yaml` carries a
    `subscription.targets: has_tag("g20") or has_tag("watch")` block, so `_cadence_targets`
-   fans out ONE worker per desk (all 25 — 19 G20 + 6 watch;
+   fans out ONE worker per desk (all 32 — 19 G20 + 13 watch;
    `target_filter=<country target id>`). Its `other_analysts` set is
-   the seven units; the kind's READ_SLICE resolves that set AND — because the run is
+   the seven broad units plus `proliferation_watch` (verify-floored via the same
+   INNER JOIN, so it naturally contributes zero rows on the 24 non-nuclear desks);
+   the kind's READ_SLICE resolves that set AND — because the run is
    target-scoped — restricts to the RUNNING desk's findings and admits ONLY
    verify-passed sub-claims above the floor (the INNER JOIN on the faithfulness
    critique). Unverified sub-claims never enter the composition. Supersession keeps one
    live head per desk. Cadence `"30 11,23"`, cooldown 39600s.
 
-2. **Honest empty-slice path.** A country whose seven units produced no verify-passed
+2. **Honest empty-slice path.** A country whose units produced no verify-passed
    sub-claim yields an EMPTY slice, and the kind emits a `confidence=0.0` "No source
    findings to synthesize" finding rather than inventing a read
    (`analyst_country_composition.yaml:20-21`). `derived_from` is stamped from the
-   contributing unit finding ids, so the per-country read back-walks one hop to the seven
-   units and two hops to their cited signals.
+   contributing unit finding ids, so the per-country read back-walks one hop to the
+   up-to-eight units and two hops to their cited signals.
 
 3. **Per-region composition.** `analyst_region_composition.yaml` carries a
    `subscription.targets` block over the **five region-frame targets** (`region_africa` /
@@ -1683,7 +1760,7 @@ band is a legible, demote-never-promote function of a `severity:<level>` tag and
 folded `effective_confidence`, and every band NAMES the verified-claim id it rests on.
 
 1. **One global sweep, deterministic.** No `subscription.targets` → one global run per
-   tick that ENUMERATES every active target tagged g20/watch (all 25 desks), reading
+   tick that ENUMERATES every active target tagged g20/watch (all 32 country desks), reading
    directly via `deps.pg_pool`
    (`analyst_scorecard_producer.yaml`, cadence `"40 4"`, cooldown 79200s). It runs
    `scorecard_banding.gather_and_band` over a 14-day verified-claim window

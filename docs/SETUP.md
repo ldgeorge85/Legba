@@ -211,10 +211,11 @@ This registers the **3 shared sources** (`source.bbc.world` /
 inert feeder), and the action packs
 (`media_processing` / `incident_response` / `discovery`).
 
-> **The live analysis producers are NOT in that bundle.** The seven bounded
-> reasoning units (`leadership_transition` / `energy_security` / `escalation` /
+> **The live analysis producers are NOT in that bundle.** The eight bounded
+> reasoning units — seven broad ones (`leadership_transition` / `energy_security` / `escalation` /
 > `narrative_coordination` / `internal_stability` / `military_posture` /
-> `economic_coercion`) and the composition tower (`country_composition` →
+> `economic_coercion`) fanned across the g20/watch desks, plus `proliferation_watch`
+> (narrow: tag-scoped to the ~8 nuclear-relevant desks) — and the composition tower (`country_composition` →
 > `region_composition` → `world_assessor`, plus the cross-desk thematic
 > `escalation_composition`, and the deterministic I&W meta-analysts
 > `indicator_tracker` / `collection_gap`) are registered by
@@ -226,10 +227,11 @@ inert feeder), and the action packs
 >   python scripts/bringup_register_analysts.py
 > ```
 >
-> Then register the six-country **watch tier** (Israel / Iran / Ukraine / Taiwan
-> / North Korea / Pakistan) to reach the full **25 desks** (the units are scoped
-> by a `has_tag("g20") or has_tag("watch")` predicate, so they fan out to the
-> watch desks automatically):
+> Then register the **watch tier** — Israel / Iran / Ukraine / Taiwan / North
+> Korea / Pakistan plus the escalation-risk band Sudan / Mali / Burkina Faso /
+> Niger / DR Congo / Myanmar / Haiti, **13 desks** — to reach the full **32
+> country desks** (the units are scoped by a `has_tag("g20") or has_tag("watch")`
+> predicate, so they fan out to the watch desks automatically):
 >
 > ```
 > docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \
@@ -241,9 +243,14 @@ inert feeder), and the action packs
 > **state-media voices** (`source.irna.english` / `source.presstv.english` /
 > `source.ukrinform.english` — `source_class: state_media`, read as
 > framing/official-position evidence) and the **UCDP** georeferenced
-> conflict-event feed (`source.ucdp.ged`, public / no-auth). The
+> conflict-event feed (`source.ucdp.ged`). The
 > `p17_workingset` pass above covers only the 3 shared feeds, so skipping this
-> silently drops those four sources on a fresh install:
+> silently drops those four sources on a fresh install. Two live-state notes for
+> a fresh operator: `source.presstv.english` is **paused** in the reference
+> deployment, and `source.ucdp.ged` is **retired** there — its endpoint answers
+> `401` despite being documented as no-auth, so it never produced a signal
+> (`DATA_SOURCES.md` §2.3). Registering them is still correct; expect to make the
+> same disposition call.
 >
 > ```
 > docker exec -e LEGBA_DATA_PG_DB=legba legba-legba-registry-1 \

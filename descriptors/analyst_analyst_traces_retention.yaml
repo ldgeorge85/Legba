@@ -11,7 +11,10 @@
 #
 # DISABLED BY DEFAULT (mirrors signals_retention): `ttl_days` defaults to 0,
 # which makes the job a no-op. It ships inert and is turned on deliberately by
-# an operator setting LEGBA_ANALYST_TRACES_TTL_DAYS in the env (cadence fires carry no options; method.options is schema-forbidden — review fix 07-28).
+# an operator either declaring `method.options.ttl_days` below (X-1: cadence
+# fires now DO carry the descriptor's options) or setting
+# LEGBA_ANALYST_TRACES_TTL_DAYS in the env. Resolution order is run options →
+# env → the retention_policies row default.
 #
 # CADENCE-HEALTH SAFETY: the System Status / telemetry read
 # (runtime_telemetry_api) aggregates a 7-DAY window over `analyst_traces`, and
@@ -87,15 +90,20 @@ method:
   # Deterministic kind: no LLM block and no per-day token budget — the whole
   # run is one substrate read + a bounded batch DELETE.
   #
-  # OPT-IN (ttl_days) is a FIRE-TIME run option, NOT a descriptor field — the
-  # AnalystDescriptor schema carries no default-run-options block (mirrors
-  # signals_retention, which is likewise disabled unless a run supplies it).
-  # The handler defaults ttl_days=0 (disabled), so every plain cadence fire is
-  # a no-op. To enable, an operator forces a run with a payload carrying a
-  # GENEROUS ttl_days (well above the 7-day cadence-health window):
-  #     {"options": {"ttl_days": 45, "batch_limit": 5000}}
-  # threaded verbatim into the run options (dapr_actors payload options
-  # pass-through).
+  # OPT-IN (ttl_days). The handler defaults ttl_days=0 (disabled), so every
+  # plain cadence fire is a no-op until an operator sets it. THREE ways, in
+  # precedence order:
+  #   1. a forced run carrying it explicitly (highest — beats the descriptor):
+  #        {"options": {"ttl_days": 45, "batch_limit": 5000}}
+  #   2. this descriptor's own `method.options` block (X-1), which makes every
+  #      CADENCE fire carry it — uncomment below. Live-editable via
+  #      `PUT /api/v1/descriptors/analyst/analyst_traces_retention`, no rebuild:
+  #        options:
+  #          ttl_days: 45          # GENEROUS — well above the 7-day window
+  #          batch_limit: 5000
+  #   3. LEGBA_ANALYST_TRACES_TTL_DAYS in the env (the pre-X-1 path; still
+  #      honored, and still the only one that needs a container recreate).
+  # Ships with NO options block, so the analyst stays inert by default.
 
 cadence:
   fallback_schedule: "37 5 * * *"

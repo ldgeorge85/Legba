@@ -1,0 +1,293 @@
+# Supply-chain pack — the ONE new bounded reasoning UNIT: disruption_status.
+# planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §2.
+#
+# A "unit": NOT a new Python kind module and NOT a _KIND_MODULE_NAMES entry —
+# just an inline_target DESCRIPTOR carrying its OWN method.system_prompt +
+# eval.rubric (the validated T1 unit-factory pattern, exactly as
+# descriptors/analyst_proliferation_watch.yaml does it). NO new kind, NO
+# migration, NO new table, NO new NATS subject. `inline_target` is a BUILT-IN
+# AnalystKind, so no `vocabulary_entries` (family='analyst_kind') seed is needed
+# either — this is a new INSTANCE of an existing kind.
+#
+# TOPIC — physical-flow disruption status on a supply-chain lane or flow desk:
+# what materially changed in the physical movement of goods through this target in
+# the cited window, and in which direction.
+#
+# NARROW fan-out: runs on `has_tag("supply_chain")` ONLY — the pack's `lane_*` /
+# `flow_*` desks (descriptors/target_lane_*.yaml + target_flow_*.yaml), NOT the
+# blanket `g20`+`watch` predicate the seven broad geopolitics units use.
+# `supply_chain` is the ONE new fan-out key the pack introduces.
+#
+# TIME WINDOW IS 24h, NOT the 72h the proliferation_watch precedent uses. This is
+# a deliberate, MEASURED deviation (plan §0.2): `_read_substrate_slice`
+# (runtime/actor_substrate_slice.py:164-445) pre-filters the newest
+# `fetch_limit = max(200, LEGBA_SLICE_ROW_CAP*3)` = 360 rows in SQL and only THEN
+# applies the target's `scope.predicate` as a post-query residual. At 72h the
+# Hormuz / Black Sea / Malacca / fab-belt lanes all exceed 360 rows and silently
+# lose about half their evidence (measured on a 72h Hormuz lane: 84 predicate hits
+# across the full window, 41 surviving the newest-360 cut). At 24h every launch
+# lane fits under the cap. Do NOT widen this window without re-running
+# scripts/preflight_supply_chain_lanes.py.
+#
+# DELIBERATELY NOT WIRED (each a plan-level NO, not an oversight):
+#   * NOT in `scorecard_banding.DIMENSIONS` (plan §2.3). That tuple is
+#     synchronised across FOUR places (scorecard_banding.DIMENSIONS,
+#     unit_correctness_scorer._DEFAULT_UNITS,
+#     collection_gap.SOURCE_CLASSES_BY_DIMENSION,
+#     substrate_query_port._ASSESSMENT_PRODUCER_ANALYSTS) and a fixed dimension
+#     would render a misleading `insufficient-evidence` band on all 32 country
+#     desks where the question does not apply. Same argument the
+#     proliferation_watch header makes for itself.
+#   * NO `action_packs` (plan §4.4). `descriptors/action_pack_escalate.yaml:63-65`
+#     declares `applies_to_tags: [g20, watch]`, enforced at
+#     data/analysts/agency/resolution.py:165-184, so a grant here would deny with
+#     a visible governor BLOCK on every supply-chain desk. An empty grant is
+#     honest; widening the pack is plan §6 step 7a, operator-gated.
+#   * NO `substrate_read` / GATHER grant so it could `list_findings` the
+#     geopolitics desks (plan §0.4 + §3.4). `inline_target._GATHER_SIGNAL_ROW_TOOLS`
+#     is deliberately EMPTY except search_corpus/read_document — every other read
+#     tool returns rows whose ids are NOT signal ids, so they arrive as UNNUMBERED
+#     preamble prose. That is the uncited-prior-leak shape that got world_context
+#     RAG rolled back (#176). Cross-domain consumption happens ONE TIER UP, at the
+#     composition tier, where a verified finding IS a citable input row
+#     (meta_findings_synthesizer.read_other_analyst_findings).
+#   * NO verify exemption. NOT in STRUCTURAL_VERIFY_EXEMPT_ANALYSTS
+#     (provenance/kinds.py:164-184) and NOT opted into the `structural_claims`
+#     deterministic profile. This unit takes the DEFAULT verify profile: the
+#     always-on deterministic cite-the-prose [N] floor plus the faithfulness LLM
+#     judge (which fires off `method.llm.verify` presence below). The [N] floor
+#     already exempts BLUF / synthesis / absence clauses
+#     (provenance/verify.py:1487-1531), so an honest quiet-lane read is not
+#     crushed by it.
+#
+# Cadence discipline: 06:00 / 18:00 UTC. Measured against the live cadence table
+# this is the only free 2x/day UNIT slot (00/12 world+journal, 01/13 leadership,
+# 02/14 internal, 03/15 proliferation+corpus_researcher, 04/16 energy, 05/17
+# military+cross_doc, 07/19 escalation, 08/20 escalation_composition+dyad, 09/21
+# economic_coercion, 10/22 narrative, 11/23 country+region composition). Two
+# LOW-frequency META analysts also sit on the 06:00 tick — chronicle_assessor
+# (weekly, Mondays) and collection_gap (monthly, the 1st) — but both are
+# single-run meta analysts, not a per-desk fan-out, so the overlap is one extra
+# run on a rare tick rather than a stacked budget bucket.
+#
+# SHIPS `state: draft`. The pack registers inert: bulk registration creates no
+# live actor, and activation (draft -> configured -> active) is a deliberate
+# main-session FSM step taken AFTER scripts/preflight_supply_chain_lanes.py
+# confirms every Tier-A lane is under the 360-row cap. Per plan §6.1 step 4 the
+# first activation runs the unit on THREE desks only (lane_hormuz, lane_red_sea,
+# lane_malacca_south_china_sea) for one 7-day watch cycle before the remaining
+# three Tier-A desks are activated.
+
+identity:
+  id: disruption_status
+  name: Supply-Chain Disruption-Status Unit
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: inline_target
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: supply_chain_pack
+
+subscription:
+  targets:
+    # NARROW predicate — one run per supply-chain desk. `has_tag` is valid on the
+    # analyst.subscription surface; this is the same one-string tag-scoped
+    # narrowing proliferation_watch uses with has_tag("nuclear_watch").
+    predicate: 'has_tag("supply_chain")'
+    data_types: [signal]
+    # 24h, NOT 72h — the 360-row pre-filter (see the header). Measured.
+    time_window: 24h
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+# Tier-1 knowledge-grounding, same block as the sibling units: injects the
+# target's ACCUMULATED facts/nexuses + assessed situations + graph structure as a
+# fenced "CURRENT CONTEXT" preamble so the unit reads a lane's standing state, not
+# only today's slice. target_geo + slice-entity scoped; capped; analysis-derived
+# context stays fenced off from ground truth.
+# NOTE: NO `vector:world_context` source — opportunistic world_context RAG is
+# rolled back platform-wide pending the faithfulness-cost fix (#176).
+grounding:
+  enabled: true
+  scope: [target_geo, slice_entities]
+  sources: [substrate, situations, graph_structure]
+  max_facts: 30
+
+method:
+  kind: llm_planner
+  # Inline, topic-scoped system prompt — the unit carries its bounded question
+  # VERBATIM in the descriptor (no Python, no prompt_module). Drives the
+  # cited-prose JSON FindingPayload so the [N] markers + the verify gate work.
+  system_prompt: |
+    You are the DISRUPTION-STATUS unit, one bounded reasoning unit of the Legba
+    intelligence oracle. You assess ONE question for ONE supply-chain target — a
+    physical corridor (a `lane_*` desk: a strait, canal, or sea lane) or a
+    commodity/product flow (a `flow_*` desk) — and nothing else.
+
+    BOUNDED QUESTION — physical-flow disruption status.
+    Read ONLY the signals provided in context. Assess what materially CHANGED in
+    the physical flow through this target in the cited window, and in which
+    DIRECTION — degrading, holding, or recovering — across these vectors:
+      * throughput — transits and sailings, cargo and loading volumes, berth and
+        terminal activity, queue length and waiting time;
+      * interdiction & physical risk — attacks, seizures and boardings, mines,
+        drone or missile activity, accidents and groundings, blockage, and
+        weather- or drought-driven closure;
+      * rerouting — diversions, longer routings, alternate corridors, and
+        transhipment or hub shifts;
+      * cost & insurance — freight and charter rates, war-risk premia,
+        surcharges, and bunker cost;
+      * access & control — closures, transit bans, flag or registry
+        restrictions, port-state action, canal transit rules, and licensing;
+      * downstream shortage — plant stoppages, allocation and rationing,
+        stockpiling, substitution, and delivery lead-times.
+    Identify the DOMINANT vector and state the direction of travel — DEGRADING,
+    HOLDING, or RECOVERING — and say which, in those words.
+    ABSENCE-HONEST: a QUIET lane is the NORMAL state, not a finding. If the cited
+    signals contain little or nothing bearing on the physical flow, say so
+    PLAINLY, set a LOW confidence, and tag severity:low — do NOT manufacture a
+    disruption, a diversion, or a shortage the evidence does not support, and do
+    NOT dress up a standing condition as a change.
+    SCOPE ABSENCE TO THE COLLECTION, never the world: a negative MUST read "not
+    observed in collected reporting" / "no collected signal reports a transit
+    disruption" — NEVER a world-fact ("the strait is operating normally", "there
+    are no diversions"): a closure can be widely reported yet absent from this
+    slice. A "not_observed" indicator means not observed in THIS desk's
+    collection window; when the slice is thin, say so plainly.
+
+    QUANTITATIVE CLAIMS — the one place this unit is most likely to fabricate.
+    Every FIGURE you state — a transit count, a tonnage, a rate, a premium, a
+    percentage, a lead-time, a number of days — MUST appear in a signal you cite
+    with its [N]. If you cannot cite a magnitude, replace it with a DIRECTION
+    word ("fewer transits", "a higher war-risk premium") and lower your
+    confidence. Never estimate, never annualise, never convert units, and never
+    carry a number over from your own background knowledge.
+
+    BOUNDARY — stay in your lane. This unit owns the PHYSICAL FLOW: transits,
+    cargoes, closures, rerouting, the cost of movement, and downstream shortage.
+    Do NOT assess national energy security or supply adequacy — that is the
+    `energy_security` unit's lane on the country desks. Do NOT assess sanctions,
+    tariff, export-control or currency POLICY — that is the `economic_coercion`
+    unit's lane. Do NOT assess the military confrontation itself — that is the
+    `escalation` unit's lane. When a signal is ambiguous, ask: does this move the
+    FLOW (here), the national energy position (energy_security), the coercion
+    policy (economic_coercion), or the confrontation (escalation)? Do NOT
+    double-count the same wire item across units.
+
+    PRODUCE EXACTLY ONE FINDING that answers ONLY this bounded question. Every
+    key claim MUST cite the signal it rests on with a bracketed marker [N] keyed
+    to that signal's index in the provided slice. Assert nothing the cited
+    signals do not support; if the evidence is thin, LOWER your confidence rather
+    than inventing specifics.
+
+    Respond with STRICT JSON ONLY — no prose outside the JSON, no code fence —
+    matching exactly this shape:
+    {
+      "title": "<concise headline naming the lane/flow + the dominant vector + the direction>",
+      "body": "<github-markdown: a one-line '**BLUF:** <verdict>'; then a '## Key points' bullet list of the cited changes, each ending with its [N] citation(s); then an '## Assessment' paragraph naming the dominant vector and stating the direction (degrading / holding / recovering), reading the lane's standing condition against any acute change this window; then an '## Indicators to watch' bullet list of concrete near-term signals that would confirm further degradation or a recovery>",
+      "confidence": <float 0.0-1.0 — calibrated confidence in the verdict given the cited evidence>,
+      "evidence": [<the signal indices / source references you cited, as strings>],
+      "tags": ["topic:disruption_status", "severity:<low|moderate|elevated|high|critical>"],
+      "indicators": [
+        {"id": "transit-volume-drop", "statement": "Reported fall in transits, sailings, or cargo volume through this corridor or flow", "status": "not_observed", "horizon_date": "2026-08-15", "first_seen": "2026-07-29", "citations": []},
+        {"id": "corridor-attack-or-seizure", "statement": "Attack, seizure, boarding, or mining of a vessel or facility on this corridor", "status": "not_observed", "horizon_date": "2026-08-15", "first_seen": "2026-07-29", "citations": []},
+        {"id": "major-rerouting-declared", "statement": "Carrier, operator, or state announces diversion away from this corridor or an alternate routing", "status": "not_observed", "horizon_date": "2026-08-15", "first_seen": "2026-07-29", "citations": []},
+        {"id": "war-risk-or-freight-cost-move", "statement": "Reported move in war-risk premia, freight/charter rates, or surcharges on this corridor or flow", "status": "not_observed", "horizon_date": "2026-08-15", "first_seen": "2026-07-29", "citations": []},
+        {"id": "transit-closure-or-ban", "statement": "Closure, transit ban, port-state action, licensing change, or new transit rule restricting access", "status": "not_observed", "horizon_date": "2026-08-15", "first_seen": "2026-07-29", "citations": []},
+        {"id": "downstream-production-halt", "statement": "Plant stoppage, allocation/rationing, or stated delivery lead-time increase attributed to this flow", "status": "not_observed", "horizon_date": "2026-08-15", "first_seen": "2026-07-29", "citations": []}
+      ]
+    }
+
+    The "tags" array MUST contain the topic tag "topic:disruption_status" PLUS
+    EXACTLY ONE severity tag drawn from {severity:low, severity:moderate,
+    severity:elevated, severity:high, severity:critical}, chosen to match the
+    assessed disruption to the physical flow. The "indicators" array is the
+    STRUCTURED, machine-checkable mirror of your '## Indicators to watch' prose.
+    It is REQUIRED and MUST be NON-EMPTY: always output 3-6 entries in the EXACT
+    SHAPE of the example objects shown in the schema above. Set each "status" to
+    "not_observed" (pre-registered, not yet seen), "triggered" (already firing in
+    the slice), or "expired" (its horizon_date passed). A "triggered" indicator
+    MUST name the signal(s) that fired it in "citations" as ASCII [N] signal
+    indices; "not_observed" / "expired" carry an empty "citations".
+    CANONICAL IDS — REUSE, do NOT re-mint: the six id slugs in the schema example
+    are this unit's FIXED vocabulary. Every run, REUSE those exact id slugs
+    verbatim (change only "status" / "citations" / "first_seen" as the situation
+    evolves) so the indicator_tracker can diff the SAME indicator run-over-run; a
+    re-minted slug is invisible to the diff. Introduce a NEW id ONLY for a
+    genuinely novel signpost none of the canonical ids cover. Output nothing but
+    the single JSON object.
+
+    OPEN QUESTIONS (optional field): the JSON object MAY also carry a top-level
+    "open_questions" array — up to 3 entries, each
+    {"question": "<a genuinely unresolved analytical question this run surfaced>",
+     "refs": [<the [N] indices of the cited evidence that raises it>]}.
+    Record a question ONLY when the cited evidence genuinely leaves it
+    unresolved — a contradiction between cited sources (two sources disagreeing
+    on whether a transit is open is exactly this), a missing confirmation for a
+    load-bearing claim, an unexplained change. Tie every entry to at least one
+    cited [N] index via "refs". When nothing is genuinely unresolved, emit
+    "open_questions": [] or omit the field entirely — NEVER invent questions to
+    fill the quota.
+  llm:
+    # Model-card sampling (gpt-oss ships generation_config temperature=1.0; the vLLM
+    # client always sends temperature, so the card default can never apply on its own).
+    # Fleet-wide per the 2026-07-24 sampling audit + A/B (+0.055 faith at 1.0).
+    temperature: 1.0
+    # $0 CORE PLANE — the self-hosted stack_ref, same as every scheduled analyst.
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # Faithfulness VERIFY judge — currently the SAME core reasoning model
+    # (llm.primary.openai_compat) that writes this unit, NOT a cross-family judge
+    # (the 8B judge proved too weak — harsh + mis-aimed). KNOWN LIMITATION:
+    # same-model judging shares blind spots, so this signal is weaker than an
+    # independent judge. Gated by LEGBA_VERIFY_LLM_JUDGE; soft-fails to the
+    # deterministic citation-presence floor if the component is unresolved. Its
+    # PRESENCE here is what arms the faithfulness pass — the bringup unit drift
+    # guard (bringup_register_analysts._assert_unit_eval_coverage) refuses a
+    # bounded unit that omits it.
+    verify:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 4096
+  # Per-day token cap for this unit's fan-out — copied from proliferation_watch,
+  # sized for 6 supply-chain desks x 2 fires/day.
+  budget_tokens_per_day: 30000000
+  # On a projected per-day cap crossing, PAUSE this unit until the next UTC
+  # bucket rather than demoting to a paid fallback (the primary is the
+  # self-hosted core plane; there is no cheap fallback wired here).
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # 06:00 / 18:00 UTC — the only free 2x/day unit slot (see the header).
+  fallback_schedule: "0 6,18 * * *"
+  # Per-(unit, target) cooldown. 11h (39600s) sits BELOW the 12h interval between
+  # the staggered fires — a cooldown == the interval lands past the next
+  # scheduled fire and silently halves each desk's cadence, so keep a margin.
+  cooldown_seconds: 39600
+
+# No agency grant in wave 1 — see the header (plan §4.4).
+action_packs: []
+
+eval:
+  rubric: |
+    {"dimensions": [
+      {"name": "flow_grounding",
+       "weight": 0.4,
+       "description": "Is the named dominant vector (throughput, interdiction & physical risk, rerouting, cost & insurance, access & control, downstream shortage) grounded in the cited signals, with the corridor/flow, operators, cargoes, facilities and dates concretely tied to their [N]? Penalize unsupported specifics, any FIGURE (transit count, tonnage, rate, premium, lead-time) that no cited signal carries, and drift into national energy security, sanctions/tariff policy, or the military confrontation itself."},
+      {"name": "direction_plausibility",
+       "weight": 0.3,
+       "description": "Is the stated direction of travel (degrading / holding / recovering) proportionate to and supported by the cited evidence, correctly separating an ACUTE change this window from the lane's standing condition, with concrete indicators-to-watch that would actually confirm further degradation or a recovery?"},
+      {"name": "severity_and_absence_calibration",
+       "weight": 0.3,
+       "description": "Do the stated confidence and the single severity tag match the strength of the cited evidence, and is the ABSENCE case handled honestly — a quiet lane reads collection-scoped ('not observed in collected reporting'), severity:low, low confidence, NOT a world-fact claim that the corridor is operating normally and NOT an invented disruption? Penalize both overconfidence on thin evidence and under-confidence on strong cited closure/seizure/stoppage evidence."}
+    ], "scale": "0.0-1.0"}

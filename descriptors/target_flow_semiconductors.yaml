@@ -1,0 +1,90 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Supply-chain pack — Tier-A desk 5/6: the semiconductor fab belt.
+# planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §1.1.
+#
+# `flow_*` = a geo-anchored COMMODITY or PRODUCT flow (the sibling family to
+# `lane_*`, which is a physical corridor). The full shape rationale (the 360-row
+# pre-filter, why scope.geo is the SQL pushdown and contains_any only a refiner,
+# why no US in the geo set, why no inline `analyst:` block, why no g20/watch tag,
+# why no source_id pin) is written out once in
+# descriptors/target_lane_hormuz.yaml — read that header first.
+#
+# WHY THIS DESK: 221 titles / 30d across 21 sources, and the top contributors are
+# yonhap (86) + cna (74) — i.e. the volume is genuinely KR/TW-centric, which is
+# exactly why a geo anchor works on a product flow. Term precision was
+# spot-checked: 12/12 sampled `chip` titles were genuine semiconductor items.
+#
+# US AND CN ARE DELIBERATELY EXCLUDED from the geo set. US for the plan's §0.3
+# firehose rule (source.nws.active_alerts is 25.9% of the corpus and the
+# per-source diversity cap does NOT run on a predicate-bearing desk). CN because
+# the measured volume does not need it and adding it would push this lane at the
+# 360 cap. Export-control POLICY out of Washington/Beijing is
+# `economic_coercion`'s lane on the country desks; this desk consumes those
+# verified heads at the composition tier (plan §3), it does not re-analyse them.
+#
+# MEASURED: ~256 canonical rows / 24h against the geo set below — ok headroom
+# under the 360 cap at a 24h window (it does NOT fit at 72h).
+#
+# Ships `state: draft`; activation is a deliberate main-session FSM step after
+# scripts/preflight_supply_chain_lanes.py.
+
+identity:
+  id: flow_semiconductors
+  name: "Flow — Semiconductors"
+  schema_uri: legba/target/2.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  inherits: []
+  state: draft
+  owner: supply_chain_pack
+  created: "2026-07-29T00:00:00Z"
+
+scope:
+  domain: thematic
+  themes: [supply_chain, semiconductor, technology, manufacturing]
+  # THE SQL PUSHDOWN — the fab / lithography / packaging belt. No US, no CN.
+  geo: [TW, KR, JP, NL, SG]
+  entity_classes:
+    - country
+    - organization
+    - corporation
+    - infrastructure
+    - commodity
+    - location
+    - international_org
+    - event_series
+    - person
+    - concept
+  relationship_types:
+    - TradesWith
+    - SanctionsAgainst
+    - HostileTo
+    - OperatesIn
+    - LocatedIn
+    - PartOf
+    - PartnersWith
+    - CompetesWith
+    - SubsidiaryOf
+  time_horizon_days: 90
+  predicate: >-
+    contains_any(["semiconductor", "chip", "chips", "foundry", "fab", "wafer",
+                  "tsmc", "samsung", "sk hynix", "asml", "lithography",
+                  "export control", "entity list", "packaging", "hbm"])
+  tags: [supply_chain, disruption, flow]
+
+sources:
+  - source_selector:
+      tags: [news]
+      kinds: [rss]
+      owner_tenant: shared
+    subscription:
+      canonical_only: true
+
+allowed_action_packs: []
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  routing: []

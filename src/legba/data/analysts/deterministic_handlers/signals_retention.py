@@ -6,157 +6,50 @@ Graph-and-data Wave-1b, item 3. The ``signals`` table was an unpartitioned,
 13-indexed, retention-free table that grew without bound. Per locked decision
 D4 (REVIEW_CONSOLIDATED_2026-06-16) the release answer is a scheduled TTL
 PURGE (not a range-partition — partitioning is heavy and the volume is small).
-This sub-handler is that purge, run on the deterministic-analyst maintenance
-cadence (mirrors ``entity_gc`` / ``fact_decay``).
 
-WHAT IT DOES (one transaction per batch, idempotent, degrade-not-drop):
-  * Selects signals whose ``fetched_at`` is older than ``ttl_days`` AND whose
-    ``retention_class`` is purgeable (NOT in the keep-set ``retain_always`` /
-    ``evidence_hold`` — those are held regardless of age), oldest-first,
-    ``LIMIT batch_limit`` per run (bounds lock time at scale; supported by the
-    composite index from migration 0036).
-  * DELETEs the dependent, *value-referenced* child rows FIRST so nothing is
-    orphaned — the substrate has no DB-level FK from these children to
-    ``signals`` (baseline 0001), so the cleanup is explicit:
-      - ``signal_entity_links`` where ``signal_id`` is purged,
-      - ``signal_aliases`` where ``alias_signal_id`` OR ``canonical_signal_id``
-        is purged.
-  * DELETEs the signal rows.
+C2 "one janitor" (2026-07-28 coherence pass): this module is now a thin
+DELEGATE onto the shared :mod:`._retention_sweep` engine, which executes the
+``signals_retention`` row of the ``retention_policies`` config table
+(migration 0109) instead of hand-rolling its own TTL constant / env-var name
+/ batch default. Behavior is BYTE-IDENTICAL to the pre-consolidation
+standalone implementation (git history has the retired body; the shared
+engine's ``_purge_signals`` / ``_finding_signals`` are that same code,
+parameterized) — this is a REGISTRATION SHIM, not a rewrite:
 
-NOT cleaned (by design): the ``derived_from uuid[]`` provenance arrays on
-facts/nexuses/outputs may still carry a purged signal's UUID — those are
-historical lineage pointers, and the recursive-CTE lineage walk simply
-terminates at a missing source. A retention policy that refused to purge any
-signal ever referenced by a fact would never reclaim space; D4 accepts the
-dangling-pointer trade-off for this release.
+  * ``ttl_days <= 0`` (the DEFAULT, seeded into the policy row) DISABLES the
+    purge — deleting signals is an operator decision; the job ships inert.
+  * Opt-in levers, highest first: an explicit run ``options["ttl_days"]``
+    (forced runs / tests) > the descriptor's own ``method.options.ttl_days``
+    — X-1 made that channel real, so a descriptor-carried ``ttl_days`` DOES
+    now reach this handler on a plain cadence fire > the
+    ``LEGBA_SIGNALS_RETENTION_TTL_DAYS`` env var (the pre-X-1 path; still
+    honored — ff65f78). The shipped posture is still all three unset, i.e.
+    disabled: deleting signals is a deliberate operator decision.
+  * Keep-class exemptions (``retain_always`` / ``evidence_hold``), batch
+    size, and the value-referenced children cleanup (``signal_entity_links``,
+    ``signal_aliases``) are all preserved — they now live in the policy row +
+    the shared engine's ``_purge_signals`` adapter, not here.
 
-A ``ttl_days <= 0`` (the DEFAULT) DISABLES the purge — the job is a no-op until
-an operator sets a positive TTL on the descriptor's ``options``, so it can ship
-inert and be turned on deliberately.
-
-Output ``data`` keys:
+Output ``data`` keys (unchanged):
     signals_purged      int — signal rows deleted this run
     entity_links_purged int — signal_entity_links rows deleted
     aliases_purged      int — signal_aliases rows deleted
     ttl_days            int — the effective TTL (0 = disabled)
+
+RETIREMENT NOTE: this module stays importable/registered in
+:data:`legba.data.analysts.deterministic.SUB_HANDLERS` under the SAME
+sub_handler name (``signals_retention``) so no descriptor/dispatch change is
+required — it just no longer carries its own purge SQL.
 """
 
 from __future__ import annotations
 
-import logging
 from typing import Any, Mapping
 
-from ...provenance.models import FindingPayload
 from ....runtime.analyst_method import AnalystMethodResult
-
-logger = logging.getLogger(__name__)
+from . import _retention_sweep
 
 SUB_HANDLER_NAME = "signals_retention"
-
-#: Disabled by default — ship inert, operator opts in with a positive TTL.
-_DEFAULT_TTL_DAYS = 0
-_DEFAULT_BATCH = 5_000
-
-#: Retention classes that are NEVER purged regardless of age.
-_KEEP_CLASSES = ("retain_always", "evidence_hold")
-
-
-def _row_count(status: str | None) -> int:
-    """Parse the trailing integer from an asyncpg command tag (``DELETE 7``)."""
-    if not status:
-        return 0
-    try:
-        return int(status.split()[-1])
-    except (ValueError, IndexError):  # pragma: no cover - defensive
-        return 0
-
-
-async def _purge(pool: Any, *, ttl_days: int, batch_limit: int) -> dict[str, int]:
-    """Purge one batch of aged signals + their value-referenced children.
-
-    All deletes for a batch run in ONE transaction so a signal and its child
-    rows are removed atomically (no window where a child is orphaned).
-    """
-    signals_purged = 0
-    entity_links_purged = 0
-    aliases_purged = 0
-
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            ids = [
-                r["id"]
-                for r in await conn.fetch(
-                    """
-                    SELECT id
-                      FROM signals
-                     WHERE fetched_at < NOW() - ($1::int * INTERVAL '1 day')
-                       AND retention_class <> ALL($2::text[])
-                     ORDER BY fetched_at ASC
-                     LIMIT $3
-                    """,
-                    ttl_days,
-                    list(_KEEP_CLASSES),
-                    batch_limit,
-                )
-            ]
-            if not ids:
-                return {
-                    "signals_purged": 0,
-                    "entity_links_purged": 0,
-                    "aliases_purged": 0,
-                }
-
-            # Children FIRST (no FK to signals — explicit cleanup so the purge
-            # never orphans a link or alias).
-            entity_links_purged = _row_count(
-                await conn.execute(
-                    "DELETE FROM signal_entity_links WHERE signal_id = ANY($1::uuid[])",
-                    ids,
-                )
-            )
-            aliases_purged = _row_count(
-                await conn.execute(
-                    "DELETE FROM signal_aliases "
-                    "WHERE alias_signal_id = ANY($1::uuid[]) "
-                    "   OR canonical_signal_id = ANY($1::uuid[])",
-                    ids,
-                )
-            )
-            signals_purged = _row_count(
-                await conn.execute(
-                    "DELETE FROM signals WHERE id = ANY($1::uuid[])", ids
-                )
-            )
-
-    return {
-        "signals_purged": signals_purged,
-        "entity_links_purged": entity_links_purged,
-        "aliases_purged": aliases_purged,
-    }
-
-
-def _build_finding(counters: Mapping[str, int], *, ttl_days: int) -> FindingPayload:
-    sp = counters.get("signals_purged", 0)
-    if ttl_days <= 0:
-        title = "Signals retention: disabled (ttl_days<=0) — no purge"
-    else:
-        title = (
-            f"Signals retention: purged {sp} signal(s) older than {ttl_days}d "
-            f"({counters.get('entity_links_purged', 0)} links, "
-            f"{counters.get('aliases_purged', 0)} aliases)"
-        )
-    body = "\n".join(f"{k}={v}" for k, v in counters.items())
-    tags = ["deterministic", "signals_retention"]
-    if sp:
-        tags.append("signals_purged")
-    return FindingPayload(
-        title=title[:2048],
-        body=body[:65536],
-        confidence=1.0,
-        evidence=[],
-        tags=tags,
-        data={"sub_handler": SUB_HANDLER_NAME, "ttl_days": ttl_days, **dict(counters)},
-    )
 
 
 async def handle(
@@ -166,27 +59,13 @@ async def handle(
 ) -> AnalystMethodResult:
     """Sub-handler entry point — see module docstring.
 
-    Sweeps the substrate directly via ``deps.pg_pool`` (the ``inputs`` slice is
-    ignored — the unit of work is "all aged signals"). ``deps is None`` (unit
-    path) or ``ttl_days <= 0`` (default) yields a zeroed, no-purge run.
+    Delegates to :func:`legba.data.analysts.deterministic_handlers.
+    _retention_sweep.handle_policy` with ``policy_name="signals_retention"``.
+    ``deps is None`` (unit path) or ``ttl_days <= 0`` (default) yields a
+    zeroed, no-purge run — identical to the pre-consolidation behavior.
     """
-    counters: dict[str, int] = {
-        "signals_purged": 0,
-        "entity_links_purged": 0,
-        "aliases_purged": 0,
-    }
-    ttl_days = int(options.get("ttl_days", _DEFAULT_TTL_DAYS))
-    pool = getattr(deps, "pg_pool", None) if deps is not None else None
-    if pool is not None and ttl_days > 0:
-        batch_limit = int(options.get("batch_limit", _DEFAULT_BATCH))
-        try:
-            counters = await _purge(pool, ttl_days=ttl_days, batch_limit=batch_limit)
-        except Exception as exc:
-            logger.warning("signals_retention.failed err=%s", exc)
-
-    return AnalystMethodResult(
-        finding=_build_finding(counters, ttl_days=ttl_days),
-        usage={"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0},
+    return await _retention_sweep.handle_policy(
+        SUB_HANDLER_NAME, inputs, options, deps
     )
 
 

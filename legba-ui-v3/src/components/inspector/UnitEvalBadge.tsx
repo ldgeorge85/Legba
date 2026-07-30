@@ -12,7 +12,17 @@
  */
 import { useEffect, useState } from 'react'
 import { Gauge } from 'lucide-react'
+import { InfoTip } from '@/components/InfoTip'
 import { fetchEvalScores, findUnitScore, type UnitEvalScore } from '@/lib/unitEvalModel'
+import { FAITHFULNESS_EXPLAIN } from '@/lib/verdictModel'
+
+/** U-5 — the server-composed badge string already carries the honest
+ *  "unmeasured (N labels)" absence (never a fabricated score); this explainer
+ *  says plainly what's measured and what an unmeasured reading means, so a
+ *  first-time reader doesn't mistake either for an error. */
+const EXPLAIN =
+  `${FAITHFULNESS_EXPLAIN} "Unmeasured" means no graded labels exist yet for ` +
+  "this unit — nothing has been checked against a reference, not a broken score."
 
 export function UnitEvalBadge({ analystId }: { analystId: string | null | undefined }) {
   const [score, setScore] = useState<UnitEvalScore | null>(null)
@@ -39,13 +49,13 @@ export function UnitEvalBadge({ analystId }: { analystId: string | null | undefi
   if (!score) return null
 
   return (
-    <span
+    <InfoTip
+      text={EXPLAIN}
       className="inline-flex items-center gap-1 rounded bg-surf-1 px-1.5 py-0.5 text-label text-accent-info"
-      data-testid="unit-eval-badge"
-      title="Per-unit eval (P2-T6): faithfulness from the mandatory verify pass + correctness vs operator gold labels"
+      testId="unit-eval-badge"
     >
       <Gauge className="h-3 w-3" aria-hidden />
       {score.badge}
-    </span>
+    </InfoTip>
   )
 }

@@ -3,7 +3,9 @@
 # One of five additional country target descriptors registered alongside
 # india_energy_infra to exercise the runtime's multi-target ingestion +
 # filter chain at scale. Body shape mirrors the live (post-F-bundle)
-# india_energy_infra descriptor: 7-filter pipeline + inline_target analyst block.
+# india_energy_infra descriptor: 7-filter pipeline (the inline analyst block
+# once carried here was dead config — see the Defect C note below; it has
+# been removed).
 #
 # RSS feed swap note:
 #   * Original candidate https://www3.nhk.or.jp/nhkworld/en/news/feeds/
@@ -79,16 +81,20 @@ pipeline:
     - kind: dedupe_tier_2
       config: {}
 
-analyst:
-  use: inline_target
-  cadence:
-    fallback_schedule: "*/10 * * * *"
-  method:
-    kind: llm_planner
-    prompt_module: legba.runtime.analyst_method:_DEFAULT_SYSTEM
-    budget_tokens_per_day: 200000
-    llm:
-      primary: llm.primary.openai_compat
+# Defect C (X-1 dead-config, 2026-07-29): an inline `analyst:` block used to
+# sit here. The runtime never builds a running analyst from a target's
+# inline `method`/`cadence`/`grounding`/`rubric` config — only
+# `analyst.analyst_ref` (a pointer to a separately registered analyst
+# descriptor) is ever consulted by
+# legba.runtime.source_first_runtime._analyst_ids_for_target, and this block
+# never set one, so it was fully inert. Removed. Units subscribe to a target
+# via a separate analyst descriptor's `subscription.targets` predicate
+# instead (e.g. descriptors/analyst_energy_security.yaml's
+# `has_tag("g20") or has_tag("watch")` — this target carries neither tag
+# today, so it has no live analyst subscriber; that gap is pre-existing and
+# out of scope here). The registry now warns loudly at registration time if
+# a target body still carries this block
+# (legba.data.registry.descriptor._validate_or_dlq).
 
 outputs:
   - kind: a2a_skill

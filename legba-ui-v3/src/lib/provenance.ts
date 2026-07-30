@@ -131,7 +131,10 @@ export interface ProvenanceSource {
   derived_from?: string[] | null
   /** The faithfulness-verify detail block, when present. */
   verification?: { faithfulness_score?: number | null; judge_status?: string | null } | null
-  /** `"structural"` for verify-exempt deterministic analysts. */
+  /** `"structural"` for verify-exempt deterministic analysts, or
+   *  `"structural-verified"` (C2b) when that structural finding's asserted
+   *  quantities additionally passed the deterministic structural_claims
+   *  verify profile. */
   verify_exempt?: string | null
   /** Confidence figures. */
   confidence?: number | null
@@ -166,7 +169,12 @@ export function describeProvenance(src: ProvenanceSource): ProvenanceFacts {
   const freshnessAt = src.produced_at ?? src.fetched_at ?? src.created_at ?? undefined
 
   let confidence: string | undefined
-  if (src.verify_exempt === 'structural') {
+  if (src.verify_exempt === 'structural-verified') {
+    // C2b — a structural finding whose asserted quantities passed the
+    // deterministic structural_claims verify profile: distinct from (and
+    // better than) the bare "unverified — structural" default below.
+    confidence = 'structural — recomputation-verified'
+  } else if (src.verify_exempt === 'structural') {
     confidence = 'unverified — structural'
   } else if (
     src.verification &&
@@ -190,7 +198,12 @@ export function describeProvenance(src: ProvenanceSource): ProvenanceFacts {
   if (!src.derived_from || src.derived_from.length === 0) {
     limitations.push('no upstream lineage recorded')
   }
-  if (src.verify_exempt === 'structural') {
+  if (src.verify_exempt === 'structural-verified') {
+    limitations.push(
+      'deterministic structural claims re-derived and matched — not routed through the ' +
+        'faithfulness verify pass (structural analyst)',
+    )
+  } else if (src.verify_exempt === 'structural') {
     limitations.push('not routed through the faithfulness verify pass (structural analyst)')
   }
   for (const extra of src.extraLimitations ?? []) limitations.push(extra)

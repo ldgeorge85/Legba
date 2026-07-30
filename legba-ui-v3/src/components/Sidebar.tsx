@@ -1,15 +1,26 @@
 /**
- * Sidebar — the ONE grouped navigation tree (S7-T2).
+ * Sidebar — the ONE grouped navigation tree (S7-T2; U-3 task order + Engine
+ * Room).
  *
  * A single grouped tree modeled on the original mission-control UI: a Search
- * (⌘K) launcher, a compact Layouts menu (named save/restore workspaces), then
- * five collapsible verb-grouped sections — Awareness / Investigation / Analysis
- * / Products / Operations — over the singleton panel catalog, followed by the
- * per-target and per-analyst instance groups. The instance groups render the
- * runtime registry's rows UNION the synthesized bound-panel set built from
- * descriptor heads (useRegistry + panel-registry/synthesize.ts) — the live
- * `ui_panel_registrations` surface is empty, so without synthesis the bound
- * panels (Target Map/Timeline/…, Analyst Runs/…) were unreachable here.
+ * (⌘K) launcher, a compact Layouts menu (named save/restore workspaces), the
+ * Desks group (U-2, human country desks, first overall), then five
+ * collapsible verb-grouped sections — Awareness / Investigation / Analysis /
+ * Products / Engine Room (id: `operations`) — over the singleton panel
+ * catalog. Within each group, rows sort by task order where U-3 pins one
+ * (`navGroups.ts` TASK_ORDER), alphabetical otherwise — NOT purely
+ * alphabetical.
+ *
+ * Engine Room (U-3 §2) additionally nests the per-target and per-analyst
+ * instance groups inside its own collapsible body (see the `group.id ===
+ * 'operations'` branch below) rather than as separate top-level sections: all
+ * 14 Operations rows PLUS the raw Targets/Analysts instance groups fold
+ * behind ONE collapsed row, so nothing is lost but the daily-driver catalog
+ * stays short. The instance groups render the runtime registry's rows UNION
+ * the synthesized bound-panel set built from descriptor heads (useRegistry +
+ * panel-registry/synthesize.ts) — the live `ui_panel_registrations` surface is
+ * empty, so without synthesis the bound panels (Target Map/Timeline/…,
+ * Analyst Runs/…) were unreachable here.
  *
  * This REPLACES the five stacked nav systems the prior sidebar carried (search +
  * 3 workspace-preset buttons + a "More layouts" dropdown + two Investigate
@@ -33,13 +44,29 @@ import { buildNavGroups } from '@/panel-registry/navGroups'
 import { extractScope } from '@/panel-registry/loader'
 import { LAYOUT_PRESETS } from '@/lib/layoutPresets'
 import { cn } from '@/lib/cn'
+import { countryNameForTargetId } from '@/lib/deskNames'
+import type { ConfidenceLevel } from '@/lib/verdictModel'
+import { CONFIDENCE_FILL, useCountryVerdicts, type CountryVerdict } from '@/v4/world/countryVerdicts'
+import { selectRow } from '@/state/selection'
 
 const COLLAPSE_KEY = 'legba_nav_collapsed'
 
-/** Groups collapsed by default on first run — plumbing folds away, and the
- *  registry-scale Targets/Analysts sections (~124/~64 records live) start
- *  folded so the first screenful stays the five-group tree. */
+/** Groups collapsed by default on first run — Engine Room (id: `operations`)
+ *  folds away, and the registry-scale Targets/Analysts sections (~124/~64
+ *  records live, nested INSIDE Engine Room per U-3 §2) start folded too, so
+ *  the first screenful stays the five-group tree. The Desks group (U-2) is
+ *  deliberately absent here — it is the new keystone entry point and must be
+ *  open on a cold boot. */
 const DEFAULT_COLLAPSED = ['operations', 'targets', 'analysts']
+
+/** Short label for a country desk's confidence band chip (mirrors the Wall's
+ *  choropleth legend wording). */
+const CONFIDENCE_LABEL: Record<ConfidenceLevel, string> = {
+  high: 'High',
+  moderate: 'Moderate',
+  low: 'Low',
+  unassessed: 'Unverified',
+}
 
 /** Resolve a registry `iconName` to a lucide component (fallback: none). */
 function iconFor(name?: string): LucideIcon | null {
@@ -169,7 +196,17 @@ export function Sidebar({
         canRestoreLayout={canRestoreLayout}
       />
 
-      {/* The one grouped tree — five verb-grouped sections. */}
+      {/* Desks (U-2) — the keystone entry point, human country names first.
+          Lives ABOVE the five verb-grouped sections and stays open on a cold
+          boot (see DEFAULT_COLLAPSED above). */}
+      <DesksSection collapsed={collapsed.has('desks')} onToggle={() => toggleGroup('desks')} />
+
+      {/* The one grouped tree — five verb-grouped sections. Engine Room (id:
+          operations — U-3 §2) additionally nests the raw Targets/Analysts
+          instance groups inside its own collapsible body, after its 14
+          singleton rows, instead of as separate top-level sections: all the
+          plumbing — catalog panels AND per-record instances — folds behind
+          one collapsed row. */}
       {navGroups.map((group) => (
         <CollapsibleSection
           key={group.id}
@@ -191,36 +228,112 @@ export function Sidebar({
               )
             })}
           </ul>
+
+          {group.id === 'operations' && (
+            <>
+              {/* Per-target groups — instance-scoped analysis panels from the
+                  registry (real rows) + the synthesized bound-panel set
+                  (useRegistry/synthesize). At live scale (~124 targets) each
+                  record collapses to one row and a filter box narrows by id. */}
+              {grouped.targets.length > 0 && (
+                <InstanceSection
+                  id="targets"
+                  title="Targets"
+                  groups={grouped.targets.map((g) => ({ record_id: g.target_id, rows: g.rows }))}
+                  collapsed={collapsed.has('targets')}
+                  onToggle={() => toggleGroup('targets')}
+                  onOpen={onOpen}
+                />
+              )}
+
+              {/* Per-analyst groups. */}
+              {grouped.analysts.length > 0 && (
+                <InstanceSection
+                  id="analysts"
+                  title="Analysts"
+                  groups={grouped.analysts.map((g) => ({ record_id: g.analyst_id, rows: g.rows }))}
+                  collapsed={collapsed.has('analysts')}
+                  onToggle={() => toggleGroup('analysts')}
+                  onOpen={onOpen}
+                />
+              )}
+            </>
+          )}
         </CollapsibleSection>
       ))}
-
-      {/* Per-target groups — instance-scoped analysis panels from the registry
-          (real rows) + the synthesized bound-panel set (useRegistry/synthesize).
-          At live scale (~124 targets) each record collapses to one row and a
-          filter box narrows by id. */}
-      {grouped.targets.length > 0 && (
-        <InstanceSection
-          id="targets"
-          title="Targets"
-          groups={grouped.targets.map((g) => ({ record_id: g.target_id, rows: g.rows }))}
-          collapsed={collapsed.has('targets')}
-          onToggle={() => toggleGroup('targets')}
-          onOpen={onOpen}
-        />
-      )}
-
-      {/* Per-analyst groups. */}
-      {grouped.analysts.length > 0 && (
-        <InstanceSection
-          id="analysts"
-          title="Analysts"
-          groups={grouped.analysts.map((g) => ({ record_id: g.analyst_id, rows: g.rows }))}
-          collapsed={collapsed.has('analysts')}
-          onToggle={() => toggleGroup('analysts')}
-          onOpen={onOpen}
-        />
-      )}
     </aside>
+  )
+}
+
+/** One resolved desk row: the verdict data plus its human country name. */
+interface DeskRow {
+  targetId: string
+  iso2: string
+  name: string
+  confidence: ConfidenceLevel
+}
+
+function toDeskRow(v: CountryVerdict): DeskRow {
+  return {
+    targetId: v.targetId,
+    iso2: v.iso2,
+    name: countryNameForTargetId(v.targetId) ?? v.iso2,
+    confidence: v.verdict.confidence,
+  }
+}
+
+/**
+ * Desks (U-2) — country desks as first-class, human nav rows: the human
+ * country NAME plus its scorecard band chip, sourced from the SAME
+ * `useCountryVerdicts` hook the Wall's band grid and the World map's
+ * choropleth read (so a desk's band never disagrees across surfaces).
+ * Clicking a row fires the SAME keystone action a Wall band-grid chip does —
+ * `selectRow('target', …)` — so the Inspector (and every other subscriber:
+ * map, feed, timeline, Why graph) follows the same selection, no new flow.
+ */
+function DesksSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+  const { verdicts, isLoading } = useCountryVerdicts()
+  const desks = useMemo(
+    () => [...verdicts.values()].map(toDeskRow).sort((a, b) => a.name.localeCompare(b.name)),
+    [verdicts],
+  )
+  return (
+    <CollapsibleSection
+      id="desks"
+      title={`Desks (${desks.length})`}
+      collapsed={collapsed}
+      onToggle={onToggle}
+    >
+      {isLoading && desks.length === 0 && (
+        <div className="px-3 py-1 text-label text-ink-3">loading desks…</div>
+      )}
+      {!isLoading && desks.length === 0 && (
+        <div className="px-3 py-1 text-label text-ink-3">no assessed desks yet</div>
+      )}
+      <ul className="space-y-px">
+        {desks.map((d) => (
+          <li key={d.targetId}>
+            <button
+              type="button"
+              data-testid={`nav-desk-${d.iso2}`}
+              onClick={() => selectRow('target', d.targetId, d.name, { origin: 'desks' })}
+              title={`${d.name} — ${CONFIDENCE_LABEL[d.confidence]} confidence`}
+              className="w-full flex items-center gap-2 text-left px-3 row-density text-body hover:bg-surf-2 text-ink-2"
+            >
+              <span
+                className="h-2 w-2 shrink-0 rounded-sm"
+                style={{ backgroundColor: CONFIDENCE_FILL[d.confidence] }}
+                aria-hidden
+              />
+              <span className="flex-1 truncate">{d.name}</span>
+              <span className="shrink-0 text-label text-ink-3">
+                {CONFIDENCE_LABEL[d.confidence]}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </CollapsibleSection>
   )
 }
 

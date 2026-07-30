@@ -23,6 +23,7 @@
  */
 
 import { severityRank } from '@/lib/findingsViews'
+import { humanizeId } from '@/lib/deskNames'
 import type { AnalystCadenceRow, SourceFiringRow } from '@/lib/api'
 
 // ---------------------------------------------------------------------------
@@ -229,6 +230,15 @@ export function bandDirectionTone(direction: string): MoverTone {
   if (direction === 'deterioration') return 'bad'
   if (direction === 'improvement') return 'good'
   return 'neutral'
+}
+
+/** U-2 — the movers list must read as prose, not plumbing: a band change's
+ *  `target_id` (`country_g20_br`) humanizes to its country name (`Brazil`)
+ *  via the shared `lib/deskNames.ts` resolver, same one the Desks nav group
+ *  and the Scorecard use, so a desk never disagrees with itself across
+ *  surfaces. Total over any target id (never renders raw snake_case). */
+export function bandChangeDeskLabel(targetId: string): string {
+  return humanizeId(targetId)
 }
 
 const DIRECTION_ORDER: Record<string, number> = {

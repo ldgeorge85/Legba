@@ -27,11 +27,13 @@ outputs (**findings**, **situations**, hypotheses, critiques) with full
 provenance. It fires on a **coalescing trigger** and/or a **cadence**
 heartbeat.
 
-**bounded reasoning unit / unit** — One of seven narrow, single-question
-`inline_target` analysts — **leadership_transition**, **energy_security**,
+**bounded reasoning unit / unit** — One of eight narrow, single-question
+`inline_target` analysts. Seven broad ones — **leadership_transition**, **energy_security**,
 **escalation**, **narrative_coordination**, **internal_stability**,
-**military_posture**, **economic_coercion** — fanned out to all 25 country desks
+**military_posture**, **economic_coercion** — fan out to all 25 country desks
 (19 G20 + the 6-desk **watch** tier) by a `has_tag("g20") or has_tag("watch")`
+predicate. An eighth, narrower unit, **proliferation_watch**, instead fans out
+to only the ~8 nuclear-relevant desks via a `has_tag("nuclear_watch")`
 predicate. Each run assembles a cited 72h signal slice plus a **grounding
 preamble**, synthesizes one strict-JSON finding whose prose carries `[N]`
 citation markers, then runs the mandatory **faithfulness verify**. Skill is
@@ -39,7 +41,8 @@ reported per unit, never as a platform-wide claim.
 
 **composition** — A second-order finding that synthesizes already-**verified**
 sub-claims, never raw signals. **country_composition** reads one desk's seven
-verified units and writes a hedged, cited per-country read; **region_composition**
+broad verified units, plus **proliferation_watch** on nuclear desks, and writes
+a hedged, cited per-country read; **region_composition**
 folds the per-country reads into one of **five region frames** (Africa, Americas,
 Europe, Indo-Pacific, MENA); **world_assessor** composes the region reads into one
 cited world view, drillable world → region → country → unit → source; the thematic
@@ -58,9 +61,12 @@ changes go live via the registry `PUT` API.
 **exemplar use case (G20 country assessment)** — Geopolitical assessment of
 the G20 countries is the proven end-to-end demonstration of the pipeline — not
 the system's identity. There is no code per country: the G20 targets are
-materialized from one **discovery** template, and the 6-country **watch tier**
-(Israel, Iran, Ukraine, Taiwan, North Korea, Pakistan) was added by simply
-registering targets.
+materialized from one **discovery** template, and the 13-country **watch tier**
+(Israel, Iran, Ukraine, Taiwan, North Korea, Pakistan, plus the escalation-risk
+band Sudan, Mali, Burkina Faso, Niger, DR Congo, Myanmar, Haiti) was added by
+simply registering targets — as was the non-country **thematic** desk family
+(the supply-chain lanes and flows), which is the clearer proof that a desk is a
+registered subject-frame and not a country.
 
 **finding** — The primary typed analyst output: a written analytic conclusion
 carrying `derived_from` provenance and a **receipt-chain** entry, itself
@@ -84,7 +90,8 @@ predictors).
 
 **per-target assessment** — The analytic product about one specific target.
 Since 2026-07 this is **country_composition**'s hedged synthesis over that
-desk's seven verified reasoning **units** — NOT the retired
+desk's seven broad verified reasoning **units** (plus **proliferation_watch**
+on nuclear desks) — NOT the retired
 **country_assessor** one-pager. Its global sibling is the world composition
 (see **world_assessor**).
 
@@ -327,7 +334,7 @@ annotated, never adjudicated into the facts table.
 dated "authoritative current context" preamble of currently-valid facts,
 nexuses, and situations from the substrate, correcting the LLM's stale
 training cutoff. Restricted to still-valid facts of **seed/curated**
-provenance only; all seven **bounded reasoning units** opt in. The Tier-2 vector
+provenance only; all eight **bounded reasoning units** opt in. The Tier-2 vector
 `world_context` RAG source is a **guarded, measured pilot** on the
 `internal_stability` unit only — retrieved from a curated, re-embedded Qdrant
 corpus through the stack embedder port (bge-m3 1024-dim) with a focused

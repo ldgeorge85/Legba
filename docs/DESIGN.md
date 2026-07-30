@@ -65,18 +65,26 @@ measures **groundedness**: does each claim follow from the evidence it cites?
 *not* one model's verdict — it is a composition of small, individually-checked
 reads:
 
-1. **Seven bounded reasoning units** (`inline_target` LLM analysts —
-   `leadership_transition`, `energy_security`, `escalation`,
+1. **Eight bounded reasoning units** (`inline_target` LLM analysts). Seven broad
+   ones — `leadership_transition`, `energy_security`, `escalation`,
    `narrative_coordination`, `internal_stability`, `military_posture`,
-   `economic_coercion`), each fanned out to every **country desk** by a
+   `economic_coercion` — each fanned out to every **country desk** by a
    `has_tag("g20") or has_tag("watch")` predicate (the 19 G20 desks plus a
-   6-country high-consequence **watch** tier — 25 desks total), each answering
+   13-country high-consequence **watch** tier — 32 desks total), each answering
    **one** narrow question over a cited 72-hour signal slice plus an
    accumulated-facts grounding preamble, each ending in a **mandatory
-   faithfulness verify** (§3.5).
+   faithfulness verify** (§3.5). An eighth, narrower unit, `proliferation_watch`
+   (narrow: tag-scoped via `has_tag("nuclear_watch")` to the ~8
+   nuclear-relevant desks, not the full 32), answers the same way over the
+   same shape and the same verify gate. A **ninth** unit, `disruption_status`,
+   proves the predicate is the whole mechanism: it is tag-scoped the same way but
+   to a **non-country** desk family — `has_tag("supply_chain")`, the thematic
+   shipping-lane and commodity-flow desks — on a 24h window, with no new analyst
+   kind and no new code path.
 2. **Per-country composition** (`country_composition`, a
-   `meta_findings_synthesizer`) reads the seven *verified* units for a country and
-   writes a hedged, cited synthesis; an unverified sub-claim never enters it.
+   `meta_findings_synthesizer`) reads the seven broad *verified* units for a
+   country, plus `proliferation_watch` on nuclear desks, and writes a hedged,
+   cited synthesis; an unverified sub-claim never enters it.
 3. **Per-region composition** (`region_composition`, same kind) composes the
    verified per-country reads into **five region frames** (Africa, Americas,
    Europe, Indo-Pacific, MENA); a thematic **`escalation_composition`** additionally
@@ -127,23 +135,25 @@ stack registry.
 ### 1.3 Proven state
 
 A cold start from empty volumes (the single `0001_baseline.sql` schema migration)
-brings the full loop up: roughly 50 poll sources on cron (RSS / API / bulk — the
-BBC / Deutsche Welle / Al Jazeera feeds are the canonical RSS exemplars) →
+brings the full loop up: 100-plus poll sources on cron (RSS / API / bulk — the
+BBC / Deutsche Welle / Al Jazeera feeds are the canonical RSS exemplars; the live
+active count is generated in `docs/RELEASE_STATE.md`, not repeated here) →
 enriched signals (geo + language + entity classes promoted to indexed columns) →
-fan-out on `legba.signals.>` → the country desks (19 G20 + a 6-country watch
-tier = 25 desks). The **reactive acquisition
+fan-out on `legba.signals.>` → the country desks (19 G20 + a 13-country watch
+tier = 32 desks), plus the thematic supply-chain desks. The **reactive acquisition
 path** (source polls → fan-out → coalesced trigger fires → analyst run) is
 **proven live in the real stack** — most recently re-verified after the
 `dapr-scheduler` embedded-etcd fix that restores reminder recurrence (§6.3 /
 RUNBOOK §0); before that fix the loop fired once at boot then went silent.
 
-On top of that path the full **analysis spine (§1.1) is live**: the seven bounded
+On top of that path the full **analysis spine (§1.1) is live**: the nine bounded
 units → per-country composition → per-region composition → world composition →
 banded scorecard (plus the thematic `escalation_composition`), each cited
 and each unit checked by the mandatory faithfulness pass, drillable to source. The
 older monolithic per-country analyst (`country_assessor`) is **retired and
-stopped** — nothing in the trusted spine reads it (the composition reads the seven
-verified units), and it was the single largest producer of unverified one-pager
+stopped** — nothing in the trusted spine reads it (the composition reads the
+seven broad verified units, plus `proliferation_watch` on nuclear desks), and
+it was the single largest producer of unverified one-pager
 output (`docs/SEAMS.md` #35); its ~1.2k historical findings remain in the DB,
 unread (not a clean slate). The forecast-as-claim predictors (`country_predictor`,
 `india_energy_predictor`) are **retired / frozen and stopped** (~539 historical
@@ -306,7 +316,7 @@ worker actors**, addressed `analyst::<descriptor_id>::<target_id>`. The primary
 dispatches the matched targets to their workers via `ActorProxy`, **bounded
 concurrent** (a semaphore of `_FANOUT_CHUNK`, default 5) so a wide analyst
 (e.g. an `inline_target` unit like `energy_security`, or `country_composition`,
-each fanned across the ~25 active country desks — 19 G20 plus a 6-country watch
+each fanned across the 32 active country desks — 19 G20 plus a 13-country watch
 tier) runs its per-target work in
 parallel instead of serializing through one actor's turn queue. Workers are
 **lazy-activated**: they carry no descriptor of their own and are only ever
@@ -379,10 +389,10 @@ provenance, not prompt text).
   NULL AND (valid_until IS NULL OR valid_until > now())`, preferring `seed`/`curated`
   provenance) about the target geo + top slice entities. It is degrade-not-drop (a
   read failure leaves the prompt untouched), token-capped (`max_facts`), and skips
-  bare-QID values so it never injects an unreadable line. Opted in on all **seven
+  bare-QID values so it never injects an unreadable line. Opted in on all **eight
   bounded units** (`leadership_transition` / `energy_security` / `escalation` /
   `narrative_coordination` / `internal_stability` / `military_posture` /
-  `economic_coercion`, `grounding.enabled: true`) and the journal (§7.6); the
+  `economic_coercion` / `proliferation_watch`, `grounding.enabled: true`) and the journal (§7.6); the
   compositions (`country_composition` / `region_composition` / `world_assessor`)
   instead compose over the units' already-verified findings rather than a raw preamble.
 - **Tier 2 — vector `world_context` collection** (**LIVE**, the L-114 wiring landed). A
@@ -436,7 +446,7 @@ The score is folded, not enforced destructively:
 time (`runtime/actor_critic.py`) and gates a **visible low-confidence tier** — a
 weakly-grounded finding is demoted and labelled, never hard-deleted. A planted
 fabrication (a claim with no supporting cited evidence) is flagged unsupported.
-The seven units carry `method.llm.verify`; so do all the compositions
+The nine units carry `method.llm.verify`; so do all the compositions
 (`country_composition` / `region_composition` / `world_assessor` / the thematic
 `escalation_composition`), and `country_composition` **INNER JOINs on the
 faithfulness critique** so an unverified sub-claim is structurally unable to enter
@@ -1218,7 +1228,7 @@ planes are wired, by role:
 
 - **Core analyst plane** — the self-hosted `gpt-oss-120b`
   (`llm.primary.openai_compat`, $0 to run) drives every production analyst: the
-  seven units, the composition tower, and the deterministic-plus-LLM handlers.
+  nine units, the composition tower, and the deterministic-plus-LLM handlers.
 - **Faithfulness verify judge** — currently the **same core `gpt-oss-120b`**
   (`llm.primary.openai_compat`) scores groundedness on the verify pass (§3.5). It
   is **not** cross-family — a deliberate, temporary choice after the 8B judge

@@ -46,10 +46,15 @@ mapping:
 # unit integrates the multi-week substrate, not only the fresh signal slice.
 # target_geo + slice-entity scoped; capped; analysis-derived context stays fenced
 # off from ground truth (the grounding-quality provenance gate applies).
+# `narratives` (W-3e): the reified contested-claim families (mig 0102,
+# narrative_mapper) for THIS desk's scope render as a fenced "ASSESSED
+# NARRATIVES" block — which claims are contested and how they spread
+# (publish-order timing only; the block header carries the detect-only /
+# descriptive-not-causal honesty contract). Empty sidecar ⇒ no block.
 grounding:
   enabled: true
   scope: [target_geo, slice_entities]
-  sources: [substrate, situations, graph_structure]
+  sources: [substrate, situations, graph_structure, narratives]
   max_facts: 30
 
 method:
@@ -103,6 +108,12 @@ method:
     sources echo one frame). Never assert coordination without citing the
     converging signals. If the slice shows no coordination, say so plainly with
     low confidence and severity:low — still emit the finding.
+    Scope absence claims to the collection, never the world: report a negative
+    as "no coordination tells in the collected signals" or "not evident in this
+    desk's sources" — never as a world-fact ("no coordinated narrative exists").
+    This slice is one desk's collection; a campaign can be documented elsewhere
+    yet absent here. A "not_observed" indicator means not observed in this
+    desk's collection window; when the slice is thin, say so.
 
     Respond with STRICT JSON ONLY — no prose, no markdown fences, outside the
     JSON object:
@@ -131,7 +142,22 @@ method:
     can diff the SAME indicator run-over-run; a re-minted slug is invisible to the
     run-over-run diff. Introduce a NEW id ONLY for a genuinely novel signpost this
     desk needs that none of the canonical ids cover. Emit the single JSON object only.
+
+    OPEN QUESTIONS (optional field): the JSON object MAY also carry a top-level
+    "open_questions" array — up to 3 entries, each
+    {"question": "<a genuinely unresolved analytical question this run surfaced>",
+     "refs": [<the [N] indices of the cited evidence that raises it>]}.
+    Record a question ONLY when the cited evidence genuinely leaves it
+    unresolved — a contradiction between cited sources, a missing confirmation
+    for a load-bearing claim, an unexplained change. Tie every entry to at
+    least one cited [N] index via "refs". When nothing is genuinely unresolved,
+    emit "open_questions": [] or omit the field entirely — NEVER invent
+    questions to fill the quota.
   llm:
+    # Model-card sampling (gpt-oss ships generation_config temperature=1.0; the vLLM
+    # client always sends temperature, so the card default can never apply on its own).
+    # Fleet-wide per the 2026-07-24 sampling audit + A/B (+0.055 faith at 1.0).
+    temperature: 1.0
     primary:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat

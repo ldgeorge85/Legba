@@ -26,6 +26,7 @@ import { apiGet, ApiError } from '@/lib/api'
 import type { PanelProps } from '@/types'
 import { cn } from '@/lib/cn'
 import { selectRow } from '@/state/selection'
+import { humanizeAnalystId } from '@/lib/analystNames'
 import {
   claimSeverities,
   toClaims,
@@ -384,8 +385,8 @@ function ClaimItem({
             <div className="text-[11px] text-slate-500">corroboration not yet scored</div>
           )}
 
-          <div className="text-[10px] text-slate-500">
-            {c.analyst_id ?? 'unknown analyst'} · {new Date(c.produced_at).toLocaleString()}
+          <div className="text-[10px] text-slate-500" title={c.analyst_id ?? undefined}>
+            {humanizeAnalystId(c.analyst_id)} · {new Date(c.produced_at).toLocaleString()}
             {c.corroborationSources !== null && ` · ${c.corroborationSources} independent source(s)`}
           </div>
 

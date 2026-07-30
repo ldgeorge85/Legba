@@ -24,6 +24,7 @@ import { useQuery } from '@tanstack/react-query'
 import { HelpCircle, Maximize2, ZoomIn, ZoomOut } from 'lucide-react'
 import { PanelChrome } from '@/components/PanelChrome'
 import { ProvenanceCard } from '@/components/ProvenanceCard'
+import { useDockviewTileRedraw } from '@/components/useTileRedraw'
 import { fetchTimeline } from '@/lib/api'
 import { useElementWidth } from '@/lib/useElementWidth'
 import { useSelection, selectRow } from '@/state/selection'
@@ -91,6 +92,23 @@ function axisTicks(domain: [number, number], count = 6): number[] {
 // would observe nothing and pin the width at 0 forever (the first-mount
 // blank-panel bug) — the callback ref re-observes whenever the element itself
 // attaches.
+//
+// That callback-ref fix does NOT cover a SECOND, distinct class: a panel
+// mounted into a Dockview tile that starts hidden (a background tab, or a
+// tile Dockview hasn't laid out yet) measures a zero-size box the instant the
+// plot div attaches, same as before — but this time the ResizeObserver it
+// just subscribed can miss the later hidden→visible transition entirely
+// (Dockview keeps the content mounted the whole time, so there is no
+// guaranteed further resize delivery once the tile activates). The width
+// then sticks at 0 forever: the subtitle honestly reports "N ranged items"
+// (shaped from the fetched data, independent of measurement) while the
+// canvas stays blank — exactly the gallery-2 "278 ranged items" + empty-plot
+// bug. `useDockviewTileRedraw` is the shared fix for this class (already
+// applied to `target/Map.tsx` + `target/Timeline.tsx`): it watches the
+// tile's own visibility/dimension events and bumps a tick a frame after the
+// tile becomes visible; keying the measured div on that tick forces the
+// callback ref to detach/reattach, which re-seeds the width against the
+// tile's now-real box.
 
 // ---------------------------------------------------------------------------
 // Panel
@@ -132,6 +150,10 @@ export default function TimelinePanel({ registration }: PanelProps) {
   const [wrapRef, width] = useElementWidth<HTMLDivElement>()
   const plotW = Math.max(0, width - GUTTER)
   const svgH = TOP_PAD + LANE_ORDER.length * LANE_H + AXIS_H
+
+  // Background/not-yet-laid-out Dockview tile fix (see the comment above):
+  // remeasure once the tile actually becomes visible.
+  const redrawTick = useDockviewTileRedraw()
 
   const vis = useMemo(
     () => (domain ? visibleItems(shaped, domain) : shaped),
@@ -302,6 +324,7 @@ export default function TimelinePanel({ registration }: PanelProps) {
           </div>
         ) : (
           <div
+            key={redrawTick}
             ref={wrapRef}
             className="min-h-0 flex-1 select-none overflow-hidden"
             data-testid="timeline-plot"

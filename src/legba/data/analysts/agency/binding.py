@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Mapping
 
 from ...schemas.action_pack import ActionPack, ActionPackRef
 from .agency import Agency, AgencyOutcome
@@ -271,6 +271,15 @@ class AgencyToolBinding:
         )
 
 
+#: The action the escalation edge has always invoked. Stays the default so a
+#: pack descriptor that says nothing behaves byte-identically to the literal
+#: this used to be.
+DEFAULT_ESCALATION_ACTION = "escalate"
+
+#: Pack-tool config key naming which tool the escalation edge invokes.
+ESCALATION_ACTION_CONFIG_KEY = "action_tool"
+
+
 @dataclass
 class EscalationBinding:
     """The ``escalate_finding`` pack bound to one analyst (A-3c).
@@ -280,11 +289,78 @@ class EscalationBinding:
     :meth:`AgencyToolBinding.for_target` — which target a finding belongs
     to is only known at write time. The gates come from the pack's
     ``escalate`` tool config (``severity_gate`` / ``confidence_gate``).
+
+    ``action_tool`` is WHICH tool the crossing invokes. It was a hardcoded
+    ``"escalate"`` string literal at the fire site, which made the escalation
+    edge — the one threshold→action rule that actually runs in production —
+    fixed to a single action even though the config dict that could name
+    another was already free-form and DB-read. It now comes from the same
+    ``escalate`` tool config the gates do (``action_tool``), validated against
+    the bound pack's tool list at read time. Default preserves today exactly.
+
+    ``action_degraded`` is set when a configured action was REFUSED (it named
+    no tool on the pack): the binding falls back to
+    :data:`DEFAULT_ESCALATION_ACTION` and this note rides every emit into the
+    durable ``alert_sink_deliveries.payload_summary``, so a typo'd action is
+    visible on the delivery ledger, not just in a boot log line.
     """
 
     binding: AgencyToolBinding
     severity_gate: str = "high"
     confidence_gate: float = 0.85
+    action_tool: str = DEFAULT_ESCALATION_ACTION
+    action_degraded: str | None = None
+
+
+def resolve_escalation_action(
+    tool_config: Mapping[str, Any] | None,
+    pack: ActionPack | None,
+    *,
+    default: str = DEFAULT_ESCALATION_ACTION,
+    log_context: str = "",
+) -> tuple[str, str | None]:
+    """Resolve the escalation edge's action tool from the pack tool config.
+
+    Returns ``(action_tool, degrade_note)``. ``degrade_note`` is ``None`` on
+    the clean paths (no config, or a configured action that names a real tool
+    on the pack).
+
+    LOUD DEGRADE, not refuse: an action naming no tool on the pack falls back
+    to ``default`` with an ERROR log and a note that follows the emit onto the
+    delivery ledger. Refusing would take the escalation edge offline for a
+    misspelling — the operator would stop being paged about real findings
+    because of a config typo, which is strictly worse than paging them through
+    the default channel while shouting about the typo.
+
+    Validation is against the LIVE pack's tool list (the registry DB row), so
+    an operator who adds ``create_incident`` to the ``escalate_finding`` pack
+    via ``PUT /descriptors/…`` can select it in the same edit — no code change,
+    no rebuild. A tool named on the pack but lacking a registered handler is
+    still caught downstream by the agency's ``unknown_tool`` sentinel.
+    """
+    raw = (tool_config or {}).get(ESCALATION_ACTION_CONFIG_KEY)
+    if raw is None:
+        return default, None
+
+    configured = str(raw).strip()
+    pack_tools = [str(t.name) for t in (getattr(pack, "tools", None) or [])]
+    if not configured:
+        note = (
+            f"{ESCALATION_ACTION_CONFIG_KEY} was empty; using {default!r}"
+        )
+    elif configured in pack_tools:
+        return configured, None
+    else:
+        note = (
+            f"{ESCALATION_ACTION_CONFIG_KEY}={configured!r} names no tool on "
+            f"pack {getattr(getattr(pack, 'identity', None), 'id', '?')} "
+            f"(has {sorted(pack_tools)}); using {default!r}"
+        )
+    logger.error(
+        "agency_binding.escalation_action.degraded analyst=%s %s",
+        log_context or "?", note,
+    )
+    return default, note
 
 
 async def fetch_action_pack(
@@ -382,6 +458,8 @@ def escalation_gate_decision(
 
 
 __all__ = [
+    "DEFAULT_ESCALATION_ACTION",
+    "ESCALATION_ACTION_CONFIG_KEY",
     "GLOBAL_SCOPE",
     "AgencyToolBinding",
     "EscalationBinding",
@@ -389,4 +467,5 @@ __all__ = [
     "fetch_action_pack",
     "grants_include",
     "is_absence_or_negative_title",
+    "resolve_escalation_action",
 ]

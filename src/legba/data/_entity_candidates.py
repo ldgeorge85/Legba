@@ -11,12 +11,18 @@ half — it emits a bounded, ranked list of candidate MERGE pairs using three
 signals, all backed by indexes from migration 0088:
 
   1. EXACT block key — ``entity_block_key(canonical_name)`` (unaccent + lower +
-     strip-honorific + DISTINCT-tokens-sorted). "Ali Khamenei" and "Ayatollah
-     Ali Khamenei" share it; "Mojtaba Khamenei" does NOT (father/son never
-     auto-block). A functional btree indexes it.
+     strip-honorific/article + DISTINCT-tokens-sorted; 0106 also strips a
+     LEADING standalone a/an — the E4a article-twin recall fix). "Ali Khamenei"
+     and "Ayatollah Ali Khamenei" share it; "Mojtaba Khamenei" does NOT
+     (father/son never auto-block). A functional btree indexes it.
   2. TRIGRAM similarity — ``similarity(lower(name), lower(name)) >= min_trgm``,
      GIN-accelerated (``%``), for typo / phonetic near-misses the exact key
      misses ("Netanyahu" / "Netanyahoo").
+  3. COUNTRY-ALIAS gazetteer (E4a recall lever) — curated exact official-vs-
+     common state-name equivalences (:mod:`._country_aliases`: Myanmar/Burma,
+     Czechia/Czech Republic, ...) that share NO block-key token and no trigram
+     mass, so probes 1-2 can never propose them. Class-gated to country/
+     location/generic rows; a handful of surfaces, one cheap filter scan.
 
 Each pair is SCOPED (same-or-compatible ``entity_class``, no ``geo_country``
 conflict), HARD-NEGATIVE-filtered (junk fragment; incompatible class; geo
@@ -46,7 +52,14 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from itertools import combinations
 
+from ._country_aliases import (
+    SQL_NORM_TEMPLATE,
+    alias_group_id,
+    alias_group_key,
+    alias_surfaces,
+)
 from ._entity_canon import is_junk_entity
 
 logger = logging.getLogger(__name__)
@@ -88,13 +101,18 @@ def _geo_conflict(a: str | None, b: str | None) -> bool:
 
 
 # Honorific/title/article tokens dropped before the ORDER-SENSITIVE auto_merge
-# check (mirrors the entity_block_key strip in migration 0088). Kept as WHOLE
-# tokens.
+# check (mirrors the entity_block_key strip in migrations 0088 + 0106). Kept as
+# WHOLE tokens.
 _ORDERED_HONORIFICS: frozenset[str] = frozenset({
     "mr", "mrs", "ms", "dr", "prof", "sir", "gen", "col", "lt", "sgt", "sen",
     "rep", "hon", "president", "pres", "minister", "ayatollah", "sheikh",
     "imam", "rabbi", "the",
 })
+#: Standalone articles dropped ONLY at the HEAD of the token sequence (0106 —
+#: the E4a recall pass): "An Nasiriyah" == "Nasiriyah", "A Coruña" == "Coruña",
+#: but a mid-name "a"/"an" is content-bearing and survives ("Deir an Nur").
+#: "the" stays in _ORDERED_HONORIFICS (stripped anywhere, matching the SQL key).
+_LEADING_ARTICLES: frozenset[str] = frozenset({"a", "an"})
 _ORDERED_PUNCT_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -105,9 +123,15 @@ def _ordered_tokens(name: str) -> tuple[str, ...]:
     this keeps order so "Ali Khamenei" == "Ayatollah Ali Khamenei" (honorific
     dropped) but "Mohammed bin Salman" != "Salman bin Mohammed" (a patronymic
     reversal — two distinct people) and "Congo Republic" != "Republic Congo".
+    A single LEADING a/an is dropped too (0106), mirroring the SQL key, so
+    "An X"/"X" article twins stay eligible for the auto band; only the leading
+    position is stripped — see :data:`_LEADING_ARTICLES`.
     """
     toks = _ORDERED_PUNCT_RE.sub(" ", str(name or "").lower()).split()
-    return tuple(t for t in toks if t and t not in _ORDERED_HONORIFICS)
+    out = [t for t in toks if t and t not in _ORDERED_HONORIFICS]
+    if out and out[0] in _LEADING_ARTICLES:
+        out = out[1:]
+    return tuple(out)
 
 
 @dataclass(frozen=True)
@@ -165,6 +189,24 @@ SELECT a.id AS aid, a.canonical_name AS aname, a.entity_class AS acls,
  LIMIT $1
 """
 
+#: The gazetteer probe: active rows whose NORMALIZED surface (the SQL twin of
+#: ``_country_aliases.normalize_country_surface``) is a curated alias surface.
+#: A plain filter scan (no index) — the surface list is a couple dozen strings
+#: and the table is small; nothing like the trigram self-JOIN's cost.
+_ALIAS_NORM_EXPR = SQL_NORM_TEMPLATE.format(col="canonical_name")
+_COUNTRY_ALIAS_SQL = f"""
+SELECT id, canonical_name, entity_class, geo_country,
+       {_ALIAS_NORM_EXPR} AS norm
+  FROM entity_profiles
+ WHERE {_ACTIVE}
+   AND {_ALIAS_NORM_EXPR} = ANY($1::text[])
+"""
+
+#: Classes a gazetteer candidate side may carry. Persons and orgs/corps are
+#: NEVER proposed from a country-name alias (a person or company named after a
+#: country is not that country); the generic bucket is allowed but always GRAY.
+_ALIAS_PROBE_CLASSES: frozenset[str] = frozenset({"country", "location", "entity", ""})
+
 _TRGM_SQL = f"""
 SELECT a.id AS aid, a.canonical_name AS aname, a.entity_class AS acls,
        a.geo_country AS ageo,
@@ -207,11 +249,13 @@ async def generate_candidates(
 ) -> list[CandidatePair]:
     """Emit deduped, ranked candidate merge pairs over the ACTIVE keeper set.
 
-    Runs the exact-block-key probe then the trigram probe (both index-backed by
-    migration 0088), applies the hard-negative gate, bands each survivor, and
-    dedups by ``pair_key`` (exact wins over trgm for the same pair). Ordered by
-    ``score`` descending (auto_merge candidates first). Pure read — never
-    mutates, never raises for a normal empty result.
+    Runs the exact-block-key probe, the country-alias gazetteer probe (curated
+    official-vs-common state names), then the trigram probe (exact + trgm are
+    index-backed by migration 0088), applies the hard-negative gates, bands
+    each survivor, and dedups by ``pair_key`` (earlier probes win; later ones
+    only append their signal). Ordered by ``score`` descending (auto_merge
+    candidates first). Pure read — never mutates, never raises for a normal
+    empty result.
     """
     out: dict[str, CandidatePair] = {}
 
@@ -251,7 +295,75 @@ async def generate_candidates(
         )
         out[pair.pair_key] = pair
 
-    # 2) TRIGRAM pairs (always GRAY — a fuzzy match needs the adjudicator).
+    # 2) COUNTRY-ALIAS gazetteer pairs (E4a recall lever). Official-vs-common
+    #    state names ("Myanmar"/"Burma", "Czechia"/"Czech Republic") share no
+    #    block-key token and no trigram mass, so probes 1 and 3 can never even
+    #    PROPOSE the pair. The gazetteer (:mod:`._country_aliases`) is curated
+    #    + exact-match only; forbidden referents (Sudan/South Sudan, the Korea
+    #    pairs, China/Taiwan, bare "Congo") are asserted absent at import.
+    #    Gates: class-gated (persons/orgs never proposed), junk gate, geo
+    #    conflict, and DIFFERENT normalized surfaces (a same-name country/
+    #    location twin is the existing keep-distinct ambiguity, not an alias).
+    #    Band: BOTH sides typed `country` -> auto_merge (a curated equivalence
+    #    of two country-typed rows is deterministic ground truth — the same
+    #    trust level as a shared multi-token block key); ANY other mix stays
+    #    GRAY — e.g. a `location` "Macedonia" may be the Greek region, so the
+    #    LLM adjudicates. This deliberately bridges the country<->location
+    #    keep-distinct default for curated alias surfaces ONLY, and only as
+    #    a GRAY suggestion.
+    alias_groups: dict[int, list] = {}
+    for r in await conn.fetch(_COUNTRY_ALIAS_SQL, list(alias_surfaces())):
+        gid = alias_group_id(str(r["norm"] or ""))
+        if gid is not None:
+            alias_groups.setdefault(gid, []).append(r)
+    for rows in alias_groups.values():
+        for ra, rb in combinations(rows, 2):
+            aname = str(ra["canonical_name"] or "")
+            bname = str(rb["canonical_name"] or "")
+            acls = str(ra["entity_class"] or "")
+            bcls = str(rb["entity_class"] or "")
+            if str(ra["norm"]) == str(rb["norm"]):
+                continue  # same surface twice (class split) — not an alias pair
+            if (acls.strip().lower() not in _ALIAS_PROBE_CLASSES
+                    or bcls.strip().lower() not in _ALIAS_PROBE_CLASSES):
+                continue
+            if not aname or not bname:
+                continue
+            if is_junk_entity(aname) or is_junk_entity(bname):
+                continue
+            if _geo_conflict(ra["geo_country"], rb["geo_country"]):
+                continue
+            left_id, right_id = str(ra["id"]), str(rb["id"])
+            pair_key = "::".join(sorted((left_id, right_id)))
+            if pair_key in out:
+                existing = out[pair_key]
+                if "country_alias" not in existing.signals:
+                    out[pair_key] = CandidatePair(
+                        left_id=existing.left_id, left_name=existing.left_name,
+                        left_class=existing.left_class,
+                        right_id=existing.right_id,
+                        right_name=existing.right_name,
+                        right_class=existing.right_class,
+                        band=existing.band, score=existing.score,
+                        signals=existing.signals + ("country_alias",),
+                        block_key=existing.block_key,
+                    )
+                continue
+            both_country = (
+                acls.strip().lower() == "country"
+                and bcls.strip().lower() == "country"
+            )
+            band = "auto_merge" if both_country else "gray"
+            out[pair_key] = CandidatePair(
+                left_id=left_id, left_name=aname, left_class=acls,
+                right_id=right_id, right_name=bname, right_class=bcls,
+                band=band,
+                score=1.0 if band == "auto_merge" else 0.80,
+                signals=("country_alias",),
+                block_key=f"country_alias:{alias_group_key(aname) or ''}",
+            )
+
+    # 3) TRIGRAM pairs (always GRAY — a fuzzy match needs the adjudicator).
     #    OPT-IN + bounded: the current trgm self-join is an un-blocked full scan
     #    (~61s over 22k rows live — the review's perf finding), too slow for the
     #    actor cadence. Callers pass trgm_limit<=0 to SKIP it (exact-block-key

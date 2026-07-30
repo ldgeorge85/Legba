@@ -62,6 +62,14 @@ export type PanelKind =
   // grid + movers-since-last-visit (/v3/since) + newest high-severity
   // verified + a system-health corner, one glanceable 2×2 screen
   | 'system.wall'
+  // U-4 (COHERENCE_WAVES_PLAN_2026-07-28) — a standalone mount of JUST the
+  // Wall's movers-since-last-visit quadrant, boot-seeded (App.tsx) so cold
+  // boot answers "what changed while I was away" without any user action.
+  // Hidden from the sidebar (registry.ts HIDDEN_KINDS) — not a merge alias
+  // like the rest of that set, but a deliberate choice to keep the sidebar's
+  // ≤22-row budget (U-3) unspent by a tile that's already on-screen at boot;
+  // still reachable via ⌘K and the "Wall" preset's full panel.
+  | 'system.wall_movers'
   // Entity knowledge-graph (UI-3 — source-first analogue of v2's entity KG)
   | 'system.entities'
   | 'system.entity_graph'
@@ -112,6 +120,12 @@ export type PanelKind =
   // the global banded Timeline lanes — self-fetching singletons.
   | 'v4.kpi'
   | 'v4.timeline'
+  // U-3 merges (COHERENCE_WAVES_PLAN_2026-07-28 §U-3) — one visible panel kind
+  // per merge set; the folded-away originals (v4.why/system.lineage/v4.flow,
+  // system.alert_center/system.watchlist/system.escalations) stay in this
+  // union + the registry (HIDDEN_KINDS) so old saved-layout panel ids resolve.
+  | 'system.provenance'
+  | 'system.alerts_watches'
 
 export type PanelCategory =
   | 'target'

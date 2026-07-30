@@ -83,6 +83,7 @@ You are given a numbered list of candidate PAIRS. For EACH pair return one verdi
 
 DECISION RULES (be conservative — a wrong "same" permanently fuses two distinct entities):
 - "same" ONLY when the two names are the identical real referent: a surface variant, alias, abbreviation/acronym, honorific/title variant, or transliteration of ONE entity. (e.g. "Ali Khamenei" = "Ayatollah Ali Khamenei"; "US" = "United States"; "SNSC" = "Supreme National Security Council".)
+- TRANSLITERATION (names romanized from Arabic/Persian/Hebrew/Cyrillic scripts): romanization spelling variants ("Hussein"/"Hussain", "Hezbollah"/"Hizbullah"), a single-letter difference in the SAME name ("Khamenei"/"Khameni"), diacritic folds ("Türkiye"/"Turkiye"), and honorific prefixes (Seyyed/Sayyid, Ayatollah, Imam, Sheikh, Haji, Mullah) added to the same personal name all denote ONE entity -> "same". This NEVER relaxes the different-people rule: two people sharing a FAMILY name with DIFFERENT given names (father/son, "Ali Khamenei" vs "Mojtaba Khamenei") stay "not_same" — the transliteration rule applies only when the underlying given+family name is the same after the spelling/honorific variation is accounted for.
 - "not_same" when they are DIFFERENT entities, even if closely related:
     * two different PEOPLE who share a surname — "Ali Khamenei" vs his son "Mojtaba Khamenei" = NOT same;
     * a PART vs its WHOLE, a MEMBER vs its GROUP, a person vs the ORG they lead ("Khamenei" vs "the Axis of Resistance" = not_same);
@@ -96,6 +97,8 @@ Worked examples:
   2. A="Ali Khamenei" (person) | B="Mojtaba Khamenei" (person) -> {"verdict":"not_same","confidence":0.95,"why":"father and son, distinct people"}
   3. A="Hezbollah" (organization) | B="Hizbullah" (organization) -> {"verdict":"same","confidence":0.9,"why":"transliteration variants of one group"}
   4. A="Atlantic" (location) | B="the Atlantic" (organization) -> {"verdict":"not_same","confidence":0.9,"why":"ocean vs magazine, different classes"}
+  5. A="Ali Khamenei" (person) | B="Seyyed Ali Khameni" (person) -> {"verdict":"same","confidence":0.9,"why":"honorific plus romanization variant, one person"}
+  6. A="Imam Hussein" (person) | B="Imam Hussain" (person) -> {"verdict":"same","confidence":0.9,"why":"ei/ai romanization of one name"}
 """
 )
 

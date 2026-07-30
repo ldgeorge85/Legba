@@ -1,0 +1,94 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Supply-chain pack — TIER-B desk 7/10: the Panama Canal.
+# planning/SUPPLY_CHAIN_PACK_PLAN_2026-07-29.md §1.2.
+#
+# ============================ ACTIVATION GATE =============================
+# TIER B: registered so the topology is DECLARED and the collection gap is
+# VISIBLE — NOT activated. It stays `state: draft` so the reconciler never wires
+# it (source_first_runtime.py:901 boot-wires only `active` targets) and the
+# disruption_status unit never fans onto it (AnalystActor._cadence_targets
+# evaluates its predicate against `is_head AND state='active'` targets only).
+#
+#   GATE (plan §1.2): needs a canal-authority feed — the plan's §5.2 slot M-2.
+#   ACTIVATE AT: >= 40 titles / 30d matching this desk's vocabulary.
+#   MEASURED 2026-07-29 (live, read-only): 13 titles ("panama canal") / 30d — up
+#   from the plan's 4 — and 26 canonical rows / 24h on the geo set below.
+#   STILL UNDER THE GATE. Activating now would emit "insufficient evidence" twice
+#   a day forever — the failure mode plan §6.3 item 8 says NO to out loud.
+#
+#   NOTE: slot M-2 IS FILLED. `source.pancanal.news`
+#   (descriptors/source_pancanal.yaml, Panama Canal Authority, `official`, geo PA)
+#   went `state: active` on 2026-07-29 and is ingesting. Its first day already
+#   makes it 46% of this lane's 24h rows — which is why the gate is a 30d TITLE
+#   count, not a row count: one day of first-fetch backlog is not coverage.
+#   Re-measure the 30d count once the feed has accumulated, THEN flip this desk.
+# ==========================================================================
+#
+# The full shape rationale (the 360-row pre-filter, why scope.geo is the SQL
+# pushdown and contains_any only a refiner, why no US in the geo set, why no
+# inline `analyst:` block, why no g20/watch tag, why no source_id pin) is written
+# out once in descriptors/target_lane_hormuz.yaml — read that header first.
+
+identity:
+  id: lane_panama
+  name: "Lane — Panama Canal"
+  schema_uri: legba/target/2.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  inherits: []
+  state: draft
+  owner: supply_chain_pack
+  created: "2026-07-29T00:00:00Z"
+
+scope:
+  domain: thematic
+  themes: [supply_chain, maritime, chokepoint, canal, shipping]
+  # THE SQL PUSHDOWN — the canal state plus its immediate isthmus neighbours.
+  # No US (plan §0.3: a PA,CR,CO,US variant measured 2,626 rows/72h of which
+  # 1,338 — 51% — were US weather alerts).
+  geo: [PA, CR, CO]
+  entity_classes:
+    - country
+    - organization
+    - corporation
+    - infrastructure
+    - commodity
+    - location
+    - international_org
+    - event_series
+    - person
+    - concept
+  relationship_types:
+    - TradesWith
+    - OperatesIn
+    - LocatedIn
+    - PartOf
+    - PartnersWith
+    - CompetesWith
+  time_horizon_days: 90
+  # NOTE on the YAML: `>-` is a FOLDED scalar, and a MORE-indented continuation
+  # line keeps its newline verbatim. That is harmless between tokens (the
+  # situation_iran_war precedent relies on it) but would corrupt a term if a
+  # quoted string were split across lines — never break inside the quotes.
+  predicate: >-
+    contains_any(["panama canal", "canal", "transit", "transits", "lock",
+                  "gatun", "drought", "water level", "queue", "vessel",
+                  "draft restriction", "booking slot", "waiting time"])
+  tags: [supply_chain, disruption, lane]
+
+sources:
+  - source_selector:
+      tags: [news]
+      kinds: [rss]
+      owner_tenant: shared
+    subscription:
+      canonical_only: true
+
+allowed_action_packs: []
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+  routing: []

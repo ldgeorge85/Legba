@@ -275,11 +275,15 @@ async def test_thematic_read_slice_reads_dimension_and_diffs_roster():
     assert "f.target_id = $" not in sq              # NOT target-scoped
     assert sp[-1] == synth.DEFAULT_VERIFY_FLOOR
 
-    # (2) the g20+watch desk roster was resolved (thematic branch, NOT the world
-    # region roster).
+    # (2) the assessed-desk roster was resolved (thematic branch, NOT the world
+    # region roster). The tag literal carries g20+watch (the seven broad units'
+    # subscription key) plus supply_chain (the disruption_status unit's key,
+    # 2026-07-29) — assert each tag rather than the exact array literal so adding
+    # a fan-out key doesn't read as a regression here.
     assert conn.roster_calls, "thematic run must resolve the desk roster"
     rq, _ = conn.roster_calls[0]
-    assert "array['g20', 'watch']" in rq
+    assert "'g20'" in rq and "'watch'" in rq
+    assert "'supply_chain'" in rq
 
     # (3) coverage: IN/DE present, IR a NAMED gap — denormalized onto every row.
     assert rows and all(r.get("_desk_mode") == synth.THEMATIC_MODE_PRESENT for r in rows)

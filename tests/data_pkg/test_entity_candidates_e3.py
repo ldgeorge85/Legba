@@ -199,3 +199,114 @@ async def test_pure_helpers_no_db():
     assert not _geo_conflict("IR", "IR")
     assert not _geo_conflict(None, "IL")  # one side unknown => no conflict
     assert not _geo_conflict("", "IL")
+
+
+# ---------------------------------------------------------------------------
+# 0106 — leading-article strip (the E4a article-twin recall lever). The E4a
+# labeling pass (2026-07-28, precision 1.000 / recall 0.347) measured "X" vs
+# "the X"/"An X" article twins as the dominant false-split class; a leading
+# standalone a/an now folds into the block key + the order-sensitive compare,
+# WITHOUT weakening the anagram / person / single-token auto-band guards.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_leading_a_an_article_twin_is_auto_merge(pg_pool):
+    # Pre-0106 these never even shared an exact key ("a"/"an" were not stripped),
+    # so the pair was invisible to the exact probe. trgm is OFF here to prove
+    # the exact-key path alone now surfaces + auto-bands them.
+    async with pg_pool.acquire() as conn:
+        await _seed(conn, "Zzartlever Movement", cls="organization")
+        await _seed(conn, "An Zzartlever Movement", cls="organization")
+        await _seed(conn, "Zzartfront Front", cls="organization")
+        await _seed(conn, "A Zzartfront Front", cls="organization")
+        pairs = await generate_candidates(conn, exact_limit=2000, trgm_limit=0)
+    p = _find(pairs, "Zzartlever Movement", "An Zzartlever Movement")
+    assert p is not None, "the 'An X' twin must share the block key post-0106"
+    assert p.band == "auto_merge", p
+    p2 = _find(pairs, "Zzartfront Front", "A Zzartfront Front")
+    assert p2 is not None, "the 'A X' twin must share the block key post-0106"
+    assert p2.band == "auto_merge", p2
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_mid_name_article_is_content_bearing(pg_pool):
+    # Only the LEADING article is stripped: a mid-name "an" (a transliterated
+    # Arabic article inside a compound) keeps its token, so these two do NOT
+    # share a key and never become an exact-probe candidate.
+    async with pg_pool.acquire() as conn:
+        await _seed(conn, "Zzmidart An Zzmidb", cls="location")
+        await _seed(conn, "Zzmidart Zzmidb", cls="location")
+        pairs = await generate_candidates(conn, exact_limit=2000, trgm_limit=0)
+    assert _find(pairs, "Zzmidart An Zzmidb", "Zzmidart Zzmidb") is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_content_function_words_not_stripped(pg_pool):
+    # of/for/etc. are content-bearing — "Bank of X" and "Bank X" must NOT fold.
+    async with pg_pool.acquire() as conn:
+        await _seed(conn, "Bank of Zzfuncword", cls="organization")
+        await _seed(conn, "Bank Zzfuncword", cls="organization")
+        pairs = await generate_candidates(conn, exact_limit=2000, trgm_limit=0)
+    assert _find(pairs, "Bank of Zzfuncword", "Bank Zzfuncword") is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_article_variant_anagram_still_gray(pg_pool):
+    # SAFETY: the anagram guard survives the article strip. "An X Republic" and
+    # "Republic X" share the sorted-DISTINCT key once the leading article drops,
+    # but their ORDERED token sequences differ -> gray, never auto_merge.
+    async with pg_pool.acquire() as conn:
+        await _seed(conn, "An Zzanagart Republic", cls="organization")
+        await _seed(conn, "Republic Zzanagart", cls="organization")
+        pairs = await generate_candidates(conn, exact_limit=2000, trgm_limit=0)
+    p = _find(pairs, "An Zzanagart Republic", "Republic Zzanagart")
+    assert p is not None, "the anagram still shares a block key -> candidate"
+    assert p.band == "gray", "a token permutation must not auto_merge"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_person_article_twin_still_never_auto(pg_pool):
+    # SAFETY: persons never auto-merge, article twin or not.
+    async with pg_pool.acquire() as conn:
+        await _seed(conn, "An Zzpersart Alpha", cls="person")
+        await _seed(conn, "Zzpersart Alpha", cls="person")
+        pairs = await generate_candidates(conn, exact_limit=2000, trgm_limit=0)
+    p = _find(pairs, "An Zzpersart Alpha", "Zzpersart Alpha")
+    assert p is not None
+    assert p.band == "gray", "person pairs are adjudicated, never auto_merged"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_block_key_sql_article_semantics(pg_pool):
+    # The 0106 SQL function itself: leading the/a/an stripped, mid-name 'an'
+    # and of/for kept, and the Python order-sensitive mirror stays in agreement
+    # on the article-twin cases.
+    from legba.data._entity_candidates import _ordered_tokens
+
+    cases = [
+        ("the Black Sea Fleet", "black fleet sea"),
+        ("Black Sea Fleet", "black fleet sea"),
+        ("An Nasiriyah", "nasiriyah"),
+        ("Nasiriyah", "nasiriyah"),
+        ("A Coruña", "coruna"),
+        ("Coruña", "coruna"),
+        ("Bank of America", "america bank of"),   # 'of' is content-bearing
+        ("Deir an Nur", "an deir nur"),           # mid-name 'an' kept
+    ]
+    async with pg_pool.acquire() as conn:
+        for raw, expect in cases:
+            got = await conn.fetchval("SELECT entity_block_key($1)", raw)
+            assert got == expect, (raw, got, expect)
+    # Order-sensitive mirror: the article twins compare EQUAL, the anagram not.
+    assert _ordered_tokens("An Nasiriyah") == _ordered_tokens("Nasiriyah")
+    assert _ordered_tokens("A Zzx Front") == _ordered_tokens("Zzx Front")
+    assert _ordered_tokens("the Zzx Front") == _ordered_tokens("Zzx Front")
+    assert _ordered_tokens("Deir an Nur") != _ordered_tokens("Deir Nur")
+    assert _ordered_tokens("Congo Republic") != _ordered_tokens("Republic Congo")

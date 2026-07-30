@@ -392,7 +392,12 @@ tile that headlines the whole panel set.
   fabricated close. Built as a lightweight custom SVG (not vis-timeline) with
   all shaping pure in `lib/timelineWindows.ts`; width measurement uses the
   shared `useElementWidth` callback-ref hook (the first-mount-blank fix,
-  below). Data: `GET /api/v1/v3/timeline?target_id=&days=` (added for this
+  below) PLUS `useDockviewTileRedraw` (keying the measured div on its tick) —
+  the callback ref alone still stuck at width 0 when the tile mounted hidden
+  (a background tab, or a tile Dockview hadn't laid out yet) and its
+  ResizeObserver missed the later hidden→visible transition; the tile-redraw
+  tick forces a re-measurement once the tile actually becomes visible. Data:
+  `GET /api/v1/v3/timeline?target_id=&days=` (added for this
   panel). Desk-scoped to the unified selection's target; click a bar →
   `selectRow` into the Inspector. Ships in `personal` and `cis`; pinned to the
   Investigation nav group. (Distinct from the `v4.timeline` KPI-strip lanes in
@@ -873,13 +878,21 @@ The evaluation and operations surfaces (mostly `personal`-only).
   - **Banded per-country scorecard** (`GET /v3/eval/country_scorecard`) — one
     honest card per active desk tagged `g20` **or** `watch`, each written by the
     deterministic `scorecard_producer` (the 12th OutputKind, `scorecard`). The
-    roster is the 19 G20 country desks plus a high-consequence **watch** tier
-    (Israel, Iran, Ukraine, Taiwan, North Korea, Pakistan — descriptor ids
-    `country_watch_{il,ir,ua,tw,kp,pk}`), 25 desks in all; the bands span **14
+    roster is the 19 G20 country desks plus a 13-country high-consequence
+    **watch** tier (Israel, Iran, Ukraine, Taiwan, North Korea, Pakistan, plus
+    the escalation-risk band Sudan, Mali, Burkina Faso, Niger, DR Congo,
+    Myanmar, Haiti), **32 desks** in all; the bands span **14
     days**, so a card integrates over that window rather than a single tick.
+    The thematic supply-chain desks are deliberately **not** carded here — the
+    scorecard enumerates `g20`/`watch`-tagged targets only, so a lane desk has no
+    row rather than an empty one.
     Adding a country is register-a-target — the coverage tag alone cards it, no
     code. Each card shows a
-    **band per dimension** (the seven bounded units) derived by high-precision
+    **band per dimension** (the seven broad bounded units — the eighth,
+    `proliferation_watch`, is deliberately NOT a fixed scorecard dimension,
+    since a fixed dimension would mis-render `insufficient-evidence` on the
+    non-nuclear desks it doesn't cover; its read still surfaces via the
+    per-country composition's `other_analysts`) derived by high-precision
     rules over already-verified sub-claims; clicking a band expands its **basis**
     — the verified sub-claim finding ids the band rests on, each a `RecordLink`
     that drills into the Inspector's cited card + the lineage DAG. A dimension

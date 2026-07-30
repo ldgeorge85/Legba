@@ -24,6 +24,19 @@
 # only sanctioned Opus users). The corpus is the analytic SUBSTRATE the whole
 # signal-content-depth program built toward; this analyst is the payoff — it MINES
 # the stored full text rather than re-deriving from the fresh teaser slice.
+#
+# R-1 (2026-07-28) — BACKLOG-DRIVEN SELECTION. The self-selection above is now
+# a FALLBACK: `grounding.sources: [open_questions]` (below) prepends a bounded,
+# priority-ordered "STANDING OPEN QUESTIONS" block (hypotheses rows with
+# status='open_question' — the K-2a harvest + the K-2b per-finding faucet) that
+# the system prompt tells the model to PREFER over self-selecting. Extends the
+# EXISTING analyst — no new organ (see the R-TRACK coherence-audit finding:
+# ~40 deterministic organs where ~15 archetypes would do). Empty backlog ⇒ the
+# grounding hook injects nothing ⇒ self-selection runs UNCHANGED. When the
+# model answers a standing question it names the tag in the new
+# "addressed_question" field; the runtime resolves that into the finding's
+# derived_from PLUS an append-only bearing_edges pointer (finding -> question,
+# `edge_kind='bears_on'`) — it NEVER closes or rewrites the question itself.
 
 identity:
   id: corpus_researcher
@@ -59,10 +72,17 @@ mapping:
   fields: []
   schema_drift_policy: warn_and_continue
 
-# No per-target grounding preamble: a META researcher has no target_geo, and it
-# assembles its own context via the GATHER tools rather than an injected slice.
+# R-1 — the ONLY grounding source this META researcher opts into is the
+# standing-question BACKLOG (no target_geo ⇒ substrate/situations/narratives/
+# graph_structure/vector:world_context all stay OFF as before — it still
+# assembles its own context via the GATHER tools rather than an injected
+# per-target slice). max_facts is a REQUEST; resolve_open_questions hard-caps
+# at 8 regardless (runtime.grounding._MAX_OPEN_QUESTIONS_GROUNDING).
 grounding:
-  enabled: false
+  enabled: true
+  sources:
+    - open_questions
+  max_facts: 8
 
 method:
   kind: llm_planner
@@ -80,6 +100,22 @@ method:
     Number the provided signals [1], [2], [3]… in the order given and treat them as
     your evidence.
 
+    STANDING QUESTIONS: a "STANDING OPEN QUESTIONS" block may appear above,
+    listing the system's own unresolved analytical questions tagged [Q1], [Q2],
+    … in priority order. When that block is present, PREFER investigating ONE
+    of those questions over picking your own topic — they are real standing
+    gaps in the system's understanding, and answering one (or determining the
+    corpus does not resolve it) retires more value than a fresh self-selected
+    read. If you investigate one, set the top-level "addressed_question" field
+    in your JSON response to its exact tag (e.g. "Q2"). A NULL RESULT is a
+    LEGITIMATE, COMPLETE finding: if the corpus you searched does not contain
+    the evidence to resolve the question, SAY SO PLAINLY in the body — that is
+    evidence about OUR COLLECTION, not a failure of the research. Set a low
+    confidence and severity:low for a genuine null result; still cite whatever
+    you searched so the null is itself verifiable. If no such block is present,
+    or none of the listed questions are worth investigating, self-select a
+    topic as usual and OMIT the "addressed_question" field (never invent a tag).
+
     You MAY use optional tools to DEEPEN the investigation when they add value (you
     can also synthesize directly from the signals provided):
     - list_situations(status='active') — the live thematic frames, to place the
@@ -91,6 +127,14 @@ method:
       citable the same way.
     - search_signals / query_facts / query_nexuses / get_timeline — supporting reads
       for corroboration and context.
+    - web_search(query) / web_fetch(url) — reach OUTSIDE the substrate when the
+      corpus genuinely cannot answer, which is a gap in our COLLECTION rather than
+      a gap in your effort. Use it especially on a STANDING QUESTION the corpus
+      leaves open. Whatever you pull back is external evidence and is cited like
+      any other source. Two hard rules: a search that reports itself DEGRADED (or
+      whose emptiness was never liveness-verified) proves NOTHING about absence —
+      never turn it into "no reporting exists"; and prefer our own archived
+      sources when both say the same thing.
 
     Method: pick the most significant development, weigh the evidence, name the
     single most plausible read, and note where independent sources agree or conflict.
@@ -98,6 +142,12 @@ method:
     [2] or [1][4]. Uncited key claims are not allowed. Separate evidence from
     inference: prefix every inferred judgement with "Assessed:". Never state
     something as established fact unless a cited signal actually reports it.
+    ABSENCE claims are CORPUS-scoped, never world-scoped: when you assert that
+    something is not happening or not reported, write "no signals in the corpus
+    searched report ..." / "not observed in the reviewed documents" — NEVER a
+    world-fact ("no X exists", "there is no Y"). The corpus is one collection;
+    absence in the searched set is not absence in the world. When coverage is
+    thin, say so plainly.
 
     Produce EXACTLY ONE finding. Respond with STRICT JSON and nothing else — no
     prose before or after, no code fences:
@@ -111,7 +161,11 @@ method:
         prefixed 'Assessed:'. Keep it tight and fully cited.>",
       "confidence": 0.0,
       "evidence": ["<the signal id (the doc_id from search_corpus / read_document) for each [N] you cited, IN ORDER: [1] -> evidence[0], [2] -> evidence[1], …>"],
-      "tags": ["severity:low", "topic:corpus_research"]
+      "tags": ["severity:low", "topic:corpus_research"],
+      "addressed_question": "<OPTIONAL — the exact tag e.g. \"Q2\" of the STANDING
+        OPEN QUESTION this run investigated, ONLY when that block was provided AND
+        you chose one; omit entirely (do not set null, do not invent a tag) when
+        self-selecting instead>"
     }
     The "evidence" array MUST list the real signal id backing each [N] marker, in
     marker order, so the faithfulness gate can ground each claim against the source
@@ -123,7 +177,22 @@ method:
     topical tags (e.g. topic:<country>, topic:<theme>). If your investigation turns
     up little of substance, say so plainly, set a low confidence, and tag
     severity:low.
+
+    OPEN QUESTIONS (optional field): the JSON object MAY also carry a top-level
+    "open_questions" array — up to 3 entries, each
+    {"question": "<a genuinely unresolved analytical question this run surfaced>",
+     "refs": [<the [N] indices of the cited evidence that raises it>]}.
+    Record a question ONLY when the cited evidence genuinely leaves it
+    unresolved — a contradiction between cited sources, a missing confirmation
+    for a load-bearing claim, an unexplained change. Tie every entry to at
+    least one cited [N] index via "refs". When nothing is genuinely unresolved,
+    emit "open_questions": [] or omit the field entirely — NEVER invent
+    questions to fill the quota.
   llm:
+    # Model-card sampling (gpt-oss ships generation_config temperature=1.0; the vLLM
+    # client always sends temperature, so the card default can never apply on its own).
+    # Fleet-wide per the 2026-07-24 sampling audit + A/B (+0.055 faith at 1.0).
+    temperature: 1.0
     primary:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
@@ -168,8 +237,26 @@ cadence:
 # binding self-allows this pack under GLOBAL_SCOPE (the grant leg stays real; the
 # allow leg is self-satisfied for the no-target run). Without this grant the loop
 # runs single-shot with no tools.
+#
+# R-3d — `web_access` is the EXTERNAL RETRIEVAL grant, and this analyst is the
+# reason the R-track exists. It drains the standing-question backlog
+# (`grounding.sources: [open_questions]` above) over OUR OWN corpus; the Mali
+# case proved the limit of that — a heavily-reported fuel embargo our feeds
+# never carried, which no amount of matching over our own stream can find.
+# Gap-filling is a COLLECTION problem, so this analyst gets the discovery leg.
+#
+# Granting the pack does NOT activate search. The three-way gate still applies
+# (this META path self-allows the pack it was granted, under GLOBAL_SCOPE), the
+# `web_search` ToolSpec still needs a provider (its `config.provider` stack_ref,
+# or the legacy LEGBA_WEB_SEARCH_ENDPOINT), and the SSRF egress guard still has
+# to permit the engine host. Every one of those gaps fails LOUDLY.
+#
+# Web-retrieved evidence is EXOGENOUS and tagged as such (`retrieval_origin`,
+# mig 0112) — it lands in the WEAK calibration tier and can never silently
+# count as strong exogenous confirmation.
 action_packs:
   - pack_id: substrate_read
+  - pack_id: web_access
 
 outputs:
   - kind: nats_stream

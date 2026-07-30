@@ -789,11 +789,13 @@ class LivenessWatchdog:
         downstream by the evaluator, so it can't false-alarm.
 
         The LATERAL join surfaces WHY a source is silent: the most recent
-        ``source_poll_outcomes`` row (written only for empty/error polls) tells
+        ``source_poll_outcomes`` row (one per poll since migration 0114) tells
         the alert whether the feed errored (``last_poll_outcome='error'`` +
-        ``last_poll_health`` / ``last_poll_error``) or simply returned nothing
-        ('empty' / 'healthy') — or whether NO poll outcome was recorded at all
-        (poll reminder likely dead). Left join so it degrades to NULLs when the
+        ``last_poll_health`` / ``last_poll_error``), simply returned nothing
+        ('empty' / 'healthy'), or last polled PRODUCTIVELY ('success' +
+        ``last_poll_signals_written``) — or whether NO poll outcome was
+        recorded at all, which now means literally what the diagnosis always
+        claimed: the poll never ran. Left join so it degrades to NULLs when the
         provenance table is empty.
         """
         async with self._pg.acquire() as conn:
@@ -807,12 +809,13 @@ class LivenessWatchdog:
                        po.health_state                                  AS last_poll_health,
                        po.error                                         AS last_poll_error,
                        po.occurred_at                                   AS last_poll_at,
-                       po.newest_entry_ts                               AS last_poll_newest_entry_ts
+                       po.newest_entry_ts                               AS last_poll_newest_entry_ts,
+                       po.signals_written                               AS last_poll_signals_written
                 FROM source_descriptors d
                 LEFT JOIN signals s ON s.source_id = d.descriptor_id
                 LEFT JOIN LATERAL (
                     SELECT outcome, health_state, error, occurred_at,
-                           newest_entry_ts
+                           newest_entry_ts, signals_written
                     FROM source_poll_outcomes
                     WHERE source_id = d.descriptor_id
                     ORDER BY occurred_at DESC
@@ -820,7 +823,8 @@ class LivenessWatchdog:
                 ) po ON TRUE
                 WHERE d.is_head AND d.state = 'active'
                 GROUP BY 1, 2, po.outcome, po.health_state, po.error,
-                         po.occurred_at, po.newest_entry_ts
+                         po.occurred_at, po.newest_entry_ts,
+                         po.signals_written
                 """
             )
         return [dict(r) for r in rows]
@@ -926,14 +930,15 @@ class LivenessWatchdog:
         source's newest produced-signal timestamp.
 
         Pulls the last ``_EMPTY_STREAK_WINDOW`` ``source_poll_outcomes`` rows for
-        each active source. A PRODUCTIVE poll writes NO outcome row, so it cannot
-        break the empty run from THIS table by itself — which is why every row
-        also carries ``last_signal`` (``max(signals.fetched_at)`` for the source):
-        ``_evaluate_empty_streaks`` uses it to RESET a streak whose most-recent
-        empty poll is OLDER than a produced signal (the source is alive again).
-        Without it, an actively-producing source whose last recorded outcome rows
-        happen to be empty stays pinned DEGRADED forever. Each output row is one
-        outcome: ``{source_id, outcome, occurred_at, health_state,
+        each active source. Since migration 0114 a PRODUCTIVE poll writes an
+        ``outcome='success'`` row, which breaks the empty run directly. Every
+        row STILL carries ``last_signal`` (``max(signals.fetched_at)`` for the
+        source): ``_evaluate_empty_streaks`` uses it to RESET a streak whose
+        most-recent empty poll is OLDER than a produced signal (the source is
+        alive again) — the only thing that could see a recovery across the
+        pre-0114 rows, which remain on disk and where an actively-producing
+        source's last recorded outcomes really are all 'empty'. Each output row
+        is one outcome: ``{source_id, outcome, occurred_at, health_state,
         newest_entry_ts, last_signal}`` — ``newest_entry_ts`` (B0-12) is the
         handler's newest-observed-upstream-entry evidence the discriminator
         keys on (NULL for handlers that don't record it).
@@ -1109,15 +1114,16 @@ def _evaluate_empty_streaks(
     """Pure empty-streak decision over poll-outcome rows — no DB, unit-testable.
 
     ``rows``: iterable of mappings with ``source_id``, ``outcome``
-    ('empty'|'error'), ``occurred_at`` (tz-aware datetime), and (optionally)
-    ``last_signal`` (tz-aware datetime — the source's newest produced signal)
-    and ``newest_entry_ts`` (the handler's newest-observed-upstream-entry
-    evidence for that poll — B0-12), already grouped per source and ordered
-    NEWEST-FIRST (the SQL guarantees this). For each source, count the leading
-    run of consecutive 'empty' rows; the run breaks on the first 'error' row.
-    Returns ``(source_id, streak_len, newest_empty_at, fault_class)`` for
-    every source whose leading empty run is >= ``threshold``, is NOT producing
-    again, and is NOT classified honest-quiet.
+    ('empty'|'error'|'success'), ``occurred_at`` (tz-aware datetime), and
+    (optionally) ``last_signal`` (tz-aware datetime — the source's newest
+    produced signal) and ``newest_entry_ts`` (the handler's
+    newest-observed-upstream-entry evidence for that poll — B0-12), already
+    grouped per source and ordered NEWEST-FIRST (the SQL guarantees this). For
+    each source, count the leading run of consecutive 'empty' rows; the run
+    breaks on the first non-'empty' row — an 'error' or, since migration 0114,
+    a 'success'. Returns ``(source_id, streak_len, newest_empty_at,
+    fault_class)`` for every source whose leading empty run is >=
+    ``threshold``, is NOT producing again, and is NOT classified honest-quiet.
 
     B0-12 discriminator: the run's newest non-null ``newest_entry_ts`` is
     compared against ``last_signal`` by :func:`_classify_streak` —
@@ -1127,10 +1133,12 @@ def _evaluate_empty_streaks(
     NEWER entries yet 0 yielded) and 'unknown' runs (no evidence — handlers
     that don't record the observation, pre-B0-12 rows) are returned.
 
-    Signal BOUND (supersedes the older newest-empty-only reset): a PRODUCTIVE
-    poll writes NO outcome row (it is self-evidencing via its signals), so this
-    table alone cannot see successes. The streak therefore counts ONLY the
-    leading 'empty' rows that occurred SINCE ``last_signal`` — an empty poll at
+    Signal BOUND (supersedes the older newest-empty-only reset): before
+    migration 0114 a PRODUCTIVE poll wrote NO outcome row, so this table alone
+    could not see successes at all. It can now — a 'success' row ends the run
+    directly — but the bound is RETAINED because every pre-0114 row on disk
+    still lacks it. The streak counts ONLY the leading 'empty' rows that
+    occurred SINCE ``last_signal`` — an empty poll at
     or before the newest produced signal is stale evidence and stops the count.
     Without the bound, a source that produces daily but polls more often than
     it publishes accumulates an unbounded interleaved 'empty' run and is
@@ -1194,18 +1202,34 @@ def _source_stall_diagnosis(row: dict[str, Any]) -> str:
     """Turn the source's newest poll-outcome row (DQ-H5b #88) into a WHY
     sentence for the cadence alert body.
 
-    ``row`` carries ``last_poll_outcome`` ('empty'|'error'|None),
-    ``last_poll_health`` ('healthy'|'degraded'|'unhealthy'|None),
-    ``last_poll_error`` and ``last_poll_at``. A missing/NULL outcome means NO
-    non-productive poll was ever recorded — i.e. the poll reminder itself is
-    likely not firing (the actor never ran), which is a different failure than
-    a feed that runs but produces nothing.
+    ``row`` carries ``last_poll_outcome``
+    ('success'|'empty'|'error'|None), ``last_poll_health``
+    ('healthy'|'degraded'|'unhealthy'|None), ``last_poll_signals_written``,
+    ``last_poll_error`` and ``last_poll_at``.
+
+    A missing/NULL outcome means NO poll was ever recorded — i.e. the poll
+    reminder itself is likely not firing (the actor never ran). Since migration
+    0114 that reading is finally SOUND: every poll writes a row, so an absence
+    is an absence. Before it, only non-productive polls were logged, so a
+    healthily-firing source that had simply never failed hit this same branch
+    and was diagnosed "the poll reminder may be dead" — precisely backwards.
     """
     outcome = row.get("last_poll_outcome")
     when = row.get("last_poll_at")
     when_s = ""
     if isinstance(when, datetime):
         when_s = f" at {when.astimezone(timezone.utc).isoformat(timespec='seconds')}"
+    if outcome == "success":
+        # The last recorded poll PRODUCED. Reaching this diagnosis means the
+        # cadence check nonetheless found the source stale, so the poll stopped
+        # firing after that success — the fetch path is not the suspect.
+        n = row.get("last_poll_signals_written")
+        n_s = f" ({n} signals)" if isinstance(n, int) and n > 0 else ""
+        return (
+            f"Last recorded poll SUCCEEDED{n_s}{when_s} and nothing has been "
+            "recorded since — the feed itself was working, so suspect the poll "
+            "reminder / actor cadence rather than the fetch path."
+        )
     if outcome == "error":
         health = row.get("last_poll_health") or "unknown"
         err = row.get("last_poll_error")

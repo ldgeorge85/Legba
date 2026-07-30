@@ -57,6 +57,10 @@ from typing import Any, Mapping
 import numpy as np
 
 from ...provenance.models import FindingPayload
+from ...retrieval_origin import (
+    WEB_EVIDENCE_RESOLUTION,
+    is_web_evidence_resolution,
+)
 from ....runtime.analyst_method import AnalystMethodResult
 from . import forecast_acute
 
@@ -536,11 +540,35 @@ _WEAK_LEXICAL_SOURCES: frozenset[str] = frozenset({"subsequent_facts"})
 # resolutions — present, but never headline.
 _WEAK_FORECAST_METHODS: frozenset[str] = frozenset({"naive_mean"})
 
+# R-3b — resolutions grounded in WEB-RETRIEVED evidence (`resolved_by` =
+# `web_evidence`, optionally suffixed with the provider component id). The
+# world did grade the claim, but through evidence that is unvetted, unranked by
+# us, drawn from an unbounded domain set, and SELECTED BY AN UPSTREAM ENGINE'S
+# RELEVANCE MODEL — an adversarially gameable input (SEO poisoning aimed at
+# exactly the queries an OSINT platform asks). Same WEAK tier as the lexical
+# proxy: reported, never headline.
+#
+# This is not conservatism for its own sake. Web-retrieved evidence is cheap and
+# abundant and will dominate volume within weeks of search going live. Left in
+# the headline tier it would quietly convert the exogenous Brier — the ONE
+# number that claims calibration against reality — into "how well do we predict
+# things that are easy to search", and NO existing test would have failed.
+# It leaves this tier only when a LABELLED GOLD SET shows web-sourced
+# resolutions are as reliable as operator labels; the gold-set loop already
+# exists and is "never pooled" — same discipline.
+_WEB_RETRIEVED_SOURCES: frozenset[str] = frozenset({WEB_EVIDENCE_RESOLUTION})
+
+
+def _is_web_evidence(row: Mapping[str, Any]) -> bool:
+    """True when the resolution was graded by web-retrieved evidence."""
+    return is_web_evidence_resolution(row.get("resolved_by"))
+
 
 def _is_weak_tier(row: Mapping[str, Any]) -> bool:
     """True when a resolution is real-world-touching but only via a WEAK proxy
-    (D16 lexical `subsequent_facts`) OR was produced by a NON-forecaster (D28
-    `naive_mean`). Weak-tier rows are reported in their own bucket and are
+    (D16 lexical `subsequent_facts`), was produced by a NON-forecaster (D28
+    `naive_mean`), or was graded on WEB-RETRIEVED evidence (R-3b
+    `web_evidence`). Weak-tier rows are reported in their own bucket and are
     DEMOTED out of the headline exogenous Brier. They are NOT self-consistency
     (the system did not grade itself) — they are a distinct, lower-confidence
     tier between exogenous and self-consistency."""
@@ -549,6 +577,11 @@ def _is_weak_tier(row: Mapping[str, Any]) -> bool:
         return True
     fm = str(row.get("forecast_method") or "").strip()
     if fm in _WEAK_FORECAST_METHODS:
+        return True
+    # R-3b — matches the bare label AND the provider-suffixed form. A suffixed
+    # label falling through here would land in headline exogenous, which is the
+    # exact silent corruption this tier exists to prevent.
+    if _is_web_evidence(row):
         return True
     return False
 
@@ -777,6 +810,7 @@ def _build_finding(
     brier_weak: float | None = None,
     weak_sample_size: int = 0,
     weak_fraction: float = 0.0,
+    web_evidence_sample_size: int = 0,
 ) -> FindingPayload:
     drift_alert = drift_z is not None and abs(drift_z) > drift_threshold
     # HONEST HEADLINE (DQ-H2): `brier` is the EXOGENOUS-only Brier — the only
@@ -808,6 +842,10 @@ def _build_finding(
         f"brier_weak_lexical={brier_weak}\n"
         f"weak_sample_size={weak_sample_size}\n"
         f"weak_fraction={weak_fraction:.4f}\n"
+        # R-3b — of the weak tier, how much was graded on WEB-RETRIEVED
+        # evidence. Reported so the drift toward "easy to search" is VISIBLE
+        # rather than inferred from the resolution_sources breakdown.
+        f"web_evidence_sample_size={web_evidence_sample_size}\n"
         f"brier_self_consistency={brier_self_consistency}\n"
         f"self_consistency_fraction={self_consistency_fraction:.4f}\n"
         f"insufficient_exogenous={insufficient_exogenous}\n"
@@ -847,6 +885,9 @@ def _build_finding(
     # resolutions so a consumer can see they were demoted, not headlined.
     if weak_sample_size > 0:
         tags.append("brier_weak_tier_present")
+    # R-3b — the same visibility for the web-retrieved subset specifically.
+    if web_evidence_sample_size > 0:
+        tags.append("brier_web_evidence_present")
     return FindingPayload(
         title=title[:2048],
         body=body[:65536],
@@ -866,6 +907,10 @@ def _build_finding(
             "brier_weak": brier_weak,
             "weak_sample_size": weak_sample_size,
             "weak_fraction": weak_fraction,
+            # R-3b — the WEB-RETRIEVED subset of the weak tier. Not a separate
+            # tier: a diagnostic on the one that will grow fastest once search
+            # is live.
+            "web_evidence_sample_size": web_evidence_sample_size,
             "brier_self_consistency": brier_self_consistency,
             "brier_pooled": brier_pooled,
             "sample_size": sample_size,
@@ -972,8 +1017,12 @@ async def handle(
     #                  (`subsequent_facts`) or a non-forecaster (`naive_mean`).
     #                  Reported in its own bucket, NEVER headline.
     #   * SELF-CONSISTENCY — the system graded itself (status_transition).
+    #   * WEB_EVIDENCE — R-3b: inside the WEAK tier, the subset graded on
+    #                  web-retrieved evidence. Counted separately so the drift
+    #                  toward "easy to search" is visible as it happens.
     exo_rows = [r for r in kept if _is_exogenous(r)]
     weak_rows = [r for r in kept if _is_weak_tier(r)]
+    web_rows = [r for r in kept if _is_web_evidence(r)]
     sc_rows = [r for r in kept if not _is_exogenous(r)]
     brier_exogenous = _brier(exo_rows)
     brier_weak = _brier(weak_rows)
@@ -1016,6 +1065,7 @@ async def handle(
         brier_weak=brier_weak,
         weak_sample_size=len(weak_rows),
         weak_fraction=weak_fraction,
+        web_evidence_sample_size=len(web_rows),
     )
     return AnalystMethodResult(
         finding=finding,

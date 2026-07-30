@@ -612,7 +612,18 @@ async def write_canonical_signal(
 
 
 # ---------------------------------------------------------------------------
-# Non-productive poll provenance (DQ-H5b #88).
+# Poll provenance (DQ-H5b #88; success outcome — migration 0114).
+#
+# EVERY poll now writes exactly one row. Migration 0046 originally logged only
+# NON-productive polls on the premise that "a productive poll is
+# self-evidencing via its signals rows" — true for a reader inspecting ONE
+# poll, false for every reader that walks a RUN of rows, because a run cannot
+# observe an absence. With success unrecorded, a repaired source still
+# presented its historical `error` rows as the LEADING run forever, and
+# `entity_gc` operation 4 re-paused sources that were actively ingesting
+# (gdelt.files 2026-07-27; ukrinform / nasa.eonet before it). A recorded
+# success BREAKS the run at its first productive poll, for every reader, with
+# no operator intervention.
 # ---------------------------------------------------------------------------
 
 _INSERT_POLL_OUTCOME = """
@@ -633,20 +644,32 @@ async def write_poll_outcome(
     source_id: str,
     source_version: str | None,
     owner_tenant: str,
-    outcome: str,                 # 'empty' | 'error'
+    outcome: str,                 # 'success' | 'empty' | 'error'
     health_state: str | None,     # 'healthy' | 'degraded' | 'unhealthy' | None
     capped: bool,
     signals_written: int,
     error: str | None,
     newest_entry_ts: datetime | None = None,
 ) -> None:
-    """Append a provenance row for a NON-productive poll (DQ-H5b).
+    """Append a provenance row for ONE poll (DQ-H5b; success — migration 0114).
 
-    Recorded only when a poll wrote ZERO signals — a productive poll is
-    self-evidencing via its ``signals`` rows. ``outcome`` is the coarse rollup
-    the cadence watchdog keys on ('error' when the poll failed — an escaped
-    exception OR a handler-swallowed 4xx/parse-fail/timeout surfaced via
-    ``health_state`` — else 'empty' for a genuine HTTP-200-but-0-items feed).
+    ``outcome`` is the coarse rollup every reader keys on, in strict
+    precedence:
+
+      * ``'success'`` — the poll was PRODUCTIVE: it wrote >=1 signal, or it
+        collapsed >=1 intra-source duplicate (it saw current content and
+        bumped recency). ``signals_written`` carries the count. A partial
+        failure (some rows written, then an exception) is still a success —
+        the source produced — but keeps its ``error`` / ``health_state``
+        detail on the row rather than discarding it.
+      * ``'error'`` — the poll failed: an escaped exception OR a
+        handler-swallowed 4xx / parse-fail / timeout surfaced via
+        ``health_state``.
+      * ``'empty'`` — a genuine HTTP-200-but-0-items feed. UNCHANGED meaning:
+        polled fine, nothing new. Deliberately NOT merged with 'success' —
+        "polled and found nothing" and "polled and ingested 28 items" are
+        different facts, and the empty-streak watchdog keys on the
+        difference.
 
     ``newest_entry_ts`` (B0-12): the newest entry timestamp the handler
     OBSERVED upstream this poll (pre-since-filter, future-skew-clamped —
@@ -1054,19 +1077,30 @@ class SourceCore:
                     "source_actor.cursor.persist_failed actor_id=%s",
                     self.actor_id, exc_info=True,
                 )
-            # DQ-H5b (#88) — record a provenance row for a NON-productive poll
-            # (empty / error) so the cadence watchdog + UI can surface WHY this
-            # source is silent. A poll that wrote >=1 signal is self-evidencing
-            # via its signals rows, so it is intentionally NOT logged here.
+            # DQ-H5b (#88) + migration 0114 — record a provenance row for
+            # EVERY poll so the cadence watchdog, entity_gc's auto-pause latch
+            # and the UI can read what this poll actually did.
+            #
+            # The original code recorded only NON-productive polls, on the
+            # premise that a productive one is self-evidencing via its signals
+            # rows. That premise breaks every reader that walks a RUN of rows:
+            # an absence cannot break a run, so a repaired source kept
+            # presenting its old 'error' rows as the leading run and entity_gc
+            # op-4 re-paused it while it was actively ingesting. A recorded
+            # 'success' breaks the run at the first productive poll.
+            #
             # S-4: a poll that wrote 0 rows but COLLAPSED >=1 intra-source
             # duplicate is ALSO productive (it saw current content + bumped
-            # recency), so it too is skipped here — otherwise a hazard feed
-            # healthily re-serving active events would log consecutive 'empty'
-            # rows and trip the watchdog's empty-streak degradation.
-            if not written and not dedup_stats.get("deduped"):
-                await self._record_poll_outcome(
-                    ctx, handler, errored=errored, capped=capped,
-                )
+            # recency) — it records 'success' with signals_written=0, never
+            # 'empty', so a hazard feed healthily re-serving active events
+            # still cannot trip the watchdog's empty-streak degradation.
+            await self._record_poll_outcome(
+                ctx, handler,
+                errored=errored,
+                capped=capped,
+                signals_written=len(written),
+                deduped=int(dedup_stats.get("deduped") or 0),
+            )
 
         if written or capped or errored:
             logger.info(
@@ -1089,8 +1123,10 @@ class SourceCore:
         *,
         errored: str | None,
         capped: bool,
+        signals_written: int = 0,
+        deduped: int = 0,
     ) -> None:
-        """Persist a non-productive-poll provenance row (DQ-H5b #88).
+        """Persist this poll's provenance row (DQ-H5b #88; success — mig 0114).
 
         Best-effort: a failure here must NEVER mask the pull result. Reads the
         handler's own freshly-recorded health (``state`` + ``last_error``) when
@@ -1099,6 +1135,18 @@ class SourceCore:
         the poll path (no exception escapes ``handler.pull`` for those cases),
         so it is what turns a bare "empty" into an honest
         "error / unhealthy — <reason>".
+
+        Outcome precedence (PRODUCTIVITY WINS over the failure signals):
+
+          * ``signals_written > 0`` or ``deduped > 0`` → ``'success'``. A poll
+            that produced is not a failing poll, whatever else it reported —
+            counting it as an error is exactly how a repaired source got
+            re-paused off its own recovery. Any ``errored`` / degraded health
+            from a PARTIAL failure is still carried on the row (``error`` /
+            ``health_state``) rather than dropped, so the detail survives
+            without poisoning the run every reader walks.
+          * else an escaped exception / degraded / unhealthy → ``'error'``.
+          * else → ``'empty'`` (unchanged: polled fine, nothing new).
         """
         health_state: str | None = None
         health_error: str | None = None
@@ -1107,7 +1155,9 @@ class SourceCore:
         # conclusion. A capped pull can leave a STALE prior-pull health record
         # (we broke the async-for before the handler wrote this pull's health),
         # so we don't read it then — capped+0-written is recorded as plain
-        # 'empty' with capped=True, which already says "made progress".
+        # 'empty' with capped=True, which already says "made progress" (a
+        # capped poll that DID write is 'success' on its own count, and needs
+        # no health record to say so).
         if not capped:
             hkey = getattr(handler, "health_state_key", None)
             if hkey:
@@ -1145,7 +1195,11 @@ class SourceCore:
                         except ValueError:
                             newest_entry_ts = None
 
-        if errored is not None or health_state in ("degraded", "unhealthy"):
+        written_n = max(0, int(signals_written))
+        if written_n > 0 or int(deduped) > 0:
+            # PRODUCTIVE — this poll moved real content into the substrate.
+            outcome = "success"
+        elif errored is not None or health_state in ("degraded", "unhealthy"):
             outcome = "error"
         else:
             outcome = "empty"
@@ -1160,7 +1214,7 @@ class SourceCore:
                     outcome=outcome,
                     health_state=health_state,
                     capped=capped,
-                    signals_written=0,
+                    signals_written=written_n,
                     error=errored or health_error,
                     newest_entry_ts=newest_entry_ts,
                 )

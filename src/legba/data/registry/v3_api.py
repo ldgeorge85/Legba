@@ -58,6 +58,32 @@ from .scorecard_reconcile import (
 
 logger = logging.getLogger(__name__)
 
+# KW-3 — the `staleness_debt` gauge, MIRRORED from
+# ``analysts.deterministic_handlers.claim_watch._STALENESS_DEBT_SQL``. A local
+# copy on purpose (the registry-slim rule: importing the handler package would
+# drag the embedder/alert-scan sub-handler modules into this route module —
+# same rationale as `substrate_reads_api._FAITH_FLOOR` and
+# `goldset_sampling.DEFAULT_UNITS`). Lockstep is test-enforced:
+# tests/data_pkg/test_v3_staleness_debt.py::test_staleness_debt_sql_mirrors_matcher
+# asserts byte equality with the matcher's own constant, so the route can never
+# publish a different number than the receipt.
+_STALENESS_DEBT_SQL = """
+    SELECT count(*)::int AS debt
+      FROM review_flags rf
+     WHERE rf.closed_at IS NULL
+       AND NOT EXISTS (
+             SELECT 1 FROM analyst_outputs ao
+              WHERE ao.id = rf.output_id
+                AND ao.superseded_by IS NOT NULL
+       )
+"""
+
+#: The analyst id the claim_watch matcher writes its traces under (the
+#: deterministic META analyst's descriptor id) — used only to report WHEN the
+#: gauge was last recomputed, so a reader can tell a genuine zero from a
+#: matcher that never ran.
+_CLAIM_WATCH_ANALYST_ID = "claim_watch"
+
 
 class ActorRow(BaseModel):
     """One row of the runtime actor health roster.
@@ -298,14 +324,68 @@ class AnalystCadenceRow(BaseModel):
     status: Literal["never", "stale", "healthy"] = "never"
 
 
+class StalenessDebtReason(BaseModel):
+    """One ``review_flags.reason`` bucket within the open debt."""
+
+    reason: str
+    open_flags: int
+
+
+class StalenessDebtOut(BaseModel):
+    """``GET /system/staleness-debt`` — the ``claim_watch`` review-flag gauge.
+
+    The number the KW-3 matcher already computes on every run and buries in its
+    ``analyst_traces`` receipt, finally readable without opening a receipt.
+
+    WHAT IT COUNTS: open ``review_flags`` (migration 0107) whose flagged
+    consumer output is still LIVE — i.e. not itself superseded. A flag on an
+    output that has since been superseded is real history but not live debt:
+    the record already moved on. ``superseded_consumer_flags`` carries that
+    remainder so the two never get confused.
+
+    HONESTY (SEAMS #49, unchanged by exposing it): this is a *flags-found,
+    match-unverified* count, NEVER a corrected-or-closed metric. The claim_watch
+    CLOSER is not built — nothing in-tree writes correction content, writes back
+    to a flagged producer, or recomposes anything; flags close by supersession
+    only. ``match_verified`` is therefore hard-``False`` on the wire, and stays
+    False until the DEC-K1 match-precision bar is formally met and recorded. A
+    reader must not read this as "N things are wrong", only as "N live products
+    rest on foundations the matcher believes have moved".
+    """
+
+    #: Open flags on still-live consumers — the receipt's own gauge, computed
+    #: with the matcher's own SQL (mirrored; drift is test-enforced).
+    staleness_debt: int = 0
+    #: Every open flag, including those whose consumer is already superseded.
+    open_flags: int = 0
+    #: ``open_flags - staleness_debt`` — open flags the record already outran.
+    superseded_consumer_flags: int = 0
+    #: Distinct still-live consumer outputs carrying debt.
+    flagged_consumers: int = 0
+    #: Distinct moved foundations behind the debt.
+    moved_foundations: int = 0
+    #: Flags closed by supersession, ever (flags are never deleted).
+    closed_flags: int = 0
+    oldest_open_at: datetime | None = None
+    newest_open_at: datetime | None = None
+    by_reason: list[StalenessDebtReason] = Field(default_factory=list)
+    #: When the matcher last ran (``analyst_traces``), so a reader can tell a
+    #: genuine zero from a matcher that has not run.
+    last_matcher_run_at: datetime | None = None
+    #: HARD False — see the class docstring. Present on the wire so no consumer
+    #: can mistake this for a verified/closed number.
+    match_verified: bool = False
+
+
 class SourceFiringRow(BaseModel):
     """One source's firing snapshot for the System Status panel.
 
     Composes ``signals`` (count + freshest ``created_at`` per ``source_id``),
-    ``source_poll_outcomes`` (latest poll outcome + recent error count — note
-    this table is a FAILURE-ONLY ledger: it only logs ``empty``/``error``
-    polls, never successes, so its rows must NOT be the primary firing
-    signal), and the head ``source_descriptors`` row (declared ``state``).
+    ``source_poll_outcomes`` (latest poll outcome + recent error count — one
+    row per poll, ``success``/``empty``/``error``, since migration 0114; it was
+    a FAILURE-ONLY ledger before that, which is why this route derives firing
+    from signal production and keeps the ledger strictly secondary), and the
+    head ``source_descriptors`` row (declared ``state``).
 
     ``status`` is derived PRIMARILY from actual signal production (recency),
     with the poll ledger used only as a secondary error signal so a
@@ -1025,6 +1105,106 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
         return out
 
     @router.get(
+        "/system/staleness-debt",
+        response_model=StalenessDebtOut,
+    )
+    async def system_staleness_debt(
+        principal: str = Depends(require_bearer),
+    ) -> StalenessDebtOut:
+        """The ``claim_watch`` review-flag debt — the first read route for it.
+
+        Until now the gauge existed ONLY inside the producing run's
+        ``analyst_traces`` receipt (SEAMS #49), so reading it meant reading a
+        receipt. The headline number here is computed with the matcher's OWN
+        SQL (mirrored above, drift test-enforced) rather than a re-derivation,
+        so the route and the receipt cannot disagree.
+
+        What the fields mean, and what they deliberately do not: see
+        :class:`StalenessDebtOut`. In short — open flags on still-live
+        consumers, a *flags-found, match-unverified* count, never a
+        corrected-or-closed metric. ``match_verified`` is hard-``False``.
+
+        Fully defensive: any query failure (including migration 0107 not
+        applied) degrades to an honest all-zero payload at HTTP 200, with
+        ``last_matcher_run_at`` null — the same "no data" shape a genuinely
+        empty flag table produces, which is the truthful reading either way.
+        """
+        try:
+            async with deps.descriptor_registry.pg.acquire() as conn:
+                debt_row = await conn.fetchrow(_STALENESS_DEBT_SQL)
+                agg_row = await conn.fetchrow(
+                    """
+                    SELECT
+                        count(*) FILTER (WHERE rf.closed_at IS NULL)::int
+                            AS open_flags,
+                        count(*) FILTER (WHERE rf.closed_at IS NOT NULL)::int
+                            AS closed_flags,
+                        count(DISTINCT rf.output_id) FILTER (
+                            WHERE rf.closed_at IS NULL
+                              AND NOT EXISTS (
+                                    SELECT 1 FROM analyst_outputs ao
+                                     WHERE ao.id = rf.output_id
+                                       AND ao.superseded_by IS NOT NULL
+                              )
+                        )::int AS flagged_consumers,
+                        count(DISTINCT rf.founded_on_id) FILTER (
+                            WHERE rf.closed_at IS NULL
+                              AND NOT EXISTS (
+                                    SELECT 1 FROM analyst_outputs ao
+                                     WHERE ao.id = rf.output_id
+                                       AND ao.superseded_by IS NOT NULL
+                              )
+                        )::int AS moved_foundations,
+                        min(rf.created_at) FILTER (WHERE rf.closed_at IS NULL)
+                            AS oldest_open_at,
+                        max(rf.created_at) FILTER (WHERE rf.closed_at IS NULL)
+                            AS newest_open_at
+                      FROM review_flags rf
+                    """
+                )
+                reason_rows = await conn.fetch(
+                    """
+                    SELECT rf.reason, count(*)::int AS open_flags
+                      FROM review_flags rf
+                     WHERE rf.closed_at IS NULL
+                     GROUP BY rf.reason
+                     ORDER BY open_flags DESC, rf.reason
+                     LIMIT 50
+                    """
+                )
+                last_run = await conn.fetchval(
+                    """
+                    SELECT max(run_started_at)
+                      FROM analyst_traces
+                     WHERE analyst_id = $1
+                    """,
+                    _CLAIM_WATCH_ANALYST_ID,
+                )
+        except Exception as exc:  # noqa: BLE001 — degrade to zeros, HTTP 200
+            logger.info("v3.system.staleness_debt.unavailable err=%s", exc)
+            return StalenessDebtOut()
+
+        debt = int(debt_row["debt"]) if debt_row is not None else 0
+        open_flags = int(agg_row["open_flags"] or 0) if agg_row else 0
+        return StalenessDebtOut(
+            staleness_debt=debt,
+            open_flags=open_flags,
+            superseded_consumer_flags=max(0, open_flags - debt),
+            flagged_consumers=int(agg_row["flagged_consumers"] or 0) if agg_row else 0,
+            moved_foundations=int(agg_row["moved_foundations"] or 0) if agg_row else 0,
+            closed_flags=int(agg_row["closed_flags"] or 0) if agg_row else 0,
+            oldest_open_at=agg_row["oldest_open_at"] if agg_row else None,
+            newest_open_at=agg_row["newest_open_at"] if agg_row else None,
+            by_reason=[
+                StalenessDebtReason(
+                    reason=str(r["reason"]), open_flags=int(r["open_flags"]),
+                )
+                for r in reason_rows
+            ],
+            last_matcher_run_at=last_run,
+        )
+
+    @router.get(
         "/system/source-firing",
         response_model=list[SourceFiringRow],
     )
@@ -1035,11 +1215,13 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
 
         Composes signal flow (``signals`` count + freshest ``created_at`` per
         source), the latest poll outcome + recent error count
-        (``source_poll_outcomes`` — a FAILURE-ONLY ledger that only records
-        ``empty`` / ``error`` polls; successes are never inserted, so absence
-        of rows is normal for a firing source and its rows must not flip a
-        producing source to ``error``/``silent``), and the declared head
-        descriptor ``state`` (``source_descriptors`` WHERE is_head).
+        (``source_poll_outcomes`` — one row per poll since migration 0114:
+        ``success`` / ``empty`` / ``error``; before it, successes were never
+        inserted, so a firing source's newest row stayed frozen at whatever it
+        last failed with — which is why this route derives firing state from
+        signal production and never lets the ledger flip a producing source to
+        ``error``/``silent``), and the declared head descriptor ``state``
+        (``source_descriptors`` WHERE is_head).
 
         ``status`` is derived PRIMARILY from real signal production and only
         SECONDARILY from the poll ledger (first match wins):
@@ -1097,9 +1279,11 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                          GROUP BY source_id
                     ),
                     poll AS (
-                        -- SECONDARY only: source_poll_outcomes is a
-                        -- failure-only ledger (no success rows), so it informs
-                        -- error context but never primary firing state
+                        -- SECONDARY only: source_poll_outcomes informs error
+                        -- context but never primary firing state (real signal
+                        -- production is the truth). It records successes too
+                        -- since migration 0114 — this filter counts only the
+                        -- 'error' rows either way, so the read is unchanged.
                         SELECT source_id,
                                count(*) FILTER (
                                    WHERE outcome = 'error'
