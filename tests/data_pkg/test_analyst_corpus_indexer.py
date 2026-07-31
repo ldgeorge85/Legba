@@ -146,3 +146,65 @@ def test_signal_to_doc_best_body_falls_back_to_raw_body():
     assert doc["best_body"] == raw
     # No distilled_body key present → it is dropped from the doc (lean).
     assert "distilled_body" not in doc
+
+
+# ---------------------------------------------------------------------------
+# R6 — chat-platform payload.text reaches the corpus (telegram/discord never
+# populate raw_body; ~96.8% of telegram content was previously invisible)
+# ---------------------------------------------------------------------------
+
+
+def test_signal_to_doc_text_field_is_indexed_and_wins_best_body():
+    """A telegram-shaped signal (only payload.text populated, no raw_body /
+    distilled_body / archived_text) must surface its message as BOTH its own
+    indexed ``text`` field and ``best_body`` — before the fix, best_body fell
+    through to nothing (empty doc, invisible to search)."""
+    msg = "Forces reported movement near the border crossing overnight."
+    doc = signal_to_doc({"id": uuid4(), "payload": {"text": msg}})
+    assert doc["text"] == msg
+    assert doc["best_body"] == msg
+
+
+def test_signal_to_doc_text_outranks_archived_text():
+    """R6b: a telegram signal's archived_text is frequently embed-widget UI
+    chrome (t.me preview pages have no article for trafilatura to find), so
+    the real message body (payload.text) must win best_body over a present
+    (but untrustworthy for this source shape) archived_text."""
+    msg = "Convoy reportedly struck on the coastal road."
+    widget_chrome = "Download\nContext\nEmbed\ntelegram-widget.js?22"
+    doc = signal_to_doc(
+        {"id": uuid4(), "payload": {"text": msg, "archived_text": widget_chrome}}
+    )
+    assert doc["best_body"] == msg
+    # archived_text is still preserved as its own field (never destroyed) —
+    # only demoted in the best_body preference ladder.
+    assert doc["archived_text"] == widget_chrome
+
+
+# ---------------------------------------------------------------------------
+# R13 — a non-string body-shaped payload value must never reach OpenSearch
+# ---------------------------------------------------------------------------
+
+
+def test_signal_to_doc_omits_non_string_raw_body():
+    """A structured (dict) payload.raw_body — e.g. a GDELT CAMEO event dump —
+    must be OMITTED from the doc, never handed through as-is: OpenSearch
+    rejects a dict against a ``{"type": "text"}`` mapping with a
+    ``mapper_parsing_exception`` that fails the WHOLE bulk doc. No exception
+    should be raised building the doc either way."""
+    cameo_event = {"event_code": "190", "actor1": "GOV", "actor2": "REB", "goldstein": -10.0}
+    doc = signal_to_doc({"id": uuid4(), "payload": {"raw_body": cameo_event}})
+    assert "raw_body" not in doc
+    # A structured, non-prose value never wins best_body either.
+    assert "best_body" not in doc
+
+
+def test_signal_to_doc_omits_non_string_text_and_archived_text():
+    doc = signal_to_doc(
+        {
+            "id": uuid4(),
+            "payload": {"text": ["not", "a", "string"], "archived_text": 12345},
+        }
+    )
+    assert "text" not in doc
+    assert "archived_text" not in doc

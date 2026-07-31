@@ -19,6 +19,7 @@ clean and humans see exactly which tokens unlock which paths.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any, Mapping
@@ -378,6 +379,43 @@ def test_anthropic_omits_temperature_for_opus_4_8():
     assert sonnet["temperature"] == 0.2
 
 
+def test_anthropic_logs_the_dropped_temperature_once_per_model(caplog):
+    """A SILENTLY dropped parameter is a dead knob nobody can see — the consult
+    kind has been setting temperature=0.2 against a deployed opus-4-8 and
+    tuning nothing. Log it, but once per handler per model: a 10-round consult
+    must not emit ten identical warnings."""
+    h = AnthropicProviderHandler()
+    msgs = [{"role": "user", "content": "hi"}]
+
+    def _build(model: str) -> None:
+        h._build_chat_payload(  # noqa: SLF001
+            messages=msgs, system=None, tools=None, model=model,
+            max_tokens=512, temperature=0.2, reasoning_effort=None,
+        )
+
+    with caplog.at_level(logging.WARNING, logger="legba.data.stack.llm.anthropic"):
+        for _ in range(10):                       # a whole consult loop
+            _build("claude-opus-4-8")
+        _build("claude-opus-4-8-20260301")        # a different model id
+        _build("claude-sonnet-4-6")               # honors it — nothing to say
+
+    dead = [r for r in caplog.records if "DEAD_KNOB" in r.getMessage()]
+    assert len(dead) == 2                         # one per model, not per call
+    assert "claude-opus-4-8" in dead[0].getMessage()
+    assert "0.2" in dead[0].getMessage()
+
+
+def test_anthropic_says_nothing_when_no_temperature_was_requested():
+    """No caller intent, no dead knob, no log line."""
+    h = AnthropicProviderHandler()
+    h._build_chat_payload(  # noqa: SLF001
+        messages=[{"role": "user", "content": "hi"}], system=None, tools=None,
+        model="claude-opus-4-8", max_tokens=512, temperature=None,
+        reasoning_effort=None,
+    )
+    assert h._temperature_drop_logged == set()  # noqa: SLF001
+
+
 def test_anthropic_translates_tool_role_to_user():
     """Anthropic has no "tool" role — the text-protocol tool loops (consult /
     deep_consult) append {"role": "tool", ...}; it must become a user message."""
@@ -406,6 +444,295 @@ def test_anthropic_merges_system_kwarg_and_message():
     assert sys_text is not None
     assert "Base system." in sys_text
     assert "Extra system." in sys_text
+
+
+# ---------------------------------------------------------------------------
+# Prompt caching (Anthropic-only) — QW1-E
+# ---------------------------------------------------------------------------
+
+
+def _big(prefix: str, handler: AnthropicProviderHandler) -> str:
+    """A string comfortably past the caching char floor."""
+    return prefix + "x" * handler.CACHE_MIN_SYSTEM_CHARS
+
+
+def test_anthropic_caches_large_system_prompt():
+    """The consult plane's ~10KB system prompt is byte-identical on every round
+    of a run — it must carry a cache breakpoint so rounds 2+ read it back."""
+    h = AnthropicProviderHandler()
+    system = _big("You are an analyst. ", h)
+    payload = h._build_chat_payload(  # noqa: SLF001
+        messages=[{"role": "user", "content": "hi"}], system=system, tools=None,
+        model="claude-opus-4-8", max_tokens=512, temperature=None,
+        reasoning_effort=None,
+    )
+    assert payload["system"] == [
+        {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}},
+    ]
+
+
+def test_anthropic_leaves_short_system_prompt_as_bare_string():
+    """Below Anthropic's minimum cacheable prefix a breakpoint is silently
+    ignored anyway — keep the historical bare-string shape."""
+    h = AnthropicProviderHandler()
+    payload = h._build_chat_payload(  # noqa: SLF001
+        messages=[{"role": "user", "content": "hi"}], system="You are an assistant.",
+        tools=None, model="claude-opus-4-8", max_tokens=512, temperature=None,
+        reasoning_effort=None,
+    )
+    assert payload["system"] == "You are an assistant."
+
+
+def test_anthropic_caches_transcript_on_last_message():
+    """A tool loop only APPENDS to its transcript, so the moving breakpoint on
+    the newest turn lets round N+1 read what round N wrote."""
+    h = AnthropicProviderHandler()
+    messages = [
+        {"role": "user", "content": _big("question ", h)},
+        {"role": "assistant", "content": '{"tool": "list_situations", "args": {}}'},
+        {"role": "user", "content": "Tool result (list_situations):\n{}"},
+    ]
+    payload = h._build_chat_payload(  # noqa: SLF001
+        messages=messages, system=None, tools=None,
+        model="claude-opus-4-8", max_tokens=512, temperature=None,
+        reasoning_effort=None,
+    )
+    wire = payload["messages"]
+    # Only the LAST message is rewritten; earlier turns stay byte-identical so
+    # the cached prefix keeps matching.
+    assert wire[:-1] == messages[:-1]
+    assert wire[-1]["content"] == [
+        {
+            "type": "text",
+            "text": "Tool result (list_situations):\n{}",
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+
+
+def test_anthropic_skips_transcript_breakpoint_for_one_shot_call():
+    """A single-message call can never read its own write back — marking it
+    would only buy the 1.25x write premium."""
+    h = AnthropicProviderHandler()
+    messages = [{"role": "user", "content": _big("one shot ", h)}]
+    payload = h._build_chat_payload(  # noqa: SLF001
+        messages=messages, system=None, tools=None,
+        model="claude-opus-4-8", max_tokens=512, temperature=None,
+        reasoning_effort=None,
+    )
+    assert payload["messages"] == messages
+
+
+def test_anthropic_skips_transcript_breakpoint_for_short_transcript():
+    h = AnthropicProviderHandler()
+    messages = [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "a"},
+    ]
+    payload = h._build_chat_payload(  # noqa: SLF001
+        messages=messages, system=None, tools=None,
+        model="claude-opus-4-8", max_tokens=512, temperature=None,
+        reasoning_effort=None,
+    )
+    assert payload["messages"] == messages
+
+
+def test_anthropic_marks_tool_roster_only_without_a_system_breakpoint():
+    """`tools` renders BEFORE `system`, so a system breakpoint already caches
+    the roster; the roster is marked separately only when it has nothing to
+    ride on."""
+    h = AnthropicProviderHandler()
+    tools = [{"name": "search_signals", "description": "d", "input_schema": {}}]
+    msgs = [{"role": "user", "content": "hi"}]
+
+    without_system = h._build_chat_payload(  # noqa: SLF001
+        messages=msgs, system=None, tools=tools, model="claude-opus-4-8",
+        max_tokens=512, temperature=None, reasoning_effort=None,
+    )
+    assert without_system["tools"][-1]["cache_control"] == {"type": "ephemeral"}
+
+    with_system = h._build_chat_payload(  # noqa: SLF001
+        messages=msgs, system=_big("sys ", h), tools=tools,
+        model="claude-opus-4-8", max_tokens=512, temperature=None,
+        reasoning_effort=None,
+    )
+    assert "cache_control" not in with_system["tools"][-1]
+
+
+def test_anthropic_cache_control_master_switch_restores_old_shape(monkeypatch):
+    h = AnthropicProviderHandler()
+    monkeypatch.setattr(type(h), "CACHE_CONTROL_ENABLED", False)
+    system = _big("sys ", h)
+    messages = [
+        {"role": "user", "content": _big("q ", h)},
+        {"role": "assistant", "content": "a"},
+    ]
+    payload = h._build_chat_payload(  # noqa: SLF001
+        messages=messages, system=system, tools=None, model="claude-opus-4-8",
+        max_tokens=512, temperature=None, reasoning_effort=None,
+    )
+    assert payload["system"] == system
+    assert payload["messages"] == messages
+
+
+def test_openai_and_vllm_payloads_carry_no_cache_control():
+    """Caching is Anthropic-shaped and must not leak to other providers."""
+    for handler in (OpenAIProviderHandler(), VLLMProviderHandler()):
+        payload = handler._build_chat_payload(  # noqa: SLF001
+            messages=[
+                {"role": "user", "content": "x" * 8000},
+                {"role": "assistant", "content": "y"},
+            ],
+            system="s" * 8000, tools=None, model="gpt-test",
+            max_tokens=512, temperature=0.2, reasoning_effort=None,
+        )
+        assert "cache_control" not in json.dumps(payload)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_sends_cache_control_on_the_wire():
+    h = AnthropicProviderHandler()
+    ctx = _make_ctx(handler_kind="anthropic", model="claude-opus-4-8")
+    await h.on_configure(ctx)
+    captured: list[dict[str, Any]] = []
+    await _install_mock_transport(h, _capture(captured))
+
+    system = _big("You are an analyst. ", h)
+    await h.chat_complete(
+        messages=[
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": '{"tool": "x", "args": {}}'},
+            {"role": "user", "content": "Tool result (x):\n" + "r" * 5000},
+        ],
+        system=system,
+    )
+    body = captured[0]["json"]
+    assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert body["messages"][-1]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_degrades_silently_when_cache_control_rejected():
+    """A provider that rejects the marker must cost the run NOTHING but the
+    caching: strip, retry uncached, and stop marking for this instance."""
+    h = AnthropicProviderHandler()
+    ctx = _make_ctx(handler_kind="anthropic", model="claude-opus-4-8")
+    await h.on_configure(ctx)
+
+    captured: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        captured.append(body)
+        if "cache_control" in json.dumps(body):
+            return httpx.Response(400, json={
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "cache_control: unexpected field",
+                },
+            })
+        return httpx.Response(200, json=_ANTHROPIC_OK_BODY)
+
+    await _install_mock_transport(h, handler)
+
+    system = _big("You are an analyst. ", h)
+    messages = [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "a" * 5000},
+    ]
+    response = await h.chat_complete(messages=messages, system=system)
+    assert response.content == "Hello there."          # the call SUCCEEDED
+    assert len(captured) == 2                          # marked, then retried
+    # The retry is the historical uncached shape, byte for byte.
+    assert captured[1]["system"] == system
+    assert captured[1]["messages"] == messages
+    assert h._cache_control_ok is False                # noqa: SLF001
+
+    # ...and the NEXT call is assembled uncached from the start.
+    await h.chat_complete(messages=messages, system=system)
+    assert len(captured) == 3
+    assert captured[2]["system"] == system
+
+
+@pytest.mark.asyncio
+async def test_anthropic_non_cache_4xx_still_raises():
+    """Only a cache_control rejection triggers the fallback — an auth or
+    validation 4xx must still fail loud."""
+    h = AnthropicProviderHandler()
+    ctx = _make_ctx(handler_kind="anthropic", model="claude-opus-4-8")
+    await h.on_configure(ctx)
+
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(401, json={"error": {"message": "invalid x-api-key"}})
+
+    await _install_mock_transport(h, handler)
+    with pytest.raises(HardLLMFailure):
+        await h.chat_complete(
+            messages=[
+                {"role": "user", "content": "q"},
+                {"role": "assistant", "content": "a" * 5000},
+            ],
+            system=_big("sys ", h),
+        )
+    assert len(calls) == 1          # no pointless retry
+    assert h._cache_control_ok is True  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_cache_tokens_land_in_the_run_receipt():
+    """`cache_read_tokens` in an llm_calls receipt IS the live proof that a
+    cached prefix was hit — record it (and only when non-zero)."""
+    from legba.data.run_accounting import (
+        bind_run_accounting,
+        current_llm_calls,
+        reset_run_accounting,
+    )
+
+    h = AnthropicProviderHandler()
+    ctx = _make_ctx(handler_kind="anthropic", model="claude-opus-4-7")
+    await h.on_configure(ctx)
+    await _install_mock_transport(h, _capture([]))
+
+    token = bind_run_accounting()
+    try:
+        await h.chat_complete(messages=[{"role": "user", "content": "hi"}])
+        calls = current_llm_calls()
+    finally:
+        reset_run_accounting(token)
+
+    assert len(calls) == 1
+    assert calls[0]["cache_read_tokens"] == 20      # from _ANTHROPIC_OK_BODY
+    assert calls[0]["cache_write_tokens"] == 5
+
+
+@pytest.mark.asyncio
+async def test_uncached_receipt_omits_the_cache_fields():
+    from legba.data.run_accounting import (
+        bind_run_accounting,
+        current_llm_calls,
+        reset_run_accounting,
+    )
+
+    h = OpenAIProviderHandler()
+    ctx = _make_ctx(handler_kind="openai")
+    await h.on_configure(ctx)
+    await _install_mock_transport(
+        h, lambda request: httpx.Response(200, json=_OPENAI_OK_BODY),
+    )
+
+    token = bind_run_accounting()
+    try:
+        await h.chat_complete(messages=[{"role": "user", "content": "hi"}])
+        calls = current_llm_calls()
+    finally:
+        reset_run_accounting(token)
+
+    assert "cache_read_tokens" not in calls[0]
+    assert "cache_write_tokens" not in calls[0]
 
 
 def test_openai_prepends_system_kwarg_when_no_system_in_messages():
@@ -1071,3 +1398,29 @@ async def test_integration_openai_smoke():
     )
     assert response.usage.prompt_tokens > 0
     assert response.content
+
+
+def test_vllm_max_tokens_env_opt_in(monkeypatch):
+    """Default: max_tokens is OMITTED (self-hosted server budget governs).
+    LEGBA_LLM_SEND_MAX_TOKENS=1 includes it (hosted-API truncation guard).
+    Per-call send_max_tokens kwarg keeps working independently of the env."""
+    h = VLLMProviderHandler()
+    common = dict(
+        messages=[{"role": "user", "content": "hi"}],
+        system=None,
+        tools=None,
+        model="m",
+        max_tokens=2048,
+        temperature=0.0,
+        reasoning_effort=None,
+    )
+    monkeypatch.delenv("LEGBA_LLM_SEND_MAX_TOKENS", raising=False)
+    assert "max_tokens" not in h._build_chat_payload(**common)  # noqa: SLF001
+    assert (
+        h._build_chat_payload(**common, send_max_tokens=True)["max_tokens"]  # noqa: SLF001
+        == 2048
+    )
+    monkeypatch.setenv("LEGBA_LLM_SEND_MAX_TOKENS", "1")
+    assert h._build_chat_payload(**common)["max_tokens"] == 2048  # noqa: SLF001
+    monkeypatch.setenv("LEGBA_LLM_SEND_MAX_TOKENS", "false")
+    assert "max_tokens" not in h._build_chat_payload(**common)  # noqa: SLF001

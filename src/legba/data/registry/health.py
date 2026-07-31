@@ -155,6 +155,44 @@ def _tcp_reachable(host: str, port: int, timeout: float = 2.0) -> bool:
         return False
 
 
+def _missing_auth_detail(
+    cfg: LLMProviderConfig,
+    *,
+    key_ok: bool,
+    user_ok: bool,
+    pass_ok: bool,
+) -> str:
+    """Name the field that is ACTUALLY missing, not the one we probed first.
+
+    The old text was a flat ``"api_key not in vault"``, which for a Basic-only
+    component (``llm.verify.slm_8b``: no ``api_key`` field at all, authing with
+    ``api_user``/``api_pass``) reported a healthy component unhealthy over a
+    field it is not supposed to carry — and pointed the operator at the wrong
+    vault entry. So the message is built from what the component DECLARES."""
+    declares_bearer = cfg.api_key is not None
+    declares_basic = cfg.api_user is not None and cfg.api_pass is not None
+    missing: list[str] = []
+    if declares_bearer and not key_ok:
+        missing.append("api_key")
+    if declares_basic:
+        if not user_ok:
+            missing.append("api_user")
+        if not pass_ok:
+            missing.append("api_pass")
+    if missing:
+        return f"{', '.join(missing)} not in vault"
+    # Neither mode declared, or a half-declared Basic pair. The schema
+    # validator forbids both shapes, so reaching here means the row predates
+    # the validator or was written around it — say exactly that rather than
+    # blaming a field the operator never configured.
+    if cfg.api_user is not None or cfg.api_pass is not None:
+        return (
+            "incomplete basic-auth config: set BOTH api_user and api_pass "
+            "(or an api_key)"
+        )
+    return "no auth field configured: set api_key (Bearer) or api_user+api_pass"
+
+
 class LLMProviderChecker:
     kind = "llm_provider"
 
@@ -173,29 +211,53 @@ class LLMProviderChecker:
                 detail=f"unparseable endpoint {endpoint!r}",
             )
         # Verify credential lookup works (don't dereference plaintext into logs).
+        #
+        # Auth is a SWITCH on this config (see LLMProviderConfig): a bearer
+        # ``api_key`` OR the HTTP Basic ``api_user``/``api_pass`` pair, with at
+        # least one required by the schema validator. This probe used to try
+        # ONLY api_key, so every Basic-authing component reported UNHEALTHY
+        # "api_key not in vault" while serving traffic perfectly — the probe
+        # was wrong about the component, not the component about itself. Try
+        # BOTH modes; either one resolving is a pass. ``resolved.secret``
+        # already maps an absent field and a MissingSecretError to None.
         try:
-            secret_bytes = await resolved.secret(cfg.api_key)
-            cred_ok = secret_bytes is not None
+            key_bytes = await resolved.secret(cfg.api_key)
+            user_bytes = await resolved.secret(cfg.api_user)
+            pass_bytes = await resolved.secret(cfg.api_pass)
         except Exception as exc:
             return StackComponentHealth(
                 component_id=component_id, kind=self.kind,
                 state=HealthState.UNHEALTHY, checked_at=_now(),
                 detail=f"credential resolve failed: {exc}",
             )
-        if not cred_ok:
+        has_bearer = key_bytes is not None
+        has_basic = user_bytes is not None and pass_bytes is not None
+        if not (has_bearer or has_basic):
             return StackComponentHealth(
                 component_id=component_id, kind=self.kind,
                 state=HealthState.UNHEALTHY, checked_at=_now(),
-                detail="api_key not in vault",
+                detail=_missing_auth_detail(
+                    cfg,
+                    key_ok=has_bearer,
+                    user_ok=user_bytes is not None,
+                    pass_ok=pass_bytes is not None,
+                ),
             )
+        # Basic wins when both resolve — mirrors LLMProviderHandler._auth_headers,
+        # so the probe reports the mode the real calls will actually use.
+        auth_mode = "basic" if has_basic else "bearer"
         reachable = _tcp_reachable(host, port)
         return StackComponentHealth(
             component_id=component_id, kind=self.kind,
             state=HealthState.HEALTHY if reachable else HealthState.UNHEALTHY,
             checked_at=_now(),
-            detail=f"tcp {host}:{port} reachable={reachable}",
+            detail=f"tcp {host}:{port} reachable={reachable} auth={auth_mode}",
             last_success_at=_now() if reachable else None,
-            extra={"endpoint": endpoint, "model": cfg.model_name.raw},
+            extra={
+                "endpoint": endpoint,
+                "model": cfg.model_name.raw,
+                "auth": auth_mode,
+            },
         )
 
 

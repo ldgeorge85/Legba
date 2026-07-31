@@ -50,6 +50,12 @@ export const CLAIM_REASON_LABELS: Record<string, string> = {
   indicator_uncited_triggered: 'triggered indicator carries no citation',
   stale_leader: 'stale-cutoff officeholder reference',
   cross_target_leak: 'names only other countries than its desk target',
+  unhedged_periphery_citation: 'rests on periphery evidence without a hedge',
+  unscoped_absence_claim: 'states an absence without scoping it to collection',
+  metadata_mismatch: 'misquotes its own recorded confidence/tier value',
+  judge_contradicted_unquoted: 'judge contradiction lacked a verbatim quote (demoted to soft)',
+  absence_slice_contradicted: 'scoped absence contradicted by an item in the full input slice',
+  absence_slice_unresolved: 'scoped-absence check could not resolve a verdict',
 }
 
 export function claimReasonLabel(reason: string): string {

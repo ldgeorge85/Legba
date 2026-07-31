@@ -18,12 +18,14 @@ unsure and never merges — only the seeded auto pairs move.
 
 from __future__ import annotations
 
+import json
 from uuid import uuid4
 
 import asyncpg
 import pytest
 import pytest_asyncio
 
+from legba.data._entity_candidates import CandidatePair
 from legba.data.analysts.entity_researcher import ResearchReport, run_entity_research
 from legba.data.config import PostgresConfig
 
@@ -99,3 +101,91 @@ async def test_apply_merges_the_losers(pg_pool):
     assert len(rep.sample) >= 1
     assert any("Zzresearchd Gamma" in s["keeper"] or "Zzresearchd Gamma" in s["loser"]
                for s in rep.sample)
+
+
+# ---------------------------------------------------------------------------
+# P4 Class 6 Obs. 2 (QW1-D fix 3) — the class_correction COUNTER + the
+# apply-gated row-level hint, exercised through the FULL orchestration.
+# generate_candidates is monkeypatched to a single controlled GRAY pair (real
+# blocking/banding heuristics are out of scope here — Class 6's own adjudicate
+# tests already cover parsing/recording at the adjudicate_pairs layer).
+# ---------------------------------------------------------------------------
+
+
+class _ClassCorrectionLLM:
+    """Always flags side 'a' as mistyped -> 'event' for every gray pair."""
+
+    async def chat_complete(self, messages, *, max_tokens=None, temperature=None,
+                             system=None, **kw):
+        class _R:
+            content = json.dumps([{
+                "n": 1, "verdict": "same", "confidence": 0.95,
+                "why": "same tournament, article variant",
+                "class_correction": {"side": "a", "correct_class": "event"},
+            }])
+            usage = None
+
+        return _R()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_class_corrections_flagged_counted_in_dry_run_but_not_applied(
+    pg_pool, monkeypatch,
+):
+    import legba.data.analysts.entity_researcher as er
+
+    async with pg_pool.acquire() as conn:
+        a_id = await _seed(conn, "Zzresearchd Orch Cup A", cls="person")
+        b_id = await _seed(conn, "Zzresearchd the Orch Cup B", cls="person")
+        pair = CandidatePair(
+            left_id=a_id, left_name="Zzresearchd Orch Cup A", left_class="person",
+            right_id=b_id, right_name="Zzresearchd the Orch Cup B",
+            right_class="person", band="gray", score=0.7,
+            signals=("trgm:0.7",), block_key="",
+        )
+
+        async def _fake_generate_candidates(*a, **k):
+            return [pair]
+
+        monkeypatch.setattr(er, "generate_candidates", _fake_generate_candidates)
+
+        rep = await run_entity_research(conn, _ClassCorrectionLLM(), apply=False)
+        assert rep.class_corrections_flagged == 1
+        assert rep.class_correction_sample[0]["correct_class"] == "event"
+        assert rep.class_correction_sample[0]["side"] == "a"
+        row = await conn.fetchrow(
+            "SELECT data FROM entity_profiles WHERE id=$1::uuid", a_id)
+    data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+    # dry-run: counted, but NOT applied to entity_profiles (the apply gate).
+    assert "adjudicator_class_hint" not in (data or {})
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_class_corrections_applied_to_entity_profiles_in_apply_mode(
+    pg_pool, monkeypatch,
+):
+    import legba.data.analysts.entity_researcher as er
+
+    async with pg_pool.acquire() as conn:
+        a_id = await _seed(conn, "Zzresearchd Orch Apply Cup A", cls="person")
+        b_id = await _seed(conn, "Zzresearchd the Orch Apply Cup B", cls="person")
+        pair = CandidatePair(
+            left_id=a_id, left_name="Zzresearchd Orch Apply Cup A", left_class="person",
+            right_id=b_id, right_name="Zzresearchd the Orch Apply Cup B",
+            right_class="person", band="gray", score=0.7,
+            signals=("trgm:0.7",), block_key="",
+        )
+
+        async def _fake_generate_candidates(*a, **k):
+            return [pair]
+
+        monkeypatch.setattr(er, "generate_candidates", _fake_generate_candidates)
+
+        rep = await run_entity_research(conn, _ClassCorrectionLLM(), apply=True)
+        assert rep.class_corrections_flagged == 1
+        row = await conn.fetchrow(
+            "SELECT data FROM entity_profiles WHERE id=$1::uuid", a_id)
+    data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+    assert data["adjudicator_class_hint"]["correct_class"] == "event"

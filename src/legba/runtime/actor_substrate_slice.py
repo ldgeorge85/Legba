@@ -85,6 +85,15 @@ def _slice_graph_structure_cap() -> int:
     return 8
 
 
+# How many candidate structures to pull per final row before the duplicate
+# collapse (:func:`_collapse_structure_items`). Duplicate RUNS are the observed
+# shape — five identical Belgium-Egypt-IGO triads in a row — so a modest
+# multiplier is enough to refill the cap with DISTINCT structures; the merge +
+# sort it feeds is over an already-bounded in-memory shortlist, so the extra
+# candidates cost nothing measurable.
+_STRUCTURE_OVERSELECT = 6
+
+
 # Human group labels for the shared ``interesting`` shortlist kinds, mirrored
 # from grounding so the slice row title reads naturally without importing the
 # private map. An unknown kind falls back to a de-underscored version.
@@ -159,6 +168,61 @@ def _select_graph_structure_items(
     # scope-first, then by the producer's own score (descending).
     merged.sort(key=lambda t: (t[1], t[2]), reverse=True)
     return [it for it, _scope, _score in merged[:limit]]
+
+
+def _structure_dedup_key(item: Mapping[str, Any]) -> tuple[str, str]:
+    """Grouping key for :func:`_collapse_structure_items`.
+
+    Two shortlist items are DUPLICATE RENDERS when they share a structure kind
+    AND a rationale — the rationale is the entire body of the rendered snippet,
+    so same kind + same rationale means the two rows differ ONLY in their
+    label, which is exactly the run the P5 gallery caught.
+    """
+    kind = item.get("kind")
+    kind = kind.strip() if isinstance(kind, str) and kind.strip() else "structure"
+    rationale = item.get("rationale")
+    rationale = rationale.strip().casefold() if isinstance(rationale, str) else ""
+    return (kind, rationale)
+
+
+def _collapse_structure_items(
+    items: list[dict[str, Any]], *, limit: int,
+) -> list[tuple[dict[str, Any], list[str]]]:
+    """Collapse duplicate-render structure items into one row each, keeping counts.
+
+    P5 finding: a META slice's tail ran five CONSECUTIVE
+    ``[ASSESSED STRUCTURE]`` pseudo-signals whose snippets were byte-identical
+    ("unbalanced signed triad (sign product negative — 1 hostile edge(s));
+    Heider-unstable, predicts realignment") and whose titles differed only in
+    the third vertex (Belgium-Egypt-IMO, -IHO, -OIF, -UNESCO, -IBRD). Five
+    numbered rows, five citation slots, ~900 chars — for ONE structural fact
+    with five instances.
+
+    Collapsing groups them on (kind, rationale) and returns the FIRST item of
+    each group with its sibling labels, so the caller can render one row that
+    names every vertex and states the count. No label is lost — the repetition
+    is. Because the group is capped AFTER collapsing, a slice that used to
+    spend its whole structure budget on one repeated fact now carries up to
+    ``limit`` DISTINCT structural facts.
+
+    Order is preserved (scope-first then score-desc, per
+    :func:`_select_graph_structure_items`). With no duplicates the result is
+    byte-for-byte the pre-collapse behavior: the first ``limit`` items, each
+    with an empty sibling list.
+    """
+    grouped: dict[tuple[str, str], tuple[dict[str, Any], list[str]]] = {}
+    for it in items:
+        key = _structure_dedup_key(it)
+        label = str(it.get("label") or "").strip()
+        existing = grouped.get(key)
+        if existing is None:
+            grouped[key] = (it, [])
+            continue
+        if label and label not in existing[1] and label != str(
+            existing[0].get("label") or ""
+        ).strip():
+            existing[1].append(label)
+    return list(grouped.values())[:limit]
 
 
 async def _read_substrate_slice(
@@ -389,16 +453,32 @@ async def _read_substrate_slice(
             # structures. A META / no-target slice (target_filter None) keeps the
             # global structures — the global picture is correct for the global
             # assessor.
+            # D4 contamination guard: scope whenever the TARGET carries a geo
+            # discriminator — country desks AND thematic lane_/flow_ targets
+            # (which carry geo sets too). Keying on the "country" name prefix
+            # let thematic targets leak globally-ranked structure rows into
+            # their evidence (gallery P1 finding: Hormuz carrying Belgium/
+            # Afghanistan noise). A META/no-target run (no geo) stays global.
             per_country = bool(
                 target_filter
                 and isinstance(target_filter, str)
-                and target_filter.strip().startswith("country")
+                and bool(target_geo)
             )
-            items = _select_graph_structure_items(
-                gpayloads, target_geo=target_geo, limit=struct_cap,
+            # Over-select, then collapse duplicate renders (P5: five identical
+            # Belgium-Egypt-IGO triads in a row), then cap — so the structure
+            # budget buys ``struct_cap`` DISTINCT structural facts rather than
+            # one fact repeated ``struct_cap`` times. The over-fetch multiplier
+            # only matters when duplicates exist; with none, the collapse is a
+            # no-op over the same first ``struct_cap`` items as before.
+            candidates = _select_graph_structure_items(
+                gpayloads, target_geo=target_geo,
+                limit=struct_cap * _STRUCTURE_OVERSELECT,
                 target_scoped=per_country,
             )
-            for it in items:
+            collapsed_total = 0
+            for it, siblings in _collapse_structure_items(
+                candidates, limit=struct_cap
+            ):
                 kind = it.get("kind")
                 kind = kind.strip() if isinstance(kind, str) and kind.strip() else "structure"
                 klabel = _SLICE_INTERESTING_KIND_LABELS.get(kind, kind.replace("_", " "))
@@ -411,6 +491,16 @@ async def _read_substrate_slice(
                 summary = (
                     f"Analysis-derived knowledge-graph structure ({klabel}). {rationale}"
                 ).strip()
+                if siblings:
+                    # Keep the COUNT and every collapsed vertex — one row that
+                    # names all instances beats N rows repeating one rationale.
+                    collapsed_total += len(siblings)
+                    summary = (
+                        f"{summary} {len(siblings) + 1} instances of this same "
+                        f"structure were found; the others are: "
+                        f"{'; '.join(siblings)}."
+                    )
+                    label = f"{label} (+{len(siblings)} more)"
                 out.append(
                     {
                         "id": None,  # excluded from derived_from — context, not a fact
@@ -436,10 +526,62 @@ async def _read_substrate_slice(
                             "summary": summary,
                             "entities": it.get("entities") or [],
                             "score": it.get("score"),
+                            # Receipt: how many duplicate-render siblings this
+                            # row absorbed. Read by inline_target's ORIENT
+                            # ``structures_collapsed`` counter; absent/0 on a
+                            # row that collapsed nothing.
+                            "duplicates_collapsed": len(siblings),
                         },
                     }
                 )
+            if collapsed_total:
+                logger.info(
+                    "substrate_slice.graph_structure.collapsed target=%s "
+                    "candidates=%d rows=%d duplicates_collapsed=%d",
+                    target_filter, len(candidates),
+                    min(struct_cap, len(candidates)), collapsed_total,
+                )
         except Exception as exc:  # degrade-not-drop — structure leg is enrichment
             logger.warning("substrate_slice.graph_structure.failed err=%s", exc)
+
+    # QW1-B — DESK GROUNDING leg. The composition floor got a memory in Phase 1
+    # (``meta_findings_synthesizer``, grep CONTINUITY); this is the SAME idiom one
+    # floor down, widened from two blocks to four: the unit's own PRIOR READ of
+    # this target, the desk's OPEN SITUATION REGISTER, its DESK BASELINE (what is
+    # normal here), and its STANDING OPEN QUESTIONS. Each arrives as a MARKED row
+    # (``UNIT_GROUNDING_ROW_KEY``) that ``inline_target.run_method`` lifts out of
+    # the evidence slice before ORIENT and renders as its own citable ``[N]``
+    # block — never as a signal, never in ``derived_from``.
+    #
+    # THREE GATES, all load-bearing:
+    #   * kind — ONLY ``inline_target``. It is the one kind whose run_method knows
+    #     how to partition and render these rows; handing a marked row to any
+    #     other kind would feed it a pseudo-signal it would read as evidence.
+    #   * target — a desk id is required. Every block is desk-scoped by
+    #     construction and an unscoped read would hand a desk another desk's
+    #     frames (the D4 contamination class).
+    #   * non-empty slice — an EMPTY slice must stay empty so the actor's
+    #     ``no_inputs`` NOOP still fires. Synthesizing off memory alone, with no
+    #     current evidence, is the fabrication this platform refuses.
+    # ``identity.kind`` is DECLARED ``str`` but a caller may hand in the
+    # ``AnalystKind`` member (it is a str-Enum, so pydantic strict-mode keeps it).
+    # ``str(AnalystKind.INLINE_TARGET)`` is ``'AnalystKind.INLINE_TARGET'``, not
+    # the value — so unwrap ``.value`` first or the gate silently never fires.
+    _identity = getattr(descriptor, "identity", None)
+    _kind_raw = getattr(_identity, "kind", None)
+    _kind = str(getattr(_kind_raw, "value", _kind_raw) or "")
+    if out and target_filter and _kind == "inline_target":
+        try:
+            from ..data.analysts.unit_grounding import gather_unit_grounding_rows
+
+            out.extend(
+                await gather_unit_grounding_rows(
+                    conn,
+                    analyst_id=getattr(_identity, "id", None),
+                    target_filter=target_filter,
+                )
+            )
+        except Exception as exc:  # degrade-not-drop — grounding leg is enrichment
+            logger.warning("substrate_slice.unit_grounding.failed err=%s", exc)
 
     return out

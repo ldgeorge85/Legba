@@ -7,17 +7,28 @@ for RETIRED actors and NEVER for a live (active/paused/error) actor — a buggy
 sweep that kills a live reminder re-creates the silent-cadence stall it exists
 to fix. These tests exercise the pure name-derivation + the sweep's call set
 against in-memory fakes (no daprd, no Postgres).
+
+A second invariant added by the GET-before-DELETE fix (2026-07 DQ sweep,
+R12): ``build_sidecar_reminder_deleter`` must NOT count a candidate as
+``removed`` off the DELETE response alone — daprd answers 2xx for an
+already-absent reminder just as readily as a real one. The
+``test_sidecar_deleter_*`` tests below drive that function against a fake
+sidecar (``httpx.MockTransport``) to pin the GET-miss / GET-hit / failure
+semantics.
 """
 
 from __future__ import annotations
 
 import json
+from typing import Any
 
+import httpx
 import pytest
 
 from legba.runtime.lifecycle import ACTIVE, ERROR, PAUSED, RETIRED
 from legba.runtime.reminder_gc import (
     ReminderGCResult,
+    build_sidecar_reminder_deleter,
     orphan_reminder_names,
     sweep_orphan_reminders,
 )
@@ -177,6 +188,7 @@ async def test_sweep_is_idempotent_no_action_when_already_clean() -> None:
     )
     assert deleter.calls == [("SourceActor", "source::dead::d", "poll_dead")]
     assert result.removed == 0
+    assert result.already_absent == 1
     assert result.took_action is False
     assert fired == []  # no alert when nothing was actually removed
 
@@ -344,3 +356,182 @@ async def test_genuine_publish_error_still_warns(caplog) -> None:
         r.levelno >= _logging.WARNING and "alert_publish_failed" in r.getMessage()
         for r in caplog.records
     )
+
+
+# --------------------------------------------------------------------------
+# build_sidecar_reminder_deleter — the GET-before-DELETE fix (R12)
+#
+# The production deleter must never count a candidate as `removed` off the
+# DELETE response alone: daprd answers 2xx for a reminder that was never
+# registered just as readily as for one it actually deleted. Only a
+# confirmed GET-hit followed by a successful DELETE may return True.
+# --------------------------------------------------------------------------
+
+
+def _patch_async_client(monkeypatch: pytest.MonkeyPatch, handler) -> list[tuple[str, str]]:
+    """Route the module's local ``import httpx`` AsyncClient through a
+    :class:`httpx.MockTransport`. Returns the list of (method, path) seen,
+    in call order, so tests can assert GET-before-DELETE ordering (and that
+    a GET-miss never triggers a DELETE at all).
+    """
+    calls: list[tuple[str, str]] = []
+
+    def _wrapped(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        return handler(request)
+
+    transport = httpx.MockTransport(_wrapped)
+    real_async_client = httpx.AsyncClient
+
+    def _patched(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        kwargs.setdefault("transport", transport)
+        return real_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _patched)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_sidecar_deleter_get_404_not_counted_as_removed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # GET-miss (404): confirmed absent. Must return False and must NEVER
+    # issue the DELETE — there is nothing to delete.
+    def _handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        return httpx.Response(404)
+
+    calls = _patch_async_client(monkeypatch, _handler)
+    delete = build_sidecar_reminder_deleter(sidecar_url="http://fake-sidecar:3500")
+
+    removed = await delete("SourceActor", "source::dead::d", "poll_dead")
+
+    assert removed is False
+    assert calls == [
+        ("GET", "/v1.0/actors/SourceActor/source::dead::d/reminders/poll_dead")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_sidecar_deleter_get_hit_then_delete_counts_as_removed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # GET-hit (200 + real body): the reminder genuinely exists. Only now may
+    # the DELETE fire, and only then does the candidate count as removed.
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"period": "1h", "dueTime": "0s"})
+        assert request.method == "DELETE"
+        return httpx.Response(204)
+
+    calls = _patch_async_client(monkeypatch, _handler)
+    delete = build_sidecar_reminder_deleter(sidecar_url="http://fake-sidecar:3500")
+
+    removed = await delete("SourceActor", "source::live::a", "poll_live")
+
+    assert removed is True
+    # GET before DELETE, same path, in that order.
+    path = "/v1.0/actors/SourceActor/source::live::a/reminders/poll_live"
+    assert calls == [("GET", path), ("DELETE", path)]
+
+
+@pytest.mark.asyncio
+async def test_sidecar_deleter_get_200_empty_body_not_counted_as_removed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Defensive case: some daprd builds answer 200 + empty/null body instead
+    # of 404 for a missing reminder. Must be treated the same as a 404.
+    def _handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        return httpx.Response(200, content=b"{}")
+
+    calls = _patch_async_client(monkeypatch, _handler)
+    delete = build_sidecar_reminder_deleter(sidecar_url="http://fake-sidecar:3500")
+
+    removed = await delete("AnalystActor", "analyst::gone::e", "run_cadence")
+
+    assert removed is False
+    # No DELETE was issued against an already-absent reminder.
+    assert all(method != "DELETE" for method, _ in calls)
+
+
+@pytest.mark.asyncio
+async def test_sidecar_deleter_get_unexpected_status_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Neither 200 nor 404 — an unexpected sidecar status must NOT be
+    # silently treated as absent; it must raise so the sweep counts it
+    # under `failed` (retried next sweep) rather than masking it.
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    _patch_async_client(monkeypatch, _handler)
+    delete = build_sidecar_reminder_deleter(sidecar_url="http://fake-sidecar:3500")
+
+    with pytest.raises(RuntimeError):
+        await delete("SourceActor", "source::flaky::z", "poll_flaky")
+
+
+@pytest.mark.asyncio
+async def test_sidecar_deleter_delete_failure_after_hit_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # GET confirmed the reminder exists, but the DELETE itself fails — this
+    # is a genuine failure, not an already-absent no-op, and must not be
+    # reported as removed=False (which the sweep would silently treat as
+    # "nothing to do").
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"period": "1h"})
+        return httpx.Response(500)
+
+    _patch_async_client(monkeypatch, _handler)
+    delete = build_sidecar_reminder_deleter(sidecar_url="http://fake-sidecar:3500")
+
+    with pytest.raises(RuntimeError):
+        await delete("SourceActor", "source::live::a", "poll_live")
+
+
+@pytest.mark.asyncio
+async def test_sweep_with_sidecar_deleter_alerts_only_on_genuine_removal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # End-to-end through the real production deleter: a sweep with one
+    # genuine orphan and one already-absent phantom candidate must report
+    # removed=1 / already_absent=1, and the alert payload must name only
+    # the genuine removal — the exact regression (phantom deletions firing
+    # the alert every sweep) this fix closes.
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if "source::dead::d" in str(request.url):
+            if request.method == "GET":
+                return httpx.Response(200, json={"period": "24h"})
+            return httpx.Response(204)
+        # Every other candidate (the phantom) is genuinely absent.
+        assert request.method == "GET"
+        return httpx.Response(404)
+
+    _patch_async_client(monkeypatch, _handler)
+    delete = build_sidecar_reminder_deleter(sidecar_url="http://fake-sidecar:3500")
+
+    store = _FakeStore(
+        [
+            _rec("source::dead::d", "source", lifecycle=RETIRED),
+            _rec("analyst::phantom::old", "analyst", lifecycle=RETIRED),
+        ]
+    )
+    fired: list[tuple[str, bytes]] = []
+
+    async def _alert(subject: str, payload: bytes) -> None:
+        fired.append((subject, payload))
+
+    result = await sweep_orphan_reminders(
+        state_store=store, delete_reminder=delete, alert_publish=_alert
+    )
+
+    assert result.removed == 1
+    assert result.already_absent == 1
+    assert result.took_action is True
+    assert len(fired) == 1
+    body = json.loads(fired[0][1])
+    assert body["removed"] == 1
+    assert body["reminders"] == [{"actor_id": "source::dead::d", "reminder": "poll_dead"}]

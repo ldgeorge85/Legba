@@ -39,6 +39,7 @@ from legba.data.filters.ner import (
     NERMultilingualConfig,
     NERMultilingualHandler,
     NERServiceUnconfigured,
+    _classify_entity_text as _clf,
 )
 from legba.data.sources._contract import Signal
 from legba.data.stack.nlp_service import (
@@ -629,6 +630,134 @@ def test_entity_classes_match_the_nine():
 
 
 # ===========================================================================
+# R8 — class precision: the person-default no longer swallows orgs and places
+# ===========================================================================
+#
+# Live 2026-07 enrichment-quality sweep. `_classify_entity_text` ended in "two
+# capitalised tokens, no cue -> person", so "White House" / "Yonhap News" /
+# "Russian Federation" / "State Duma" typed PERSON, real places ("Kyiv",
+# "Crete", "Yekaterinburg", "Germany") fell to the generic `entity` bucket, and
+# inverted GLiREL triples typed people as places ("Seyyed Ali Khamenei" and
+# "Keir Starmer" -> location). Entity auto-merge requires the same SPECIFIC
+# class on both sides, so this class instability was the proximate blocker on
+# 570 exact-key duplicate clusters (Zelensky x9, Trump x7).
+#
+# Each surface named in the sweep is locked below, alongside the fallbacks the
+# fix must NOT disturb.
+
+
+@pytest.mark.parametrize("surface,expected", [
+    # --- were PERSON, are institutions -------------------------------------
+    ("White House", "organization"),
+    ("Yonhap News", "organization"),
+    ("Yonhap", "organization"),
+    ("State Duma", "organization"),
+    ("Russian Federation", "country"),
+    ("EU", "organization"),
+    # --- were LOCATION off an inverted triple, are people -------------------
+    ("Seyyed Ali Khamenei", "person"),
+    ("Keir Starmer", "person"),
+    # --- were the generic bucket, are places --------------------------------
+    ("Kyiv", "location"),
+    ("Crete", "location"),
+    ("Yekaterinburg", "location"),
+    ("Germany", "country"),
+])
+def test_r8_reported_misclassifications(surface, expected):
+    assert _clf(surface) == expected, (
+        f"{surface!r} should be {expected}, got {_clf(surface)!r}"
+    )
+
+
+@pytest.mark.parametrize("surface,predicate,expected", [
+    # An inverted place predicate must not overrule a personal-name shape...
+    ("Seyyed Ali Khamenei", "country of citizenship", "person"),
+    ("Keir Starmer", "residence", "person"),
+    ("Volodymyr Zelensky", "located in", "person"),
+    # ... but a single-token unknown place still takes the predicate's word
+    # (the guard is shape-only, so recall on real datelines is preserved).
+    ("Damietta", "located in", "location"),
+    ("Yerevan", "place of birth", "location"),
+])
+def test_r8_place_predicate_does_not_overrule_person_shape(
+    surface, predicate, expected
+):
+    assert _clf(surface, predicate=predicate, slot="object") == expected
+
+
+@pytest.mark.parametrize("surface,expected", [
+    ("IAEA", "organization"),        # institution acronym, was `entity`
+    ("IRGC", "organization"),
+    ("TASS", "organization"),        # curated wire agency
+    ("COVID", "entity"),             # disease, NOT an org
+    ("SARS", "entity"),
+    ("GDP", "entity"),               # economic measure
+    ("THE", "entity"),               # ALL-CAPS headline residue
+])
+def test_r8_acronym_typing(surface, expected):
+    assert _clf(surface) == expected
+
+
+@pytest.mark.parametrize("surface,expected", [
+    # KEEP-TESTS — the fallbacks and cues the fix must not disturb.
+    ("Donald Trump", "person"),
+    ("Volodymyr Zelensky", "person"),
+    ("Vladimir Putin", "person"),
+    ("A. Merkel", "person"),
+    ("Michelle Steel", "person"),          # surname/org-suffix collision guard
+    ("Emily Post", "person"),              # ... widened with the news heads
+    ("Apple Inc.", "corporation"),         # legal form keeps the finer class
+    ("Hurricane Helene", "event"),
+    ("Severe Thunderstorm Warning", "event"),
+    ("the Russian Foreign Ministry", "organization"),
+    ("Bank of England", "organization"),
+    ("Nippon Steel", "organization"),
+])
+def test_r8_keeps_existing_classifications(surface, expected):
+    assert _clf(surface) == expected
+
+
+def test_r8_operator_override_still_wins():
+    # The taxonomy_map override is applied before every R8 tier.
+    assert _clf("Kyiv", overrides={"kyiv": "concept"}) == "concept"
+
+
+@pytest.mark.asyncio
+async def test_r8_classes_reach_the_payload_through_transform():
+    # The real binding path: the classes the handler stamps on payload.entities
+    # (the same handler `reenrich_ner` builds and calls for the backfill).
+    handler_fn, _captured = _make_ner_transport(
+        default_triples=[
+            {"subject": "White House", "predicate": "located in",
+             "object": "Washington"},
+            {"subject": "Yekaterinburg", "predicate": "country",
+             "object": "Russian Federation"},
+            {"subject": "Keir Starmer", "predicate": "head of government",
+             "object": "United Kingdom"},
+        ],
+    )
+    client = _build_client(handler_fn)
+    handler = NERMultilingualHandler(NERMultilingualConfig(), nlp_client=client)
+    await handler.on_configure(_ctx())
+    await handler.on_activate(_ctx())
+    sig = _signal(
+        text=(
+            "White House officials met in Washington. A scientist was beaten in "
+            "Yekaterinburg, Russian Federation. Keir Starmer commented."
+        ),
+        language="en",
+    )
+    out = await handler.transform(sig, _ctx())
+    assert out is not None
+    by_text = {e["text"]: e["class"] for e in out.payload["entities"]}
+    assert by_text["White House"] == "organization"
+    assert by_text["Yekaterinburg"] == "location"
+    assert by_text["Russian Federation"] == "country"
+    assert by_text["Keir Starmer"] == "person"
+    await handler.on_retire(_ctx())
+
+
+# ===========================================================================
 # M12 — telegram payload.text is now NER'd
 # ===========================================================================
 #
@@ -740,6 +869,121 @@ async def test_m12_empty_telegram_signal_still_drops():
 
 def test_m12_text_in_default_text_fields():
     assert "text" in NERMultilingualConfig().text_fields
+
+
+# ===========================================================================
+# DQ R1 — the extractor's head/tail PAIRS are preserved
+# ===========================================================================
+#
+# /extract returns real (subject, predicate, object) triples. The contractual
+# entity list flattens them and DE-DUPES on endpoint text, so an entity claimed
+# by an earlier triple is missing from every later one — which destroys the
+# pairing. Downstream, fact_extractor re-paired that flat list BY LIST INDEX
+# and manufactured relations nobody extracted. The pairs are now stamped
+# alongside the entities so nothing has to be guessed back out.
+
+
+@pytest.mark.asyncio
+async def test_relations_preserve_pairs_the_entity_list_loses():
+    """The de-dup that broke fact extraction, and the surface that fixes it."""
+    handler_fn, _ = _make_extract_handler(
+        default_triples=[
+            {"subject": "Telegram", "predicate": "located in", "object": "Russia"},
+            {"subject": "Telegram", "predicate": "founded by",
+             "object": "Pavel Durov"},
+        ],
+    )
+    client = _build_client(handler_fn)
+    h = NERMultilingualHandler(
+        NERMultilingualConfig(languages=["en", "xx"], default_language="xx"),
+        nlp_client=client,
+    )
+    await h.on_configure(_ctx())
+    await h.on_activate(_ctx())
+    sig = _signal(
+        body="Telegram founder Pavel Durov rejected the demand from Russia.",
+        language="en",
+    )
+    out = await h.transform(sig, _ctx())
+
+    # The lossy half: "Telegram" was claimed by the FIRST triple, so it is
+    # absent from the 'founded by' group entirely. Nothing in the flat list
+    # still says who founded what.
+    founded_by = [
+        e for e in out.payload["entities"] if e.get("predicate") == "founded by"
+    ]
+    assert [e["text"] for e in founded_by] == ["Pavel Durov"], (
+        "the entity list drops the de-duped head — pairing is unrecoverable"
+    )
+
+    # The fix: the model's own pairs, intact and correctly directed.
+    pairs = {
+        (r["subject"], r["predicate"], r["object"]) for r in out.payload["relations"]
+    }
+    assert ("Telegram", "founded by", "Pavel Durov") in pairs
+    assert ("Telegram", "located in", "Russia") in pairs
+    # The garbage the index-pairing produced from this exact shape.
+    assert ("Russia", "founded by", "Pavel Durov") not in pairs
+    await h.on_retire(_ctx())
+
+
+@pytest.mark.asyncio
+async def test_relations_carry_offsets_locating_the_object_after_its_subject():
+    """Offsets let the fact stage quote the asserting clause as evidence; the
+    object resolves to the occurrence AFTER its subject, not the document's
+    first mention of that surface."""
+    handler_fn, _ = _make_extract_handler(
+        default_triples=[
+            {"subject": "Tim Cook", "predicate": "employer", "object": "Apple Inc."},
+        ],
+    )
+    client = _build_client(handler_fn)
+    h = NERMultilingualHandler(
+        NERMultilingualConfig(languages=["en", "xx"], default_language="xx"),
+        nlp_client=client,
+    )
+    await h.on_configure(_ctx())
+    await h.on_activate(_ctx())
+    body = "Apple Inc. reported earnings. Tim Cook still runs Apple Inc. today."
+    out = await h.transform(_signal(body=body, language="en"), _ctx())
+
+    rel = next(
+        r for r in out.payload["relations"] if r["predicate"] == "employer"
+    )
+    assert body[rel["subject_start"]:rel["subject_end"]] == "Tim Cook"
+    assert body[rel["object_start"]:rel["object_end"]] == "Apple Inc."
+    # The SECOND "Apple Inc." — the one in Tim Cook's clause.
+    assert rel["object_start"] > rel["subject_start"]
+    await h.on_retire(_ctx())
+
+
+@pytest.mark.asyncio
+async def test_relations_reject_nonentity_endpoints():
+    """A relation whose endpoint the entity list would refuse (bare
+    number/date) must not sneak in through the pair surface."""
+    handler_fn, _ = _make_extract_handler(
+        default_triples=[
+            {"subject": "Apple Inc.", "predicate": "employer", "object": "50%"},
+            {"subject": "Tim Cook", "predicate": "employer",
+             "object": "Apple Inc."},
+        ],
+    )
+    client = _build_client(handler_fn)
+    h = NERMultilingualHandler(
+        NERMultilingualConfig(languages=["en", "xx"], default_language="xx"),
+        nlp_client=client,
+    )
+    await h.on_configure(_ctx())
+    await h.on_activate(_ctx())
+    out = await h.transform(
+        _signal(body="Tim Cook runs Apple Inc. and holds 50% approval.",
+                language="en"),
+        _ctx(),
+    )
+    objects = {r["object"] for r in out.payload["relations"]}
+    assert "50%" not in objects
+    assert "Apple Inc." in objects
+    await h.on_retire(_ctx())
 
 
 # ===========================================================================

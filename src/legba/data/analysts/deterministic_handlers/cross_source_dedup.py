@@ -52,6 +52,12 @@ Output ``data`` keys:
     aliases_linked    int — alias links written this run
     exact_aliases     int — aliases linked by content_hash
     semantic_aliases  int — aliases linked by Qdrant near-dup
+    qdrant_errors     int — 1 when the semantic pass raised (query/transport
+                      failure against ``qdrant_collection``) and degraded to
+                      content_hash-only this run; 0 otherwise. A dead/missing
+                      collection previously degraded SILENTLY (only a WARNING
+                      log line, no counter) — this makes it a receipt fact an
+                      operator can alert on.
     sets              [{canonical_signal_id, alias_signal_ids, reason, score}]
                       (omitted on the live-pool path when large; always present
                       in synthetic-input mode for test assertions)
@@ -88,6 +94,15 @@ _SEMANTIC_TOP_K = 10
 # groups in SQL — replaces the old unbounded full-table re-scan that was
 # blowing the Dapr actor-invoke budget on busy targets.
 DEFAULT_MAX_GROUPS_PER_RUN: int = 500
+
+# The ONE Qdrant collection every signal actually lives in (see
+# legba.data.config.QdrantConfig.signals_collection / signal_embedder). R2:
+# this used to default to "signals" — a collection nothing ever created — so
+# the semantic pass below silently never found a point and semantic dedupe
+# never fired, in all of history. Kept as a named constant (rather than an
+# inline literal in options.get) so a regression test can import it and pin
+# it against the shared config default.
+_DEFAULT_QDRANT_COLLECTION = "legba_signals"
 
 
 # ---------------------------------------------------------------------------
@@ -260,15 +275,22 @@ async def _resolve_semantic_pool(
     collection: str,
     produced_by: str | None,
     owner_tenant: str | None,
-) -> tuple[int, list[dict[str, Any]]]:
-    """Best-effort semantic near-dup over Qdrant. Returns ``(aliases_linked, sets)``.
+) -> tuple[int, list[dict[str, Any]], int]:
+    """Best-effort semantic near-dup over Qdrant. Returns
+    ``(aliases_linked, sets, qdrant_errors)``.
 
     Only runs when a Qdrant client is injected. Any Qdrant error is swallowed
-    (logged) — the mandatory content-hash path already ran, so a missing or
-    flaky vector store degrades to content_hash-only rather than failing the run.
+    (logged AT WARNING) — the mandatory content-hash path already ran, so a
+    missing or flaky vector store degrades to content_hash-only rather than
+    failing the run. ``qdrant_errors`` is 1 when that happened this run, 0
+    otherwise — R2: a swallowed exception with no counter is how a dead/
+    misnamed collection went unnoticed for the handler's entire history; the
+    WARNING log line alone was never enough because nothing consumes logs as
+    a signal, but a receipt counter can be alerted on.
     """
     aliases_linked = 0
     sets: list[dict[str, Any]] = []
+    qdrant_errors = 0
     try:
         async with pool.acquire() as conn:
             tenant_filter = ""
@@ -339,8 +361,13 @@ async def _resolve_semantic_pool(
                         "score": threshold,
                     })
     except Exception as exc:  # noqa: BLE001 — degrade to content_hash-only
-        logger.warning("cross_source_dedup.semantic_failed err=%s", exc)
-    return aliases_linked, sets
+        qdrant_errors = 1
+        logger.warning(
+            "cross_source_dedup.semantic_failed collection=%s err=%s — "
+            "degrading to content_hash-only this run (see qdrant_errors)",
+            collection, exc,
+        )
+    return aliases_linked, sets, qdrant_errors
 
 
 async def _qdrant_neighbours(
@@ -428,6 +455,7 @@ def _build_finding(
     aliases_linked: int,
     exact_aliases: int,
     semantic_aliases: int,
+    qdrant_errors: int,
     sets: list[dict[str, Any]] | None,
     target_id: str | None,
 ) -> FindingPayload:
@@ -436,6 +464,8 @@ def _build_finding(
         f"{aliases_linked} aliases linked "
         f"({exact_aliases} content_hash, {semantic_aliases} semantic)"
     )
+    if qdrant_errors:
+        title = f"{title} [qdrant_errors={qdrant_errors}]"
     if target_id:
         title = f"{title} for {target_id}"
     body = "\n".join([
@@ -443,16 +473,20 @@ def _build_finding(
         f"aliases_linked={aliases_linked}",
         f"exact_aliases={exact_aliases}",
         f"semantic_aliases={semantic_aliases}",
+        f"qdrant_errors={qdrant_errors}",
     ])
     tags = ["deterministic", SUB_HANDLER_NAME]
     if aliases_linked:
         tags.append("aliases_linked")
+    if qdrant_errors:
+        tags.append("qdrant_errors")
     data: dict[str, Any] = {
         "sub_handler": SUB_HANDLER_NAME,
         "canonical_count": canonical_count,
         "aliases_linked": aliases_linked,
         "exact_aliases": exact_aliases,
         "semantic_aliases": semantic_aliases,
+        "qdrant_errors": qdrant_errors,
     }
     if sets is not None:
         data["sets"] = sets
@@ -486,7 +520,9 @@ async def handle(
     semantic_threshold:
         Qdrant cosine floor for a near-dup link (default 0.95).
     qdrant_collection:
-        Qdrant collection name (default ``"signals"``).
+        Qdrant collection name (default :data:`_DEFAULT_QDRANT_COLLECTION`,
+        ``"legba_signals"`` — the ONE collection signal_embedder actually
+        writes into; see :data:`legba.data.config.QdrantConfig.signals_collection`).
     max_groups_per_run:
         Cap on the number of duplicate-hash groups the exact pass resolves per
         run (default :data:`DEFAULT_MAX_GROUPS_PER_RUN`). Bounds per-run work so
@@ -497,7 +533,7 @@ async def handle(
     produced_by = str(options.get("analyst_id") or SUB_HANDLER_NAME)
     owner_tenant = options.get("owner_tenant")
     threshold = float(options.get("semantic_threshold", _DEFAULT_SEMANTIC_THRESHOLD))
-    collection = str(options.get("qdrant_collection", "signals"))
+    collection = str(options.get("qdrant_collection", _DEFAULT_QDRANT_COLLECTION))
     max_groups = int(options.get("max_groups_per_run", DEFAULT_MAX_GROUPS_PER_RUN))
 
     pool = getattr(deps, "pg_pool", None) if deps is not None else None
@@ -518,8 +554,9 @@ async def handle(
             canonical_count, exact_aliases, sets = 0, 0, []
         # Best-effort semantic pass (only if Qdrant injected).
         semantic_aliases = 0
+        qdrant_errors = 0
         if qdrant is not None:
-            semantic_aliases, semantic_sets = await _resolve_semantic_pool(
+            semantic_aliases, semantic_sets, qdrant_errors = await _resolve_semantic_pool(
                 pool, qdrant,
                 threshold=threshold,
                 collection=collection,
@@ -535,6 +572,7 @@ async def handle(
     else:
         canonical_count, exact_aliases, sets = _resolve_synthetic(inputs)
         semantic_aliases = 0
+        qdrant_errors = 0
         aliases_linked = exact_aliases
         sets_for_finding = sets
 
@@ -543,6 +581,7 @@ async def handle(
         aliases_linked=aliases_linked,
         exact_aliases=exact_aliases,
         semantic_aliases=semantic_aliases,
+        qdrant_errors=qdrant_errors,
         sets=sets_for_finding,
         target_id=options.get("target_id"),
     )

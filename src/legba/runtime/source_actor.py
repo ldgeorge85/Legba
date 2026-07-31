@@ -92,9 +92,35 @@ RETIRED = "retired"
 # advance the cursor in a `finally`, and time-box per-entry enrichment so one
 # hung extractor call can't block the actor. Downstream content-hash dedup makes
 # the resulting window overlap a harmless no-op.
-_MAX_ENTRIES_PER_POLL = 100      # hard count cap per pull
-_POLL_BUDGET_S = 30.0            # wall-time budget per pull
+_MAX_ENTRIES_PER_POLL = 100      # hard count cap per pull (generic default)
+_POLL_BUDGET_S = 30.0            # wall-time budget per pull (generic default)
 _ENRICH_TIMEOUT_S = 12.0         # per-entry baseline/enrichment timeout
+
+# R5 (2026-07-30) — PER-SOURCE poll bounds. The two defaults above are sized for
+# the modal source (an RSS/JSON feed that returns one page in a couple of
+# seconds). They are NOT universal: the telegram handler walks ~30 channels
+# behind its own 180s cycle guard, so a 30s outer budget truncated 100 of 105
+# live polls and the walk never reached the tail of the channel list at all —
+# the generic bound was cutting the pull long before the handler's own
+# economics applied. Each source now resolves its own bounds:
+#
+#   1. the descriptor's ``config`` (the operator's tuning surface — live-PUT
+#      per source, no code change), then
+#   2. the handler's advertised ``poll_budget_seconds`` /
+#      ``max_entries_per_poll`` (the handler knows its own cost; this is the
+#      same "handler advertises, actor reads" contract as ``health_state_key``
+#      / ``BULK_RESUME_OFFSET_KEY``), then
+#   3. the generic defaults above (UNCHANGED for every source that declares
+#      nothing — which is all of them but telegram).
+#
+# Both overrides are CLAMPED to the ceilings below. A poll must still finish
+# inside Dapr's drain window and reach its cursor-advance, so no descriptor
+# typo may park an actor indefinitely: the ceiling is the invariant, the
+# override is a dial inside it.
+_MAX_POLL_BUDGET_S = 240.0       # ceiling on any per-source wall-time override
+_MAX_ENTRIES_CEILING = 1000      # ceiling on any per-source entry-cap override
+_POLL_BUDGET_CONFIG_KEY = "poll_budget_seconds"
+_MAX_ENTRIES_CONFIG_KEY = "max_entries_per_poll"
 
 # S-4 intra-source exact-hash dedup. A source that re-lists an unchanged item
 # every poll (hazard feeds re-serve active events; NWS/NASA/USGS re-publish)
@@ -241,6 +267,116 @@ def bulk_highwater_advance(
     if reached_end:
         return 0
     return max(0, int(prior_offset)) + walked
+
+
+def _unwrap_factory_value(raw: Any) -> Any:
+    """Unwrap a descriptor property-factory shape (``{"raw": ..., ...}``).
+
+    Descriptor config values arrive either bare or wrapped by the property
+    factory; every actor-side read of a config field has to tolerate both
+    (see :func:`_bulk_resume_field`, which does the same unwrap inline).
+    """
+    if isinstance(raw, dict) and "raw" in raw:
+        return raw["raw"]
+    return raw
+
+
+def _positive_number(raw: Any) -> float | None:
+    """Coerce ``raw`` to a POSITIVE float, or None when it is not usable.
+
+    Rejects bools (``True`` is an int in Python and would silently mean "1
+    second"), non-numerics and anything <= 0. None means "this source of the
+    value said nothing usable" — the caller falls through to the next one.
+    """
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if value != value or value <= 0.0:  # NaN or non-positive
+        return None
+    return value
+
+
+def _resolve_bound(
+    *,
+    source_id: str,
+    config_value: Any,
+    handler_value: Any,
+    default: float,
+    ceiling: float,
+    label: str,
+) -> float:
+    """Resolve ONE per-source poll bound: descriptor → handler → default.
+
+    Clamped to ``ceiling`` (never below the resolved value's own intent — a
+    source is free to ask for LESS than the default, only more is capped). A
+    present-but-unusable value logs and falls through to the next source
+    rather than failing the poll: a bad tuning knob must degrade to the proven
+    default, never take a source offline.
+    """
+    for origin, raw in (
+        ("descriptor.config", _unwrap_factory_value(config_value)),
+        ("handler", handler_value),
+    ):
+        if raw is None:
+            continue
+        value = _positive_number(raw)
+        if value is None:
+            logger.warning(
+                "source_actor.poll_bound.invalid source=%s bound=%s origin=%s "
+                "value=%r — ignoring (falling through to the default)",
+                source_id, label, origin, raw,
+            )
+            continue
+        if value > ceiling:
+            logger.warning(
+                "source_actor.poll_bound.clamped source=%s bound=%s origin=%s "
+                "requested=%s ceiling=%s",
+                source_id, label, origin, value, ceiling,
+            )
+            return ceiling
+        return value
+    return default
+
+
+def resolve_poll_bounds(
+    descriptor: SourceDescriptor, handler: Any,
+) -> tuple[float, int]:
+    """Per-source ``(wall_clock_budget_s, max_entries)`` for ONE pull (R5).
+
+    Descriptor config wins over the handler's advertisement, which wins over
+    the module defaults; both are clamped to the module ceilings. A source
+    that declares neither gets exactly the historical bounds — this is a
+    widening, never a change, for every kind but the ones that opt in.
+    """
+    cfg = descriptor.config or {}
+    source_id = descriptor.identity.id
+
+    def _handler_attr(name: str) -> Any:
+        try:
+            return getattr(handler, name, None)
+        except Exception:  # pragma: no cover — a handler property that raises
+            return None
+
+    budget = _resolve_bound(
+        source_id=source_id,
+        config_value=cfg.get(_POLL_BUDGET_CONFIG_KEY),
+        handler_value=_handler_attr(_POLL_BUDGET_CONFIG_KEY),
+        default=_POLL_BUDGET_S,
+        ceiling=_MAX_POLL_BUDGET_S,
+        label=_POLL_BUDGET_CONFIG_KEY,
+    )
+    entries = _resolve_bound(
+        source_id=source_id,
+        config_value=cfg.get(_MAX_ENTRIES_CONFIG_KEY),
+        handler_value=_handler_attr(_MAX_ENTRIES_CONFIG_KEY),
+        default=float(_MAX_ENTRIES_PER_POLL),
+        ceiling=float(_MAX_ENTRIES_CEILING),
+        label=_MAX_ENTRIES_CONFIG_KEY,
+    )
+    return float(budget), max(1, int(entries))
 
 
 #: B0-11 Fix-1 (MASTER_PLAN 2026-07-10) — max tolerated FUTURE skew on a
@@ -983,7 +1119,12 @@ class SourceCore:
         # used to advance the cursor to where we STOPPED (not NOW) on a capped
         # pull, so a backlog is resumed rather than skipped (Fix A).
         last_processed_ts: datetime | None = None
-        deadline = time.monotonic() + _POLL_BUDGET_S
+        # R5 — per-source bounds (descriptor config > handler advertisement >
+        # the module defaults), each clamped to the module ceiling. Resolved
+        # ONCE per poll, before the walk, so the whole pull is governed by one
+        # pair of numbers that the log line below can report.
+        poll_budget_s, max_entries = resolve_poll_bounds(self.descriptor, handler)
+        deadline = time.monotonic() + poll_budget_s
         try:
             async with self.deps.pg_pool.acquire() as conn:
                 count = 0
@@ -991,7 +1132,7 @@ class SourceCore:
                     # Bound the poll by count AND wall time so it always finishes
                     # within Dapr's drain window and reaches the cursor-advance
                     # below — never trapped re-grinding a backlog (2026-06-08).
-                    if count >= _MAX_ENTRIES_PER_POLL or time.monotonic() > deadline:
+                    if count >= max_entries or time.monotonic() > deadline:
                         capped = True
                         break
                     count += 1
@@ -1105,9 +1246,9 @@ class SourceCore:
         if written or capped or errored:
             logger.info(
                 "source_actor.pull.done actor_id=%s written=%d capped=%s err=%s "
-                "bulk_offset=%s",
+                "bulk_offset=%s budget_s=%.0f max_entries=%d",
                 self.actor_id, len(written), capped, errored,
-                new_cursor.get("bulk_offset"),
+                new_cursor.get("bulk_offset"), poll_budget_s, max_entries,
             )
         return {
             "outcome": "success" if written else ("hard_fail" if errored else "noop"),
@@ -1233,9 +1374,10 @@ class SourceCore:
         offset to 0 (re-walk the refreshed snapshot next pull); a mid-stream
         stop keeps advancing it. Truth sources, in order:
 
-          * If WE capped (hit ``_MAX_ENTRIES_PER_POLL`` / the wall-clock
-            budget), it is NEVER end-of-stream — we stopped the handler
-            mid-snapshot. The handler's post-loop report didn't even run.
+          * If WE capped (hit the resolved entry cap / wall-clock budget —
+            see :func:`resolve_poll_bounds`), it is NEVER end-of-stream — we
+            stopped the handler mid-snapshot. The handler's post-loop report
+            didn't even run.
           * Otherwise the handler returned on its own; its report
             (:data:`BULK_TRAVERSED_KEY`) distinguishes a true end-of-stream
             (``reached_end=True``) from the handler's OWN ``max_bulk_rows`` cap

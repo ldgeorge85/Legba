@@ -30,6 +30,10 @@ from uuid import UUID, uuid4
 import pytest
 
 from legba.data.analysts._tradecraft import ANALYTIC_PREAMBLE
+from legba.data.analysts.unit_grounding import (
+    UNIT_GROUNDING_CLAUSE,
+    with_grounding_clause,
+)
 from legba.data.analysts.inline_target import (
     InlineTargetDeps,
     InlineTargetRunner,
@@ -124,13 +128,31 @@ _UNIT_PROMPT = (
 
 
 def test_effective_system_prompt_uses_deps_value_when_set() -> None:
+    """The descriptor's prompt drives synthesis, VERBATIM — QW1-B appends the
+    shared DESK GROUNDING clause after it (one definition for every unit) and
+    changes nothing the unit itself wrote."""
     deps = InlineTargetDeps(llm=_CapturingLLM(), system_prompt=_UNIT_PROMPT)
-    assert _effective_system_prompt(deps) == _UNIT_PROMPT
+    resolved = _effective_system_prompt(deps)
+    assert resolved == with_grounding_clause(_UNIT_PROMPT)
+    assert resolved.startswith(_UNIT_PROMPT)
+    assert UNIT_GROUNDING_CLAUSE in resolved
 
 
 def test_effective_system_prompt_falls_back_when_none() -> None:
     deps = InlineTargetDeps(llm=_CapturingLLM(), system_prompt=None)  # type: ignore[arg-type]
-    assert _effective_system_prompt(deps) == _SYSTEM_PROMPT
+    resolved = _effective_system_prompt(deps)
+    assert resolved == with_grounding_clause(_SYSTEM_PROMPT)
+    assert _SYSTEM_PROMPT.strip() in resolved
+
+
+def test_the_grounding_clause_is_never_stamped_twice() -> None:
+    """A GEPA-promoted candidate that already carries the clause must not get a
+    second copy."""
+    already = with_grounding_clause(_UNIT_PROMPT)
+    deps = InlineTargetDeps(llm=_CapturingLLM(), system_prompt=already)
+    resolved = _effective_system_prompt(deps)
+    assert resolved == already
+    assert resolved.count(UNIT_GROUNDING_CLAUSE) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +167,7 @@ async def test_run_method_synthesizes_with_unit_system_prompt() -> None:
     deps = InlineTargetDeps(llm=llm, system_prompt=_UNIT_PROMPT)
     # No target_id → meta run (off-target guard is a no-op), single synthesis call.
     await run_method([_signal_row(id_=uuid4())], {"analyst_id": "unit.ltr"}, deps)
-    assert llm.systems == [_UNIT_PROMPT]
+    assert llm.systems == [with_grounding_clause(_UNIT_PROMPT)]
     # The unit-specific sentinel is in the rendered system prompt.
     assert "UNIT-SENTINEL-LTR-9f2a" in (llm.systems[0] or "")
 
@@ -156,7 +178,7 @@ async def test_run_method_falls_back_to_default_system_prompt() -> None:
     llm = _CapturingLLM()
     deps = InlineTargetDeps(llm=llm, system_prompt=None)  # type: ignore[arg-type]
     await run_method([_signal_row(id_=uuid4())], {"analyst_id": "unit.ltr"}, deps)
-    assert llm.systems == [_SYSTEM_PROMPT]
+    assert llm.systems == [with_grounding_clause(_SYSTEM_PROMPT)]
 
 
 # ---------------------------------------------------------------------------

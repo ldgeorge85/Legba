@@ -121,13 +121,21 @@ export default function CitedAssessment({
               >
                 <span className="mt-px shrink-0 font-mono text-label text-accent-info">{c.marker}</span>
                 <div className="min-w-0 flex-1">
-                  <RecordLink
-                    kind={c.refKind}
-                    id={c.refId}
-                    label={c.title ?? c.refId}
-                    origin="cited-assessment"
-                    showKind
-                  />
+                  {c.refKind === 'situation_register' ? (
+                    // Continuity situation register: a real citation with NO
+                    // single drill target by design — labeled, non-drilling.
+                    <span className="text-body text-fg-muted">
+                      {c.title ?? 'Open-situation register'}
+                    </span>
+                  ) : (
+                    <RecordLink
+                      kind={c.refKind}
+                      id={c.refId}
+                      label={c.title ?? c.refId}
+                      origin="cited-assessment"
+                      showKind
+                    />
+                  )}
                   {c.source && (
                     <a
                       href={c.source}

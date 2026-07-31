@@ -1,0 +1,54 @@
+-- SPDX-FileCopyrightText: 2026 Lewis George
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- 0116_bearing_edges_data.sql
+--
+-- W-B1/W-B2 (the bearing pipeline). One additive column on the 0107
+-- `bearing_edges` table: the per-edge SEMANTIC-JUDGMENT sidecar.
+--
+-- WHY A COLUMN AND NOT A TABLE. Every 0107 column answers "what did the
+-- DETERMINISTIC matcher compute" (planes, weight, matcher_version). The
+-- bearing gate answers a different question — "did a model agree this signal
+-- actually bears on this thesis" — and it is a property OF THE EDGE, written
+-- in the same statement, read by every consumer that reads the edge. A
+-- sidecar table would need its own key, its own idempotency, and a join on
+-- every read of a row that is already unique by (src_id, dst_id, edge_kind).
+--
+-- SHAPE. `data` is a small, open jsonb envelope. The keys the writer stamps
+-- today (legba.data.analysts.deterministic_handlers.bearing_gate):
+--
+--   * bearing_gate         — 'yes' | 'unavailable' | 'deferred'.
+--       'yes'         the gate model judged the signal to bear on the thesis.
+--       'unavailable' the gate was ON but could not answer (endpoint down,
+--                     timeout, unparseable reply). The edge is STILL WRITTEN
+--                     — an 8B outage must never silence a deterministic
+--                     matcher — and consumers filter on the stamp.
+--       'deferred'    the gate was ON but the per-run call budget was spent.
+--       (a gate verdict of NO writes NO ROW AT ALL, so 'no' never appears
+--        here; the refusal is counted in the run receipt instead.)
+--   * bearing_gate_ref     — the stack component that judged it, so an edge
+--                            written under one model is distinguishable from
+--                            an edge written under another.
+--   * bearing_gate_prompt  — the prompt version, so the prompt-lab lane can
+--                            attribute a precision shift to a prompt change.
+--   * bearing_confirm      — 'yes' | 'no' | 'unavailable' (gate-YES edges
+--                            only; the core-plane second opinion).
+--   * bearing_confirm_reason — one line, from the confirming model.
+--
+-- NOT NULL DEFAULT '{}' so:
+--   * every pre-existing row reads as "no judgment recorded" rather than
+--     NULL-vs-empty ambiguity, and
+--   * a run with the gate OFF writes the DEFAULT, which is byte-identical to
+--     what 3.2.0 wrote — the X-1 "absent option changes nothing" contract
+--     holds at the storage layer too, not just in the handler.
+--
+-- No index: the gate stamp is read alongside the edge (the existing
+-- idx_bearing_edges_dst covers the access path), never scanned on its own.
+--
+-- SAFETY (idempotent, additive, forward-only): ADD COLUMN IF NOT EXISTS with
+-- a constant default — Postgres 11+ rewrites no heap for that. No existing
+-- column is touched, no row is rewritten, and a re-apply is a no-op. The
+-- runner wraps this file in its own transaction (no inline BEGIN/COMMIT).
+
+ALTER TABLE public.bearing_edges
+    ADD COLUMN IF NOT EXISTS data jsonb NOT NULL DEFAULT '{}'::jsonb;

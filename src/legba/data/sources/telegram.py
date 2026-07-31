@@ -25,6 +25,21 @@ returns newest-first; we walk until we hit either the stored cursor or
 the `since` lower bound, whichever is earlier — re-emission of
 overlapping windows is allowed (dedupe is downstream, per KC-3 / L-151).
 
+Rotation (R5, 2026-07-30): the channel walk is ROUND-ROBIN, not fixed
+config order. Every layer above this handler truncates a poll — the
+source actor bounds each pull by wall-clock AND entry count, and a
+truncation kills the pull generator mid-walk — so a fixed-order loop
+serves the head of ``channels`` every poll and STARVES the tail. It was
+measured: 100 of 105 telegram polls in a live window ended ``capped``
+and the three newest channels (positions 26-28) had effectively never
+been polled. The handler therefore persists a rotation pointer
+(:data:`_ROTATION_KEY`) alongside the per-channel cursors and starts each
+poll where the previous one stopped, wrapping around. The pointer is
+written AHEAD of each channel (before it is attempted), because a
+truncated poll never reaches the end of ``pull`` — write-ahead is the
+only record that survives a capped poll, and it also makes it impossible
+for one busy channel to trap the rotation on itself forever.
+
 Reconnection: Telethon raises `FloodWaitError(seconds=N)` on rate
 limit; we honor it. Connection drops fall through to exponential
 backoff (1s, 2s, 4s, 8s, capped at 30s; max 5 attempts per channel
@@ -423,6 +438,42 @@ class TelegramChannelSourceConfig(BaseModel):
                     "left by a crashed poll and is force-cleared (logged). "
                     "Keep it comfortably above cycle_timeout_seconds.",
     )
+    # --- R5 outer poll bounds (read by the SOURCE ACTOR, not this handler) ---
+    # `legba.runtime.source_actor` bounds EVERY pull by wall-clock and entry
+    # count; those generic bounds (30s / 100 entries) are far tighter than this
+    # handler's own cycle economics (180s over ~30 channels), so the actor cut
+    # the walk long before cycle_timeout_seconds ever mattered. The actor now
+    # resolves its bounds per-source: these two OPTIONAL fields first, then the
+    # handler's advertised `poll_budget_seconds` / `max_entries_per_poll`
+    # properties (derived from cycle_timeout_seconds / per_channel_message_limit
+    # just below), then its own defaults. They are declared HERE — even though
+    # this handler never reads them — because the config schema is
+    # ``extra='forbid'``: an undeclared key in the descriptor config would fail
+    # validation at registration and the actor reads the SAME descriptor block.
+    # Leave both unset unless a live poll needs hand-tuning; the derived
+    # advertisement already sizes the budget to this handler's own guards.
+    poll_budget_seconds: float | None = Field(
+        default=None,
+        gt=0.0,
+        description="OPTIONAL override of the source actor's wall-clock "
+                    "budget for one pull of THIS source, in seconds. Unset "
+                    "(default) → the handler advertises "
+                    "cycle_timeout_seconds + a persist margin. The actor "
+                    "clamps any value to its own ceiling (240s) so a typo "
+                    "cannot park a poll past the actor's drain window.",
+    )
+    max_entries_per_poll: int | None = Field(
+        default=None,
+        gt=0,
+        description="OPTIONAL override of the source actor's per-pull entry "
+                    "cap for THIS source. Unset (default) → the handler "
+                    "advertises per_channel_message_limit x len(channels) — "
+                    "one full page for every channel in the rotation — so "
+                    "the WALL CLOCK ends a sweep, not the entry cap (a "
+                    "catch-up page cut mid-flight never persists its cursor "
+                    "and re-reads the same messages forever). The actor "
+                    "clamps any value to its own ceiling (1000).",
+    )
 
     @field_validator("classes", mode="after")
     @classmethod
@@ -469,6 +520,50 @@ _HEALTH_KEY = "telegram_health"
 # FLOOD_WAIT deadline so it is honored ACROSS polls after a cycle abort.
 _LOCK_KEY = "telegram_poll_lock"            # value: {"acquired_at": epoch_s}
 _FLOODWAIT_KEY = "telegram_floodwait_until"  # value: {"until": epoch_s}
+# R5 (2026-07-30) — round-robin rotation pointer. Value:
+# ``{"next_handle": <normalized handle>, "updated_at": <iso8601>}`` — the
+# channel the NEXT poll must start from. Kept in its own key (not folded into
+# ``_STATE_KEY``) so the cursor map stays a pure {handle: message_id} dict that
+# every reader — including the operator's psql spot-checks — can consume without
+# filtering out a magic entry. See the module docstring for WHY rotation exists.
+_ROTATION_KEY = "telegram_rotation"
+
+# R5 — inputs to the poll bounds this handler advertises to the source actor
+# (see ``TelegramChannelSourceHandler.poll_budget_seconds`` /
+# ``.max_entries_per_poll``). The schema defaults are read back OFF the model so
+# a change to a Field default above can never drift from the advertisement.
+_POLL_BUDGET_MARGIN_S = 20.0  # headroom for the post-loop cursor/health persists
+_DEFAULT_CYCLE_TIMEOUT_S: float = float(
+    TelegramChannelSourceConfig.model_fields["cycle_timeout_seconds"].default
+)
+_DEFAULT_PER_CHANNEL_MESSAGE_LIMIT: int = int(
+    TelegramChannelSourceConfig.model_fields["per_channel_message_limit"].default
+)
+
+
+def rotate_channel_order(
+    channels: list[tuple[str, str]], next_handle: str | None,
+) -> list[tuple[str, str]]:
+    """Rotate ``(config_ref, normalized_handle)`` pairs to start at ``next_handle``.
+
+    Pure (no I/O) so the rotation invariant is unit-testable without a
+    Telethon stub. Returns a NEW list, config order preserved apart from the
+    rotation point:
+
+      * no pointer (first-ever poll) → config order, unchanged.
+      * pointer names a configured channel → that channel first, the rest
+        following in config order, wrapping past the end.
+      * pointer names a channel that is NO LONGER configured (removed from
+        ``channels``, or renamed) → config order. Falling back to the top is
+        the safe degrade: it re-polls a channel or two early rather than
+        skipping the tail, and the next poll re-anchors the pointer.
+    """
+    if not channels or not next_handle:
+        return list(channels)
+    for idx, (_ref, handle) in enumerate(channels):
+        if handle == next_handle:
+            return list(channels[idx:]) + list(channels[:idx])
+    return list(channels)
 
 
 @dataclass
@@ -485,6 +580,10 @@ class _PullStats:
     # and, when a FLOOD_WAIT cycle abort fired, the server-demanded wait.
     channels_deferred: list[str] = field(default_factory=list)
     flood_wait_abort_seconds: int | None = None
+    # R5 — the channel this poll's rotation STARTED at (carried onto the health
+    # record so "which channels did this poll actually reach" is answerable
+    # from the state store, not only from the logs).
+    rotation_start: str | None = None
 
 
 @dataclass
@@ -516,7 +615,8 @@ class TelegramChannelSourceHandler:
       * ``on_activate`` connects the Telethon client and verifies
         authorization. Lazy by default — the smoke harness can also call
         ``pull`` directly with the client lazily constructed inside.
-      * ``pull`` iterates configured channels, yielding Signals.
+      * ``pull`` iterates configured channels in ROTATION order (R5),
+        yielding Signals.
       * ``on_pause`` / ``on_retire`` disconnect cleanly and delete the
         materialized session file.
 
@@ -558,6 +658,57 @@ class TelegramChannelSourceHandler:
         self._last_success_at: datetime | None = None
         self._rows_pulled_24h: int = 0
         self._last_error: str | None = None
+
+    # --- R5: outer poll bounds this handler advertises to the actor ------
+    #
+    # `legba.runtime.source_actor` asks every handler what ITS pull costs
+    # before bounding the pull (``resolve_poll_bounds``). The handler knows its
+    # own economics; the actor keeps the ceilings. Both properties fall back to
+    # the schema defaults when no config is resolved yet (a bare-constructed
+    # handler whose ``on_configure`` has not run), so the actor can always ask.
+
+    @property
+    def poll_budget_seconds(self) -> float:
+        """Wall-clock seconds this handler wants for ONE pull.
+
+        The A7 cycle guard already bounds the walk at
+        ``cycle_timeout_seconds`` (default 180s); the outer budget must exceed
+        it or the actor truncates the walk before the handler's own guard —
+        and a generic 30s budget over ~30 channels is exactly how the tail of
+        ``channels`` starved. The margin covers the post-loop cursor +
+        rotation + health persists that a truncated pull never reaches.
+        """
+        cfg = self._config
+        if cfg is not None and cfg.poll_budget_seconds is not None:
+            return float(cfg.poll_budget_seconds)
+        cycle = (
+            cfg.cycle_timeout_seconds if cfg is not None
+            else _DEFAULT_CYCLE_TIMEOUT_S
+        )
+        return float(cycle) + _POLL_BUDGET_MARGIN_S
+
+    @property
+    def max_entries_per_poll(self) -> int:
+        """Signals this handler wants to be allowed to yield in ONE pull.
+
+        One full page for every channel in the rotation
+        (``per_channel_message_limit * len(channels)``), which is deliberately
+        generous: the entry cap should not be what ends a sweep — the
+        wall-clock budget should, because it is the bound that actually
+        protects the actor. Two things go wrong when the entry cap binds
+        first: the sweep stops after a couple of channels (the tail waits
+        rotations it did not need to), and a catch-up page cut mid-flight
+        never persists its cursor — the walk re-reads the same messages on
+        every subsequent visit, a per-channel stall rather than a delay.
+        The actor clamps this to its own ceiling, so asking generously is
+        safe (the live 28-channel descriptor asks 1400 and is given 1000).
+        """
+        cfg = self._config
+        if cfg is not None and cfg.max_entries_per_poll is not None:
+            return int(cfg.max_entries_per_poll)
+        if cfg is None:
+            return _DEFAULT_PER_CHANNEL_MESSAGE_LIMIT
+        return int(cfg.per_channel_message_limit) * max(1, len(cfg.channels))
 
     # --- Lifecycle hooks (L-102 §1) -------------------------------------
 
@@ -717,15 +868,28 @@ class TelegramChannelSourceHandler:
                 label="cycle",
             )
 
-            for channel_ref in cfg.channels:
-                handle = self._normalize_handle(channel_ref)
+            # R5 — ROUND-ROBIN order. Config order is the tie-break, not the
+            # walk order: the stored pointer decides where this poll STARTS so
+            # the channels a previous (capped/deferred) poll never reached are
+            # served first. See the module docstring for the starvation this
+            # fixes; ``rotate_channel_order`` holds the (pure) ordering rule.
+            ordered = rotate_channel_order(
+                [(ref, self._normalize_handle(ref)) for ref in cfg.channels],
+                await self._read_rotation_pointer(ctx),
+            )
+            stats.rotation_start = ordered[0][1] if ordered else None
+            if ordered and ordered[0][1] != self._normalize_handle(cfg.channels[0]):
+                ctx.logger.info(
+                    "telegram_channel: rotation starts at %s (%d channels; "
+                    "config head is %s)",
+                    stats.rotation_start, len(ordered),
+                    self._normalize_handle(cfg.channels[0]),
+                )
 
+            for position, (_channel_ref, handle) in enumerate(ordered):
                 # A7 GUARD 4 — cycle cap reached: defer the rest to next poll.
                 if cycle_deadline.expired():
-                    remaining = [
-                        self._normalize_handle(c)
-                        for c in cfg.channels[cfg.channels.index(channel_ref):]
-                    ]
+                    remaining = [h for _ref, h in ordered[position:]]
                     stats.channels_deferred.extend(remaining)
                     ctx.logger.warning(
                         "telegram_channel: cycle timeout %.0fs reached — "
@@ -733,6 +897,43 @@ class TelegramChannelSourceHandler:
                         cfg.cycle_timeout_seconds, len(remaining), remaining,
                     )
                     break
+
+                # R5 — advance the rotation pointer PAST this channel BEFORE
+                # attempting it (write-ahead), for two reasons:
+                #
+                #   * A capped poll never returns here. The source actor bounds
+                #     the pull and ``break``s out of its ``async for``, which
+                #     CLOSES this generator at the yield it is suspended on —
+                #     everything after the channel loop (the cursor persist, the
+                #     health record) is simply never executed. Only state
+                #     already written survives, so the pointer has to be written
+                #     ahead of the work, not after it.
+                #   * It makes trapping impossible. Pointing at the channel
+                #     currently being walked would park the rotation on any
+                #     channel busy enough to consume a whole poll by itself —
+                #     re-creating the starvation one channel over. Write-ahead
+                #     guarantees every poll advances the rotation by exactly the
+                #     channels it touched.
+                #
+                # The cost is bounded and paid knowingly: a channel whose walk
+                # is cut mid-page waits one full rotation for its next turn. It
+                # loses nothing — its cursor did not advance either, so the
+                # unread messages are still pending when its turn comes round.
+                #
+                # The same call checkpoints the CURSORS accumulated so far,
+                # which is safe here and nowhere else: at the top of a channel
+                # the map holds exactly the progress of channels that CONCLUDED
+                # (this poll's own ``cursors[handle] = mid`` for the channel
+                # about to be walked has not run yet), so a cut poll can never
+                # persist a cursor past a signal the actor discarded at its cap.
+                # Without this, a capped poll threw away every cold-start
+                # channel's progress — the cold-start walk has no per-page
+                # persist and the post-loop persist is never reached.
+                await self._checkpoint_poll_progress(
+                    ctx,
+                    cursors=cursors,
+                    next_handle=ordered[(position + 1) % len(ordered)][1],
+                )
 
                 # Task #206 — durable-across-pages cursor persistence. A
                 # catch-up walk (see _pull_channel) can span MULTIPLE
@@ -799,8 +1000,11 @@ class TelegramChannelSourceHandler:
                     # or a FLOOD_WAIT exceeding the abort threshold). Remaining
                     # channels are deferred; a flood abort persists the server
                     # wait deadline (below) so subsequent polls honor it.
-                    idx = cfg.channels.index(channel_ref)
-                    remaining = [self._normalize_handle(c) for c in cfg.channels[idx + 1:]]
+                    # R5: "remaining" is the tail of the ROTATION, not of the
+                    # config list — and it is read by POSITION, so a duplicated
+                    # handle in ``channels`` can no longer resolve to the wrong
+                    # index the way ``list.index()`` did.
+                    remaining = [h for _ref, h in ordered[position + 1:]]
                     stats.channels_deferred.extend(remaining)
                     stats.last_error = str(ab)
                     if ab.flood_wait_seconds is not None:
@@ -1359,6 +1563,12 @@ class TelegramChannelSourceHandler:
                 "channels_ok": ok,
                 "channels_failed": sorted(stats.channels_failed),
                 "yielded": stats.yielded,
+                # R5 — rotation coverage for THIS poll (only ever recorded by a
+                # poll that ran to a natural conclusion; a capped poll never
+                # reaches here, which is exactly why the pointer itself is
+                # written ahead in the loop rather than reported from here).
+                "rotation_start": stats.rotation_start,
+                "channels_deferred": list(stats.channels_deferred),
             },
         )
 
@@ -1518,6 +1728,60 @@ class TelegramChannelSourceHandler:
         """A7 GUARD 3 — clear the single-flight poll lock (best-effort)."""
         with suppress(Exception):
             await ctx.state_store.set(_LOCK_KEY, None)
+
+    # --- R5 round-robin rotation ----------------------------------------
+
+    async def _read_rotation_pointer(self, ctx: SourceContext) -> str | None:
+        """The handle the NEXT poll must start at, or None to start at the top.
+
+        Fails OPEN (None → config order) on a missing/garbage/unreadable
+        record: a lost pointer costs one non-rotated poll, never a skipped
+        channel.
+        """
+        try:
+            record = await ctx.state_store.get(_ROTATION_KEY)
+        except Exception:  # pragma: no cover — state store hiccup
+            return None
+        if not isinstance(record, dict):
+            return None
+        handle = record.get("next_handle")
+        return handle if isinstance(handle, str) and handle else None
+
+    async def _checkpoint_poll_progress(
+        self,
+        ctx: SourceContext,
+        *,
+        cursors: dict[str, int],
+        next_handle: str,
+    ) -> None:
+        """Durably record mid-poll progress: rotation pointer + cursors.
+
+        Called at the TOP of each channel (write-ahead) because a truncated
+        poll never reaches the end of ``pull`` — see the call site for why
+        that ordering is load-bearing for both records.
+
+        Best-effort by design, exactly like the lock/floodwait persists: a
+        state-store hiccup must not take down a poll that is otherwise
+        working. The failure mode of a dropped write is one repeated slice of
+        the rotation on the next poll (the per-channel cursors make the repeat
+        a cheap no-op), never a skipped channel.
+        """
+        # Suppressed independently — a failed pointer write must not also cost
+        # us the cursor write (they answer different questions).
+        with suppress(Exception):
+            await ctx.state_store.set(
+                _ROTATION_KEY,
+                {
+                    "next_handle": next_handle,
+                    "updated_at": datetime.now(tz=timezone.utc).isoformat(),
+                },
+            )
+        with suppress(Exception):
+            # ``cursors`` was seeded from the stored map at the top of the poll
+            # and only ever grows, so this is a superset write, never a
+            # truncating one (the single-flight lock rules out a concurrent
+            # poll holding a different view).
+            await ctx.state_store.set(_STATE_KEY, dict(cursors))
 
     # --- Helpers --------------------------------------------------------
 

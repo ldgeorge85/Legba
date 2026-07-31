@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from typing import Any, ClassVar, Mapping
 
@@ -114,9 +115,19 @@ class VLLMProviderHandler(LLMProviderHandler):
                 temperature if temperature is not None else self._DEFAULT_TEMPERATURE
             ),
         }
-        # `max_tokens` not sent by default — vLLM serves its server-side
-        # budget. Caller can opt-in by passing max_tokens explicitly.
-        if max_tokens and kwargs.pop("send_max_tokens", False):
+        # `max_tokens` not sent by default — a self-hosted vLLM serves its
+        # server-side budget, and an absent cap lets long findings complete.
+        # BUT a hosted OpenAI-compatible API with a LOW server default will
+        # silently TRUNCATE findings when the field is absent. Opt-in, two
+        # ways: per-call (`send_max_tokens=True` kwarg, unchanged) or
+        # deployment-wide via LEGBA_LLM_SEND_MAX_TOKENS=1 (for instances
+        # pointing this handler at a hosted endpoint). Unset env + no kwarg
+        # is byte-identical to the historical behavior.
+        if max_tokens and (
+            kwargs.pop("send_max_tokens", False)
+            or os.getenv("LEGBA_LLM_SEND_MAX_TOKENS", "").strip().lower()
+            in ("1", "true", "yes")
+        ):
             payload["max_tokens"] = max_tokens
         if tools:
             payload["tools"] = list(tools)

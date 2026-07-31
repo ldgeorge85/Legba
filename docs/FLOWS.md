@@ -312,9 +312,10 @@ Lineage answers "what did this finding rest on?"; a second, newer pair of
 mechanisms answers the forward question — "does anything change now?" —
 without ever letting a machine rewrite a settled claim:
 
-- **Open questions, watched.** `claim_watch` (deterministic, no LLM, `state:
-  draft` — built but **not yet part of the default live spine**; see
-  `SEAMS.md` #49) matches NEW signals against the standing `hypotheses`
+- **Open questions, watched.** `claim_watch` (deterministic MATCHING — the
+  optional post-match bearing gate is the only LLM in the leg and it ships
+  OFF; `state: draft` — built but **not yet part of the default live spine**;
+  see `SEAMS.md` #49) matches NEW signals against the standing `hypotheses`
   `status='open_question'` set on a fused vector+entity+geo plane, and
   side-writes `bearing_edges` ("this new evidence bears on that old question",
   migration 0107) plus `review_flags` (one open flag per consumer whose

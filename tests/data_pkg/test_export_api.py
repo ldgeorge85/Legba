@@ -29,6 +29,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from nacl.signing import SigningKey
 
+from legba.data.alerts.sinks import ENV_PUBLIC_BASE_URL
 from legba.data.config import NatsConfig, PostgresConfig
 from legba.data.nats import NatsStore
 from legba.data.postgres import PostgresStore
@@ -65,6 +66,25 @@ def _fixed_identity() -> SigningIdentity:
         signing_key=SigningKey(seed),
         signer_did="did:legba:registry:export-api-test",
     )
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_public_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate every test here from the host's REAL ``.env``.
+
+    ``legba.data.config._load_env`` falls back to the fixed path
+    ``/usr/local/deployments/active/legba/.env`` when no repo-relative
+    ``.env`` exists — on a shared box that IS the live deployment's env
+    file, so a plain test run inherits the deployment's real
+    ``LEGBA_PUBLIC_BASE_URL`` value. That turns every
+    ``receipt_link()`` call absolute (see ``legba/data/alerts/sinks.py``),
+    silently breaking the relative-path assertions these export tests pin
+    (the receipt line is meant to be tested unset-base-url, not against
+    whatever happens to be ambient). Clear it here so the suite is
+    deterministic on every box; a test that wants the absolute-URL
+    behaviour opts back in explicitly via ``monkeypatch.setenv``.
+    """
+    monkeypatch.delenv(ENV_PUBLIC_BASE_URL, raising=False)
 
 
 # ---------------------------------------------------------------------------

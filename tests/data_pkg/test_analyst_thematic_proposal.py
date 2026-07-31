@@ -9,6 +9,8 @@ active thematic targets via deps.pg_pool) is exercised against the running stack
 """
 from __future__ import annotations
 
+from uuid import UUID, uuid4
+
 from legba.data.analysts.deterministic import SUB_HANDLERS, OUTPUT_KIND_BY_SUB_HANDLER
 from legba.data.analysts.deterministic_handlers import thematic_proposal as sd
 from legba.runtime.analyst_method import AnalystMethodResult
@@ -119,3 +121,82 @@ async def test_nonempty_proposals_emit_on_synthetic_path():
     result = await sd.handle(rows, {"analyst_id": "thematic_proposal"}, None)
     assert result.finding.data["proposal_count"] >= 1
     assert result.force_trace_only is False
+
+
+# ---------------------------------------------------------------------------
+# A2 (verify-path structural fix, 2026-07-31) — real citations + derived_from.
+#
+# thematic_proposal shipped 100% citation-less (JUDGE_READOUT #1) despite
+# HAVING evidence rows (the situations it read each carry a real ``id`` PK).
+# These assert the producer now cites the situation directly and carries a
+# real lineage, instead of the prior always-empty ``evidence``/``derived_from``.
+# ---------------------------------------------------------------------------
+
+
+def test_proposal_carries_situation_id_when_present():
+    sid = uuid4()
+    rows = [{"id": sid, "situation_signature": "sig:c",
+             "name": "Sudan civil conflict deepens", "intensity_score": 1.6}]
+    props = sd._build_proposals(rows, covered_text="", floor=1.5)
+    assert len(props) == 1
+    assert props[0]["situation_id"] == str(sid)
+
+
+def test_proposal_situation_id_absent_when_row_carries_no_id():
+    """The synthetic/unit-test path (no ``id`` on the row) degrades to
+    ``situation_id: None`` — never a fabricated ref."""
+    rows = [{"situation_signature": "sig:c", "name": "Sudan civil conflict deepens",
+             "intensity_score": 1.6}]
+    props = sd._build_proposals(rows, covered_text="", floor=1.5)
+    assert props[0]["situation_id"] is None
+
+
+def test_proposal_lineage_dedupes_and_skips_unresolvable():
+    sid1, sid2 = uuid4(), uuid4()
+    proposals = [
+        {"situation_id": str(sid1)},
+        {"situation_id": str(sid2)},
+        {"situation_id": str(sid1)},   # duplicate — deduped
+        {"situation_id": None},        # unresolvable — skipped
+        {},                             # missing key — skipped
+    ]
+    lineage = sd.proposal_lineage(proposals)
+    assert lineage == [sid1, sid2]
+    assert all(isinstance(u, UUID) for u in lineage)
+
+
+def test_build_finding_emits_citations_from_situation_ids():
+    """ACCEPTANCE (A2): the finding's ``data.citations`` is non-empty and
+    resolvable whenever the proposals carry real situation ids — the smallest
+    correct fix to thematic_proposal's finding construction."""
+    sid = uuid4()
+    proposals = [sd._proposal("sig:c", "Sudan civil conflict deepens", 1.6, ["sudan"], sid)]
+    finding = sd._build_finding(proposals)
+    citations = finding.data["citations"]
+    assert isinstance(citations, list) and citations
+    assert citations[0]["ref_kind"] == "situation"
+    assert citations[0]["ref_id"] == str(sid)
+
+
+def test_build_finding_citations_empty_when_no_proposals():
+    """Honest-empty: no proposals -> empty citations AND empty derived_from
+    (never a violation of the non-empty-when-derived_from-is invariant)."""
+    finding = sd._build_finding([])
+    assert finding.data["citations"] == []
+    assert sd.proposal_lineage([]) == []
+
+
+async def test_handle_live_shaped_rows_set_real_derived_from_and_citations():
+    """ACCEPTANCE (A2): a run over rows carrying real situation ids (the live
+    shape — ``_resolve_pool`` now SELECTs ``id``) emits BOTH a non-empty
+    ``derived_from`` lineage and a non-empty, resolvable ``data.citations`` —
+    the finding previously carried NEITHER."""
+    sid = uuid4()
+    rows = [{"id": sid, "situation_signature": "sig:c",
+             "name": "Sudan civil conflict deepens", "intensity_score": 1.6}]
+    result = await sd.handle(rows, {"analyst_id": "thematic_proposal"}, None)
+    assert result.derived_from == [sid]
+    citations = result.finding.data["citations"]
+    assert citations and citations[0]["ref_id"] == str(sid)
+    # the non-empty-citations-when-derived_from-is-non-empty invariant (A2).
+    assert bool(result.finding.data["citations"]) == bool(result.derived_from)

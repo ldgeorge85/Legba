@@ -102,6 +102,12 @@ from ..data.analysts.deterministic_handlers.finding_supersession import (
 from ..data.provenance.bearing import record_bearing_edge
 from ..data.provenance.consumption import record_output_consumption
 from ..data.provenance.writes import write_analyst_output
+from ..data.run_accounting import (
+    bind_run_accounting as _bind_run_accounting,
+    current_llm_calls as _current_llm_calls,
+    current_tool_calls as _current_tool_calls,
+    reset_run_accounting as _reset_run_accounting,
+)
 from ..data.schemas.analyst import AnalystDescriptor
 from ..data.schemas.target import TargetDescriptor
 from .analyst_method import AnalystMethodResult, LLMAnalystRunner
@@ -148,6 +154,93 @@ def _is_organic_trigger(trigger_kind: str) -> bool:
     return trigger_kind not in _FORCED_TRIGGERS
 
 
+#: R3 — the SCHEDULE-class trigger kinds: the actor's own cadence reminder
+#: ('reminder', :meth:`AnalystActor._cadence_reminder`) and the primary's
+#: per-target fan-out ('cadence'). A cooldown NOOP on one of these means a
+#: SCHEDULED TICK WAS EATEN — the analyst goes dark for a whole cadence period
+#: with no trace row. A cooldown NOOP on the reactive 'coalesced_fire' is the
+#: opposite: the cooldown doing its job (thrash suppression on a busy target).
+#: The two are indistinguishable without this split, so the NOOP log stamps
+#: ``missed_cadence=`` off it — that is the alertable signal.
+_SCHEDULE_TRIGGERS = frozenset({"cadence", "reminder"})
+
+
+def _is_schedule_trigger(trigger_kind: str) -> bool:
+    """True when the run was fired by the SCHEDULE (cadence reminder / fan-out)
+    rather than reactively ('coalesced_fire') or manually ('method')."""
+    return trigger_kind in _SCHEDULE_TRIGGERS
+
+
+def _as_dt(v: Any) -> datetime:
+    """Coerce a persisted actor-state timestamp to a ``datetime``.
+
+    Dapr's DefaultJSONSerializer auto-parses ISO date-strings into datetime
+    objects on deserialize (see DaprJSONDecoder's ``datetime_regex``), so a
+    round-tripped value may already be a datetime rather than the str we wrote.
+    Accept both.
+    """
+    return v if isinstance(v, datetime) else datetime.fromisoformat(str(v))
+
+
+def _cadence_cooldown_until(
+    run_started_at: datetime, cooldown_seconds: int,
+) -> datetime:
+    """When the per-(analyst, target) cadence cooldown stamped by a run expires.
+
+    R3 — ANCHORED ON RUN START, not run end. Anchoring on end made the
+    effective mute window ``cooldown_seconds + run_duration``, so any run slower
+    than ``(cadence_period − cooldown_seconds)`` pushed the cooldown past the
+    analyst's OWN next scheduled tick and ate it silently: signal_salience's
+    20:07Z run took 14 minutes, so ``end 20:21:16 + 3000s = 21:11:16`` suppressed
+    the 21:07 tick as ``noop reason=cooldown``, and ten analysts sat 16-41h dark
+    on that mechanism. Start-anchoring pins the window at exactly
+    ``cooldown_seconds`` however long the run takes, so a run can never consume
+    its own next tick — the cadence is bounded by the SCHEDULE, which is the
+    only thing it was ever meant to be bounded by.
+
+    The end-anchor's implicit protection ("don't re-fire the instant a long run
+    finishes") is not lost:
+
+      * CONCURRENCY — Dapr actors are turn-based (reentrancy is not enabled
+        anywhere in this deployment), so a second invocation of the same actor
+        id cannot start while one is in flight; it queues. That is the in-flight
+        guard and this change does not touch it.
+      * REACTIVE THRASH — the coalescer's own cooldown clamp is ALREADY
+        start-anchored: :meth:`legba.runtime.triggers.coalescer.Coalescer._maybe_fire`
+        CAS-stamps ``last_fired_at = now`` BEFORE dispatching the run, and
+        :func:`legba.runtime.triggers.policy.decide` mutes the pair for
+        ``cooldown_seconds`` off that anchor. The actor's end-anchor was a
+        second, inconsistent clamp on the same path; the two now agree.
+
+    A re-trigger arriving within ``cooldown_seconds`` of the START still NOOPs
+    (see :func:`_cadence_cooldown_blocks`) — burst suppression is preserved and
+    only the run-duration inflation is gone.
+    """
+    return run_started_at + timedelta(seconds=cooldown_seconds)
+
+
+def _cadence_cooldown_slack(cooldown_seconds: int) -> timedelta:
+    """Jitter absorption for the cadence-cooldown comparison.
+
+    A descriptor whose ``cooldown_seconds`` ≈ its cadence period leaves the
+    stamped expiry landing within milliseconds of the next scheduled tick, and
+    reminder delivery jitter can put the tick on the wrong side of it. Absorb
+    that with a small slack derived from the cooldown itself: negligible for
+    short cadences (~45s for a 15-minute cooldown), a few minutes for long ones
+    (capped at 10), which never meaningfully weakens burst suppression.
+    """
+    return timedelta(seconds=min(cooldown_seconds * 0.05, 600.0))
+
+
+def _cadence_cooldown_blocks(
+    cooldown_until: Any, *, now: datetime, cooldown_seconds: int,
+) -> bool:
+    """True when a stamped cadence cooldown suppresses a fire landing at ``now``."""
+    if not cooldown_until:
+        return False
+    return _as_dt(cooldown_until) > now + _cadence_cooldown_slack(cooldown_seconds)
+
+
 #: X-1 receipt phase name. Appears in ``analyst_traces.intermediate_steps``
 #: whenever a descriptor declared ``method.options`` — stating what was applied
 #: AND what was dropped, so a knob that silently failed to take effect is a
@@ -161,7 +254,12 @@ def _merge_descriptor_options(
     *,
     actor_id: str = "",
 ) -> dict[str, Any] | None:
-    """Merge a deterministic descriptor's ``method.options`` into ``options``.
+    """Merge a descriptor's ``method.options`` into the run ``options``.
+
+    TWO LANES (QW1-B widened the original one): a ``deterministic`` descriptor
+    resolves against the SUB-HANDLER catalog; an analyst KIND that declares its
+    own catalog (``ANALYST_KIND_OPTIONS`` — knobs its ``run_method`` reads) is
+    resolved against that. A kind in NEITHER lane keeps the original refusal.
 
     THE X-1 repair: before this existed the runtime built ``options`` from
     scratch at fire time and ``MethodBlock`` had no ``options`` field, so every
@@ -184,25 +282,65 @@ def _merge_descriptor_options(
 
     identity = getattr(descriptor, "identity", None)
     analyst_id = str(getattr(identity, "id", "") or "")
-    if str(getattr(identity, "kind", "")) != "deterministic":
-        # Refused at registration; a legacy registry row could still carry one.
-        logger.warning(
-            "dapr_actors.analyst.handler_options.ignored actor_id=%s "
-            "analyst_id=%s kind=%s — method.options is read only for "
-            "deterministic analysts",
-            actor_id, analyst_id, getattr(identity, "kind", None),
+    kind = str(getattr(getattr(identity, "kind", None), "value", None)
+               or getattr(identity, "kind", "") or "")
+
+    from ..data.analysts.handler_options import (
+        ANALYST_KIND_OPTIONS,
+        resolve_handler_options,
+        resolve_kind_options,
+    )
+
+    if kind != "deterministic":
+        # QW1-B — the KIND lane. An analyst kind whose OWN ``run_method`` reads
+        # ``options[...]`` (currently ``inline_target``'s ``slice_focus`` ranking
+        # hints) resolves against ``ANALYST_KIND_OPTIONS`` instead of the
+        # sub-handler catalog. Same contract end to end: setdefault merge, loud
+        # per-key degrade, a receipt on the trace. A kind with NO catalog keeps
+        # the original refusal — its block is inert and says so.
+        if kind not in ANALYST_KIND_OPTIONS:
+            # Refused at registration; a legacy registry row could still carry one.
+            logger.warning(
+                "dapr_actors.analyst.handler_options.ignored actor_id=%s "
+                "analyst_id=%s kind=%s — method.options is read only for "
+                "deterministic analysts and kinds declaring an option catalog",
+                actor_id, analyst_id, kind,
+            )
+            return {
+                "phase": HANDLER_OPTIONS_RECEIPT_PHASE,
+                "status": "ignored_non_deterministic",
+                "applied": {},
+                "rejected": [
+                    {"key": k, "cause": "non_deterministic_kind", "detail": ""}
+                    for k in sorted(raw)
+                ],
+            }
+        kind_resolution = resolve_kind_options(
+            kind, raw, log_context=f"{analyst_id}@{getattr(identity, 'version', '')}",
         )
+        for key, value in kind_resolution.accepted.items():
+            options.setdefault(key, value)
+        if kind_resolution.rejected:
+            logger.warning(
+                "dapr_actors.analyst.kind_options.degraded actor_id=%s kind=%s "
+                "applied=%d rejected=%d — see the per-key handler_options."
+                "rejected lines above",
+                actor_id, kind, len(kind_resolution.accepted),
+                len(kind_resolution.rejected),
+            )
+        else:
+            logger.info(
+                "dapr_actors.analyst.kind_options.applied actor_id=%s kind=%s "
+                "keys=%s",
+                actor_id, kind, sorted(kind_resolution.accepted),
+            )
         return {
             "phase": HANDLER_OPTIONS_RECEIPT_PHASE,
-            "status": "ignored_non_deterministic",
-            "applied": {},
-            "rejected": [
-                {"key": k, "cause": "non_deterministic_kind", "detail": ""}
-                for k in sorted(raw)
-            ],
+            "status": "degraded" if kind_resolution.degraded else "applied",
+            "analyst_kind": kind,
+            "applied": dict(kind_resolution.accepted),
+            "rejected": [r.as_dict() for r in kind_resolution.rejected],
         }
-
-    from ..data.analysts.handler_options import resolve_handler_options
 
     sub_handler = str(options.get("sub_handler") or analyst_id)
     resolution = resolve_handler_options(
@@ -1979,13 +2117,6 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
 
         now = _utcnow()
 
-        def _as_dt(v: Any) -> datetime:
-            # Dapr's DefaultJSONSerializer auto-parses ISO date-strings into
-            # datetime objects on deserialize (see DaprJSONDecoder's
-            # datetime_regex), so a round-tripped value may already be a
-            # datetime rather than the str we wrote. Accept both.
-            return v if isinstance(v, datetime) else datetime.fromisoformat(str(v))
-
         # Global throttle (budget exhaustion → pause the whole analyst) blocks
         # every target.
         cooldown_raw = rec.get("cooldown_until")
@@ -2004,34 +2135,61 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
         cooldown_key = str(target_filter) if target_filter else "_global"
         cooldowns_by_target = rec.get("cooldown_by_target") or {}
         cd_raw = cooldowns_by_target.get(cooldown_key)
-        # The cadence cooldown is stamped at run COMPLETION (now + cooldown_seconds
-        # at the set site below). When a descriptor sets cooldown_seconds ≈ its
-        # cadence interval, the completion drift (run duration + reminder jitter)
-        # pushes cooldown_until a little PAST the next scheduled fire, so that fire
-        # is wrongly suppressed and the cadence silently halves (a 6h cron → 12h —
-        # the world_assessor / country_assessor symptom). Absorb that drift with a
-        # small slack derived from the cooldown itself: negligible for short
-        # cadences (e.g. ~45s for a 15-min cooldown), a few minutes for long ones
-        # (capped at 10 min), which never meaningfully weakens burst suppression.
+        # R3 — the cadence cooldown is START-anchored and jitter-slacked; see
+        # :func:`_cadence_cooldown_until` for why, and the stamp site below.
         # Applies ONLY to the per-target cadence cooldown — the global budget
         # cooldown (cooldown_until, above) stays strict.
-        _cd_slack = timedelta(
-            seconds=min(deps_bundle.descriptor.cadence.cooldown_seconds * 0.05, 600.0)
-        )
-        if cd_raw and _as_dt(cd_raw) > now + _cd_slack:
+        _cd_seconds = deps_bundle.descriptor.cadence.cooldown_seconds
+        if _cadence_cooldown_blocks(cd_raw, now=now, cooldown_seconds=_cd_seconds):
             # P7-F3(b): make the per-target cadence-cooldown NOOP observable — this
             # is the path that silently suppressed the escalation_composition 08:30Z
             # organic tick (a forced 01:04Z run had stamped the '_global' cooldown),
             # leaving no analyst_traces row and only a bare 'reminder.fired' log.
-            logger.info(
+            #
+            # R3 observability: stamp WHICH of the two suppressions this is.
+            #   * missed_cadence=true  — a SCHEDULED tick ('cadence'/'reminder')
+            #     was eaten; the analyst just went dark for a full period. Post
+            #     start-anchoring this should only happen when a descriptor sets
+            #     cooldown_seconds > its own cadence period (a misconfiguration),
+            #     so it is directly alertable.
+            #   * missed_cadence=false — a reactive 'coalesced_fire' (or a forced
+            #     'method' run) was throttled. That is the cooldown working.
+            # ``overshoot_s`` is how much longer the cooldown still has to run,
+            # i.e. how far the suppression reaches past this tick.
+            #
+            # R4 (2026-07-31, live: 432 missed_cadence WARNINGs/9h, 369 from
+            # cross_source_dedup) — the SCHEDULE-vs-reactive split above is
+            # right for a PRIMARY/meta actor's own tick, but a PER-TARGET
+            # WORKER's fan-out tick carries trigger_kind='cadence' too (see
+            # ``_fanout_to_workers``): a busy target whose worker JUST ran off
+            # a reactive 'coalesced_fire' gets its next cadence fan-out tick
+            # for the SAME target land inside the cooldown that same run
+            # stamped. That is the coalesced trigger's cooldown doing its job
+            # a few seconds early, NOT a dropped heartbeat — the worker has no
+            # cadence of its own to miss (§A2: only the primary carries the
+            # reminder). Reclassify a worker's schedule-tick suppression as
+            # ``worker_suppressed`` at INFO instead of ``missed_cadence`` at
+            # WARNING; a PRIMARY's own schedule tick (no fan-out involved)
+            # keeps the WARNING unchanged.
+            _is_worker_actor = self._is_worker(deps_bundle)
+            _missed_cadence = _is_schedule_trigger(trigger_kind) and not _is_worker_actor
+            _worker_suppressed = _is_schedule_trigger(trigger_kind) and _is_worker_actor
+            _overshoot_s = int((_as_dt(cd_raw) - now).total_seconds())
+            logger.log(
+                logging.WARNING if _missed_cadence else logging.INFO,
                 "dapr_actors.analyst.noop actor_id=%s reason=cooldown scope=cadence "
-                "cooldown_key=%s cooldown_until=%s trigger=%s",
+                "cooldown_key=%s cooldown_until=%s trigger=%s missed_cadence=%s "
+                "worker_suppressed=%s overshoot_s=%d cooldown_seconds=%d",
                 actor_id, cooldown_key, cd_raw, trigger_kind,
+                str(_missed_cadence).lower(), str(_worker_suppressed).lower(),
+                _overshoot_s, _cd_seconds,
             )
             return {
                 "outcome": ActorRunOutcome.NOOP.value,
                 "reason": "cooldown",
                 "target": cooldown_key,
+                "missed_cadence": _missed_cadence,
+                "worker_suppressed": _worker_suppressed,
             }
 
         run_id = uuid4()
@@ -2059,6 +2217,12 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
             analyst_id=actor_id,
             correlation_id=consult_request_id,
         )
+        # R11: open this run's LLM/tool call account on the SAME task-local
+        # boundary as the log context. Everything underneath — including calls
+        # made from sub-tasks the run spawns — accumulates into it, and a
+        # concurrent actor on this event loop gets its own. Flushed into the
+        # ``analyst_traces`` row at receipt time; reset in the finally below.
+        _acct_token = _bind_run_accounting()
         try:
             async with deps_bundle.deps.pg_pool.acquire() as conn:
                 if inputs_override is not None:
@@ -2966,6 +3130,22 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                     # ReAct kinds adopt the same field).  Defaults to []
                     # for kinds that don't touch either surface so the
                     # chain row's columns stay non-null per the schema.
+                    #
+                    # R11 — flush this run's call account into the receipt.
+                    # ``llm_calls`` came from the provider chokepoint
+                    # (``LLMProviderHandler.chat_complete``); ``tool_calls``
+                    # merges the agency-plane record with whatever the kind's
+                    # own ReAct loop already reported, so the critic's native
+                    # ``tool_calls_log`` keeps landing exactly as before and
+                    # the agency entries (tagged ``source='agency'``) are
+                    # additive. Both were declared-but-never-written columns:
+                    # every ``analyst_traces`` row all-time carried ``[]``, so
+                    # a receipt could not evidence that a model was called.
+                    _acct_llm_calls = _current_llm_calls()
+                    _acct_tool_calls = [
+                        *(getattr(method_result, "tool_calls", None) or []),
+                        *_current_tool_calls(),
+                    ]
                     receipt_hash, prev_receipt_hash = (
                         await deps_bundle.receipt_chain.record(
                             run_id=run_id,
@@ -2997,9 +3177,8 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                             intermediate_steps=getattr(
                                 method_result, "intermediate_steps", None
                             ) or None,
-                            tool_calls=getattr(
-                                method_result, "tool_calls", None
-                            ) or None,
+                            llm_calls=_acct_llm_calls or None,
+                            tool_calls=_acct_tool_calls or None,
                         )
                     )
 
@@ -3270,13 +3449,16 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                     # manual/forced 'method' run (so a debug force can't consume the
                     # next scheduled organic fire, and a reactive fire still throttles
                     # its own redundant re-runs).
+                    #
+                    # R3 — the expiry is anchored on RUN START (``now``), never on
+                    # run end; :func:`_cadence_cooldown_until` carries the full
+                    # rationale and what still protects against rapid re-fire.
                     cd_key = str(target_filter) if target_filter else "_global"
                     cd_map = rec.get("cooldown_by_target")
                     if not isinstance(cd_map, dict):
                         cd_map = {}
-                    cd_map[cd_key] = (
-                        _utcnow()
-                        + timedelta(seconds=deps_bundle.descriptor.cadence.cooldown_seconds)
+                    cd_map[cd_key] = _cadence_cooldown_until(
+                        now, deps_bundle.descriptor.cadence.cooldown_seconds,
                     ).isoformat()
                     rec["cooldown_by_target"] = cd_map
                 await self._set_record(rec)
@@ -3399,6 +3581,8 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
         finally:
             # Unbind the per-run log correlation context (W-1b §3).
             _reset_run_log_context(_log_ctx_token)
+            # R11: close this run's call account (see the bind above).
+            _reset_run_accounting(_acct_token)
 
     def _minimal_worker_record(
         self,
@@ -3514,10 +3698,15 @@ __all__ = [
     "_PAYLOAD_SELECTORS",
     "_TargetDeps",
     "_bucket_end_iso",
+    "_cadence_cooldown_blocks",
+    "_cadence_cooldown_slack",
+    "_cadence_cooldown_until",
     "_classify_exception",
     "_extract_primary_model_ref",
     "_invoke_run_method",
     "_is_actor_demoted",
+    "_is_organic_trigger",
+    "_is_schedule_trigger",
     "_payload_finding",
     "_payload_nested",
     "_read_substrate_slice",

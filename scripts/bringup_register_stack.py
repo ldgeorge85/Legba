@@ -125,7 +125,9 @@ COMPONENTS: list[tuple[str, dict]] = [
                 "endpoint": _t(LLM_API_ENDPOINT),
                 "api_key": _s("llm.primary.api_key"),
                 "model_name": _t(EMBED_MODEL_NAME),
-                "dim": _n(1024),
+                # Honor the same env the runtime reads (config.py signals_dim)
+                # so a clone with a different embedder isn't silently 1024.
+                "dim": _n(int(os.getenv("LEGBA_DATA_EMBED_DIM", "1024"))),
                 "normalize": _dd("true", ["true", "false"]),
                 "batch_size": _n(64),
             },

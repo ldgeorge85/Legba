@@ -8,14 +8,23 @@ ARCHIVES, forbidden classes skip), content-addressed store (atomic write +
 dedup hit), textual sniffing, and the corpus projection upgrade
 (``archived_text`` in the doc + ``best_body`` preference).
 
+V-E1/V-E2 pure tests: the JS-wall/bot-check/redirect deny-gate
+(``_match_wall_pattern``) — the exact live artifact from JUDGE_READOUT §5
+(Le Monde's no-JS fallback page), the other live-DB-confirmed patterns, the
+length-gate false-positive guard (a wall phrase incidentally present inside a
+genuine long article must never be rejected), and clean-text passthrough.
+
 Ephemeral-DB tests (``migrated_pg`` + a LOCAL HTTP fixture server, allowlisted
 through the SSRF guard via ``LEGBA_EGRESS_ALLOW_HOSTS``): cited-only selection
 (uncited/unverified never archived), fetch→store→hash→stamp end-to-end against
 live SQL + the 0104 sidecar, the corpus DIRTY-MARKER contract (indexed_at
-nulled + updated_at bumped in the same stamp), license-gate skip rows, the
-egress guard (a private-address canonical_url is blocked + terminal), the size
-cap, failed-fetch attempt caps, CAS dedup, the media leg, idempotency
-(re-run examines nothing), and counter honesty.
+nulled + updated_at bumped in the same stamp), the V-E2 substance-floor marker
+(``payload.archived_text_chars``), the V-E1 rejection path end-to-end (bytes
+still archived, no text stored, dirty marker NOT tripped, counter + sidecar
+honesty), license-gate skip rows, the egress guard (a private-address
+canonical_url is blocked + terminal), the size cap, failed-fetch attempt caps,
+CAS dedup, the media leg, idempotency (re-run examines nothing), and counter
+honesty.
 """
 from __future__ import annotations
 
@@ -58,6 +67,41 @@ _HTML = (
 )
 _MEDIA = b"\x89PNG\r\n\x1a\nfakepngbytes-evidence-archiver-test"
 _BIG = b"x" * 65536
+
+# V-E1 — a no-JS fallback page shaped exactly like the LIVE lemonde.fr artifact
+# JUDGE_READOUT §5 named ("JavaScript is disabled in your browser..."):
+# Trafilatura extracts it CLEANLY (it's well-formed HTML with real <article>
+# text) — the deny-gate is what must reject it, not extraction failure.
+_JSWALL_HTML = (
+    b"<!doctype html><html><head><title>Le Monde</title></head><body>"
+    b"<article><p>JavaScript is disabled in your browser.</p>"
+    b"<p>Please enable JavaScript to proceed.</p>"
+    b"<p>A required part of this site could not load.</p></article>"
+    b"</body></html>"
+)
+
+# The SAME wall phrase, but as ONE sentence inside a genuine long article (the
+# real france24.com shape: an embedded-video caption inside real prose about
+# Zidane's appointment) — must NEVER be rejected; the length gate protects it.
+_LONG_ARTICLE_WITH_WALL_MENTION_HTML = (
+    b"<!doctype html><html><head><title>Zidane</title></head><body><article>"
+    b"<p>Iconic footballer Zinedine Zidane and the France national football "
+    b"team share a love story with a bright future stretching back over "
+    b"decades of shared history on and off the pitch, fans and pundits agree, "
+    b"even as the sport itself continues to evolve around them in ways few "
+    b"could have predicted when he first rose to prominence.</p>"
+    b"<p>French-Algerian football icon Zinedine Zidane became the new manager "
+    b"of France's national football team on Tuesday, bringing an end to what "
+    b"little suspense there was over Didier Deschamp's successor. Zidane "
+    b"frequently stated his desire to take over the French team and much of "
+    b"the football world supported his ambitions over the following years, "
+    b"citing his playing career, his tactical acumen, and his standing among "
+    b"both players and supporters alike as reasons for optimism about what "
+    b"comes next for the national side under his stewardship.</p>"
+    b"<p>One of your browser extensions seems to be blocking the video player "
+    b"from loading. To watch this content, you may need to disable it on "
+    b"this site.</p></article></body></html>"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +218,27 @@ def test_is_textual():
     assert ea._is_textual(None, _MEDIA) is False
 
 
+# ---------------------------------------------------------------------------
+# R6b — Telegram embed-widget pages never get text-extracted (chrome, not
+# prose: "Download\nContext\nEmbed\n...telegram-widget.js...")
+# ---------------------------------------------------------------------------
+
+
+def test_skip_text_extraction_telegram_widget_hosts():
+    assert ea._skip_text_extraction("https://t.me/somechannel/12345") is True
+    # The public "instant view" preview variant — same widget chrome.
+    assert ea._skip_text_extraction("https://t.me/s/somechannel/12345") is True
+    assert ea._skip_text_extraction("https://telegram.me/somechannel/12345") is True
+    # Case + port + userinfo are normalized before the host comparison.
+    assert ea._skip_text_extraction("https://T.ME:443/somechannel/1") is True
+    # A genuine article host is never affected.
+    assert ea._skip_text_extraction("https://example.com/article") is False
+    assert ea._skip_text_extraction("https://news.example.com/t.me-mentions") is False
+    # A malformed URL never raises — degrades to "attempt extraction" (the
+    # existing best-effort _extract_text failure path covers a bad fetch).
+    assert ea._skip_text_extraction("not a url \x00") is False
+
+
 def test_signal_to_doc_carries_archived_text_and_best_body_preference():
     """The S-10 depth fix: the archived FULL text upgrades the corpus doc —
     its own indexed field, AND best_body when no distilled brief exists; the
@@ -197,6 +262,119 @@ def test_signal_to_doc_carries_archived_text_and_best_body_preference():
 
 
 # ---------------------------------------------------------------------------
+# V-E1 — JS-wall/bot-check/redirect deny-gate (planning/
+# VERIFY_PATH_STRUCTURAL_FIXES_SPEC_2026-07-31.md §V-E1; JUDGE_READOUT §5)
+# ---------------------------------------------------------------------------
+
+
+def test_match_wall_pattern_rejects_the_live_judge_readout_artifact():
+    """The EXACT artifact JUDGE_READOUT §5 named: a stored archived_text
+    reading "JavaScript is disabled in your browser" (Le Monde) grounded a
+    judged claim. Reproduced verbatim from a live-DB row (2026-07-31 audit,
+    lemonde.fr, 286 chars)."""
+    le_monde = (
+        "JavaScript is disabled in your browser.\n"
+        "Please enable JavaScript to proceed.\n"
+        "A required part of this site couldn’t load. This may be due to a "
+        "browser extension, network issues, or browser settings. Please check "
+        "your connection, disable any ad blockers, or try using a different "
+        "browser."
+    )
+    assert len(le_monde) <= ea._WALL_MAX_CHARS
+    assert ea._match_wall_pattern(le_monde) == "javascript is disabled"
+
+
+def test_match_wall_pattern_rejects_other_live_confirmed_patterns():
+    """Every one of these is a VERBATIM (or near-verbatim) live-DB-confirmed
+    garbage body from the same 2026-07-31 audit — not invented examples."""
+    # en.irna.ir — Google-redirect interstitial, 83 confirmed rows, 70 chars.
+    assert ea._match_wall_pattern("Transferring to the website...") == (
+        "transferring to the website"
+    )
+    # france24.com — ad-blocker/video-wall notice, 148 confirmed rows (short).
+    video_wall = (
+        "One of your browser extensions seems to be blocking the video player "
+        "from loading. To watch this content, you may need to disable it on "
+        "this site."
+    )
+    assert ea._match_wall_pattern(video_wall) == (
+        "one of your browser extensions seems to be blocking the video player"
+    )
+    # A ShopShield-style bot-mitigation "please wait" page (1 confirmed row).
+    assert ea._match_wall_pattern(
+        "Please wait\nWe are optimizing your request for the best experience."
+    ) == "we are optimizing your request for the best experience"
+    # A literal, never-substituted template placeholder (2 confirmed rows).
+    assert ea._match_wall_pattern(
+        "ERROR MESSAGE HEADINGERROR MESSAGE SUBHEADING"
+    ) == "error message heading"
+    # Industry-standard bot-challenge phrasing — not observed live in THIS
+    # audit, but included defensively (see _WALL_DENY_PATTERNS docstring).
+    assert ea._match_wall_pattern("Are you a robot? Please verify below.") == (
+        "are you a robot"
+    )
+
+
+def test_match_wall_pattern_case_insensitive():
+    assert ea._match_wall_pattern("JAVASCRIPT IS DISABLED in your browser.") == (
+        "javascript is disabled"
+    )
+
+
+def test_match_wall_pattern_length_gate_protects_long_genuine_articles():
+    """The SAME wall phrase, but as one sentence inside genuine long prose
+    (the real france24.com shape — an embedded-video caption) must NEVER be
+    rejected. Live-audit-derived cutoff: the longest confirmed 100%-boilerplate
+    body was 499 chars; the shortest confirmed genuine article incidentally
+    containing a wall phrase was 852 chars — 500 sits cleanly in the gap."""
+    long_article = (
+        "Iconic footballer Zinedine Zidane and the France national team share "
+        "a rich history together. " * 15
+    ) + (
+        "One of your browser extensions seems to be blocking the video player "
+        "from loading. To watch this content, you may need to disable it on "
+        "this site."
+    )
+    assert len(long_article) > ea._WALL_MAX_CHARS
+    assert ea._match_wall_pattern(long_article) is None
+
+
+def test_match_wall_pattern_clean_text_never_matches():
+    assert ea._match_wall_pattern(
+        "A maritime incident occurred in the strait on Tuesday, with two "
+        "vessels reporting damage after an exchange of fire."
+    ) is None
+    assert ea._match_wall_pattern("") is None
+
+
+def test_match_wall_pattern_deliberately_excludes_decorative_cookie_footers():
+    """DELIBERATE exclusion, live-audit-verified: CGTN appends a cookie-notice
+    footer ("By continuing to browse our site you agree to our use of
+    cookies...") to EVERY article — 77 confirmed rows from 314 to 7,517 chars,
+    always co-occurring with real content, never the whole body. A blind
+    "accept cookies" pattern would false-reject real cited news; this is why
+    it is NOT in :data:`ea._WALL_DENY_PATTERNS`."""
+    cgtn_short_but_real = (
+        "By continuing to browse our site you agree to our use of cookies, "
+        "revised Privacy Policy and Terms of Use. You can change your cookie "
+        "settings through your browser.\nCGTN\n, Updated 10:36, 31-Jul-2026"
+        "The Japanese government held the first meeting of the National "
+        "Intelligence Council on Friday, local media reported."
+    )
+    assert ea._match_wall_pattern(cgtn_short_but_real) is None
+
+
+def test_clean_extraction_passes_the_gate_byte_identical():
+    """Composition-level passthrough: a genuine extraction is untouched by
+    the V-E1 gate — same text in, same text out, nothing stripped/mutated."""
+    text = ea._extract_text(_HTML, None, max_chars=200_000)
+    assert text is not None
+    assert ea._match_wall_pattern(text) is None
+    # Re-running extraction is deterministic — byte-identical on repeat.
+    assert ea._extract_text(_HTML, None, max_chars=200_000) == text
+
+
+# ---------------------------------------------------------------------------
 # Local HTTP fixture server (allowlisted through the SSRF guard per-test)
 # ---------------------------------------------------------------------------
 
@@ -208,6 +386,11 @@ class _FixtureHandler(BaseHTTPRequestHandler):
             "/dup": (200, "text/html; charset=utf-8", _HTML),
             "/media.png": (200, "image/png", _MEDIA),
             "/big": (200, "application/octet-stream", _BIG),
+            "/jswall": (200, "text/html; charset=utf-8", _JSWALL_HTML),
+            "/long_with_wall_mention": (
+                200, "text/html; charset=utf-8",
+                _LONG_ARTICLE_WITH_WALL_MENTION_HTML,
+            ),
         }
         if self.path in routes:
             status, ctype, body = routes[self.path]
@@ -374,6 +557,10 @@ async def test_archives_cited_verified_only(
         # S-10: the archived FULL text landed in the payload…
         payload = json.loads(row["payload"])
         assert "maritime incident" in payload["archived_text"]
+        # V-E2: the substance-floor marker — a free len() stamped alongside
+        # the text itself, in the SAME update, so a later verify-side pass
+        # never has to re-read the body to know how much was extracted.
+        assert payload["archived_text_chars"] == len(payload["archived_text"])
         # …and the corpus DIRTY-MARKER contract was honored: indexed_at nulled
         # AND updated_at bumped IN THE SAME UPDATE (both load-bearing — see
         # corpus_indexer's contract).
@@ -397,6 +584,117 @@ async def test_archives_cited_verified_only(
     data2 = await _run(pg_pool)
     assert data2["examined"] == 0
     assert data2["archived"] == 0
+
+
+async def test_no_content_region_host_withholds_derived_text_not_bytes(
+    pg_pool, clean_slate, http_fixture, archive_env, monkeypatch,
+):
+    """R6b end-to-end wiring: a candidate whose URL resolves to a known
+    no-content-region host (the real ``t.me`` can't be dialed in a hermetic
+    test, so the local fixture host is monkeypatched into the set) archives
+    the BYTES exactly as normal but must NEVER write ``archived_text`` — even
+    though the fixture page is genuinely well-formed, extractable HTML (the
+    same page ``test_archives_cited_verified_only`` proves DOES extract
+    cleanly when the host is NOT in the no-content-region set)."""
+    monkeypatch.setattr(ea, "_NO_CONTENT_REGION_HOSTS", frozenset({"127.0.0.1"}))
+    async with pg_pool.acquire() as conn:
+        cited = await _insert_signal(conn, f"{http_fixture}/article")
+        await _insert_finding(conn, [cited], verified=True)
+
+    data = await _run(pg_pool)
+    assert data["archived"] == 1
+    assert data["text_extracted"] == 0
+    assert data["text_extract_failed"] == 0
+    assert data["text_extract_skipped"] == 1
+
+    async with pg_pool.acquire() as conn:
+        row = await _signal(conn, cited)
+        # The bytes are archived (object_ref stamped) — only the derived-text
+        # upgrade is withheld.
+        assert row["object_ref"] is not None
+        payload = json.loads(row["payload"])
+        assert "archived_text" not in payload
+
+        side = await _sidecar(conn, cited)
+        assert side["status"] == "archived"
+        assert side["text_extracted"] is False
+
+
+async def test_wall_pattern_rejected_bytes_archived_no_text_dirty_marker_not_tripped(
+    pg_pool, clean_slate, http_fixture, archive_env,
+):
+    """V-E1 end-to-end: a JS-wall body extracts CLEANLY (Trafilatura succeeds
+    — this is genuinely well-formed, parseable HTML) but is REJECTED as
+    boilerplate. The bytes are archived exactly as normal; payload.archived_text
+    is NEVER written; the corpus dirty-marker contract is NEVER tripped (a
+    rejection must not falsely re-queue a doc for text it doesn't have); and
+    the rejection is counted + the sidecar reflects "not extracted"."""
+    async with pg_pool.acquire() as conn:
+        cited = await _insert_signal(conn, f"{http_fixture}/jswall")
+        await _insert_finding(conn, [cited], verified=True)
+        # Simulate a previously-indexed doc so a false dirty-marker trip would
+        # be OBSERVABLE (indexed_at flipping to NULL) rather than vacuously
+        # "still NULL".
+        await conn.execute(
+            "UPDATE signals SET indexed_at = now() WHERE id = $1", cited,
+        )
+        pre = await _signal(conn, cited)
+        assert pre["indexed_at"] is not None
+
+    data = await _run(pg_pool)
+    assert data["archived"] == 1
+    assert data["text_extracted"] == 0
+    assert data["text_extract_failed"] == 0
+    assert data["text_extract_rejected_boilerplate"] == 1
+
+    digest = hashlib.sha256(_JSWALL_HTML).hexdigest()
+    stored = cas_path(archive_env, digest)
+    assert stored.read_bytes() == _JSWALL_HTML   # bytes archive untouched
+
+    async with pg_pool.acquire() as conn:
+        row = await _signal(conn, cited)
+        assert row["object_ref"] == cas_object_ref(digest)   # bytes ARE archived
+        payload = json.loads(row["payload"])
+        assert "archived_text" not in payload         # NO text stored
+        assert "archived_text_chars" not in payload
+        # The dirty-marker contract was NOT tripped — a rejection is not a
+        # text write, so the corpus doc is never falsely re-queued.
+        assert row["indexed_at"] == pre["indexed_at"]
+        assert row["updated_at"] > pre["updated_at"]   # still bumps (harmless)
+
+        side = await _sidecar(conn, cited)
+        assert side["status"] == "archived"
+        assert side["text_extracted"] is False
+
+
+async def test_wall_pattern_inside_long_article_not_rejected(
+    pg_pool, clean_slate, http_fixture, archive_env,
+):
+    """False-positive guard, end-to-end: the SAME wall phrase appears as one
+    sentence inside a genuine long article (the real france24.com shape) —
+    the length gate must let it through untouched, exactly like any other
+    clean extraction."""
+    async with pg_pool.acquire() as conn:
+        cited = await _insert_signal(
+            conn, f"{http_fixture}/long_with_wall_mention",
+        )
+        await _insert_finding(conn, [cited], verified=True)
+
+    data = await _run(pg_pool)
+    assert data["archived"] == 1
+    assert data["text_extracted"] == 1
+    assert data["text_extract_rejected_boilerplate"] == 0
+
+    async with pg_pool.acquire() as conn:
+        row = await _signal(conn, cited)
+        payload = json.loads(row["payload"])
+        assert "Zinedine Zidane" in payload["archived_text"]
+        assert "browser extensions" in payload["archived_text"]
+        assert payload["archived_text_chars"] == len(payload["archived_text"])
+        assert payload["archived_text_chars"] > ea._WALL_MAX_CHARS
+
+        side = await _sidecar(conn, cited)
+        assert side["text_extracted"] is True
 
 
 async def test_license_gate_skips_recorded_never_silent(

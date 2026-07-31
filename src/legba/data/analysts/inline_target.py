@@ -124,7 +124,9 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Mapping, Protocol, runtime_checkable
+from typing import (
+    Any, Awaitable, Callable, Mapping, NamedTuple, Protocol, runtime_checkable,
+)
 from uuid import UUID
 
 from ..provenance.kinds import OutputKind
@@ -137,6 +139,16 @@ from .consult_on_demand import (
     _coerce_uuid_list,
     _extract_json,
     _refs_from_tool_result,
+)
+# QW1-B DESK GROUNDING — the composition CONTINUITY idiom one floor down. The
+# slice reader stamps the marked rows; this module owns the partition, the render,
+# the honest citation shapes and the prompt clause.
+from .unit_grounding import (
+    citation_for_block,
+    grounding_receipts,
+    partition_grounding_rows,
+    render_grounding_section,
+    with_grounding_clause,
 )
 
 logger = logging.getLogger(__name__)
@@ -294,6 +306,13 @@ _CHARS_PER_TOKEN = 4            # rough estimate; we don't tokenize on the hot p
 # ``inject_preamble`` step (a live preamble is ~3.8k chars; 16k covers the tail
 # without letting a pathological preamble bloat the analyst_traces row).
 _PREAMBLE_TRACE_CHAR_CAP = 16000
+# A2 (verify-path structural fix, 2026-07-31) — bound on the UNMARKED-BASIS
+# citation fallback (see ``run_method``): when the model's prose carries no
+# resolvable ``[N]`` marker at all despite a real oriented slice, we fall back
+# to citing the slice directly rather than shipping an empty/absent citations
+# key. Capped well below ``_MAX_INPUT_SIGNALS`` so the rare fallback path can't
+# balloon the payload with the JSONB `source_text`/`snippet` per entry.
+_FALLBACK_BASIS_CITATIONS_CAP = 25
 
 
 def _input_token_budget() -> int:
@@ -315,6 +334,156 @@ def _input_token_budget() -> int:
 def _estimate_tokens(text: str) -> int:
     """Cheap chars/4 token estimate (no tokenizer on the inference hot path)."""
     return (len(text) + _CHARS_PER_TOKEN - 1) // _CHARS_PER_TOKEN
+
+
+# ---------------------------------------------------------------------------
+# QW1-B — the per-unit slice RANKING seam (``method.options.slice_focus``)
+# ---------------------------------------------------------------------------
+#
+# THE DEFECT IT ANSWERS. The P1 gallery measured 8 of the 9 bounded units fanning
+# out over ONE byte-identical 120-row user message: same target, same window, same
+# reader, same pack. Only the ~8-10K-char system prompt differs. The escalation
+# unit and the energy_security unit read the same food-security piece and the same
+# oil-pricing story in the SAME recency order, and each silently discards what the
+# other needed — with the on-topic rows scattered wherever recency happened to put
+# them.
+#
+# WHAT THIS IS, AND — LOUDLY — WHAT IT IS NOT. It is a RE-RANK, applied to the
+# rows the token budget ALREADY admitted. It is NOT a filter and must never
+# become one:
+#
+#   * the row SET is byte-identical to the un-focused run — same rows, same count,
+#     nothing hidden from the model and nothing hidden from an auditor reading
+#     ``derived_from``;
+#   * it runs AFTER ``_orient``'s budget pack, never before. A pre-pack re-rank
+#     would change WHICH rows survive the budget the moment the budget binds —
+#     that is a filter wearing a ranking's clothes, and a unit that never sees a
+#     row cannot report that it did not see it;
+#   * the sort is STABLE, so equal-scoring rows (including the all-zero case, i.e.
+#     a focus that matched nothing) keep their exact recency order.
+#
+# ABSENT ⇒ BYTE-IDENTICAL: no ``slice_focus`` on the descriptor means no sort call
+# at all. Declared in the X-1 catalog (``handler_options.ANALYST_KIND_OPTIONS``)
+# so it is descriptor-borne, versioned, live-editable via PUT, and loudly degraded
+# when malformed — never dead config.
+_SLICE_FOCUS_OPTION = "slice_focus"
+_SLICE_FOCUS_CLASSES_OPTION = "slice_focus_entity_classes"
+#: Weight applied to a focus token that declares none (``"hormuz"`` == 1.0).
+_FOCUS_DEFAULT_WEIGHT = 1.0
+#: Chars of rendered text a focus term is matched against. Bounded so a single
+#: 1,500-char GDELT dump can't dominate the scan cost of a 200-row slice.
+_FOCUS_MATCH_CHARS = 2000
+
+
+@dataclass(frozen=True)
+class _SliceFocus:
+    """One unit's parsed ranking hints: ``(token, weight)`` pairs.
+
+    ``terms`` are matched case-insensitively against the row's title + body text;
+    ``classes`` against the row's ``entity_classes`` array (the 9 retained
+    PascalCase vertex labels). Both are additive — a row's score is the sum of
+    every hint it matches, so a row hitting two terms outranks one hitting one.
+    """
+
+    terms: tuple[tuple[str, float], ...] = ()
+    classes: tuple[tuple[str, float], ...] = ()
+
+    def __bool__(self) -> bool:
+        return bool(self.terms or self.classes)
+
+
+def _parse_focus_tokens(raw: Any) -> tuple[tuple[str, float], ...]:
+    """Parse ``["hormuz", "tanker:2.5"]`` into ``(("hormuz", 1.0), ("tanker", 2.5))``.
+
+    A token may carry an explicit ``:weight`` suffix; without one it weighs
+    :data:`_FOCUS_DEFAULT_WEIGHT`. A malformed / empty / non-positive-weight token
+    is DROPPED (never coerced to a default weight that the operator did not ask
+    for) — the option catalog already refused the obvious shapes at fire time, and
+    a hint we cannot read must not silently become a hint we invented.
+    """
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    out: list[tuple[str, float]] = []
+    for item in raw:
+        if not isinstance(item, str) or not item.strip():
+            continue
+        token, _, weight_txt = item.strip().rpartition(":")
+        if not token:
+            token, weight = item.strip(), _FOCUS_DEFAULT_WEIGHT
+        else:
+            try:
+                weight = float(weight_txt)
+            except (TypeError, ValueError):
+                continue
+        token = token.strip().casefold()
+        if not token or not (weight > 0.0):
+            continue
+        out.append((token, weight))
+    return tuple(out)
+
+
+def _resolve_slice_focus(options: Mapping[str, Any]) -> _SliceFocus | None:
+    """This run's ranking hints, or ``None`` when the descriptor declared none.
+
+    ``None`` — not an empty :class:`_SliceFocus` — is the byte-identical signal:
+    the caller skips the re-rank entirely rather than running a no-op sort.
+    """
+    focus = _SliceFocus(
+        terms=_parse_focus_tokens(options.get(_SLICE_FOCUS_OPTION)),
+        classes=_parse_focus_tokens(options.get(_SLICE_FOCUS_CLASSES_OPTION)),
+    )
+    return focus or None
+
+
+def _focus_score(row: Mapping[str, Any], focus: _SliceFocus) -> float:
+    """This row's focus score — the sum of every matched hint's weight (0.0 = no
+    match, which leaves the row exactly where recency put it)."""
+    score = 0.0
+    if focus.terms:
+        data = row.get("data")
+        title = row.get("title_en") or (
+            data.get("title_en") if isinstance(data, dict) else None
+        ) or row.get("title") or ""
+        snippet = ""
+        if isinstance(data, dict):
+            snippet = (
+                data.get("distilled_body")
+                or data.get("raw_body")
+                or data.get("summary")
+                or data.get("description")
+                or data.get("content_text")
+                or data.get("snippet")
+                or ""
+            )
+        haystack = f"{title} {snippet}"[:_FOCUS_MATCH_CHARS].casefold()
+        for token, weight in focus.terms:
+            if token in haystack:
+                score += weight
+    if focus.classes:
+        raw_classes = row.get("entity_classes")
+        present = {
+            str(c).casefold()
+            for c in (raw_classes or ())
+            if isinstance(c, str) and c.strip()
+        }
+        for token, weight in focus.classes:
+            if token in present:
+                score += weight
+    return score
+
+
+def _rerank_by_focus(
+    rows: list[Mapping[str, Any]], focus: _SliceFocus | None,
+) -> list[Mapping[str, Any]]:
+    """Re-order (NEVER re-select) the packed rows by focus score, best-first.
+
+    Stable: equal scores — including every row scoring 0.0 — keep the recency
+    order they arrived in. ``focus`` ``None`` returns the SAME list object, so the
+    default path does not even copy.
+    """
+    if focus is None or not rows:
+        return rows
+    return sorted(rows, key=lambda r: _focus_score(r, focus), reverse=True)
 
 
 def _produced_at_sort_key(value: Any) -> str:
@@ -342,11 +511,22 @@ def _produced_at_sort_key(value: Any) -> str:
 def _orient(
     inputs: list[Mapping[str, Any]],
     target_id: str | None,
+    *,
+    stats: dict[str, Any] | None = None,
+    focus: "_SliceFocus | None" = None,
 ) -> tuple[list[Mapping[str, Any]], list[UUID]]:
-    """Sort + pack the substrate slice under the INPUT-token budget.
+    """Sort + prune + pack the substrate slice under the INPUT-token budget.
 
     Sort: produced_at descending so the freshest signals get the most
     weight in the LLM context (absent timestamps sort last).
+
+    Prune (QW1-A): DEAD rows — no title AND no usable body — are dropped
+    BEFORE numbering. This is the only safe place for that cut: ``N`` is the
+    1-based position in this list, and ``_render_user_prompt`` /
+    ``_build_citation_index`` / ``derived_from`` all key off it, so a row
+    dropped anywhere downstream would desync every citation marker after it.
+    Dropping here also returns the row's token budget to the pack loop, so the
+    space a citable-nothing would have burned goes to a row with real content.
 
     Pack: admit recency-ordered signals until the estimated INPUT-token budget
     (:func:`_input_token_budget`) is reached, capped by the
@@ -355,6 +535,16 @@ def _orient(
     20-row trim — the bound is the INPUT-token budget, NOT a hard count, and we
     never cap the model's OUTPUT (the core plane serves its own output budget).
 
+    ``stats``, when supplied, is filled with the per-clean render receipt (see
+    :func:`_slice_render_stats`) so the ORIENT trace step carries auditable
+    counters for every row the render suppressed, prosed, marked, or upgraded.
+
+    RE-RANK (QW1-B, optional): with a ``focus`` the PACKED rows are re-ordered
+    best-first by the unit's declared ranking hints. Deliberately AFTER the pack,
+    never before — the row SET, and therefore ``derived_from``, is byte-identical
+    to the un-focused run; only the order the model reads them in changes. See the
+    ``_SliceFocus`` note above for why a pre-pack re-rank would be a filter.
+
     Returns the list of signal UUIDs in ``derived_from`` order so the
     NARRATE phase can attach provenance.
     """
@@ -362,10 +552,18 @@ def _orient(
         inputs, key=lambda r: _produced_at_sort_key(r.get("produced_at")), reverse=True
     )
 
+    live: list[Mapping[str, Any]] = []
+    dropped_dead = 0
+    for row in ordered:
+        if _is_dead_row(row):
+            dropped_dead += 1
+            continue
+        live.append(row)
+
     budget = _input_token_budget()
     trimmed: list[Mapping[str, Any]] = []
     used = 0
-    for row in ordered:
+    for row in live:
         if len(trimmed) >= _MAX_INPUT_SIGNALS:
             break
         cost = _estimate_tokens(_render_signal(len(trimmed) + 1, row))
@@ -374,6 +572,10 @@ def _orient(
             break
         trimmed.append(row)
         used += cost
+
+    # QW1-B: re-rank (never re-select) the packed set. No-op — same list object —
+    # when the descriptor declared no ranking hints.
+    trimmed = _rerank_by_focus(trimmed, focus)
 
     derived_from: list[UUID] = []
     for row in trimmed:
@@ -390,11 +592,70 @@ def _orient(
                 # tolerates partial derived_from lists.
                 continue
 
+    if stats is not None:
+        stats.update(_slice_render_stats(trimmed))
+        stats["dropped_dead_rows"] = dropped_dead
+
     logger.debug(
-        "inline_target.orient target_id=%s in=%d kept=%d est_tokens=%d budget=%d derived=%d",
-        target_id, len(inputs), len(trimmed), used, budget, len(derived_from),
+        "inline_target.orient target_id=%s in=%d dead=%d kept=%d est_tokens=%d "
+        "budget=%d derived=%d focus=%d",
+        target_id, len(inputs), dropped_dead, len(trimmed), used, budget,
+        len(derived_from),
+        0 if focus is None else len(focus.terms) + len(focus.classes),
     )
     return trimmed, derived_from
+
+
+def _slice_render_stats(sliced: list[Mapping[str, Any]]) -> dict[str, int]:
+    """Per-clean receipt for the rows that actually reached the prompt.
+
+    One counter per QW1-A render clean, so an operator reading an
+    ``analyst_traces`` ORIENT step can see what the renderer did to this slice
+    instead of inferring it from prompt bytes:
+
+      ``gdelt_prosed``          CAMEO records rendered as one prose line
+                                instead of a stringified 61-column dict.
+      ``untranslated_marked``   non-Latin bodies replaced by the honest
+                                ``[body untranslated: <lang>]`` marker.
+      ``full_body_rows``        rows rendering a SUBSTANTIVE body (distilled /
+                                translated / message / archived / raw) — the
+                                content the teaser used to crowd out.
+      ``teaser_rows``           rows still on the thin summary/description tail.
+      ``empty_body_rows``       rows kept for their headline alone (a real
+                                title with no body is evidence, not a dead row).
+      ``structures_collapsed``  duplicate graph-structure pseudo-signals folded
+                                away by the slice reader (see
+                                ``actor_substrate_slice._collapse_structure_items``).
+
+    ``dropped_dead_rows`` is stamped by :func:`_orient` itself — it counts rows
+    that never made it into ``sliced``.
+    """
+    counts: dict[str, int] = {
+        "gdelt_prosed": 0,
+        "untranslated_marked": 0,
+        "full_body_rows": 0,
+        "teaser_rows": 0,
+        "empty_body_rows": 0,
+        "structures_collapsed": 0,
+    }
+    for row in sliced:
+        kind = _signal_body(row).kind
+        if kind == "gdelt_prose":
+            counts["gdelt_prosed"] += 1
+        elif kind == "untranslated":
+            counts["untranslated_marked"] += 1
+        elif kind == "empty":
+            counts["empty_body_rows"] += 1
+        if kind in _FULL_BODY_KINDS:
+            counts["full_body_rows"] += 1
+        elif kind == "teaser":
+            counts["teaser_rows"] += 1
+        data = row.get("data")
+        if isinstance(data, Mapping):
+            collapsed = data.get("duplicates_collapsed")
+            if isinstance(collapsed, int) and collapsed > 0:
+                counts["structures_collapsed"] += collapsed
+    return counts
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +699,336 @@ def _clean_body_text(text: str) -> str:
     return _HTML_WS_RE.sub(" ", text).strip()
 
 
+# ---------------------------------------------------------------------------
+# Body selection (QW1-A) — ONE precedence, shared by the prompt render and the
+# citation-evidence snippet
+# ---------------------------------------------------------------------------
+#
+# ``_render_signal`` (what the analyst reads) and ``_citation_entry``'s
+# ``snippet`` (what the verify judge is shown as the analyst's WORKING text)
+# MUST resolve the same body from the same payload — a divergence grades a
+# claim against text the model never saw. Both now go through
+# :func:`_body_from_fields`, so the invariant holds by construction rather than
+# by two hand-synchronised ``or`` chains.
+#
+# The precedence mirrors :data:`legba.data.opensearch._BEST_BODY_FIELDS` — the
+# corpus plane's already-canonical "best body" order — with the M13 body
+# TRANSLATION (``text_en``) spliced in right behind our own distilled brief:
+#
+#   distilled_body  our Stage-2 English brief (best: short, English, on-point)
+#   text_en         M13 NLLB translation of a non-Latin body — the SAME content
+#                   in a language the analyst and the judge can both ground on
+#   text            chat-platform full message body (telegram/discord populate
+#                   ONLY payload.text — see below; this outranks archived_text
+#                   because a t.me "archive" is embed-widget chrome, not prose)
+#   archived_text   P2-1 evidence archive: the FULL extracted article, already
+#                   JS-wall/bot-check gated by evidence_archiver (V-E1)
+#   raw_body        the ingest body (RSS content:encoded / full-text feeds)
+#   summary / description / content_text / snippet   the thin teaser tail
+#
+# Two of these were MISSING from the pre-QW1-A chain, both load-bearing:
+#   * ``text`` — telegram carries the message body ONLY here and stamps no
+#     ``title`` at all, so every telegram signal rendered as "(untitled)" with
+#     an EMPTY snippet: 632 of 5,377 rows in a live 24h window were citable
+#     NOTHING (P1 gallery ``[4]``, a bare t.me forward).
+#   * ``archived_text`` — the archived full article (live 24h: ~1.6k rows,
+#     2,000-5,000 chars each) never reached the prompt, so the analyst read a
+#     ~113-char RSS teaser of a story we already hold in full.
+_BODY_FIELD_PRECEDENCE: tuple[tuple[str, str], ...] = (
+    ("distilled_body", "distilled"),
+    ("text_en", "translated"),
+    ("text", "message"),
+    ("archived_text", "archived"),
+    ("raw_body", "raw"),
+    ("summary", "teaser"),
+    ("description", "teaser"),
+    ("content_text", "teaser"),
+    ("snippet", "teaser"),
+)
+
+#: Body kinds that carry SUBSTANTIVE text the analyst can ground a claim on
+#: (as opposed to the thin teaser tail). Counted in the ORIENT receipt.
+_FULL_BODY_KINDS: frozenset[str] = frozenset(
+    {"distilled", "translated", "message", "archived", "raw", "gdelt_prose"}
+)
+
+#: Body kinds that are NOT citable evidence — a row with one of these AND no
+#: title is a DEAD citation and is dropped before the slice is numbered.
+_UNUSABLE_BODY_KINDS: frozenset[str] = frozenset({"untranslated", "empty"})
+
+#: Highest code point still considered Latin script (Basic Latin through Latin
+#: Extended-B + IPA extensions). Everything above — Greek, Cyrillic, Arabic,
+#: Hebrew, Devanagari, CJK — counts as non-Latin for the untranslated check.
+_LATIN_SCRIPT_MAX_ORD = 0x2FF
+#: Minimum alphabetic characters before the script ratio is meaningful. A
+#: two-word body is not enough evidence to declare a script.
+_MIN_SCRIPT_SAMPLE = 24
+#: Share of alphabetic characters that must be Latin for the body to count as
+#: readable-as-rendered. Below this we mark it untranslated rather than spend
+#: context on script the analyst cannot cite and the judge cannot grade.
+_LATIN_SHARE_FLOOR = 0.5
+
+
+class _SignalBody(NamedTuple):
+    """The one body text a signal renders with, plus WHERE it came from.
+
+    ``kind`` is the provenance label from :data:`_BODY_FIELD_PRECEDENCE` (or
+    ``gdelt_prose`` / ``untranslated`` / ``empty`` for the derived cases). It
+    drives the ORIENT receipt counters and the dead-row test; it is never
+    rendered into the prompt.
+    """
+
+    text: str
+    kind: str
+
+
+def _is_predominantly_non_latin(text: str) -> bool:
+    """True when ``text`` is mostly non-Latin script (Arabic, CJK, Cyrillic, …).
+
+    Ratio-based rather than a language-code lookup: the ``language`` column is
+    a detector's guess and is frequently absent, while the bytes are always
+    authoritative. Short bodies are exempt (:data:`_MIN_SCRIPT_SAMPLE`) — a
+    handful of characters cannot establish a script.
+    """
+    letters = [c for c in text if c.isalpha()]
+    if len(letters) < _MIN_SCRIPT_SAMPLE:
+        return False
+    latin = sum(1 for c in letters if ord(c) <= _LATIN_SCRIPT_MAX_ORD)
+    return (latin / len(letters)) < _LATIN_SHARE_FLOOR
+
+
+def _gdelt_event_record(fields: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """The raw GDELT events-table row when this payload is a GDELT signal.
+
+    Both GDELT handlers (``gdelt_files`` file-dump, ``gdelt`` BigQuery) stash
+    the whole 61-column CAMEO record under ``payload.raw_body`` as a MAPPING —
+    which the body precedence used to stringify straight into the prompt (P1
+    gallery ``[6]``: ~1,500 chars of ``'Actor1Geo_FeatureID': 'IR'`` key-value
+    noise per row, and GDELT is the single highest-volume source on the
+    platform — 1,813 of 5,377 signals in a live 24h window).
+    """
+    raw = fields.get("raw_body")
+    if isinstance(raw, Mapping) and ("GLOBALEVENTID" in raw or "EventRootCode" in raw):
+        return raw
+    return None
+
+
+def _cameo_root_label(root: str) -> str:
+    """Human label for a CAMEO root code, from the source handler's own table.
+
+    Imported lazily so the analyst render path never pulls a source handler
+    (httpx/zipfile/csv) at module-import time, and degrades to the bare code if
+    the import or the lookup misses — a label is presentation, never grounding.
+    """
+    try:
+        from ..sources.gdelt_files import CAMEO_ROOT_LABELS
+    except Exception:                                       # pragma: no cover
+        return f"CAMEO root {root}" if root else "unclassified event"
+    label = CAMEO_ROOT_LABELS.get(root)
+    if label:
+        return label
+    return f"CAMEO root {root}" if root else "unclassified event"
+
+
+def _gdelt_prose(fields: Mapping[str, Any], record: Mapping[str, Any]) -> str:
+    """Render a GDELT/CAMEO event record as ONE clean prose line.
+
+    The information WITHOUT the noise: who acted on whom, what event class,
+    where, when, how conflictual, how corroborated, and the report URL — drawn
+    from the payload's own typed projections (``actors`` / ``geo`` /
+    ``event_root_code`` / …, identical keys in both GDELT handlers), falling
+    back to the raw CAMEO columns when a projection is absent.
+
+    Deliberately states its own nature ("structured event record, no article
+    text") so the analyst does not read a coded actor pair as a quotable
+    report: a GDELT row is a machine coding OF an article, not the article.
+    """
+    def _col(payload_path: tuple[str, ...], column: str = "") -> str:
+        """Typed payload projection first, raw CAMEO column as the fallback."""
+        cur: Any = fields
+        for key in payload_path:
+            if not isinstance(cur, Mapping):
+                cur = None
+                break
+            cur = cur.get(key)
+        if cur in (None, "") and column:
+            cur = record.get(column)
+        return "" if cur in (None, "") else str(cur).strip()
+
+    actor1 = _col(("actors", "actor1_name"), "Actor1Name")
+    actor2 = _col(("actors", "actor2_name"), "Actor2Name")
+    actor1_code = _col(("actors", "actor1_code"), "Actor1Code")
+    actor2_code = _col(("actors", "actor2_code"), "Actor2Code")
+    root = _col(("event_root_code",), "EventRootCode")
+    root = root.zfill(2) if root else ""
+    event_code = _col(("event_code",), "EventCode")
+    location = _col(("geo", "full_name"), "ActionGeo_FullName")
+    country = _col(("geo", "country"))
+    sqldate = _col(("published_at",), "SQLDATE")
+    goldstein = _col(("goldstein_scale",), "GoldsteinScale")
+    tone = _col(("tone",), "AvgTone")
+    mentions = _col(("num_mentions",), "NumMentions")
+    sources = _col(("num_sources",), "NumSources")
+    articles = _col(("num_articles",), "NumArticles")
+    url = _col(("source_url",), "SOURCEURL")
+
+    def _named(name: str, code: str) -> str:
+        if name and code:
+            return f"{name} [{code}]"
+        return name or code or "unnamed party"
+
+    parts: list[str] = [
+        "GDELT/CAMEO structured event record (machine coding of a news report, "
+        "not article text)"
+    ]
+    if actor2 or actor2_code:
+        parts.append(f"{_named(actor1, actor1_code)} → {_named(actor2, actor2_code)}")
+    else:
+        parts.append(f"{_named(actor1, actor1_code)} (no coded counterpart)")
+    action = _cameo_root_label(root)
+    parts.append(f"action: {action}" + (f" (CAMEO {event_code})" if event_code else ""))
+    where = location or country
+    if where:
+        parts.append(f"location: {where}")
+    if len(sqldate) == 8 and sqldate.isdigit():
+        parts.append(f"event date: {sqldate[:4]}-{sqldate[4:6]}-{sqldate[6:]}")
+    elif sqldate:
+        parts.append(f"event date: {sqldate}")
+    intensity = [
+        f"Goldstein {goldstein}" if goldstein else "",
+        f"tone {tone[:6]}" if tone else "",
+    ]
+    intensity = [i for i in intensity if i]
+    if intensity:
+        parts.append("intensity: " + ", ".join(intensity))
+    corroboration = [
+        f"{mentions} mentions" if mentions else "",
+        f"{sources} sources" if sources else "",
+        f"{articles} articles" if articles else "",
+    ]
+    corroboration = [c for c in corroboration if c]
+    if corroboration:
+        parts.append("corroboration: " + " / ".join(corroboration))
+    if url:
+        parts.append(f"report: {url}")
+    return "; ".join(parts)
+
+
+def _body_from_fields(
+    fields: Mapping[str, Any] | None,
+    *,
+    language: Any = None,
+    limit: int,
+) -> _SignalBody:
+    """Resolve ONE signal payload to the body text that should be rendered.
+
+    The single choke point for four QW1-A render cleans:
+
+    1. **GDELT dict dumps** — a CAMEO event record is prosed
+       (:func:`_gdelt_prose`) instead of stringified verbatim.
+    2. **Full bodies over teasers** — ``text`` / ``archived_text`` join the
+       precedence, so a message body or an archived full article is rendered
+       where a 113-char RSS teaser used to be.
+    3. **Untranslated bodies** — when the winning body is predominantly
+       non-Latin AND is not one of our own English derivatives, it is replaced
+       by an honest ``[body untranslated: <lang>]`` marker. The model cannot
+       cite what it cannot read, and the marker tells it so instead of letting
+       it hallucinate a reading of raw script. (``text_en`` sits ABOVE the raw
+       fields, so a translated signal keeps its real English body and never
+       reaches this branch.)
+    4. **Dead rows** — an ``empty``/``untranslated`` kind with no title is what
+       :func:`_is_dead_row` drops before the slice is numbered.
+
+    ``limit`` bounds the returned text (the render cap / the citation-snippet
+    cap — the same number today, passed explicitly so the two callers stay
+    honest about which bound they applied).
+    """
+    if not isinstance(fields, Mapping):
+        return _SignalBody("", "empty")
+
+    record = _gdelt_event_record(fields)
+    if record is not None:
+        # A GDELT row may ALSO carry an archived copy of the article it coded
+        # (live: ~28% do) — real prose beats our synthesized line, so let the
+        # normal precedence try the English-text fields first and fall back to
+        # the prosed record.
+        for field, kind in _BODY_FIELD_PRECEDENCE:
+            if field == "raw_body":
+                break
+            value = fields.get(field)
+            if isinstance(value, str) and value.strip():
+                cleaned = _clean_body_text(value)[:limit]
+                if cleaned:
+                    return _SignalBody(cleaned, kind)
+        return _SignalBody(_gdelt_prose(fields, record)[:limit], "gdelt_prose")
+
+    for field, kind in _BODY_FIELD_PRECEDENCE:
+        value = fields.get(field)
+        if not isinstance(value, str):
+            # Non-string bodies are a payload-shape bug for every field EXCEPT
+            # the GDELT raw_body handled above; skip rather than str() junk in.
+            continue
+        cleaned = _clean_body_text(value)
+        if not cleaned:
+            continue
+        if kind not in ("distilled", "translated") and _is_predominantly_non_latin(
+            cleaned
+        ):
+            # ``und`` is the language detector's own "undetermined" code — it
+            # reads as a typo in a prompt, so normalise it (and an absent
+            # language) to plain "unknown".
+            lang = str(language or fields.get("language") or "").strip()
+            if lang.casefold() in ("", "und", "unknown", "mul", "zxx"):
+                lang = "unknown"
+            return _SignalBody(f"[body untranslated: {lang}]", "untranslated")
+        return _SignalBody(cleaned[:limit], kind)
+
+    return _SignalBody("", "empty")
+
+
+def _signal_body(row: Mapping[str, Any], *, limit: int = _MAX_SNIPPET_CHARS) -> _SignalBody:
+    """:func:`_body_from_fields` for a SLICE row (payload lives under ``data``)."""
+    return _body_from_fields(
+        row.get("data"), language=row.get("language"), limit=limit
+    )
+
+
+def _signal_title(row: Mapping[str, Any]) -> str:
+    """The row's best title — English translation first, raw title otherwise.
+
+    T-1b (M13): prefer the stored English translation (payload.title_en) over
+    the raw title so a non-Latin signal renders English in the slice the LLM
+    reads, not a transliterated surface. The slice reader carries the full
+    payload under ``data``; a top-level ``title_en`` (agency read tools) wins
+    too. Empty string when the row carries no title at all (telegram stamps
+    none) — the render substitutes ``(untitled)``, the dead-row test reads the
+    emptiness.
+    """
+    data = row.get("data")
+    title_en = row.get("title_en") or (
+        data.get("title_en") if isinstance(data, dict) else None
+    )
+    title = title_en or row.get("title") or ""
+    return str(title).strip()
+
+
+def _is_dead_row(row: Mapping[str, Any]) -> bool:
+    """True for a slice row that would render as a CITABLE NOTHING.
+
+    No title AND no usable body — the P1 gallery's ``[4]``: an empty numbered
+    entry the model can (and does) cite, spending a citation slot and a
+    provenance edge on zero evidence. Dropped before the slice is numbered so
+    the budget it would have burned goes to a row with content instead.
+
+    A row with a real headline and an empty body is NOT dead (gallery ``[5]``,
+    "Oil price rises after Iran says it stops ships in Hormuz" — the headline
+    alone is groundable evidence); only the both-empty case is.
+    """
+    if _signal_title(row):
+        return False
+    return _signal_body(row).kind in _UNUSABLE_BODY_KINDS
+
+
 def _render_signal(idx: int, row: Mapping[str, Any]) -> str:
     """Render ONE signal block (title + provenance + truncated snippet).
 
@@ -445,14 +1036,7 @@ def _render_signal(idx: int, row: Mapping[str, Any]) -> str:
     the token accounting matches the bytes actually sent to the LLM.
     """
     data = row.get("data")
-    # T-1b (M13): prefer the stored English translation (payload.title_en) over
-    # the raw title so a non-Latin signal renders English in the slice the LLM
-    # reads, not a transliterated surface. The slice reader carries the full
-    # payload under ``data``; a top-level ``title_en`` (agency read tools) wins too.
-    title_en = row.get("title_en") or (
-        data.get("title_en") if isinstance(data, dict) else None
-    )
-    title = str(title_en or row.get("title") or "(untitled)")[:_MAX_TITLE_CHARS]
+    title = (_signal_title(row) or "(untitled)")[:_MAX_TITLE_CHARS]
     produced_at = row.get("produced_at")
     source = row.get("source_url") or ""
     # `produced_at` is INGESTION (fetch) time, NOT the event date — label it
@@ -460,25 +1044,9 @@ def _render_signal(idx: int, row: Mapping[str, Any]) -> str:
     # LLM can't read fetch-time as event-time (the world-assessor temporal-collapse
     # class: a fresh June article about a Feb event got dated "today").
     published_at = data.get("published_at") if isinstance(data, dict) else None
-    snippet = ""
-    if isinstance(data, dict):
-        # Prefer a clean distilled derivative (Stage 2), then the fuller captured
-        # body (raw_body — content:encoded / full-text feeds carry the real article
-        # here, richer than the RSS teaser), falling back to the teaser. HTML-strip
-        # whichever we pick. `summary` stays in payload untouched; _marker_to_evidence
-        # uses this SAME precedence so the verify judge grades against what we render.
-        snippet = (
-            data.get("distilled_body")
-            or data.get("raw_body")
-            or data.get("summary")
-            or data.get("description")
-            or data.get("content_text")
-            or data.get("snippet")
-            or ""
-        )
-        if not isinstance(snippet, str):
-            snippet = str(snippet)
-        snippet = _clean_body_text(snippet)[:_MAX_SNIPPET_CHARS]
+    # ONE body precedence, shared with the citation-evidence snippet, so the
+    # verify judge's WORKING text is byte-identical to what the analyst read.
+    snippet = _signal_body(row).text
     published_str = f" published={published_at}" if published_at else ""
     return (
         f"[{idx}] {title}\n"
@@ -592,18 +1160,14 @@ def _citation_entry(
     source_text = ""
     source_truncated = False
     if isinstance(fields, Mapping):
-        raw_snip = (
-            fields.get("distilled_body")
-            or fields.get("raw_body")
-            or fields.get("summary")
-            or fields.get("description")
-            or fields.get("content_text")
-            or fields.get("snippet")
-            or ""
-        )
-        if not isinstance(raw_snip, str):
-            raw_snip = str(raw_snip)
-        snippet = _clean_body_text(raw_snip)[:_CITATION_SNIPPET_CHARS]
+        # The analyst's WORKING text — resolved by the SAME helper the prompt
+        # render uses (:func:`_body_from_fields`), so the judge is shown the
+        # bytes the analyst actually read: the prosed GDELT record, the
+        # archived full article, the M13 translation, or the honest
+        # untranslated marker — never a body the render suppressed.
+        snippet = _body_from_fields(
+            fields, limit=_CITATION_SNIPPET_CHARS
+        ).text
         # FAITHFULNESS TRUST BOUNDARY: the RAW authoritative source ONLY,
         # DELIBERATELY excluding ``distilled_body``. The precedence covers the
         # message/full-text shapes the summarizer distils from — raw_body (RSS
@@ -622,7 +1186,16 @@ def _citation_entry(
             or ""
         )
         if not isinstance(raw_source, str):
-            raw_source = str(raw_source)
+            # A GDELT payload's ``raw_body`` is the 61-column CAMEO record as a
+            # MAPPING — ``str()`` on it hands the judge ~3,200 chars of
+            # ``'Actor1Geo_FeatureID': 'IR'`` noise to ground a claim against.
+            # The prosed record carries the SAME authoritative fields in a form
+            # the judge can read; it is a deterministic projection of the raw
+            # source, NOT an LLM summary, so the trust boundary holds.
+            record = _gdelt_event_record(fields)
+            raw_source = (
+                _gdelt_prose(fields, record) if record is not None else str(raw_source)
+            )
         cleaned_source = _clean_body_text(raw_source)
         # Truncation-aware grounding (F1): flag when the cleaned source is longer
         # than the cap, so the judge treats the stored text as an EXCERPT (a cited
@@ -669,6 +1242,58 @@ def _build_citation_index(
     return index
 
 
+#: QW1-B — index key carrying an ALREADY-BUILT citation for a non-signal block
+#: (a DESK GROUNDING block: prior read / situation register / desk baseline /
+#: standing questions). Those blocks are not ``signals`` rows, have no
+#: ``signal_id``, and each has its own honest ref shape built by
+#: ``unit_grounding.citation_for_block`` — so the index carries the finished
+#: citation rather than the field bag :func:`_citation_entry` builds for a signal.
+_PREBUILT_CITATION_KEY = "_citation"
+
+
+def _citation_from_index_entry(
+    n: int, entry: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """One resolved citation entry for slice position ``n`` — shared by
+    :func:`_extract_citations`'s marker-driven resolution and the A2 (2026-07-31)
+    unmarked-basis fallback in :func:`run_method`. ``None`` when the entry
+    carries no resolvable ``signal_id`` (never a fabricated ref)."""
+    if not entry:
+        return None
+    # QW1-B: a DESK GROUNDING block hands over its finished citation verbatim —
+    # ref_kind + the REAL underlying ids + the rendered evidence_text, and
+    # deliberately NO ``signal_id`` (it is not a signal) and NO fabricated
+    # ``ref_id`` on the synthetic blocks.
+    prebuilt = entry.get(_PREBUILT_CITATION_KEY)
+    if isinstance(prebuilt, Mapping):
+        return dict(prebuilt)
+    if not entry.get("signal_id"):
+        return None
+    citation: dict[str, Any] = {
+        "marker": f"[{n}]",
+        "signal_id": entry["signal_id"],
+    }
+    if entry.get("title"):
+        citation["title"] = entry["title"]
+    if entry.get("source"):
+        citation["source"] = entry["source"]
+    # #116(e): carry the compact evidence snippet (the analyst's WORKING text,
+    # distilled-first) so the verify judge sees the cited signal's CONTENT, not
+    # just its headline (see _marker_to_evidence).
+    if entry.get("snippet"):
+        citation["snippet"] = entry["snippet"]
+    # FAITHFULNESS TRUST BOUNDARY: carry the RAW authoritative source text so the
+    # verify judge grounds a claim against the real article, not our distilled
+    # summary — catching a summarizer hallucination (see _marker_to_evidence).
+    # ``source_truncated`` rides along ONLY when True (payload-minimal; absent =>
+    # complete) so the judge softens "absent => unsupported" on an excerpt.
+    if entry.get("source_text"):
+        citation["source_text"] = entry["source_text"]
+        if entry.get("source_truncated"):
+            citation["source_truncated"] = True
+    return citation
+
+
 def _extract_citations(
     body: str,
     index: Mapping[int, Mapping[str, Any]],
@@ -693,32 +1318,10 @@ def _extract_citations(
             continue
         seen.add(n)
         marker_count += 1
-        entry = index.get(n)
-        if not entry or not entry.get("signal_id"):
+        citation = _citation_from_index_entry(n, index.get(n))
+        if citation is None:
             # Out-of-range or unresolved index — count it, never fabricate an id.
             continue
-        citation: dict[str, Any] = {
-            "marker": f"[{n}]",
-            "signal_id": entry["signal_id"],
-        }
-        if entry.get("title"):
-            citation["title"] = entry["title"]
-        if entry.get("source"):
-            citation["source"] = entry["source"]
-        # #116(e): carry the compact evidence snippet (the analyst's WORKING text,
-        # distilled-first) so the verify judge sees the cited signal's CONTENT, not
-        # just its headline (see _marker_to_evidence).
-        if entry.get("snippet"):
-            citation["snippet"] = entry["snippet"]
-        # FAITHFULNESS TRUST BOUNDARY: carry the RAW authoritative source text so the
-        # verify judge grounds a claim against the real article, not our distilled
-        # summary — catching a summarizer hallucination (see _marker_to_evidence).
-        # ``source_truncated`` rides along ONLY when True (payload-minimal; absent =>
-        # complete) so the judge softens "absent => unsupported" on an excerpt.
-        if entry.get("source_text"):
-            citation["source_text"] = entry["source_text"]
-            if entry.get("source_truncated"):
-                citation["source_truncated"] = True
         citations.append(citation)
     return citations, marker_count, len(citations)
 
@@ -1839,8 +2442,20 @@ def _effective_system_prompt(deps: InlineTargetDeps) -> str:
     ``None`` — a directly-constructed deps or the bare-LLM back-compat path — so
     both the GATHER suffix and the synthesis call always have a real prompt to
     build on (and never crash on ``None + str``).
+
+    QW1-B: the DESK GROUNDING clause is appended HERE — the ONE choke point both
+    the synthesis call and the GATHER suffix build on — rather than pasted into
+    nine unit descriptors. One definition, every unit, no drift, and a new unit
+    inherits the contract the moment it exists. (GATHER inherits it too, which is
+    correct rather than merely harmless: no grounding section exists yet during
+    the tool loop, so the clause's "no block shown ⇒ this is a FIRST read, claim
+    nothing about before" leg is exactly the discipline that phase needs.)
+    Idempotent by fingerprint (see
+    :func:`~legba.data.analysts.unit_grounding.with_grounding_clause`), so a
+    GEPA-promoted candidate that already carries the clause is never
+    double-stamped.
     """
-    return deps.system_prompt or _SYSTEM_PROMPT
+    return with_grounding_clause(deps.system_prompt or _SYSTEM_PROMPT)
 
 
 # ---------------------------------------------------------------------------
@@ -2273,14 +2888,40 @@ async def run_method(
     steps.append({"phase": "wake", "kind": "envelope"})
 
     # --- ORIENT --------------------------------------------------------
-    sliced, derived_from = _orient(inputs, target_id)
-    steps.append({
+    # QW1-B: lift the MARKED desk-grounding rows off the slice FIRST so they can
+    # never be mistaken for evidence — they must not consume the INPUT-token
+    # budget, must not be re-ranked by the focus, and must not enter
+    # ``derived_from`` (a unit is not DERIVED from its own memory, it is
+    # ANNOTATED by it). Data-driven (row markers, never env): an unmarked slice —
+    # every legacy caller, every non-unit kind — partitions to ``(inputs, [])``
+    # and is byte-for-byte the pre-grounding path.
+    signal_inputs, grounding_rows = partition_grounding_rows(inputs)
+    render_stats: dict[str, Any] = {}
+    sliced, derived_from = _orient(
+        list(signal_inputs), target_id,
+        stats=render_stats,
+        focus=_resolve_slice_focus(options),
+    )
+    orient_step: dict[str, Any] = {
         "phase": "orient",
         "kind": "deterministic",
-        "in_count": len(inputs),
+        "in_count": len(signal_inputs),
         "kept_count": len(sliced),
         "derived_count": len(derived_from),
-    })
+        # QW1-A per-clean render receipt (see _slice_render_stats) — what the
+        # renderer dropped, prosed, marked, or upgraded on THIS slice.
+        **render_stats,
+    }
+    # RECEIPTS — how many grounding blocks actually entered this run, one key per
+    # block kind, ALWAYS all four (a key that appeared only when the block
+    # resolved could not distinguish "no prior read" from "the receipt changed
+    # shape"). Reported here AND on the dedicated ``ground_blocks`` step below, so
+    # "did this unit get its memory this cycle" is answerable from a trace without
+    # re-running the gather. Absent-by-default: no marked rows ⇒ no receipt keys,
+    # so an untouched run's trace is byte-identical.
+    if grounding_rows:
+        orient_step.update(grounding_receipts(grounding_rows))
+    steps.append(orient_step)
 
     # Piece 2 — the empty-slice NOOP. A normal analyst with no signals emits the
     # diagnostic empty-slice finding. A ``gather_only`` analyst is DIFFERENT: its
@@ -2498,6 +3139,40 @@ async def run_method(
             intermediate_steps=steps,
         )
 
+    # --- GROUND BLOCKS (QW1-B desk grounding) --------------------------
+    # Rendered LAST — after the numbered signals and after any GATHER-gathered
+    # corpus docs — so the model reads the CURRENT evidence first and its memory
+    # second, and so the ordinals continue ONE flat ``[N]`` space with no gaps and
+    # no collisions: ``start_ordinal`` is one past the highest ordinal already
+    # claimed by the slice + the GATHER extension. Each block is CITABLE by that
+    # handle and carries its rendered text as ``evidence_text``, so a clause
+    # resting on the desk's memory is graded against exactly what the model was
+    # shown — the RAG-rollback lesson, enforced structurally: the ONLY licensed
+    # source of "before" is a block that must be cited like any other evidence.
+    if grounding_rows:
+        _start = (max(citation_index) if citation_index else len(sliced)) + 1
+        grounding_text, grounding_stamped = render_grounding_section(
+            grounding_rows, start_ordinal=_start,
+        )
+        if grounding_text:
+            user_prompt = f"{user_prompt}\n\n{grounding_text}"
+            for _ordinal, _row in grounding_stamped:
+                _citation = citation_for_block(_row, _ordinal)
+                if _citation is None:
+                    # A block we cannot cite honestly (a prior read with no
+                    # resolvable id) is never rendered as an unciteable block.
+                    continue
+                citation_index[_ordinal] = {_PREBUILT_CITATION_KEY: _citation}
+            ground_blocks_step: dict[str, Any] = {
+                "phase": "ground",
+                "kind": "desk_grounding_blocks",
+                "blocks": len(grounding_stamped),
+                "start_ordinal": _start,
+                "block_chars": len(grounding_text),
+            }
+            ground_blocks_step.update(grounding_receipts(grounding_rows))
+            steps.append(ground_blocks_step)
+
     # --- REASON+ACT ----------------------------------------------------
     # NOTE: when DSPy is wired into the runtime (L-176 GEPA replays this
     # phase), the call below is the boundary the optimizer monkey-patches
@@ -2552,6 +3227,29 @@ async def run_method(
     citations, marker_count, resolved_count = _extract_citations(
         finding.body, citation_index
     )
+    # A2 (verify-path structural fix, 2026-07-31): the marker pass above resolved
+    # to NOTHING — either the model's prose carried no [N] marker at all, or
+    # every marker it used was out-of-range/unmapped — yet this run WAS reasoned
+    # over real evidence (``sliced`` is the same non-empty set that seeds
+    # ``derived_from``). Rather than persist an empty/absent citations key (the
+    # exact shape the verify path auto-fails on — JUDGE_READOUT 2026-07-31 #1),
+    # fall back to citing the rendered basis directly, bounded, each entry
+    # flagged so a reader can tell an unmarked run from a marker-resolved one.
+    # Still never fabricates a clause-to-source mapping — it states plainly
+    # which basis signals this run actually read. No-op (byte-identical) when
+    # the model DID cite (the common, working case).
+    citations_fallback = False
+    if not citations and sliced:
+        fallback: list[dict[str, Any]] = []
+        for n in range(1, min(len(sliced), _FALLBACK_BASIS_CITATIONS_CAP) + 1):
+            entry = _citation_from_index_entry(n, citation_index.get(n))
+            if entry is None:
+                continue
+            entry["resolution"] = "fallback_basis"
+            fallback.append(entry)
+        if fallback:
+            citations = fallback
+            citations_fallback = True
     if citations:
         citation_data = dict(finding.data) if isinstance(finding.data, dict) else {}
         citation_data["citations"] = citations
@@ -2618,6 +3316,9 @@ async def run_method(
         # sequence is unchanged (no extra reflect step).
         "citation_markers": marker_count,
         "citations_resolved": resolved_count,
+        # A2 — whether the persisted citations came from the unmarked-basis
+        # fallback rather than a resolved [N] marker (see above).
+        "citations_fallback": citations_fallback,
         # R-1 — whether this run resolved a backlog answer-link (see above).
         "backlog_question_addressed": backlog_question_id is not None,
     })

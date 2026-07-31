@@ -118,6 +118,17 @@ def test_fail_class_mapping_table() -> None:
         # W31: a world-scoped absence claim with no collection-scoping language
         # — honesty-phrasing defect (overclaim family), not fabrication.
         "unscoped_absence_claim": FAIL_CLASS_SOFT,
+        # V-B: a scoped negative contradicted by a row of the analyst's OWN
+        # retained input slice — hard, and only when the violating title
+        # resolves (the same earned-severity rule as V-D).
+        "absence_slice_contradicted": FAIL_CLASS_HARD,
+        # V-D: a judge contradiction with no resolvable verbatim evidence quote
+        # — still a failure, but the hard-fail severity was never earned.
+        "judge_contradicted_unquoted": FAIL_CLASS_SOFT,
+        # V-C: prose misquoting the platform's OWN metadata (an
+        # effective_confidence / tier the cited output's captured column
+        # contradicts) — an overclaim about provenance, not a fabricated fact.
+        "metadata_mismatch": FAIL_CLASS_SOFT,
     }
     # Unknown reasons degrade conservatively (soft, never a fabricated hard).
     assert fail_class_for_reason("some_future_reason") == FAIL_CLASS_SOFT
@@ -141,10 +152,17 @@ def _reason_literals(node: ast.AST) -> tuple[set[str], bool]:
 
 
 def test_fail_class_drift_guard() -> None:
-    """EVERY reason verify.py emits (UnsupportedSpan(...) / ClaimVerdict.failed)
-    is in the mapping table, and every mapped reason is actually emitted — a new
-    span reason cannot land without classifying it, and the table cannot carry
-    dead entries. AST-level so multiline / ternary / constant forms all count."""
+    """EVERY reason verify.py emits (UnsupportedSpan(...) / ClaimVerdict.failed /
+    _ClaimOverride(...)) is in the mapping table, and every mapped reason is
+    actually emitted — a new span reason cannot land without classifying it, and
+    the table cannot carry dead entries. AST-level so multiline / ternary /
+    constant forms all count.
+
+    ``_ClaimOverride`` (2026-07-31) is the THIRD reason source: the deterministic
+    override seam decides a verdict and ``_apply_claim_overrides`` materializes
+    the span/ledger row from it, so the literal reason lives on the override
+    construction rather than on the span.
+    """
     tree = ast.parse(inspect.getsource(verify))
     emitted: set[str] = set()
     for node in ast.walk(tree):
@@ -164,7 +182,7 @@ def test_fail_class_drift_guard() -> None:
             if isinstance(node.func, ast.Name)
             else getattr(node.func, "attr", None)
         )
-        if fname == "UnsupportedSpan":
+        if fname in ("UnsupportedSpan", "_ClaimOverride"):
             for kw in node.keywords:
                 if kw.arg == "reason":
                     lits, _ = _reason_literals(kw.value)
@@ -257,9 +275,22 @@ async def test_floor_ledger_indicators_and_guards(monkeypatch) -> None:
 
 async def test_judge_ledger_all_three_verdicts(monkeypatch) -> None:
     monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
-    judge = _StubJudge('{"verdicts": ["supported", "contradicted", "unsupported"]}')
+    # V-D: the contradicted claim carries a VERBATIM quote of the cited evidence,
+    # so the hard class is EARNED (an unquotable contradiction demotes to the soft
+    # judge_contradicted_unquoted — see test_verify_hardfail_quote.py).
+    cites = [
+        {
+            "marker": "[1]",
+            "signal_id": str(uuid4()),
+            "title": "Delta held the port and announced no sanctions",
+        }
+    ]
+    judge = _StubJudge(
+        '{"verdicts": ["supported", "contradicted", "unsupported"], '
+        '"quotes": ["", "Delta held the port and announced no sanctions", ""]}'
+    )
     report = await verify_finding_faithfulness(
-        body=_THREE_CLAIM_BODY, citations=_citations(), judge_llm=judge
+        body=_THREE_CLAIM_BODY, citations=cites, judge_llm=judge
     )
     assert report.judge_status == "llm"
     ledger = report.claim_verdicts

@@ -161,3 +161,51 @@ async def test_run_baseline_no_enrichment_stage_withholds_uncorroborated():
     assert out is not None
     assert out.geo == []
     assert out.payload["publisher_origin"] == ["SG"]
+
+
+# --- R4: a title naming a DIFFERENT country contradicts the origin ----------
+
+
+@pytest.mark.asyncio
+async def test_run_baseline_title_country_contradicts_origin():
+    # LIVE R4: a BBC Greece-wildfires story landed geo=GB because "the UK
+    # Foreign Office" appeared deep in the body and attested the outlet's own
+    # origin. The title names Greece and not the UK, so the origin is
+    # CONTRADICTED — the signal stays unattributed rather than mis-routed.
+    sig = _sig(
+        title="Greece wildfires force thousands to flee homes",
+        text=(
+            "Firefighters battled blazes near Athens overnight. The UK Foreign "
+            "Office advised travellers to check local guidance."
+        ),
+    )
+    out = await run_baseline(sig, _ctx(["GB"]), enrichment_stage=_resolve_nothing)
+    assert out is not None
+    assert out.geo == []                                  # NOT geo=GB
+    assert out.payload["publisher_origin"] == ["GB"]
+
+
+@pytest.mark.asyncio
+async def test_run_baseline_title_naming_origin_still_corroborates():
+    # The guard only fires on CONTRADICTION: a title that names the origin
+    # itself (alongside another country) still corroborates.
+    sig = _sig(
+        title="UK and Greece sign wildfire response pact",
+        text="Officials met in London to finalise the agreement.",
+    )
+    out = await run_baseline(sig, _ctx(["GB"]), enrichment_stage=_resolve_nothing)
+    assert out is not None
+    assert out.geo == ["GB"]
+
+
+@pytest.mark.asyncio
+async def test_run_baseline_no_country_in_title_keeps_body_corroboration():
+    # With no country named in the title at all, body-wide corroboration is
+    # unchanged (the pre-R4 behavior).
+    sig = _sig(
+        title="Central bank holds rates steady",
+        text="Türkiye's central bank left its policy rate unchanged.",
+    )
+    out = await run_baseline(sig, _ctx(["TR"]), enrichment_stage=_resolve_nothing)
+    assert out is not None
+    assert out.geo == ["TR"]

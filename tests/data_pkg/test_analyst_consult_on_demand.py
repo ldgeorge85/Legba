@@ -44,12 +44,15 @@ from legba.data.analysts.consult_on_demand import (
     AnalystMethodResult,
     ConsultOnDemandDeps,
     ConsultOnDemandRunner,
+    FINAL_SENTINEL,
     HANDLER_VERSION,
     KIND_NAME,
     MAX_TOOL_ROUNDS,
     PROMPT_MODULE_PATH,
     SCHEMA_VERSION,
     _extract_json,
+    _parse_round_reply,
+    _parse_sentinel_final,
     build_prompt_module,
     run_method,
 )
@@ -1061,6 +1064,198 @@ def test_extract_json_string_aware_with_trailing_prose():
     assert parsed["args"]["query"] == "set {x,y} and }z{"
 
 
+# ---------------------------------------------------------------------------
+# §28.4 — the plain-markdown FINAL contract (kills the unparseable class)
+# ---------------------------------------------------------------------------
+
+
+_SENTINEL_FINAL = f"""{FINAL_SENTINEL}
+uncertainty: 0.35
+cited_refs: 792fd4d7-ff16-4a34-80bf-f1af1a58c14c, d6b35902-1b3f-410f-8c2f-009275454a35
+unanswered_aspects: naval posture beyond the strait; sanction timelines
+
+## Bottom line
+
+The lane is **holding** — see [792fd4d7] and the "quoted" phrase, a stray }} brace,
+and a backslash \\ that would all have needed escaping inside a JSON string.
+
+---
+
+Detail follows.
+"""
+
+
+def test_sentinel_final_parses_headers_and_markdown_body():
+    parsed = _parse_sentinel_final(_SENTINEL_FINAL)
+    assert parsed is not None
+    assert parsed["final"] is True
+    assert parsed["uncertainty"] == 0.35
+    assert parsed["cited_refs"] == [
+        "792fd4d7-ff16-4a34-80bf-f1af1a58c14c",
+        "d6b35902-1b3f-410f-8c2f-009275454a35",
+    ]
+    assert parsed["unanswered_aspects"] == [
+        "naval posture beyond the strait",
+        "sanction timelines",
+    ]
+    # The body is the markdown VERBATIM — no unescaping step to get wrong.
+    assert parsed["answer"].startswith("## Bottom line")
+    assert 'the "quoted" phrase' in parsed["answer"]
+    assert "a stray } brace" in parsed["answer"]
+    assert parsed["answer"].endswith("Detail follows.")
+
+
+def test_sentinel_final_headers_are_optional_and_order_free():
+    parsed = _parse_sentinel_final(
+        f"{FINAL_SENTINEL}\ncited_refs: abc\nuncertainty: 0.9\n\n## Answer\nbody"
+    )
+    assert parsed is not None
+    assert parsed["uncertainty"] == 0.9
+    assert parsed["cited_refs"] == ["abc"]
+    assert "unanswered_aspects" not in parsed
+    assert parsed["answer"] == "## Answer\nbody"
+
+
+def test_sentinel_final_tolerates_json_array_headers_and_fences():
+    """A model that spent the loop emitting JSON sometimes reaches for brackets,
+    or fences the whole reply. Neither is worth burning a round over."""
+    parsed = _parse_sentinel_final(
+        "```\n"
+        f"{FINAL_SENTINEL}\n"
+        'cited_refs: ["a", "b"]\n'
+        'unanswered_aspects: ["gap one"]\n'
+        "\n"
+        "Answer text.\n"
+        "```"
+    )
+    assert parsed is not None
+    assert parsed["cited_refs"] == ["a", "b"]
+    assert parsed["unanswered_aspects"] == ["gap one"]
+    assert parsed["answer"] == "Answer text."
+
+
+def test_sentinel_final_ignores_a_sentinel_buried_in_prose():
+    """A sentinel mid-reply is the model quoting the contract, not answering."""
+    assert _parse_sentinel_final(
+        f"I will answer next round using {FINAL_SENTINEL} as instructed."
+    ) is None
+
+
+def test_sentinel_final_with_no_body_is_not_a_final():
+    """A bare sentinel is not a usable answer — fall through so the loop asks
+    for a correction rather than storing an empty answer."""
+    assert _parse_sentinel_final(FINAL_SENTINEL) is None
+    assert _parse_sentinel_final(f"{FINAL_SENTINEL}\nuncertainty: 0.2\n") is None
+
+
+def test_truncated_sentinel_final_degrades_to_a_cut_answer():
+    """THE POINT of the contract. A max_tokens cut mid-prose used to leave an
+    unclosed JSON envelope → parse failure → the loop re-asked for the WHOLE
+    answer under the SAME cap (the 30k→36k ratchet in p6 §1.6). With no
+    envelope there is nothing to close: the metadata already landed (headers
+    lead) and the prose is simply short."""
+    cut = (
+        f"{FINAL_SENTINEL}\n"
+        "uncertainty: 0.4\n"
+        "cited_refs: 792fd4d7-ff16-4a34-80bf-f1af1a58c14c\n"
+        "\n"
+        "## Bottom line\n\nThe consolidated presiden"
+    )
+    parsed = _parse_sentinel_final(cut)
+    assert parsed is not None
+    assert parsed["uncertainty"] == 0.4                       # metadata intact
+    assert parsed["cited_refs"] == ["792fd4d7-ff16-4a34-80bf-f1af1a58c14c"]
+    assert parsed["answer"].endswith("The consolidated presiden")
+
+
+def test_parse_round_reply_accepts_both_final_shapes():
+    """Transition contract: the sentinel is current, the JSON envelope is
+    legacy (replayed sessions, older prompts) and must still parse."""
+    legacy = json.dumps({
+        "final": True, "answer": "legacy body", "uncertainty": 0.2,
+        "cited_refs": ["x"], "unanswered_aspects": [],
+    })
+    parsed_legacy = _parse_round_reply(legacy)
+    assert parsed_legacy is not None
+    assert parsed_legacy["answer"] == "legacy body"
+
+    parsed_new = _parse_round_reply(_SENTINEL_FINAL)
+    assert parsed_new is not None
+    assert parsed_new["answer"].startswith("## Bottom line")
+
+
+def test_parse_round_reply_still_routes_tool_calls_as_json():
+    parsed = _parse_round_reply('{"tools": [{"tool": "list_targets", "args": {}}]}')
+    assert parsed is not None
+    assert parsed.get("final") is not True
+    assert parsed["tools"][0]["tool"] == "list_targets"
+
+
+@pytest.mark.asyncio
+async def test_sentinel_final_ends_the_loop_with_no_retry():
+    """End to end: a truncated markdown final is ACCEPTED on the first attempt
+    — one LLM call, no `unparseable` step, no correction round."""
+    substrate = _SubstrateStub()
+    llm = _ScriptedLLMHandler([
+        f"{FINAL_SENTINEL}\nuncertainty: 0.4\n\n## Bottom line\n\nCut off mid-sen"
+    ])
+    deps = ConsultOnDemandDeps(llm=llm, substrate=substrate)
+    result = await run_method([{"question": "What is going on?"}], {}, deps)
+
+    assert len(llm.calls) == 1                                # NO retry ratchet
+    kinds = [s.get("kind") for s in result.intermediate_steps]
+    assert "unparseable" not in kinds
+    assert "forced_final" not in kinds
+    consult = result.consult_response
+    assert consult.answer == "## Bottom line\n\nCut off mid-sen"
+    assert consult.uncertainty == 0.4
+
+
+@pytest.mark.asyncio
+async def test_sentinel_final_cited_refs_still_intersect_observed_refs():
+    """The citation guard is contract-independent: the planner may NARROW to
+    refs the tools returned, never invent."""
+    observed = uuid4()
+    substrate = _SubstrateStub(
+        signal_rows=[{"id": str(observed), "title": "A real row"}],
+        signal_refs=[observed],
+    )
+    llm = _ScriptedLLMHandler([
+        json.dumps({"tool": "search_signals", "args": {"query": "iran"}}),
+        (
+            f"{FINAL_SENTINEL}\n"
+            f"cited_refs: {observed}, 11111111-2222-3333-4444-555555555555\n"
+            "\n"
+            "## Bottom line\n\nSomething happened."
+        ),
+    ])
+    deps = ConsultOnDemandDeps(llm=llm, substrate=substrate)
+    result = await run_method([{"question": "iran?"}], {}, deps)
+
+    cited = [str(r) for r in result.consult_response.cited_substrate_refs]
+    assert str(observed) in cited
+    assert "11111111-2222-3333-4444-555555555555" not in cited
+
+
+@pytest.mark.asyncio
+async def test_forced_final_salvages_prose_with_a_stray_sentinel():
+    """Terminal turn, sentinel present but no header block and no body split —
+    the prose is still the answer; the routing token is not."""
+    substrate = _SubstrateStub()
+    tool_call = json.dumps({"tool": "search_signals", "args": {"query": "x"}})
+    responses = [tool_call] * MAX_TOOL_ROUNDS + [
+        f"{FINAL_SENTINEL} The lane is holding."
+    ]
+    llm = _ScriptedLLMHandler(responses)
+    deps = ConsultOnDemandDeps(llm=llm, substrate=substrate)
+    result = await run_method([{"question": "q"}], {}, deps)
+
+    consult = result.consult_response
+    assert consult.data["forced_final"] is True
+    assert consult.answer == "The lane is holding."
+    assert FINAL_SENTINEL not in consult.answer
+
+
 def test_consult_response_payload_schema_invariants():
     """ConsultResponsePayload enforces the shape L-178 specifies."""
     p = ConsultResponsePayload(
@@ -1329,13 +1524,19 @@ def test_system_prompt_is_broad_first():
 
 
 def test_system_prompt_keeps_loop_protocol():
-    # The JSON loop-protocol contract the parser depends on must survive.
+    # The loop-protocol contract the parser depends on must survive: JSON for
+    # tool rounds, the sentinel + markdown for the final.
     assert "Loop protocol:" in _SYSTEM_PROMPT
     assert '{"tool": "<name>", "args": {...}}' in _SYSTEM_PROMPT
-    assert '{"final": true' in _SYSTEM_PROMPT
-    # Output-discipline (JSON only, no fences) now lives in the shared tradecraft
-    # preamble that is composed into _SYSTEM_PROMPT.
+    assert FINAL_SENTINEL in _SYSTEM_PROMPT
+    assert "uncertainty:" in _SYSTEM_PROMPT
+    assert "cited_refs:" in _SYSTEM_PROMPT
+    assert "unanswered_aspects:" in _SYSTEM_PROMPT
+    # Output-discipline (JSON only, no fences) lives in the shared tradecraft
+    # preamble composed into _SYSTEM_PROMPT — and the task block must say, out
+    # loud, that the FINAL reply overrides it. Without that the two contradict.
     assert "no prose, no markdown fences" in _SYSTEM_PROMPT
+    assert "OVERRIDES the preamble's output-discipline rule" in _SYSTEM_PROMPT
 
 
 # ---------------------------------------------------------------------------
@@ -2365,7 +2566,17 @@ def test_system_prompt_mandates_situation_survey_for_broad():
 
 def test_system_prompt_requires_markdown_answer():
     assert "MARKDOWN prose" in _SYSTEM_PROMPT
-    assert 'nested {"final": ...} envelope' in _SYSTEM_PROMPT
+    assert "The FINAL round" in _SYSTEM_PROMPT
+    assert "is NOT JSON" in _SYSTEM_PROMPT
+
+
+def test_system_prompt_no_longer_teaches_the_nested_envelope():
+    """The old contract carried a WRONG/RIGHT example whose "wrong" arm was a
+    literal nested {"final": ...} string — p6_consult.md §1.6 notes models
+    reproduced exactly that (which is why _unwrap_double_envelope exists). The
+    markdown contract must not reintroduce the example it wants avoided."""
+    assert 'nested {"final": ...} envelope' not in _SYSTEM_PROMPT
+    assert '\\"final\\"' not in _SYSTEM_PROMPT
 
 
 # ---------------------------------------------------------------------------

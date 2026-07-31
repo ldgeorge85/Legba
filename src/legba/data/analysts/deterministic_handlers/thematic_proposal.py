@@ -30,6 +30,7 @@ import logging
 import os
 import re
 from typing import Any, Mapping
+from uuid import UUID
 
 from ...provenance.models import FindingPayload
 from ....runtime.analyst_method import AnalystMethodResult
@@ -191,8 +192,15 @@ def stable_slug(sig: str, name: str) -> str:
     return f"situation_{h}"
 
 
-def _proposal(sig: str, name: str, intensity: float, terms: list[str]) -> dict[str, Any]:
+def _proposal(
+    sig: str, name: str, intensity: float, terms: list[str], situation_id: Any = None,
+) -> dict[str, Any]:
     return {
+        # A2 (verify-path fix, 2026-07-31): the situations.id PK this proposal was
+        # built from — a real, resolvable drill-target (never a fabricated ref).
+        # None when the row carries no parseable id (the synthetic/unit-test
+        # path); ``_build_finding`` skips those when assembling citations.
+        "situation_id": str(situation_id) if situation_id is not None else None,
         "situation_signature": sig,
         "name": name[:512],
         "intensity_score": round(float(intensity), 4),
@@ -235,9 +243,35 @@ def _build_proposals(
         if slug in seen_slugs:
             continue
         seen_slugs.add(slug)
-        out.append(_proposal(sig, name, intensity, terms))
+        out.append(_proposal(sig, name, intensity, terms, s.get("id")))
         if len(out) >= _MAX_PROPOSALS:
             break
+    return out
+
+
+def _proposal_uuid(p: Mapping[str, Any]) -> UUID | None:
+    """The proposal's ``situation_id`` as a real :class:`UUID`, or ``None`` when
+    absent/unparseable (the synthetic/unit-test path carries no id) — never a
+    fabricated ref."""
+    raw = p.get("situation_id")
+    if not raw:
+        return None
+    try:
+        return UUID(str(raw))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def proposal_lineage(proposals: list[dict[str, Any]]) -> list[UUID]:
+    """The real situation UUIDs backing ``proposals``, de-duplicated, in order —
+    the ``derived_from`` lineage for this run's finding (A2 verify-path fix)."""
+    seen: set[UUID] = set()
+    out: list[UUID] = []
+    for p in proposals:
+        uid = _proposal_uuid(p)
+        if uid is not None and uid not in seen:
+            seen.add(uid)
+            out.append(uid)
     return out
 
 
@@ -252,6 +286,21 @@ def _build_finding(proposals: list[dict[str, Any]]) -> FindingPayload:
         )
     else:
         body = "No uncovered high-intensity situations to propose as thematic frames."
+    # A2 (verify-path fix, 2026-07-31): thematic_proposal HAS evidence rows (the
+    # situations it read) — cite them directly instead of shipping citation-less
+    # (the JUDGE_READOUT's #1 structural finding: this kind shipped 100%
+    # citation-less). One entry per proposal with a resolvable situation id;
+    # never fabricated (a row lacking an id is silently skipped).
+    citations = [
+        {
+            "ref_kind": "situation",
+            "ref_id": str(uid),
+            "title": p.get("name"),
+            "situation_signature": p.get("situation_signature"),
+        }
+        for p in proposals
+        if (uid := _proposal_uuid(p)) is not None
+    ]
     return FindingPayload(
         title=f"Situation detection: {n} candidate thematic frame(s) proposed"[:2048],
         body=body[:65536],
@@ -262,6 +311,7 @@ def _build_finding(proposals: list[dict[str, Any]]) -> FindingPayload:
             "sub_handler": SUB_HANDLER_NAME,
             "proposals": proposals if n <= _MAX_PROPOSALS else proposals[:_MAX_PROPOSALS],
             "proposal_count": n,
+            "citations": citations,
         },
     )
 
@@ -270,7 +320,7 @@ async def _resolve_pool(pool: Any, *, floor: float) -> list[dict[str, Any]]:
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT situation_signature, name, intensity_score
+            SELECT id, situation_signature, name, intensity_score
             FROM situations
             WHERE superseded_by IS NULL
               AND (valid_until IS NULL OR valid_until > now())
@@ -358,4 +408,7 @@ async def handle(
         finding=finding,
         usage={"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0},
         force_trace_only=force_trace_only,
+        # A2 (verify-path fix): real lineage back to the cited situations (was
+        # always empty — this finding previously carried NO derived_from at all).
+        derived_from=proposal_lineage(proposals),
     )

@@ -459,6 +459,15 @@ async def verify_inline_target_finding(
             # guard (stale_leader_vs_facts — flag/demote only, never a
             # correction; degrade-not-drop inside the guard on a read failure).
             facts_conn=conn,
+            # V-B: the same conn + this run's id let the pass read the RETAINED
+            # INPUT SLICE (analyst_traces.input_row_refs — written by the
+            # receipt chain earlier in this same actor turn, on its own pooled
+            # connection, so it is committed and visible here) and judge
+            # SCOPED-ABSENCE claims against their actual scope instead of the
+            # citation subset. An unreadable slice degrades to today's behavior,
+            # counted absence_slice_unavailable — never a fabricated pass.
+            slice_conn=conn,
+            run_id=run_id,
         )
     except Exception as exc:  # pragma: no cover — verify must never break a run
         logger.warning(

@@ -242,8 +242,12 @@ async def test_flag_off_per_country_read_is_byte_identical(monkeypatch):
     monkeypatch.delenv(synth.VERIFY_FLOOR_ENV, raising=False)
     conn = _CapturingConn(rows=[])
     await synth.READ_SLICE(conn, descriptor=_descriptor(_UNITS), target_filter="country_g20_in")
-    # Exactly ONE gather (the legacy verify-floored basis read), floor 0.0.
-    assert len(conn.calls) == 1
+    # Exactly ONE *evidence* gather (the legacy verify-floored basis read), floor
+    # 0.0 — no periphery leg. The trailing call is the Phase-1 CONTINUITY
+    # open-situation register, which is orthogonal to the tier split (the
+    # descriptor stub carries no identity block, so no prior-read query fires).
+    assert len(conn.calls) == 2
+    assert "FROM situations" in conn.calls[-1][0]
     query, params = conn.calls[0]
     assert "JOIN LATERAL" in query and "LEFT JOIN LATERAL" not in query
     assert "LEAST(f.confidence, v.faithfulness_score) >= $4" in query
@@ -259,9 +263,10 @@ async def test_flag_on_per_country_read_splits_basis_and_periphery(monkeypatch):
     rows = await synth.READ_SLICE(
         conn, descriptor=_descriptor(_UNITS), target_filter="country_g20_in"
     )
-    # TWO gathers: the basis read at the SPLIT floor (0.50), then the periphery
-    # complement at the SAME floor.
-    assert len(conn.calls) == 2
+    # TWO evidence gathers: the basis read at the SPLIT floor (0.50), then the
+    # periphery complement at the SAME floor (+ the Phase-1 continuity register).
+    assert len(conn.calls) == 3
+    assert "FROM situations" in conn.calls[-1][0]
     basis_q, basis_p = conn.calls[0]
     peri_q, peri_p = conn.calls[1]
     assert "LEAST(f.confidence, v.faithfulness_score) >= $4" in basis_q
@@ -298,7 +303,7 @@ async def test_flag_on_env_floor_pin_drives_both_legs(monkeypatch):
     await synth.READ_SLICE(
         conn, descriptor=_descriptor(_UNITS), target_filter="country_g20_br"
     )
-    (_, basis_p), (_, peri_p) = conn.calls
+    (_, basis_p), (_, peri_p) = conn.calls[:2]
     assert basis_p[3] == pytest.approx(0.3)
     assert peri_p[3] == pytest.approx(0.3)
 
@@ -321,8 +326,9 @@ async def test_flag_on_region_read_splits_with_member_scope(monkeypatch):
         descriptor=_descriptor([("country_composition", "24h")]),
         target_filter="region_mena",
     )
-    # member-resolve + basis + periphery.
-    assert len(conn.calls) == 3
+    # member-resolve + basis + periphery (+ the Phase-1 continuity register).
+    assert len(conn.calls) == 4
+    assert "FROM situations" in conn.calls[-1][0]
     peri_q, peri_p = conn.calls[2]
     assert "LEFT JOIN LATERAL" in peri_q
     assert peri_p[2] == ["country_g20_sa", "country_watch_ir"]
@@ -350,8 +356,10 @@ async def test_flag_off_region_read_is_byte_identical(monkeypatch):
         descriptor=_descriptor([("country_composition", "24h")]),
         target_filter="region_mena",
     )
-    # member-resolve + the ONE legacy basis read at floor 0.0 — no periphery.
-    assert len(conn.calls) == 2
+    # member-resolve + the ONE legacy basis read at floor 0.0 — no periphery
+    # (+ the Phase-1 continuity register, orthogonal to the tier split).
+    assert len(conn.calls) == 3
+    assert "FROM situations" in conn.calls[-1][0]
     _, basis_p = conn.calls[1]
     assert basis_p[3] == synth.DEFAULT_VERIFY_FLOOR
 

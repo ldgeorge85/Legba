@@ -4,6 +4,7 @@ import {
   humanizeId,
   iso2FromTargetId,
   isDeskTargetId,
+  thematicDeskName,
 } from './deskNames'
 
 describe('iso2FromTargetId', () => {
@@ -87,7 +88,37 @@ describe('humanizeId', () => {
     expect(humanizeId('nigeria_news')).toBe('Nigeria News')
   })
 
+  it('humanizes a thematic supply-chain desk id to its registered name', () => {
+    expect(humanizeId('lane_hormuz')).toBe('Strait of Hormuz')
+    expect(humanizeId('flow_semiconductors')).toBe('Semiconductor Supply')
+  })
+
   it('never throws and degrades to the raw id only for unsplittable input', () => {
     expect(humanizeId('---')).toBe('---')
+  })
+})
+
+describe('thematicDeskName', () => {
+  it('resolves every activated lane to its human name', () => {
+    expect(thematicDeskName('lane_hormuz')).toBe('Strait of Hormuz')
+    expect(thematicDeskName('lane_red_sea')).toBe('Red Sea / Bab el-Mandeb')
+    expect(thematicDeskName('lane_malacca_south_china_sea')).toBe('Malacca / South China Sea')
+  })
+
+  it('resolves the registered-but-still-draft lanes/flows ahead of activation', () => {
+    expect(thematicDeskName('lane_black_sea')).toBe('Black Sea')
+    expect(thematicDeskName('lane_panama')).toBe('Panama Canal')
+    expect(thematicDeskName('lane_baltic_north_sea')).toBe('Baltic / North Sea')
+    expect(thematicDeskName('flow_semiconductors')).toBe('Semiconductor Supply')
+    expect(thematicDeskName('flow_energy_shipping')).toBe('Energy Shipping')
+    expect(thematicDeskName('flow_critical_minerals')).toBe('Critical Minerals')
+    expect(thematicDeskName('flow_container_freight')).toBe('Container Freight')
+  })
+
+  it('returns null for a non-thematic or unrecognized id', () => {
+    expect(thematicDeskName('country_g20_br')).toBeNull()
+    expect(thematicDeskName('lane_unknown_future_lane')).toBeNull()
+    expect(thematicDeskName(null)).toBeNull()
+    expect(thematicDeskName(undefined)).toBeNull()
   })
 })

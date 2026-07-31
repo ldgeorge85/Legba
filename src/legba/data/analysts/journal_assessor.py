@@ -62,7 +62,6 @@ from .inline_target import (
     InlineTargetDeps,
     LLMHandlerLike,
     _gather,
-    _gather_system_suffix,
     _normalize_citation_markers,
     _reason_via_llm,
     _resolve_signal_id,
@@ -1310,6 +1309,35 @@ _LENS_EMPTY_FALLBACK_INSTRUCTION = (
     "exactly that in one honest sentence."
 )
 
+# P3 finding (2026-07-31 sweep) — the SAME empty-read gap recurred on the
+# lens_diff (chorus diff) tier: a healthy roster (all four faculties ran)
+# still shipped "(empty chorus diff)" because the E-1 fallback above was
+# wired to entry_kind == "lens" only. lens_diff has no live SLICE to fall
+# back into (it referees get_lens_reads, not the tower directly) — its own
+# redirect re-pulls THIS cycle's lens reads + continuity rather than the
+# tower corpus.
+_LENS_DIFF_EMPTY_FALLBACK_INSTRUCTION = (
+    "\n\nYOUR LAST ATTEMPT PRODUCED AN EMPTY DIFF. An empty or degraded read "
+    "is an APERTURE FACT to declare, never a reason to fall silent: your "
+    "material is get_lens_reads (this cycle's four faculty reads) and "
+    "get_journal_delta (continuity) — pull them again NOW and referee "
+    "whatever faculty reads actually exist this cycle, naming any faculty "
+    "that did not run as an honest absence rather than staying silent "
+    "yourself. NEVER fabricate a faculty's stance: if truly nothing is there "
+    "to referee, say exactly that in one honest sentence, then still close "
+    "with the aperture line."
+)
+
+# Per-tier empty-read fallback instruction (E-1 lens + its lens_diff sibling).
+# A tier NOT in this dict (entry/chronicle/consolidation) gets NO fallback
+# pass — those tiers reason over the tower corpus directly already, so an
+# empty NARRATE there is the SAME material coming back empty twice, not a
+# recoverable degrade.
+_EMPTY_FALLBACK_INSTRUCTION_FOR: dict[str, str] = {
+    "lens": _LENS_EMPTY_FALLBACK_INSTRUCTION,
+    "lens_diff": _LENS_DIFF_EMPTY_FALLBACK_INSTRUCTION,
+}
+
 
 async def _field_notes(
     deps: InlineTargetDeps,
@@ -1514,6 +1542,72 @@ async def _guard_against_tool_call_leak(
         f"NARRATE returned tool-call JSON as the entry body even after one "
         f"retry (content={retried_content[:200]!r})"
     )
+
+
+# ---------------------------------------------------------------------------
+# Consolidation prose-shape guard — a SECOND, LATER backstop than task #236's
+# ``_guard_against_tool_call_leak`` above.
+#
+# Live defect 2026-07-31 02:07Z: a gather-timeout left the consolidator's
+# NARRATE turn emitting a raw tool-call envelope — ``{"tool":
+# "get_source_health", "call": {...`` — that sailed past the #236 guard and
+# was persisted VERBATIM as a consolidation entry's title+body. The #236
+# predicate (``_is_tool_call_leak``) only recognizes an allow-listed key set
+# (``tool``/``name``/``args``/``arguments``/``function``/``parameters``/
+# ``tool_calls``); this shape carried a ``"call"`` key the allowlist didn't
+# cover, and the full envelope was long enough (well over the 120-char floor)
+# to clear the short-content fallback too. Rather than keep widening that one
+# allowlist forever, this is a broader, tier-scoped check applied at the
+# point the body is about to become the persisted payload: ANY whole-string
+# JSON body/title is never legitimate consolidation prose, and a body that
+# merely LOOKS like a tool envelope (starts with ``{`` and carries a
+# ``"tool"``/``"call"`` key) is treated the same even if truncation left it
+# unparsable.
+# ---------------------------------------------------------------------------
+
+_CONSOLIDATION_SHAPE_ENVELOPE_RE = re.compile(r'"(?:tool|call)"\s*:')
+
+
+def _is_consolidation_shape_rejected(text: str) -> bool:
+    """True when ``text`` reads as apparatus exhaust, not consolidation prose.
+
+    Two independent tells, either one enough:
+
+      (a) the WHOLE trimmed/fence-stripped string parses as JSON — a
+          legitimate journal entry is markdown prose, never a bare JSON
+          document, regardless of key shape; or
+      (b) it starts with ``{`` and contains a ``"tool"`` or ``"call"`` key —
+          the tell for a TRUNCATED tool-call envelope that never closes its
+          braces and so fails (a): still garbage, just garbage that can't be
+          parsed.
+
+    Mirrors ``_is_tool_call_leak``'s whole-string discipline (never a
+    substring match against prose that merely quotes JSON mid-paragraph for
+    (a); (b) is deliberately narrower — envelope-shaped AND leading brace —
+    so an ordinary sentence that happens to mention 'the tool: X' is never
+    caught by it).
+    """
+    candidate = _strip_code_fence(text).strip()
+    if not candidate:
+        return False
+    if candidate.startswith("{") or candidate.startswith("["):
+        try:
+            json.loads(candidate)
+            return True  # whole-string JSON — never legitimate prose
+        except (json.JSONDecodeError, ValueError):
+            pass  # fall through — may still be a truncated envelope
+    return bool(
+        candidate.startswith("{")
+        and _CONSOLIDATION_SHAPE_ENVELOPE_RE.search(candidate[:200])
+    )
+
+
+_CONSOLIDATION_SHAPE_RETRY_INSTRUCTION = (
+    "\n\nYOUR LAST ATTEMPT WAS RAW TOOL-CALL JSON, NOT A CONSOLIDATION ENTRY. "
+    "Tools are no longer available this round. Write the consolidation itself "
+    "as plain markdown prose — no JSON, no tool syntax — reflecting over your "
+    "inner landscape and the tower's verified output."
+)
 
 
 async def _narrate_with_tools(
@@ -2092,6 +2186,164 @@ def _apparatus_lead_flag(body: str) -> list[str]:
     return []
 
 
+# ---------------------------------------------------------------------------
+# QW1-D fix 1/2 — the GATHER tool catalog, DERIVED FROM THE GRANT (never
+# hand-listed). planning/prompt_gallery/p3_journal_family.md §1/§8: the journal
+# family used to reuse inline_target's GENERIC ``_gather_system_suffix`` — a
+# catalog of 12 substrate_read-shaped tools (only 5 real for 7 of the 8
+# classes, since the journal is granted ``journal_read``, not
+# ``substrate_read`` — journal_read.py's module docstring). The journal's OWN
+# 10 self-instruments (get_assessments, get_source_health, get_calibration, …)
+# never appeared in that catalog at all — the model learned their names only
+# from scattered persona/user-prompt prose, with zero formal arg schema. The
+# entry/consolidation WRITE-BACK suffix was WORSE: it hardcoded the generic
+# ``propose_facts`` pack's tools (propose_fact/request_source/open_question) —
+# tools belonging to a pack the journal is NEVER granted — immediately before
+# describing the REAL journal_propose tools, with no disambiguation.
+#
+# This catalog is built from the SAME two tuples the four-surface drift guard
+# already treats as the single source of truth (JOURNAL_READ_TOOLS /
+# JOURNAL_PROPOSE_TOOLS, tests/runtime/test_journal_assessor_wiring.py): a
+# tool absent from these tuples can never appear here, and a tool ADDED to
+# them appears automatically (with a generic fallback line) even before
+# anyone authors a dedicated one-liner for it. The one-line purpose + arg
+# schema per name is the one HAND-AUTHORED surface (prose has to come from
+# somewhere) — the SET of tools shown is never hand-listed.
+_JOURNAL_READ_TOOL_SCHEMAS: dict[str, str] = {
+    "list_findings": (
+        "list_findings([target_id], [analyst_id], [severity], [since_hours], "
+        "[include_superseded], [limit]) — the platform's own prior LIVE "
+        "findings/assessments; cite the output_id."
+    ),
+    "query_facts": (
+        "query_facts([subject], [predicate], [value], [limit]) — the current "
+        "temporal fact store."
+    ),
+    "query_nexuses": (
+        "query_nexuses([subject], [object], [rel_type], [polarity], [limit]) "
+        "— open signed/typed relationships."
+    ),
+    "list_situations": (
+        "list_situations([status], [target_id], [since_hours], [limit]) — "
+        "ongoing first-class situation frames."
+    ),
+    "get_timeline": (
+        "get_timeline(subject, [limit]) — time-ordered facts ∪ signals for "
+        "one subject."
+    ),
+    "get_assessments": (
+        "get_assessments([analyst_id], [target_id], [since_hours=48], "
+        "[limit=20]) — recent country_assessor/world_assessor reads, incl. a "
+        "`disagreements` block where a banded scorecard excluded a dimension "
+        "the live composition still cites."
+    ),
+    "get_graph_structure": (
+        "get_graph_structure([limit=20]) — graph_mining communities/"
+        "centrality over the knowledge graph."
+    ),
+    "get_structural_balance": (
+        "get_structural_balance([limit=20]) — unstable (++−) signed-nexus "
+        "triads (a prediction of tension, not a settled fact)."
+    ),
+    "get_critic_scores": (
+        "get_critic_scores([analyst_id], [since_hours=168], [limit=20]) — "
+        "the critic's rubric scores (NON-ACTUATING — reading it is "
+        "reflection, not a closed loop)."
+    ),
+    "get_calibration": (
+        "get_calibration() — forecast/calibration tracking, incl. the "
+        "segregated brier_forecast_acute pilot (n<30, no proven skill yet)."
+    ),
+    "get_run_health": (
+        "get_run_health([analyst_id], [quiet_hours=24], [limit=200]) — what "
+        "fired vs went quiet across the analyst fleet."
+    ),
+    "get_source_health": (
+        "get_source_health([silent_only=False], [silent_hours=48], "
+        "[limit=200]) — source poll outcomes; its `summary` block carries "
+        "the honest denominator (total_wired / by_state / active_fresh / "
+        "active_stalled / active_erroring) — speak THAT, never the capped "
+        "`rows` list."
+    ),
+    "get_budget_status": (
+        "get_budget_status([analyst_id], [demotion_lookback_hours=168], "
+        "[limit=40]) — governor/budget pressure across the fleet."
+    ),
+    "get_journal_delta": (
+        "get_journal_delta([since], [limit=30]) — what changed since your "
+        "last entry, and your own prior entry/consolidation (memory, never "
+        "the sole ref for a fact claim)."
+    ),
+    "get_lens_reads": (
+        "get_lens_reads() — this cycle's four VOICES faculty lens reads "
+        "(inert except for the lens_diff chorus pass)."
+    ),
+}
+
+_JOURNAL_PROPOSE_TOOL_SCHEMAS: dict[str, str] = {
+    "propose_correction": (
+        "propose_correction(rationale, diff, [cited_substrate_refs]) — "
+        "propose a correction (a stale fact to supersede / an entity merge / "
+        "a situation fix). Queues ONE journal_proposals row; NEVER a live "
+        "write."
+    ),
+    "propose_change": (
+        "propose_change(rationale, diff, [cited_substrate_refs]) — propose a "
+        "descriptor/config change. Queues ONE journal_proposals row; NEVER a "
+        "live write."
+    ),
+    "propose_self_revision": (
+        "propose_self_revision(rationale, diff, [cited_substrate_refs]) — "
+        "propose a diff to YOUR OWN system prompt (the highest-scrutiny "
+        "class — protected sections auto-reject at accept time). Queues ONE "
+        "journal_proposals row; NEVER a direct self-edit."
+    ),
+}
+
+
+def _journal_gather_catalog(*, granted_propose: bool) -> str:
+    """Build the journal-family GATHER tool catalog FROM the granted pack
+    tuples — ``JOURNAL_READ_TOOLS`` always (every journal-family class grants
+    ``journal_read``), ``JOURNAL_PROPOSE_TOOLS`` iff ``granted_propose``
+    (true only when the running class's ``journal_propose`` pack is actually
+    bound this run — entry + consolidation today, per ``run_method``'s
+    ``write_fragments`` check). Never hand-listed: a tool absent from either
+    tuple can never appear; a tool present but missing an authored schema
+    line falls back to a generic one-liner rather than silently vanishing
+    (QW1-D fix 1 + fix 2)."""
+    lines = [
+        "\n\nBefore you write the entry you may FIRST query the substrate + "
+        "your own instruments to ground your reflection. Each query must be "
+        "a single strict-JSON object.\nAvailable tools:"
+    ]
+    for name in JOURNAL_READ_TOOLS:
+        lines.append(
+            "  - " + _JOURNAL_READ_TOOL_SCHEMAS.get(
+                name, f"{name}(...) — journal read instrument (see persona)."
+            )
+        )
+    if granted_propose:
+        lines.append(
+            "\nWRITE-BACK (journal_propose pack — these PROPOSE, they do NOT "
+            "assert truth or mutate anything directly; a human always "
+            "reviews before anything is applied):"
+        )
+        for name in JOURNAL_PROPOSE_TOOLS:
+            lines.append(
+                "  - " + _JOURNAL_PROPOSE_TOOL_SCHEMAS.get(
+                    name, f"{name}(...) — journal propose tool (see persona)."
+                )
+            )
+    lines.append(
+        "\nProtocol:\n"
+        '  - To query, reply with strict JSON: {"tool": "<name>", "args": {...}}\n'
+        '  - When you have gathered enough, reply with: {"done": true}\n'
+        "  - Do not write the entry yet — you will be asked for it after "
+        "gathering."
+    )
+    return "\n".join(lines) + "\n"
+
+
 async def run_method(
     inputs: list[dict[str, Any]],
     options: Mapping[str, Any],
@@ -2201,16 +2453,14 @@ async def run_method(
     # binding in ``gather_tool_bindings`` (carrying the per-run WritebackContext),
     # exactly like the generic propose_facts write tools. The host builds that
     # binding iff the journal_propose pack is EFFECTIVE (granted); when it is
-    # bound, the actor passes the pack's operator-authored guidance through
-    # ``gather_write_prompt_fragments`` so the in-run instruction tracks the
-    # descriptor. Absent (e.g. unit tests with no write binding) → propose tools
-    # are recognized but report a clean unbound no-op, never an ungoverned write.
+    # bound, ``options['gather_write_prompt_fragments']`` is non-None — that is
+    # the SAME signal ``_journal_gather_catalog`` uses to decide whether to show
+    # the journal's OWN propose_correction/propose_change/propose_self_revision
+    # tools (never the generic, ungranted propose_fact/request_source/
+    # open_question pack — QW1-D fix 1 + fix 2).
     write_fragments = options.get("gather_write_prompt_fragments")
-    gather_system = _gather_system_suffix(
-        web_fragments=None,
-        write_fragments=(
-            list(write_fragments) if write_fragments is not None else None
-        ),
+    gather_system = _journal_gather_catalog(
+        granted_propose=write_fragments is not None,
     )
     # V4 (GATHER [N]→journal bridge): the {N -> citation entry} map for the corpus
     # documents GATHER numbered. Populated only when GATHER engages + surfaced a
@@ -2264,19 +2514,26 @@ async def run_method(
     _fold(narrate_usage)
     body = (body or "").strip()
 
-    # --- E-1 lens EMPTY-READ fallback (2026-07-27 sweep) --------------------
-    # A faculty whose NARRATE returned nothing gets ONE more narrate pass with
-    # an explicit redirect at the verified tower corpus (the material the
-    # chronicle/consolidation reason over when the slice/acquisition is dark).
-    # Best-effort: any failure inside the fallback degrades to the honest
-    # empty body below — it never fails a run the primary narrate survived. A
-    # read still empty after the fallback stays honestly "(empty lens read)".
-    if entry_kind == "lens" and not body:
-        steps.append({"phase": "narrate", "kind": "empty_lens_fallback"})
+    # --- E-1 lens/lens_diff EMPTY-READ fallback (2026-07-27 sweep + the P3
+    # 2026-07-31 extension) --------------------------------------------------
+    # A VOICES tier whose NARRATE returned nothing gets ONE more narrate pass
+    # with an explicit per-tier redirect (lens: the verified tower corpus, the
+    # material chronicle/consolidation reason over when the slice/acquisition
+    # is dark; lens_diff: re-pull THIS cycle's lens reads + continuity — it
+    # has no tower slice of its own to fall back into). Best-effort: any
+    # failure inside the fallback degrades to the honest empty body below —
+    # it never fails a run the primary narrate survived. A read still empty
+    # after the fallback stays honestly "(empty lens read)" / "(empty chorus
+    # diff)" and logs a WARNING (a healthy roster shipping an empty diff is
+    # worth an operator's attention even though the run itself succeeds).
+    _empty_fallback_instruction = _EMPTY_FALLBACK_INSTRUCTION_FOR.get(entry_kind)
+    if _empty_fallback_instruction is not None and not body:
+        _fallback_kind = f"empty_{entry_kind}_fallback"
+        steps.append({"phase": "narrate", "kind": _fallback_kind})
         try:
             fb_body, fb_usage = await _narrate_with_tools(
                 deps,
-                field_notes=field_notes + _LENS_EMPTY_FALLBACK_INSTRUCTION,
+                field_notes=field_notes + _empty_fallback_instruction,
                 binding=active_binding,
                 analyst_id=analyst_id,
                 steps=steps,
@@ -2285,17 +2542,78 @@ async def run_method(
             body = (fb_body or "").strip()
         except Exception as exc:  # degrade-not-drop — honest empty beats a crash
             logger.warning(
-                "journal_assessor.empty_lens_fallback.failed id=%s err=%s",
-                analyst_id, exc,
+                "journal_assessor.empty_%s_fallback.failed id=%s err=%s",
+                entry_kind, analyst_id, exc,
             )
         steps.append({
             "phase": "narrate",
             "kind": (
-                "empty_lens_fallback_recovered"
-                if body else "empty_lens_fallback_still_empty"
+                f"{_fallback_kind}_recovered"
+                if body else f"{_fallback_kind}_still_empty"
             ),
             "body_chars": len(body),
         })
+        if not body:
+            logger.warning(
+                "journal_assessor.empty_%s_fallback.still_empty analyst_id=%s",
+                entry_kind, analyst_id,
+            )
+
+    # --- Consolidation prose-shape guard (persist-time backstop) -----------
+    # Live defect 2026-07-31 02:07Z (see the module docstring above
+    # ``_is_consolidation_shape_rejected``). Scoped to the consolidation tier
+    # — the tier the defect hit and the one whose write fires
+    # ``supersede_prior_consolidation``, so a persisted garbage row is the
+    # most expensive kind of wrong here. One retry with a hard prose-only
+    # instruction; a retry that ALSO looks like an envelope leaves
+    # ``consolidation_shape_rejected`` set, and the run publishes NOTHING —
+    # an absent entry beats a garbage one — while still tracing full-fidelity
+    # for audit (mirrors inline_target's D4 off-target guard: force
+    # TRACE_ONLY rather than drop the run outright).
+    consolidation_shape_rejected = False
+    if is_consolidation and _is_consolidation_shape_rejected(body):
+        logger.warning(
+            "journal_assessor.consolidation_shape_rejected retry=1 "
+            "body_chars=%d preview=%r",
+            len(body), body[:200],
+        )
+        steps.append({
+            "phase": "narrate", "kind": "consolidation_shape_rejected",
+            "retry": 1, "body_chars": len(body),
+        })
+        retry_body = ""
+        try:
+            retry_body, retry_usage = await _narrate_with_tools(
+                deps,
+                field_notes=field_notes + _CONSOLIDATION_SHAPE_RETRY_INSTRUCTION,
+                binding=active_binding,
+                analyst_id=analyst_id,
+                steps=steps,
+            )
+            _fold(retry_usage)
+            retry_body = (retry_body or "").strip()
+        except Exception as exc:  # degrade-not-drop — same idiom as the lens fallback
+            logger.warning(
+                "journal_assessor.consolidation_shape_rejected.retry_failed err=%s",
+                exc,
+            )
+        if retry_body and not _is_consolidation_shape_rejected(retry_body):
+            body = retry_body
+            steps.append({
+                "phase": "narrate", "kind": "consolidation_shape_recovered",
+                "body_chars": len(body),
+            })
+        else:
+            consolidation_shape_rejected = True
+            logger.warning(
+                "journal_assessor.consolidation_shape_rejected "
+                "retry=1/fatal body_chars=%d preview=%r",
+                len(retry_body), retry_body[:200],
+            )
+            steps.append({
+                "phase": "narrate", "kind": "consolidation_shape_rejected_fatal",
+                "body_chars": len(retry_body),
+            })
 
     # --- V4 (GATHER [N]→[[ref:uuid]] bridge) — BEFORE reflect --------------
     # A [N] the narrator wrote against a GATHER-gathered corpus doc dies at render
@@ -2423,6 +2741,9 @@ async def run_method(
         derived_from=[],            # OFF the chain (§3.5)
         intermediate_steps=steps,
         consumed_edges=consumed_edges,
+        # consolidation prose-shape guard — a rejected-after-retry body still
+        # traces (audit), but never publishes as a visible journal_entries row.
+        force_trace_only=consolidation_shape_rejected,
     )
 
 

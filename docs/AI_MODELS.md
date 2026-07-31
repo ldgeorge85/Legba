@@ -85,7 +85,7 @@ deterministic NLP enrichment — there is no LLM in this service.
 
 | Endpoint | Method | Model | HuggingFace ID | Purpose |
 |----------|--------|-------|----------------|---------|
-| `/translate` | POST | NLLB-200-distilled-600M | `facebook/nllb-200-distilled-600M` | Translate non-English text → English |
+| `/translate` | POST | NLLB-200-distilled-1.3B | `facebook/nllb-200-distilled-1.3B` | Translate non-English text → English (upgraded from 600M in the 2026-07 war-beat NER wave) |
 | `/classify`  | POST | DeBERTa-v3 zero-shot | `MoritzLaurer/deberta-v3-base-zeroshot-v2.0` | Zero-shot topic classification |
 | `/extract`   | POST | GLiREL-large | `jackboyla/glirel-large-v0` | Zero-shot relation extraction (S-P-O triples) |
 | `/summarize` | POST | T5-small | `google-t5/t5-small` | One-line multi-text summary |

@@ -14,9 +14,9 @@
  *     (there is no /findings/{id} GET; the lineage `root` carries the row's
  *      title/target/analyst/schema, and the report gives DERIVED-FROM refs).
  *   - entity   → GET /entities/{id}            (profile + linked signals + rels)
- *   - source   → GET /sources/{id}             (source descriptor)
- *   - target   → GET /descriptors/target/{id}  (target descriptor)
- *   - analyst  → GET /descriptors/analyst/{id} (analyst descriptor)
+ *   - source   → GET /registry/descriptors/source/{id}  (source descriptor)
+ *   - target   → GET /registry/descriptors/target/{id}  (target descriptor)
+ *   - analyst  → GET /registry/descriptors/analyst/{id} (analyst descriptor)
  */
 import { useQuery } from '@tanstack/react-query'
 import { apiGet, ApiError } from '@/lib/api'
@@ -257,17 +257,17 @@ function descriptorDetail(kind: SelectionKind, sel: Selection, d: DescriptorResp
 }
 
 async function resolveSource(sel: Selection): Promise<InspectorDetail> {
-  const d = await apiGet<DescriptorResp>(`/sources/${encodeURIComponent(sel.id)}`)
+  const d = await apiGet<DescriptorResp>(`/registry/descriptors/source/${encodeURIComponent(sel.id)}`)
   return descriptorDetail('source', sel, d)
 }
 
 async function resolveTarget(sel: Selection): Promise<InspectorDetail> {
-  const d = await apiGet<DescriptorResp>(`/descriptors/target/${encodeURIComponent(sel.id)}`)
+  const d = await apiGet<DescriptorResp>(`/registry/descriptors/target/${encodeURIComponent(sel.id)}`)
   return descriptorDetail('target', sel, d)
 }
 
 async function resolveAnalyst(sel: Selection): Promise<InspectorDetail> {
-  const d = await apiGet<DescriptorResp>(`/descriptors/analyst/${encodeURIComponent(sel.id)}`)
+  const d = await apiGet<DescriptorResp>(`/registry/descriptors/analyst/${encodeURIComponent(sel.id)}`)
   return descriptorDetail('analyst', sel, d)
 }
 

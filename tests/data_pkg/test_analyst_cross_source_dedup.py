@@ -50,6 +50,67 @@ def test_cross_source_dedup_registered():
 
 
 # ---------------------------------------------------------------------------
+# R2 — the qdrant_collection default drift guard + qdrant_errors hardening
+#
+# Root cause (2026-07): this handler's ``qdrant_collection`` default was the
+# literal ``"signals"``, a collection nothing ever creates — the live Qdrant
+# only ever holds ``legba_signals`` (signal_embedder / QdrantConfig). The
+# descriptor never overrode it, so every semantic-dedup pass queried a
+# nonexistent collection, raised, and was swallowed by the best-effort
+# except-log in ``_resolve_semantic_pool`` — zero ``signal_aliases`` rows with
+# ``reason='semantic_qdrant'`` in all of history, with NOTHING in the receipt
+# to say so.
+# ---------------------------------------------------------------------------
+
+
+def test_qdrant_collection_default_matches_the_shared_canonical_name():
+    """Cross-module drift guard: import both the handler and the shared
+    Qdrant config (the source of truth signal_embedder writes through via
+    ``store.cfg.signals_collection``) and assert they name the SAME
+    collection. This is the exact class of bug that shipped: a hardcoded
+    literal ("signals") silently diverged from the real collection name
+    ("legba_signals") and nobody noticed for the handler's entire history."""
+    from legba.data.analysts.deterministic_handlers import signal_embedder  # noqa: F401 — drift guard: prove the module imports clean alongside the config it relies on
+    from legba.data.config import QdrantConfig
+
+    assert cross_source_dedup._DEFAULT_QDRANT_COLLECTION == QdrantConfig().signals_collection
+    assert cross_source_dedup._DEFAULT_QDRANT_COLLECTION == "legba_signals"
+
+
+async def test_semantic_pool_qdrant_error_returns_counter_not_silent():
+    """A Qdrant/transport failure during the semantic pass must surface as
+    ``qdrant_errors=1`` in the return tuple — not just the WARNING log line
+    (which nothing consumes as a signal). Before this hardening a dead/
+    misnamed collection degraded with ZERO observable trace in the receipt."""
+
+    class _RaisingPool:
+        def acquire(self):
+            raise RuntimeError("qdrant/pg transport boom")
+
+    aliases_linked, sets, qdrant_errors = await cross_source_dedup._resolve_semantic_pool(
+        _RaisingPool(),
+        qdrant=object(),
+        threshold=0.95,
+        collection="legba_signals",
+        produced_by="test_dedup",
+        owner_tenant=None,
+    )
+    assert aliases_linked == 0
+    assert sets == []
+    assert qdrant_errors == 1
+
+
+async def test_synthetic_path_reports_zero_qdrant_errors():
+    """The synthetic (deps=None) path never touches Qdrant — the receipt must
+    say so honestly (``qdrant_errors=0``), not omit the key."""
+    inputs = [
+        {"id": str(uuid4()), "source_id": "a", "content_hash": "x", "fetched_at": 1},
+    ]
+    result = await run_method(inputs, {"sub_handler": SUB}, None)
+    assert result.finding.data["qdrant_errors"] == 0
+
+
+# ---------------------------------------------------------------------------
 # Synthetic path — content-hash grouping, deterministic canonical
 # ---------------------------------------------------------------------------
 

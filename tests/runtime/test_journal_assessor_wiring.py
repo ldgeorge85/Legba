@@ -593,3 +593,132 @@ def test_priming_slice_keeps_sixty_row_cap():
     lines = [ln for ln in prompt.splitlines() if ln.startswith("- ")]
     assert len(lines) == 60  # [:60] row cap preserved
     assert all("[[ref:" in ln for ln in lines)
+
+
+# ---------------------------------------------------------------------------
+# QW1-D fix 1/2 — the GATHER tool catalog is DERIVED FROM THE GRANT (never
+# hand-listed): every JOURNAL_READ_TOOLS entry gets a formal one-line schema,
+# the ungranted generic inline_target tools never appear, and the WRITE-BACK
+# section shows ONLY the real journal_propose tools (never propose_fact /
+# request_source / open_question — a pack the journal is never granted).
+# ---------------------------------------------------------------------------
+
+
+def test_journal_gather_catalog_lists_every_read_tool_with_a_schema():
+    from legba.data.analysts.agency.journal_read import JOURNAL_READ_TOOLS
+    from legba.data.analysts.journal_assessor import _journal_gather_catalog
+
+    catalog = _journal_gather_catalog(granted_propose=False)
+    for name in JOURNAL_READ_TOOLS:
+        assert name in catalog, f"{name} missing from the derived catalog"
+    # the headline finding: the 10 self-instruments are no longer prose-only —
+    # each carries a formal arg-schema line in the catalog itself.
+    assert "get_source_health(" in catalog
+    assert "get_calibration(" in catalog
+    assert "get_journal_delta(" in catalog
+
+
+def test_journal_gather_catalog_omits_the_unusable_generic_inline_target_tools():
+    """§1/§8 of p3_journal_family.md: the old generic catalog described 7 tools
+    that hard-block `unknown_tool` for the journal (search_signals, search_corpus,
+    read_document, inspect_entity, query_hypotheses, compare_targets,
+    query_predictions) — none of these are in JOURNAL_READ_TOOLS, so the derived
+    catalog must never advertise them."""
+    from legba.data.analysts.journal_assessor import _journal_gather_catalog
+
+    catalog = _journal_gather_catalog(granted_propose=False)
+    for unusable in (
+        "search_signals(", "search_corpus(", "read_document(",
+        "inspect_entity(", "query_hypotheses(", "compare_targets(",
+        "query_predictions(",
+    ):
+        assert unusable not in catalog, (
+            f"{unusable} is not a journal_read tool — advertising it hands the "
+            "model a plausible tool call that hard-blocks unknown_tool"
+        )
+
+
+def test_journal_gather_catalog_omits_propose_section_without_the_grant():
+    from legba.data.analysts.journal_assessor import _journal_gather_catalog
+
+    catalog = _journal_gather_catalog(granted_propose=False)
+    assert "WRITE-BACK" not in catalog
+    assert "propose_correction" not in catalog
+
+
+def test_journal_gather_catalog_includes_real_propose_tools_when_granted():
+    from legba.data.analysts.agency.journal_propose import JOURNAL_PROPOSE_TOOLS
+    from legba.data.analysts.journal_assessor import _journal_gather_catalog
+
+    catalog = _journal_gather_catalog(granted_propose=True)
+    assert "WRITE-BACK" in catalog
+    for name in JOURNAL_PROPOSE_TOOLS:
+        assert name in catalog
+
+
+def test_journal_gather_catalog_never_shows_the_ungranted_propose_facts_pack():
+    """Fix 2 — the journal is never granted propose_facts (the generic write
+    pack); the model must never be handed propose_fact/request_source/
+    open_question, regardless of whether journal_propose is granted this run."""
+    from legba.data.analysts.journal_assessor import _journal_gather_catalog
+
+    for granted in (False, True):
+        catalog = _journal_gather_catalog(granted_propose=granted)
+        for ungranted in ("propose_fact(", "request_source(", "open_question("):
+            assert ungranted not in catalog, (
+                f"{ungranted} (propose_facts pack) leaked into the journal "
+                "catalog — the journal is never granted that pack"
+            )
+
+
+def test_journal_gather_catalog_read_grant_change_changes_it(monkeypatch):
+    """The catalog must be DERIVED from JOURNAL_READ_TOOLS, not a hand-copied
+    list — adding/removing a tool from the tuple changes the rendered catalog
+    with NO other code edit."""
+    import legba.data.analysts.journal_assessor as ja
+
+    baseline = ja._journal_gather_catalog(granted_propose=False)
+    assert "totally_new_instrument" not in baseline
+
+    monkeypatch.setattr(
+        ja, "JOURNAL_READ_TOOLS",
+        ja.JOURNAL_READ_TOOLS + ("totally_new_instrument",),
+    )
+    widened = ja._journal_gather_catalog(granted_propose=False)
+    assert "totally_new_instrument" in widened  # generic fallback line, still shown
+
+    monkeypatch.setattr(
+        ja, "JOURNAL_READ_TOOLS",
+        tuple(t for t in ja.JOURNAL_READ_TOOLS if t != "get_source_health"),
+    )
+    narrowed = ja._journal_gather_catalog(granted_propose=False)
+    assert "get_source_health" not in narrowed
+
+
+def test_journal_gather_catalog_propose_grant_change_changes_it(monkeypatch):
+    """Same derived-from-grant property for the write side: a JOURNAL_PROPOSE_TOOLS
+    change changes the catalog with no other code edit."""
+    import legba.data.analysts.journal_assessor as ja
+
+    monkeypatch.setattr(
+        ja, "JOURNAL_PROPOSE_TOOLS",
+        ja.JOURNAL_PROPOSE_TOOLS + ("propose_totally_new",),
+    )
+    catalog = ja._journal_gather_catalog(granted_propose=True)
+    assert "propose_totally_new" in catalog
+
+
+def test_journal_run_method_wires_granted_propose_from_write_fragments():
+    """The run_method call site derives ``granted_propose`` from the SAME
+    ``gather_write_prompt_fragments`` signal that already gates whether the
+    journal_propose binding is actually usable this run — never a hardcoded
+    per-tier branch."""
+    import inspect
+
+    from legba.data.analysts import journal_assessor as ja
+
+    src = inspect.getsource(ja.run_method)
+    assert "_journal_gather_catalog(" in src
+    assert "granted_propose=write_fragments is not None" in src
+    # the old generic suffix call must be gone from the journal's own run_method
+    assert "_gather_system_suffix(" not in src

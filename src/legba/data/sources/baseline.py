@@ -339,6 +339,16 @@ def _origin_corroborated_by_content(
     call), matching the tier-1 baseline contract. Returns ``[]`` when nothing
     corroborates, so the signal stays geo-unattributed rather than mis-tagged
     with the outlet origin.
+
+    R4 TITLE-CONTRADICTION guard: when the TITLE names some country and the
+    origin is not among them, the origin is CONTRADICTED, not corroborated —
+    the outlet is simply covering that country. The live sweep found BBC's
+    Greek-wildfire coverage filed under the UNITED KINGDOM because a "the UK
+    Foreign Office said" line deep in the body attested GB. A title naming a
+    different country is the strongest cheap subject signal there is, so the
+    origin is dropped and the signal stays geo-unattributed (a missing tag
+    under-includes; a wrong one misroutes). With no country in the title the
+    body-wide corroboration below is unchanged.
     """
     if not origin_iso2:
         return []
@@ -350,6 +360,15 @@ def _origin_corroborated_by_content(
     )
 
     payload = signal.payload or {}
+    title = payload.get("title")
+    title_attested = (
+        country_iso2s_in_text(title) if isinstance(title, str) and title else set()
+    )
+    if title_attested and not any(
+        iso.upper() in title_attested for iso in origin_iso2
+    ):
+        return []
+
     attested: set[str] = set()
     for field in ("title", "text", "raw_body"):
         value = payload.get(field)

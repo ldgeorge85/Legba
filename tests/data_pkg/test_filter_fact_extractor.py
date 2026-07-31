@@ -49,6 +49,9 @@ from legba.data.filters.fact_extractor import (
     FactExtractorUnconfigured,
     _entities_to_triples,
     _event_time,
+    _offset_aligned_text,
+    _relations_to_triples,
+    _triple_excerpt,
     _is_junk_triple,
     _is_quantity_phrase,
     _parse_llm_triples,
@@ -94,24 +97,71 @@ def _ctx() -> FilterContext:
     )
 
 
+def _relations_from_entity_pairs(
+    entities: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """The ground truth a hand-built entity-pair fixture ENCODES: consecutive
+    same-predicate members are one (subject, object) relation.
+
+    Production no longer INFERS this — ``ner_multilingual`` stamps the
+    extractor's real head/tail pairs on ``payload['relations']`` — so the
+    fixtures state the intended binding outright instead of leaving the code to
+    guess it back out of a flattened list. Tests that specifically exercise the
+    legacy guess-path pass ``relations=[]`` to suppress this surface.
+    """
+    by_pred: dict[str, list[dict[str, Any]]] = {}
+    order: list[str] = []
+    for ent in entities:
+        pred = str(ent.get("predicate", "")).strip()
+        if not pred:
+            continue
+        if pred not in by_pred:
+            by_pred[pred] = []
+            order.append(pred)
+        by_pred[pred].append(ent)
+    rels: list[dict[str, Any]] = []
+    for pred in order:
+        members = by_pred[pred]
+        for i in range(0, len(members) - 1, 2):
+            subj, obj = members[i], members[i + 1]
+            rels.append({
+                "subject": subj.get("text", ""),
+                "predicate": pred,
+                "object": obj.get("text", ""),
+                "confidence": subj.get("confidence", obj.get("confidence")),
+            })
+    return rels
+
+
 def _signal(
     *,
     entities: list[dict[str, Any]] | None = None,
+    relations: list[dict[str, Any]] | None = None,
     title: str = "",
     body: str = "",
+    text: str = "",
     published_at: datetime | None = None,
+    source_id: str = "src.test",
 ) -> Signal:
     payload: dict[str, Any] = {}
     if title:
         payload["title"] = title
     if body:
         payload["body"] = body
+    if text:
+        # Telegram shape: the message body lives in payload.text and
+        # title/body/summary/raw_body are all empty.
+        payload["text"] = text
     if entities is not None:
         payload["entities"] = entities
+        if relations is None:
+            relations = _relations_from_entity_pairs(entities)
+    if relations is not None:
+        payload["relations"] = relations
     if published_at is not None:
         payload["_published_at_dt"] = published_at
     return Signal(
-        source_id="src.test",
+        source_id=source_id,
         payload=payload,
         content_hash=f"hash-{title}{body}",
     )
@@ -279,11 +329,171 @@ def test_event_time_precedence():
     )
 
 
-def test_entities_to_triples_pairs_by_predicate():
-    triples = _entities_to_triples(_rebel_entities())
-    norm = {(t["subject"], t["predicate"], t["object"]) for t in triples}
-    assert ("Apple Inc.", "headquarters location", "Cupertino") in norm
-    assert ("Tim Cook", "employer", "Apple Inc.") in norm
+# ---------------------------------------------------------------------------
+# DQ R1 — triple pairing. The extractor returns real (head, predicate, tail)
+# pairs; ner_multilingual used to flatten them into a de-duped entity list and
+# this stage re-paired that list BY INDEX, which invented relations wholesale.
+# These fixtures are the live failures the sweep pinned.
+# ---------------------------------------------------------------------------
+
+
+def _located(text: str, predicate: str, doc: str, *, occurrence: int = 0,
+             cls: str = "location") -> dict[str, Any]:
+    """An entity carrying the REAL offsets ner_multilingual measures via
+    ``_find_span`` — the shape live payloads actually have."""
+    idx = -1
+    for _ in range(occurrence + 1):
+        idx = doc.lower().find(text.lower(), idx + 1)
+        assert idx >= 0, f"{text!r} occurrence {occurrence} not in fixture doc"
+    return {"class": cls, "text": text, "predicate": predicate,
+            "start": idx, "end": idx + len(text), "confidence": 1.0}
+
+
+#: Live shape: an International-Tiger-Day post. Two unrelated sentences; index
+#: pairing bound the day to a park it never appeared beside.
+TIGER_DAY_DOC = (
+    "International Tiger Day is marked on July 29 across the region. "
+    "Rangers counted new tracks in the Leopard National Park this spring."
+)
+
+#: Live shape: "Telegram founder Pavel Durov" — the founder relation belongs to
+#: Telegram, but "Telegram" was de-duped into an earlier predicate group so the
+#: flat list left Russia adjacent to Durov.
+DUROV_DOC = (
+    "Telegram founder Pavel Durov said the platform will not hand over data. "
+    "Russia has repeatedly demanded access."
+)
+
+#: Live shape: a TASS-style digest — many unrelated headlines in ONE message,
+#: separated by bullets. Index pairing fused endpoints across bullets.
+DIGEST_DOC = (
+    "⚡️ Kiev regime launched a strike on the border area.\n"
+    "⚡️ Donetsk reported shelling overnight.\n"
+    "⚡️ The Republican party nominated its candidate."
+)
+
+#: A story where the relation IS legitimately extractable and must SURVIVE:
+#: subject and object sit in one clause.
+HSBC_DOC = "HSBC said it will move its trading hub to Singapore next year."
+
+
+def test_entities_to_triples_refuses_unlocated_candidates():
+    """No offsets ⇒ no evidence the endpoints were ever adjacent ⇒ no triple.
+
+    The old behavior paired the flat list by index and emitted both. Dropping
+    is correct: ``_extract_relation`` falls through to the authoritative
+    ``/extract`` pairs when this yields nothing.
+    """
+    triples, dropped = _entities_to_triples(_rebel_entities())
+    assert triples == []
+    # Two candidate pairs index-pairing WOULD have emitted, both refused.
+    assert dropped == 2
+
+
+def test_entities_to_triples_binds_same_sentence_pair():
+    """The keep-case: one clause, subject before object ⇒ the fact survives."""
+    ents = [
+        _located("HSBC", "headquarters location", HSBC_DOC, cls="corporation"),
+        _located("Singapore", "headquarters location", HSBC_DOC),
+    ]
+    triples, dropped = _entities_to_triples(ents, text=HSBC_DOC)
+    assert [(t["subject"], t["predicate"], t["object"]) for t in triples] == [
+        ("HSBC", "headquarters location", "Singapore")
+    ]
+    assert dropped == 0
+
+
+def test_tiger_day_not_bound_to_a_park_in_another_sentence():
+    """R1 regression: "International Tiger Day / located in / the Leopard
+    National Park" — two different sentences, never asserted by anyone."""
+    ents = [
+        _located("International Tiger Day", "located in", TIGER_DAY_DOC, cls="event"),
+        _located("the Leopard National Park", "located in", TIGER_DAY_DOC),
+    ]
+    triples, dropped = _entities_to_triples(ents, text=TIGER_DAY_DOC)
+    assert triples == []
+    assert dropped == 1
+
+
+def test_durov_founder_relation_not_bound_to_russia():
+    """R1 regression: the text says "Telegram founder Pavel Durov"; the flat
+    list left ("Russia", "Pavel Durov") adjacent under 'founded by'."""
+    ents = [
+        _located("Russia", "founded by", DUROV_DOC, cls="country"),
+        _located("Pavel Durov", "founded by", DUROV_DOC, cls="person"),
+    ]
+    triples, dropped = _entities_to_triples(ents, text=DUROV_DOC)
+    # Russia occurs AFTER Durov and in a different sentence — unbindable twice
+    # over (text order + sentence bound).
+    assert triples == []
+    assert dropped == 1
+
+
+def test_digest_bullets_do_not_bind_across_items():
+    """R1 regression: a digest post is one document but many statements.
+    "Donetsk / founded by / Kiev" came from fusing separate bullets."""
+    ents = [
+        _located("Kiev", "founded by", DIGEST_DOC, cls="location"),
+        _located("Donetsk", "founded by", DIGEST_DOC, cls="location"),
+        _located("The Republican party", "member of", DIGEST_DOC, cls="organization"),
+    ]
+    triples, dropped = _entities_to_triples(ents, text=DIGEST_DOC)
+    assert triples == []
+    assert dropped == 1
+
+
+def test_relations_surface_is_the_extractors_own_pairing():
+    """The authoritative route: ``payload['relations']`` is projected as-is —
+    the head/tail binding is the model's, so nothing is inferred."""
+    rels = [
+        {"subject": "Telegram", "predicate": "founded by", "object": "Pavel Durov",
+         "subject_start": 0, "subject_end": 8,
+         "object_start": 17, "object_end": 28},
+    ]
+    triples = _relations_to_triples(rels)
+    assert [(t["subject"], t["predicate"], t["object"]) for t in triples] == [
+        ("Telegram", "founded by", "Pavel Durov")
+    ]
+    # No fabricated score — the /extract contract carries none, so the write
+    # path applies its documented floor.
+    assert triples[0]["confidence"] is None
+
+
+def test_triple_excerpt_quotes_the_relation_sentence():
+    """The evidence hook quotes the clause asserting the relation, not the
+    head of the document."""
+    triple = {
+        "subject_start": HSBC_DOC.index("HSBC"),
+        "subject_end": HSBC_DOC.index("HSBC") + 4,
+        "object_start": HSBC_DOC.index("Singapore"),
+        "object_end": HSBC_DOC.index("Singapore") + len("Singapore"),
+    }
+    assert _triple_excerpt(HSBC_DOC, triple, fallback="") == HSBC_DOC
+    # Second sentence of a two-sentence doc → only that sentence is quoted.
+    park = {
+        "subject_start": TIGER_DAY_DOC.index("Rangers"),
+        "subject_end": TIGER_DAY_DOC.index("Rangers") + 7,
+        "object_start": TIGER_DAY_DOC.index("the Leopard National Park"),
+        "object_end": TIGER_DAY_DOC.index("the Leopard National Park") + 25,
+    }
+    excerpt = _triple_excerpt(TIGER_DAY_DOC, park, fallback="")
+    assert excerpt.startswith("Rangers counted")
+    assert "International Tiger Day" not in excerpt
+
+
+def test_triple_excerpt_falls_back_when_offsets_unusable():
+    assert _triple_excerpt("", {}, fallback="head of doc") == "head of doc"
+    assert _triple_excerpt(HSBC_DOC, {}, fallback="head of doc") == "head of doc"
+
+
+def test_offset_aligned_text_matches_ner_rendering():
+    """Offsets index the markdown-STRIPPED text ner_multilingual measured, so
+    the excerpt/sentence logic must strip identically."""
+    payload = {"text": "[**HSBC**](https://x.invalid) moved to Singapore."}
+    aligned = _offset_aligned_text(
+        payload, ["title", "body", "summary", "raw_body", "text"]
+    )
+    assert aligned == "HSBC moved to Singapore."
 
 
 def test_parse_llm_triples_tolerant():
@@ -563,12 +773,13 @@ async def test_idempotent_upsert(pg_pool):
     ]
     h = FactExtractorHandler(FactExtractorConfig(), pg_pool=pg_pool)
     await h.on_activate(_ctx())
-    s1 = _signal(entities=ents, title="a", published_at=pub)
+    s1 = _signal(entities=ents, title="a", published_at=pub, source_id="src.alpha")
     await h.transform(s1, _ctx())
 
-    # Second signal, same triple+valid_from, higher confidence.
+    # Second signal, same triple+valid_from, higher confidence. DQ R1: a
+    # DISTINCT source, so the noisy-OR corroboration lift applies.
     ents2 = [dict(e, confidence=0.9) for e in ents]
-    s2 = _signal(entities=ents2, title="b", published_at=pub)
+    s2 = _signal(entities=ents2, title="b", published_at=pub, source_id="src.beta")
     await h.transform(s2, _ctx())
 
     async with pg_pool.acquire() as conn:
@@ -663,11 +874,12 @@ async def test_identical_triple_does_not_supersede(pg_pool):
         {"class": "location", "text": "Lisbon", "predicate": "capital of", "confidence": 0.4},
         {"class": "country", "text": "Portugal", "predicate": "capital of", "confidence": 0.4},
     ]
-    s1 = _signal(entities=ents, title="a", published_at=pub)
+    s1 = _signal(entities=ents, title="a", published_at=pub, source_id="src.one")
     await h.transform(s1, _ctx())
-    # Re-assert the SAME triple+valid_from at higher confidence.
+    # Re-assert the SAME triple+valid_from at higher confidence. DQ R1: from a
+    # DISTINCT source, so this is real corroboration and the lift applies.
     ents2 = [dict(e, confidence=0.9) for e in ents]
-    s2 = _signal(entities=ents2, title="b", published_at=pub)
+    s2 = _signal(entities=ents2, title="b", published_at=pub, source_id="src.two")
     await h.transform(s2, _ctx())
 
     async with pg_pool.acquire() as conn:
@@ -682,6 +894,119 @@ async def test_identical_triple_does_not_supersede(pg_pool):
     # Holes-B Wave 0: corroboration combines via bounded noisy-OR (was max).
     # 0.4 then 0.9 -> 1-(1-0.4)*(1-0.9) = 0.94 (above the old max of 0.9).
     assert rows[0]["confidence"] == pytest.approx(0.94)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_same_source_repeat_does_not_lift_confidence(pg_pool):
+    """DQ R1: a recurring digest format must not manufacture its own
+    corroboration.
+
+    The relation backend emits no real per-triple score, so every observation
+    lands on the heuristic floor. Before this gate, ANY re-assert combined via
+    the noisy-OR — so one channel reposting the same boilerplate walked its own
+    garbage triples 0.50 → 0.75 and out of the floor band, which is precisely
+    how a spot-check finds a 0.75-confidence fact nobody ever corroborated.
+    """
+    nonce = uuid4().hex[:8]
+    subj, val = f"Arkhavn_{nonce}", f"Belmoor_{nonce}"
+    pub = datetime(2026, 6, 8, 0, 0, tzinfo=timezone.utc)
+    ents = [
+        {"class": "location", "text": subj, "predicate": "located in", "confidence": 0.5},
+        {"class": "country", "text": val, "predicate": "located in", "confidence": 0.5},
+    ]
+    h = FactExtractorHandler(FactExtractorConfig(), pg_pool=pg_pool)
+    await h.on_activate(_ctx())
+
+    # The SAME source posts the same triple three times (the digest cadence).
+    for i in range(3):
+        await h.transform(
+            _signal(entities=ents, title=f"digest-{i}", published_at=pub,
+                    source_id="src.digest"),
+            _ctx(),
+        )
+
+    async with pg_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT confidence, data FROM facts "
+            "WHERE lower(subject)=lower($1) AND lower(value)=lower($2)",
+            subj, val,
+        )
+    assert row is not None
+    assert row["confidence"] == pytest.approx(0.5), (
+        "same-source repeats must NOT lift confidence"
+    )
+    # The corroboration ledger records ONE source, not three sightings.
+    assert json.loads(row["data"])["source_ids"] == ["src.digest"]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_distinct_sources_still_corroborate(pg_pool):
+    """The other half of the contract: genuinely independent sources agreeing
+    DO raise belief (Holes-A A2 is preserved, just made honest)."""
+    nonce = uuid4().hex[:8]
+    subj, val = f"Corvane_{nonce}", f"Dunmarr_{nonce}"
+    pub = datetime(2026, 6, 8, 0, 0, tzinfo=timezone.utc)
+    ents = [
+        {"class": "location", "text": subj, "predicate": "located in", "confidence": 0.5},
+        {"class": "country", "text": val, "predicate": "located in", "confidence": 0.5},
+    ]
+    h = FactExtractorHandler(FactExtractorConfig(), pg_pool=pg_pool)
+    await h.on_activate(_ctx())
+
+    for src in ("src.wire", "src.paper"):
+        await h.transform(
+            _signal(entities=ents, title=f"t-{src}", published_at=pub, source_id=src),
+            _ctx(),
+        )
+
+    async with pg_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT confidence, data FROM facts "
+            "WHERE lower(subject)=lower($1) AND lower(value)=lower($2)",
+            subj, val,
+        )
+    assert row is not None
+    # Floor + floor corroboration tops out at the DQ-P5 0.75 ceiling.
+    assert row["confidence"] == pytest.approx(0.75)
+    assert sorted(json.loads(row["data"])["source_ids"]) == ["src.paper", "src.wire"]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_telegram_text_payload_gets_a_real_excerpt(pg_pool):
+    """DQ R1: facts were landing with an EMPTY evidence_set.text_excerpt.
+
+    ``ner_multilingual`` reads ``payload.text`` (its M12 field set) so telegram
+    signals DO get entities and DO produce facts — but this stage's field list
+    omitted ``text``, so it held no source text and stamped an empty excerpt on
+    every one of them. The excerpt is the human-verification hook; empty makes
+    the fact unauditable.
+    """
+    nonce = uuid4().hex[:8]
+    subj = f"Halvex_{nonce}"
+    doc = f"{subj} said it will move its trading hub to Singapore next year."
+    rels = [{
+        "subject": subj, "predicate": "headquarters location", "object": "Singapore",
+        "subject_start": 0, "subject_end": len(subj),
+        "object_start": doc.index("Singapore"),
+        "object_end": doc.index("Singapore") + len("Singapore"),
+    }]
+    h = FactExtractorHandler(FactExtractorConfig(), pg_pool=pg_pool)
+    await h.on_activate(_ctx())
+    sig = _signal(relations=rels, text=doc,
+                  published_at=datetime(2026, 6, 9, 0, 0, tzinfo=timezone.utc))
+    await h.transform(sig, _ctx())
+
+    async with pg_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT evidence_set FROM facts WHERE lower(subject)=lower($1)", subj,
+        )
+    assert row is not None, "a telegram-shaped signal must still produce facts"
+    evidence = json.loads(row["evidence_set"])
+    assert evidence["text_excerpt"], "text_excerpt must never be empty"
+    assert evidence["text_excerpt"] == doc
 
 
 @pytest.mark.integration

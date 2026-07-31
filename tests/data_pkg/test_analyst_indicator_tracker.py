@@ -13,13 +13,18 @@ exercised against the running stack.
 from __future__ import annotations
 
 import json
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from legba.data.analysts.deterministic import (
     OUTPUT_KIND_BY_SUB_HANDLER,
     SUB_HANDLERS,
 )
 from legba.data.analysts.deterministic_handlers import indicator_tracker as it
+from legba.data.provenance.kinds import (
+    STRUCTURAL_CLAIMS_VERIFY_ANALYSTS,
+    STRUCTURAL_VERIFY_EXEMPT_ANALYSTS,
+)
+from legba.data.provenance.verify import verify_structural_claims
 from legba.runtime.analyst_method import AnalystMethodResult
 
 
@@ -313,3 +318,127 @@ async def test_handle_empty_inputs_is_trace_only():
     result = await it.handle([], {"analyst_id": "indicator_tracker"}, None)
     assert result.finding.data["flip_count"] == 0
     assert result.force_trace_only is True
+
+
+# ---------------------------------------------------------------------------
+# A2 / V-A (verify-path structural fix, 2026-07-31) — real citations,
+# derived_from, and the structural_claims verify opt-in.
+#
+# indicator_tracker shipped 100% citation-less (JUDGE_READOUT #1). It is
+# ALREADY registered in both STRUCTURAL_VERIFY_EXEMPT_ANALYSTS (the "structural"
+# unverified badge) and STRUCTURAL_CLAIMS_VERIFY_ANALYSTS (the C2b deterministic
+# re-derivation opt-in) — but never actually emitted data['structural_claims'],
+# so the opt-in was a permanent no-op and the badge could never earn
+# "structural-verified". It ALSO never cited the two indicator-bearing findings
+# it diffed even though they were fetched for free. These assert BOTH are now
+# wired: cheap real citations (preferred per spec) AND the structural_claims
+# block.
+# ---------------------------------------------------------------------------
+
+
+def test_registered_in_both_verify_exempt_registries():
+    """Sanity anchor: the registry entries this fix wires against already
+    exist (provenance.kinds) — the gap was the PRODUCER never emitting the
+    structural_claims block the opt-in expects."""
+    assert "indicator_tracker" in STRUCTURAL_VERIFY_EXEMPT_ANALYSTS
+    assert "indicator_tracker" in STRUCTURAL_CLAIMS_VERIFY_ANALYSTS
+
+
+def test_flip_finding_ids_dedupes_and_skips_unresolvable():
+    id_a, id_b, id_c = uuid4(), uuid4(), uuid4()
+    flips = [
+        {"source_finding_ids": {"prev": str(id_a), "curr": str(id_b)}},
+        {"source_finding_ids": {"prev": str(id_b), "curr": str(id_c)}},  # id_b repeats
+        {"source_finding_ids": {"prev": None, "curr": None}},             # unresolvable
+        {},                                                               # missing key
+    ]
+    ids = it._flip_finding_ids(flips)
+    assert ids == [id_a, id_b, id_c]
+    assert all(isinstance(u, UUID) for u in ids)
+
+
+def test_flips_between_carries_source_finding_ids():
+    prev_id, curr_id = uuid4(), uuid4()
+    flips = it._flips_between(
+        [_ind("x", "not_observed")],
+        [_ind("x", "triggered", citations=[2])],
+        target_id="t", analyst_id="a",
+        prev_finding_id=prev_id, curr_finding_id=curr_id,
+    )
+    assert len(flips) == 1
+    assert flips[0]["source_finding_ids"] == {"prev": str(prev_id), "curr": str(curr_id)}
+    # the source unit's OWN raw ordinal citations survive unchanged (decorative,
+    # distinct field — no collision with the new finding-level citations).
+    assert flips[0]["citations"] == [2]
+
+
+def test_build_finding_emits_citations_from_diffed_findings():
+    """ACCEPTANCE (A2): citing the indicator rows it diffed is the CHEAP,
+    preferred fix — the finding's data.citations is non-empty and each entry
+    resolves to one of the two real diffed finding ids."""
+    prev_id, curr_id = uuid4(), uuid4()
+    flips = it._flips_between(
+        [_ind("x", "not_observed")],
+        [_ind("x", "triggered", citations=[2])],
+        target_id="t", analyst_id="a",
+        prev_finding_id=prev_id, curr_finding_id=curr_id,
+    )
+    finding = it._build_finding(flips, groups_compared=1)
+    citations = finding.data["citations"]
+    assert isinstance(citations, list) and citations
+    cited_ids = {c["ref_id"] for c in citations}
+    assert cited_ids == {str(prev_id), str(curr_id)}
+    assert all(c["ref_kind"] == "finding" for c in citations)
+
+
+def test_build_finding_citations_and_derived_from_empty_together():
+    """Honest-empty: no flips -> empty citations (never a violation of the
+    non-empty-when-derived_from-is invariant, since derived_from is empty too)."""
+    finding = it._build_finding([], groups_compared=0)
+    assert finding.data["citations"] == []
+    assert it._flip_finding_ids([]) == []
+
+
+def test_build_finding_structural_claims_re_derive_supported():
+    """The structural_claims block this handler now emits (C2b wiring) actually
+    passes the REAL deterministic re-derivation profile — proving the opt-in
+    (already registered in STRUCTURAL_CLAIMS_VERIFY_ANALYSTS) is no longer a
+    silent no-op."""
+    def _flip(target, analyst, activation, from_status="not_observed", to_status="triggered"):
+        return {
+            "target_id": target, "source_analyst_id": analyst,
+            "indicator_id": "x", "statement": "signpost",
+            "from_status": from_status, "to_status": to_status,
+            "activation": activation, "match": "id",
+            "citations": [], "source_finding_ids": {"prev": None, "curr": None},
+        }
+
+    flips = [
+        _flip("de", "escalation", True),
+        _flip("de", "escalation", False, from_status="triggered", to_status="expired"),
+        _flip("fr", "energy_security", True),
+    ]
+    finding = it._build_finding(flips, groups_compared=2)
+    report = verify_structural_claims(data=finding.data)
+    assert report.had_claims is True
+    assert report.structural_verified is True
+    assert report.miscount == 0
+    assert report.unverifiable == 0
+
+
+async def test_handle_synthetic_sets_real_derived_from():
+    """ACCEPTANCE (A2): a flipped-fixture run's derived_from is no longer
+    ALWAYS empty — it carries the two real source-finding ids the diff read."""
+    rows = [
+        _run(target="country_g20_de", analyst="escalation", produced_at=1,
+             indicators=[_ind("reservist-mobilization", "not_observed")]),
+        _run(target="country_g20_de", analyst="escalation", produced_at=2,
+             indicators=[_ind("reservist-mobilization", "triggered", citations=[2])]),
+    ]
+    result = await it.handle(rows, {"analyst_id": "indicator_tracker"}, None)
+    assert len(result.derived_from) == 2
+    assert {str(u) for u in result.derived_from} == {rows[0]["id"], rows[1]["id"]}
+    # the non-empty-citations-when-derived_from-is-non-empty invariant (A2).
+    citations = result.finding.data["citations"]
+    assert bool(citations) == bool(result.derived_from)
+    assert {c["ref_id"] for c in citations} == {rows[0]["id"], rows[1]["id"]}

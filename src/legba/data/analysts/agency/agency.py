@@ -33,11 +33,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
 import asyncpg
 
+from ...run_accounting import record_tool_call
 from ...schemas.action_pack import ActionPack
 from .events import GovernorEvent, NatsPublish, record_governor_event
 from .governor import PackGovernorEnforcer, pack_tool_timeout_seconds
@@ -100,7 +102,96 @@ class Agency:
         estimated_cost_usd: float = 0.0,
         estimated_units: int = 1,
     ) -> AgencyOutcome:
-        """Run the full hard-gate pipeline for one pack-tool call."""
+        """Run the full hard-gate pipeline for one pack-tool call.
+
+        R11: this is the ONE entry point for a pack action, and it has SIX exit
+        paths (three blocks, a timeout, a handler crash, the settled success),
+        so the per-run ``analyst_traces.tool_calls`` receipt is stamped HERE —
+        around :meth:`_run_pack_tool` — rather than at each return. Every
+        outcome including a BLOCK therefore reaches the receipt; the durable
+        ``action_pack_invocations`` / ``governor_events`` ledgers are unchanged.
+        """
+        started = time.monotonic()
+        outcome: AgencyOutcome | None = None
+        raised: BaseException | None = None
+        try:
+            outcome = await self._run_pack_tool(
+                conn,
+                pack=pack,
+                call=call,
+                analyst_grants=analyst_grants,
+                target_allows=target_allows,
+                scope=scope,
+                ctx=ctx,
+                estimated_cost_usd=estimated_cost_usd,
+                estimated_units=estimated_units,
+            )
+            return outcome
+        except BaseException as exc:
+            raised = exc
+            raise
+        finally:
+            self._account_tool_call(
+                pack=pack, call=call, started_monotonic=started,
+                outcome=outcome, exc=raised,
+            )
+
+    def _account_tool_call(
+        self,
+        *,
+        pack: ActionPack,
+        call: ToolCall,
+        started_monotonic: float,
+        outcome: AgencyOutcome | None,
+        exc: BaseException | None,
+    ) -> None:
+        """Stamp one tool call onto the bound run account. Never raises.
+
+        Arguments and results are deliberately NOT collected — they are
+        unbounded (a substrate_read result can be the whole slice) and already
+        live in ``action_pack_invocations``. What the receipt needs is that the
+        call happened, through which pack, and how it ended.
+        """
+        try:
+            fields: dict[str, Any] = {
+                "source": "agency",
+                "pack": pack.identity.id,
+                "name": call.tool_name,
+                "duration_ms": int((time.monotonic() - started_monotonic) * 1000),
+            }
+            if exc is not None:
+                fields["status"] = "error"
+                fields["error"] = type(exc).__name__
+            elif outcome is not None:
+                fields["admitted"] = outcome.admitted
+                if not outcome.admitted:
+                    fields["status"] = "blocked"
+                    fields["block_cause"] = outcome.block_cause
+                else:
+                    result = outcome.tool_result
+                    fields["status"] = result.status if result else "completed"
+                    if result is not None and result.cost_usd:
+                        fields["cost_usd"] = result.cost_usd
+                    if result is not None and result.units:
+                        fields["units"] = result.units
+            record_tool_call(**fields)
+        except Exception:  # pragma: no cover — instrumentation must never bite
+            logger.debug("agency.account_tool_call failed", exc_info=True)
+
+    async def _run_pack_tool(
+        self,
+        conn: asyncpg.Connection,
+        *,
+        pack: ActionPack,
+        call: ToolCall,
+        analyst_grants: list[Any] | None,
+        target_allows: list[Any] | None,
+        scope: TargetScopeView,
+        ctx: ToolContext,
+        estimated_cost_usd: float = 0.0,
+        estimated_units: int = 1,
+    ) -> AgencyOutcome:
+        """The hard-gate pipeline itself (see :meth:`run_pack_tool`)."""
         pack_id = pack.identity.id
         tool_name = call.tool_name
 

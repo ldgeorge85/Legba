@@ -78,8 +78,14 @@ COPY src /build/src
 RUN pip install --prefix=/install --no-deps /build
 
 # Strip bytecode caches + test fixtures from installed packages.
+# NB: strip only `tests` dirs, NOT `testing` — `numpy/testing` (and
+# analogous `*/testing` packages) is a PUBLIC module, not a test suite;
+# a broader `tests|testing` regex here deleted it in a sibling image
+# (Dockerfile.runtime's predictor/statsforecast import — DQ-H1) even
+# though this image doesn't install numpy today. Kept narrow so adding
+# a numpy-family dep here later doesn't silently reopen that bug.
 RUN find /install -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true \
- && find /install -type d -regex '.*/\(tests\|testing\)' -exec rm -rf {} + 2>/dev/null || true \
+ && find /install -type d -regex '.*/tests' -exec rm -rf {} + 2>/dev/null || true \
  && find /install -name "*.pyc" -delete 2>/dev/null || true
 
 # --------------------------------------------------------------- runtime

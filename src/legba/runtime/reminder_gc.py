@@ -37,13 +37,30 @@ Mechanism (part 1 — desired-vs-observed, ships now)
 ---------------------------------------------------
 For each retired ``actor_state`` row we derive the reminder name(s) that
 actor *would* have registered when it was live (from the actor kind +
-its recorded ``source_cursors``), then issue an idempotent
-``DELETE /v1.0/actors/{type}/{id}/reminders/{name}`` against the daprd
-sidecar HTTP API. The DELETE is a no-op (204) when the reminder is
-already gone, so re-running the sweep is cheap and the steady-state
-removed-count is zero. We do NOT re-activate the actor (no ``run`` /
-``activate`` proxy call) — deleting by name via the sidecar avoids
-waking a retired actor.
+its recorded ``source_cursors``), then check daprd for real:
+``GET /v1.0/actors/{type}/{id}/reminders/{name}`` first, and only when
+that confirms the reminder genuinely exists do we issue the
+``DELETE`` against the same sidecar HTTP API. This GET-before-DELETE
+order matters: daprd returns a 2xx on ``DELETE`` for a reminder that was
+never there just as readily as for one it actually removed, so a bare
+DELETE-and-count-2xx sweep cannot tell a real orphan from an absent one
+(2026-07 DQ finding — see :data:`ReminderDeleter`). Only a GET-hit
+followed by a successful DELETE counts toward :attr:`ReminderGCResult.removed`;
+a GET-miss is tallied under :attr:`ReminderGCResult.already_absent` and
+never counted as :attr:`ReminderGCResult.took_action`. Re-running the
+sweep is still cheap (it's read-mostly against the sidecar), and in
+steady state ``removed`` is genuinely zero — ``already_absent`` is not,
+because retired ``actor_state`` rows are never pruned (the actor_id
+grammar embeds ``content_hash[:16]``, so every descriptor edit mints a
+new actor_id and leaves the old one RETIRED forever — see
+``ActorStateStore.list_by_lifecycle``); each of those stale rows is a
+distinct candidate every sweep. That volume is legitimate re-checking,
+not a bug this module can safely dedupe away: a retired actor_id is its
+own point in daprd's reminder namespace, so two different retired rows
+that happen to derive the same reminder *name* are not interchangeable
+candidates and collapsing them risks skipping a real orphan. We do NOT
+re-activate the actor (no ``run`` / ``activate`` proxy call) — reaching
+the sidecar by name avoids waking a retired actor.
 
 When a sweep *actually removes* one or more reminders it logs at INFO and
 fires an operator alert via the injected ``alert_publish`` closure
@@ -169,6 +186,7 @@ class ReminderGCResult:
     retired_scanned: int = 0
     candidates: int = 0
     removed: int = 0
+    already_absent: int = 0  # GET-miss: genuinely nothing to delete, not an action
     failed: int = 0
     removed_names: list[tuple[str, str]] = field(default_factory=list)  # (actor_id, name)
 
@@ -177,12 +195,18 @@ class ReminderGCResult:
         return self.removed > 0
 
 
-# A pluggable "delete one reminder by name" — production wires the daprd
-# sidecar DELETE; tests inject a recorder. Returns True iff a reminder was
-# actually present and removed (204 with prior existence) — but daprd does
-# not distinguish, so production returns True on any 2xx and the
-# steady-state removed-count is best-effort upper-bound. Tests assert the
-# exact call set, which is the safety-critical surface.
+# A pluggable "delete one reminder by name" — production wires a daprd
+# sidecar GET-then-DELETE; tests inject a recorder. Returns True iff the
+# reminder was CONFIRMED present (a GET-hit) and then successfully
+# deleted; False iff the GET already showed it absent (nothing to do —
+# not an action, not a failure). A per-attempt exception (network error,
+# an unexpected non-2xx/404 status) is the caller's signal to count it as
+# `failed` instead — see :func:`build_sidecar_reminder_deleter`. This
+# distinction is load-bearing: daprd's DELETE returns a 2xx for a
+# reminder that was never there just as readily as for one it actually
+# removed, so counting "removed" straight off the DELETE response (the
+# pre-fix behaviour) cannot tell a real orphan from an absent one. Tests
+# assert the exact call set, which is the safety-critical surface.
 ReminderDeleter = Callable[[str, str, str], Awaitable[bool]]
 # An operator-alert publish closure: (subject, payload_bytes) -> awaitable.
 AlertPublisher = Callable[[str, bytes], Awaitable[None]]
@@ -246,6 +270,12 @@ async def sweep_orphan_reminders(
                     "reminder_gc.removed actor_id=%s reminder=%s",
                     rec.actor_id, name,
                 )
+            else:
+                result.already_absent += 1
+                logger.debug(
+                    "reminder_gc.already_absent actor_id=%s reminder=%s",
+                    rec.actor_id, name,
+                )
 
     if result.took_action and alert_publish is not None:
         import json
@@ -286,8 +316,10 @@ async def sweep_orphan_reminders(
                 logger.warning("reminder_gc.alert_publish_failed err=%s", exc)
 
     logger.info(
-        "reminder_gc.sweep retired_scanned=%d candidates=%d removed=%d failed=%d",
-        result.retired_scanned, result.candidates, result.removed, result.failed,
+        "reminder_gc.sweep retired_scanned=%d candidates=%d removed=%d "
+        "already_absent=%d failed=%d",
+        result.retired_scanned, result.candidates, result.removed,
+        result.already_absent, result.failed,
     )
     return result
 
@@ -299,8 +331,30 @@ def build_sidecar_reminder_deleter(
 ) -> ReminderDeleter:
     """Production :data:`ReminderDeleter` backed by the daprd sidecar.
 
-    Issues ``DELETE /v1.0/actors/{type}/{id}/reminders/{name}`` — idempotent
-    per the Dapr actor reminder API (a missing reminder still returns 204).
+    GET-then-DELETE, deliberately in that order:
+
+      * ``GET /v1.0/actors/{type}/{id}/reminders/{name}`` first. daprd
+        (per the actor-runtime error table — ``ErrActorReminderNotFound``,
+        HTTP 404) answers 404 when the named reminder does not exist for
+        that actor, and 200 with the reminder body when it does. A 404
+        (or a 200 with an empty/null body, defensively — some daprd
+        builds have returned that instead of a 404 for the same case)
+        means there is genuinely nothing to remove: return ``False``
+        without ever calling DELETE.
+      * Only on a confirmed GET-hit do we issue the
+        ``DELETE /v1.0/actors/{type}/{id}/reminders/{name}`` and return
+        ``True`` on a 2xx.
+
+    This exists because ``DELETE`` alone is not a safe removed/absent
+    signal: daprd returns a 2xx for a reminder that was never registered
+    just as readily as for one it actually deleted (idempotent by design),
+    so counting straight off the DELETE response — the pre-fix behaviour
+    here — reported every already-absent candidate as "removed" and made
+    the GC's alert fire, and look identical, on every single sweep. Any
+    other GET status, or a non-2xx DELETE after a confirmed GET-hit, is
+    raised so the caller (:func:`sweep_orphan_reminders`) counts it under
+    ``failed`` rather than silently swallowing it as absent.
+
     Does NOT activate the actor through the run path.
     """
     base = (sidecar_url or dapr_sidecar_url()).rstrip("/")
@@ -310,18 +364,47 @@ def build_sidecar_reminder_deleter(
 
         url = f"{base}/v1.0/actors/{actor_type}/{actor_id}/reminders/{reminder_name}"
         async with httpx.AsyncClient(timeout=timeout_s) as client:
-            resp = await client.delete(url)
-        # 2xx == removed (or already absent — daprd does not distinguish).
-        # 4xx/5xx surfaces as a failed candidate (logged, retried next sweep).
-        if 200 <= resp.status_code < 300:
+            get_resp = await client.get(url)
+            if get_resp.status_code == 404:
+                return False  # confirmed absent — nothing to delete
+            if get_resp.status_code != 200:
+                raise RuntimeError(
+                    f"reminder_gc sidecar GET non-200/404 actor={actor_id} "
+                    f"reminder={reminder_name} status={get_resp.status_code}"
+                )
+            if not _reminder_body_present(get_resp):
+                # Defensive: some daprd builds answer 200 + empty/null body
+                # instead of 404 for a reminder that does not exist.
+                return False
+
+            del_resp = await client.delete(url)
+
+        if 200 <= del_resp.status_code < 300:
             return True
-        logger.warning(
-            "reminder_gc.sidecar_delete_non2xx actor=%s reminder=%s status=%d",
-            actor_id, reminder_name, resp.status_code,
+        raise RuntimeError(
+            f"reminder_gc sidecar DELETE non-2xx actor={actor_id} "
+            f"reminder={reminder_name} status={del_resp.status_code} "
+            "(GET confirmed it existed)"
         )
-        return False
 
     return _delete
+
+
+def _reminder_body_present(resp: Any) -> bool:
+    """True iff a 200 GET response body actually describes a reminder.
+
+    Defence against daprd builds that answer a missing reminder with
+    ``200`` + an empty/null body rather than a ``404`` — treat that the
+    same as a 404 rather than tripping the DELETE path on nothing.
+    """
+    raw = resp.content
+    if not raw or raw.strip() in (b"{}", b"null", b'""'):
+        return False
+    try:
+        body = resp.json()
+    except ValueError:
+        return True  # non-empty, non-JSON body — assume it's real
+    return bool(body)
 
 
 __all__ = [

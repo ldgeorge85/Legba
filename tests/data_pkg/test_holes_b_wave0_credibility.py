@@ -324,6 +324,11 @@ def test_insert_fact_on_conflict_merges_credibility_max():
 # ===========================================================================
 
 
+#: 0-based index of the ``source_credibility`` bind param ($12) on the
+#: ingestion INSERT. DQ R1 appended $13 (the corroboration source id) after it.
+_SOURCE_CREDIBILITY_PARAM = 11
+
+
 def _run_ingestion(conn: RecordingConn, *, derived_from: list[UUID]) -> None:
     asyncio.run(
         _insert_ingestion_fact(
@@ -405,8 +410,9 @@ def test_ingestion_stamps_tier_nominal_when_signals_unscored():
     assert ins is not None
     sql, params = ins
     assert "source_credibility" in sql
-    # source_credibility is the LAST bind param ($12) on the ingestion INSERT.
-    assert params[-1] == pytest.approx(0.5), params
+    # source_credibility binds $12; DQ R1 appended $13 (the corroboration
+    # source id), so index by position rather than off the end.
+    assert params[_SOURCE_CREDIBILITY_PARAM] == pytest.approx(0.5), params
 
 
 def test_ingestion_stamps_backing_signal_score():
@@ -416,7 +422,22 @@ def test_ingestion_stamps_backing_signal_score():
     conn = RecordingConn(fetchval_results=[0.9, None])  # credibility, dedup miss
     _run_ingestion(conn, derived_from=[sig])
     _, params = conn.insert_into("facts")
-    assert params[-1] == pytest.approx(0.9), params
+    assert params[_SOURCE_CREDIBILITY_PARAM] == pytest.approx(0.9), params
+
+
+def test_ingestion_lift_requires_a_distinct_source():
+    """DQ R1: the noisy-OR lift on BOTH re-assert paths is gated on the
+    incoming source not already being in the fact's corroboration ledger, so a
+    source repeating itself unions lineage without raising belief."""
+    conn = RecordingConn(fetchval_results=[None])
+    _run_ingestion(conn, derived_from=[])
+    ins = conn.insert_into("facts")
+    assert ins is not None
+    sql = ins[0]
+    assert "source_ids" in sql
+    assert "$13::text" in sql
+    # The lift is inside a CASE that short-circuits to the existing confidence.
+    assert "THEN facts.confidence" in sql
 
 
 def test_ingestion_on_conflict_merges_credibility_max():

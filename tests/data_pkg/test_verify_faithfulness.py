@@ -214,7 +214,13 @@ async def test_judge_engaged_refines_and_can_only_tighten(monkeypatch):
     # Judge is authoritative (C1): here judge=2/3, below the floor's 1.0, so it
     # still tightens — the judge_score stands on its own (no min() co-veto).
     assert rep.faithfulness_score == pytest.approx(2 / 3)
-    assert any(s.reason == "judge_contradicted" for s in rep.unsupported_spans)
+    # V-D: this stub returns NO evidence quote, so the contradiction cannot earn
+    # the hard class — it lands as the SOFT judge_contradicted_unquoted, counted.
+    # The claim still fails: the score above is unchanged by the demotion.
+    assert any(
+        s.reason == "judge_contradicted_unquoted" for s in rep.unsupported_spans
+    )
+    assert rep.counters["hardfail_demoted_no_quote"] == 1
 
 
 async def test_judge_error_soft_fails_to_floor(monkeypatch):
@@ -413,7 +419,11 @@ async def test_judge_parses_fenced_json_verdicts(monkeypatch):
     assert rep.judge_status == "llm"
     assert rep.judge_unavailable_reason is None
     assert rep.faithfulness_score == pytest.approx(2 / 3)
-    assert any(s.reason == "judge_contradicted" for s in rep.unsupported_spans)
+    # V-D: no quote in the fenced object → the contradiction demotes to soft; the
+    # fence PARSE (this test's subject) is unaffected.
+    assert any(
+        s.reason == "judge_contradicted_unquoted" for s in rep.unsupported_spans
+    )
 
 
 async def test_judge_short_verdict_list_is_judge_error_not_silent_pass(monkeypatch):

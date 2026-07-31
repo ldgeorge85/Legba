@@ -63,6 +63,11 @@ CORPUS_INDEX_MAPPING: dict[str, Any] = {
             "title": {"type": "text", "analyzer": "english"},
             "distilled_body": {"type": "text", "analyzer": "english"},
             "raw_body": {"type": "text", "analyzer": "english"},
+            # R6: the chat-platform full message body (payload.text —
+            # telegram/discord; see _to_signal in those source modules). These
+            # modalities never populate raw_body, so without this field their
+            # content was invisible to the corpus (~96.8% of telegram signals).
+            "text": {"type": "text", "analyzer": "english"},
             # P2-1 / S-10: the evidence_archiver's Trafilatura-extracted FULL
             # article text (payload.archived_text) — upgrades the thin teaser
             # doc for every archived cited signal via the corpus_indexer
@@ -102,17 +107,26 @@ _SEARCH_FIELDS: tuple[str, ...] = (
     "title^2",
     "best_body^1.5",
     "distilled_body",
+    "text",
     "archived_text",
     "summary",
     "raw_body",
     "entities_text",
 )
 
-#: best_body preference order (first non-empty wins) — OUR distilled brief first,
-#: then the archived FULL article text (P2-1 evidence archival, when present),
-#: then the ingest body, then the teaser, then rarer manual/derived text fields.
+#: best_body preference order (first non-empty wins) — OUR distilled brief
+#: first, then the chat-platform full message body (R6: telegram/discord
+#: populate ONLY payload.text, never raw_body — this must outrank
+#: archived_text because a t.me/telegram-widget "archive" of a chat message
+#: is embed-widget UI CHROME, not an article (see evidence_archiver's
+#: t.me skip-extraction guard) — real prose from the platform itself is
+#: always preferable to whatever an article-extractor made of a page with no
+#: article on it), then the archived FULL article text (P2-1 evidence
+#: archival — a genuine upgrade for actual article pages, when present), then
+#: the ingest body, then the teaser, then rarer manual/derived text fields.
 _BEST_BODY_FIELDS: tuple[str, ...] = (
     "distilled_body",
+    "text",
     "archived_text",
     "raw_body",
     "summary",
@@ -180,6 +194,25 @@ def _first_nonempty(payload: Mapping[str, Any], keys: Sequence[str]) -> str:
         if isinstance(val, str) and val.strip():
             return val
     return ""
+
+
+def _as_text_field(v: Any) -> str | None:
+    """Coerce a payload value destined for a ``text``-mapped corpus field.
+
+    R13: some signals' body-shaped payload keys hold a non-string value — a
+    dict/list of STRUCTURED data (e.g. a GDELT CAMEO event dump landing in
+    ``payload.raw_body``), not prose. Handing that straight to OpenSearch
+    against a ``{"type": "text"}`` mapping is a ``mapper_parsing_exception``
+    (the bulk indexer rejects the whole doc). Structured records are not
+    searchable prose anyway, so the correct move is to OMIT the field for
+    this doc (never stringify — a raw ``repr()``/JSON dump of a CAMEO event
+    would just pollute BM25 with punctuation/field-name noise), rather than
+    coerce it into something that parses. ``None`` propagates to the
+    existing drop-empties pass in :func:`signal_to_doc`.
+    """
+    if isinstance(v, str):
+        return v.strip() or None
+    return None
 
 
 def _entities_text(payload: Mapping[str, Any]) -> str:
@@ -263,6 +296,12 @@ def signal_to_doc(row: Mapping[str, Any]) -> dict[str, Any]:
     (so a re-index OVERWRITES in place — idempotent), plus the text/keyword/date
     fields declared in :data:`CORPUS_INDEX_MAPPING`. None/empty fields are dropped
     so a doc stays lean and a null never reaches a date/float mapping.
+
+    Every ``text``-mapped field sourced directly from ``payload`` goes through
+    :func:`_as_text_field` (R13) — a non-string value there (a dict/list of
+    structured data, e.g. a GDELT CAMEO event dump in ``payload.raw_body``) is
+    OMITTED rather than handed to OpenSearch, which would reject the whole
+    doc with a ``mapper_parsing_exception``.
     """
     r = dict(row)
     payload = _as_dict(r.get("payload"))
@@ -270,14 +309,17 @@ def signal_to_doc(row: Mapping[str, Any]) -> dict[str, Any]:
     doc: dict[str, Any] = {
         "_id": str(r.get("id")),
         # text
-        "title": payload.get("title"),
-        "distilled_body": payload.get("distilled_body"),
-        "raw_body": payload.get("raw_body"),
+        "title": _as_text_field(payload.get("title")),
+        "distilled_body": _as_text_field(payload.get("distilled_body")),
+        "raw_body": _as_text_field(payload.get("raw_body")),
+        # R6: the chat-platform full message body (telegram/discord) — see
+        # _BEST_BODY_FIELDS docstring for why this outranks archived_text.
+        "text": _as_text_field(payload.get("text")),
         # P2-1: the archived FULL article text (evidence_archiver writes
         # payload.archived_text + nulls indexed_at per the dirty-marker
         # contract, so the re-index lands it here — the S-10 depth fix).
-        "archived_text": payload.get("archived_text"),
-        "summary": payload.get("summary"),
+        "archived_text": _as_text_field(payload.get("archived_text")),
+        "summary": _as_text_field(payload.get("summary")),
         "best_body": _first_nonempty(payload, _BEST_BODY_FIELDS) or None,
         "entities_text": _entities_text(payload) or None,
         # keyword facets (columns)

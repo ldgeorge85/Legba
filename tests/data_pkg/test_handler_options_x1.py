@@ -329,13 +329,17 @@ def test_method_options_accepted_on_a_deterministic_kind():
     assert _method(options={"per_desk_cap": 3}).options == {"per_desk_cap": 3}
 
 
-def test_method_options_refused_on_a_non_deterministic_kind():
-    """An options block on an LLM kind could only ever be inert — refusing it
-    at registration is the no-silent-dead-config rule applied to its own fix."""
-    with pytest.raises(ValueError, match="kind=deterministic"):
-        MethodBlock(
-            kind="llm_single_turn", prompt_module="a:b", options={"x": 1}
-        )
+def test_method_options_on_a_non_deterministic_kind_is_a_descriptor_level_check():
+    """QW1-B moved the "which kinds may carry options" gate UP to the DESCRIPTOR
+    validator, which can see ``identity.kind`` — a :class:`MethodBlock` alone
+    cannot tell an ``inline_target`` unit (which now DOES read options) from a
+    composition (which does not). The block itself no longer refuses; the rule
+    is enforced, unchanged in spirit, by
+    ``AnalystDescriptor._check_options_kind`` — asserted in
+    ``tests/data_pkg/test_unit_grounding.py``
+    (``test_a_kind_with_no_catalog_still_cannot_carry_options``)."""
+    block = MethodBlock(kind="llm_single_turn", prompt_module="a:b", options={"x": 1})
+    assert block.options == {"x": 1}
 
 
 def test_method_options_refuses_private_and_nested_values():

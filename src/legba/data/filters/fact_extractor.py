@@ -11,11 +11,25 @@ tools come alive — they read an empty store today.
 
 STATUS:
   * ``backend="relation"`` (DEFAULT) — LIVE, zero new model infra. Reuses the
-    GLiREL relation triples already on ``signal.payload["entities"]`` (from the
+    GLiREL relation pairs already on ``signal.payload["relations"]`` (from the
     upstream ``ner_multilingual`` stage); when those are absent it calls the
     hosted ``POST /extract`` endpoint itself via the injected
     ``NlpServiceClient`` (the SAME call NER makes — ``ner.py``). This is
     literally "the same pattern as the NLP filters."
+
+    PAIRS, NOT POSITIONS (DQ R1): facts are ``(subject, predicate, value)``, so
+    this stage needs to know which extracted head went with which tail. It used
+    to reconstruct that from ``payload["entities"]`` — a document-wide, de-duped,
+    NOT-text-ordered list where each entity keeps only a ``predicate`` label —
+    by pairing members BY LIST INDEX. That invented relations wholesale
+    ("Russia / founded by / Pavel Durov" from a post reading "Telegram founder
+    Pavel Durov"; "Donetsk / founded by / Kiev" from "the war launched by the
+    Kiev regime"; endpoints fused across unrelated bullets of one digest post).
+    The extractor's real pairs are now carried on ``payload["relations"]`` and
+    consumed directly. The entity route survives only for payloads written
+    before that surface existed, and there it CORROBORATES rather than guesses:
+    a candidate pair must be provably adjacent in the source text or it is
+    dropped (:func:`_entities_to_triples`).
   * ``backend="llm"`` — OPT-IN, declared (the "8B hosted model" path). Routes
     the signal text through the analyst LLM provider plane via an injected
     ``llm_handler_factory`` (the ``SLMPort`` pattern). NO STUB: it raises a
@@ -70,7 +84,12 @@ from ..stack.nlp_service import (
 )
 from ._contract import FilterContext, FilterHealth
 from ._fact_graph import edge_label_for_predicate, upsert_fact_edge
-from .ner import _classify_entity_text, _is_nonentity_candidate
+from .ner import (
+    _MD_BOLD_RE,
+    _MD_LINK_RE,
+    _classify_entity_text,
+    _is_nonentity_candidate,
+)
 from .slm_relationship_validate import (
     CORRECTED_TYPE_KEY,
     SLM_VALIDATED_FLAG,
@@ -918,8 +937,27 @@ class FactExtractorConfig(BaseModel):
         description="Hard cap on facts written per signal (row-explosion/cost guard).",
     )
     text_fields: list[str] = Field(
-        default_factory=lambda: ["title", "body", "summary", "raw_body"],
-        description="Ordered payload fields concatenated for the /extract + LLM backends.",
+        default_factory=lambda: ["title", "body", "summary", "raw_body", "text"],
+        description=(
+            "Ordered payload fields concatenated for the /extract + LLM backends. "
+            "``text`` MUST stay in the set (it matches ner_multilingual's M12 "
+            "field list): telegram signals carry their message body in "
+            "``payload.text`` and leave title/body/summary/raw_body empty, so "
+            "omitting it left this stage with NO source text on those signals — "
+            "facts were still written from the upstream entities but landed with "
+            "an EMPTY evidence_set.text_excerpt (the human-verification hook), "
+            "the sports/topic gates never fired, and the /extract fallback was "
+            "dead on the single largest slice of the feed."
+        ),
+    )
+    pair_max_char_gap: int = Field(
+        default=160, ge=1,
+        description=(
+            "Legacy-payload pairing bound: max characters between a candidate "
+            "subject's end and its object's start before the pair is REFUSED. "
+            "Only consulted when a signal predates the ``payload['relations']`` "
+            "pair surface; roughly one sentence."
+        ),
     )
     max_text_chars: int = Field(
         default=2000, ge=1,
@@ -1081,6 +1119,9 @@ class FactExtractorHandler:
         # SLM-validation stage counters.
         self._triples_slm_validated = 0
         self._triples_slm_dropped = 0
+        # Legacy-payload candidate pairs REFUSED because they could not be
+        # bound to one sentence (the index-pairing garbage class).
+        self._triples_unbound_dropped = 0
 
     # ------------------------------------------------------------------- props
 
@@ -1174,20 +1215,45 @@ class FactExtractorHandler:
     async def _extract_relation(
         self, signal: Signal, ctx: FilterContext
     ) -> list[dict[str, Any]]:
-        """Default backend: reuse GLiREL relation triples already on the signal.
+        """Default backend: reuse the GLiREL relations already on the signal.
 
-        Reads ``payload["entities"]`` (relation entities carry their ``predicate``
-        context per ``ner.py``) and reconstructs ``(subject, predicate, value)``
-        by pairing consecutive subject/object entities that share a predicate.
-        When ``entities`` is absent/empty (NER off or upstream-skipped), calls
-        ``/extract`` itself — the same call NER makes — so the stage is
-        self-sufficient.
+        Three routes, in strict preference order:
+
+        1. ``payload["relations"]`` — the extractor's REAL ``(head, predicate,
+           tail)`` pairs, stamped by ``ner_multilingual``. Authoritative: the
+           model said these endpoints go together, so nothing is guessed.
+        2. ``payload["entities"]`` — a LEGACY payload written before the pair
+           surface existed. The flat entity list is grouped by predicate and
+           de-duped on endpoint text, so the pairing is genuinely GONE; all we
+           can do is re-bind candidates that are provably adjacent in the source
+           text (:func:`_entities_to_triples`) and DROP the rest. Unbindable
+           candidates are refused, not guessed.
+        3. ``/extract`` — called here, the same call NER makes, when neither
+           surface yields anything. This is what makes route 2's strictness
+           safe: a legacy payload whose candidates all fail the binding test
+           falls through to the authoritative pairs instead of to nothing.
         """
         payload = signal.payload if isinstance(signal.payload, dict) else {}
+        relations = payload.get("relations")
+        if isinstance(relations, list) and relations:
+            triples = _relations_to_triples(relations)
+            if triples:
+                return triples
         entities = payload.get("entities")
-        triples = _entities_to_triples(entities) if isinstance(entities, list) else []
-        if triples:
-            return triples
+        if isinstance(entities, list) and entities:
+            triples, unbound = _entities_to_triples(
+                entities,
+                text=_offset_aligned_text(payload, self._config.text_fields),
+                max_gap=self._config.pair_max_char_gap,
+            )
+            self._triples_unbound_dropped += unbound
+            if unbound:
+                ctx.logger.debug(
+                    "fact_extractor.pair_unbound signal_id=%s dropped=%d kept=%d",
+                    signal.signal_id, unbound, len(triples),
+                )
+            if triples:
+                return triples
 
         # Fallback: call /extract ourselves (same as ner.py).
         if self._nlp_client is None:
@@ -1460,7 +1526,10 @@ class FactExtractorHandler:
         geo_lat = geo.get("lat")
         geo_lon = geo.get("lon")
         full_text = _concat_text(payload, cfg.text_fields)
-        excerpt = full_text[:512]
+        # Offsets on the triples index the markdown-stripped rendering the NER
+        # measured against, so the per-fact excerpt is sliced from that form.
+        align_text = _offset_aligned_text(payload, cfg.text_fields)
+        excerpt = (align_text or full_text)[:512]
         overrides = None
 
         # D6/D13 topic gate: a sports-dominated signal (a World-Cup roster feed)
@@ -1577,6 +1646,9 @@ class FactExtractorHandler:
                 "subject_class": subj_class,
                 "value_class": val_class,
                 "relation_type": relation_type,
+                # Quote the clause this relation was read from, not the head of
+                # the document, as the fact's evidence excerpt.
+                "excerpt": _triple_excerpt(align_text, triple, fallback=excerpt),
                 # Carry the SLM verdict (when the opt-in validation stage ran)
                 # so it is provenanced into the fact's data jsonb below.
                 "slm_validated": triple.get(SLM_VALIDATED_FLAG),
@@ -1598,6 +1670,10 @@ class FactExtractorHandler:
                     "signal_id": str(signal.signal_id),
                     "extractor": "fact_extractor",
                     "backend": cfg.backend,
+                    # DQ R1 corroboration ledger — which SOURCES have asserted
+                    # this triple. Repeats from one source never extend it, so
+                    # the noisy-OR lift can require genuine independence.
+                    "source_ids": [signal.source_id],
                     "ner_class_subject": t["subject_class"],
                     "ner_class_object": t["value_class"],
                     "relation_type": t["relation_type"],
@@ -1617,7 +1693,7 @@ class FactExtractorHandler:
                         data["slm_reasoning"] = str(t["slm_reasoning"])
                 evidence_set = {
                     "signal_id": str(signal.signal_id),
-                    "text_excerpt": excerpt,
+                    "text_excerpt": t.get("excerpt") or excerpt,
                 }
                 await _insert_ingestion_fact(
                     conn,
@@ -1632,6 +1708,7 @@ class FactExtractorHandler:
                     data=data,
                     evidence_set=evidence_set,
                     derived_from=[signal.signal_id],
+                    source_id=signal.source_id,
                 )
                 written += 1
                 if cfg.emit_graph_edges and self._graph_store is not None:
@@ -1677,6 +1754,7 @@ class FactExtractorHandler:
                 "slm_validate_relations": self._config.slm_validate_relations,
                 "triples_slm_validated": self._triples_slm_validated,
                 "triples_slm_dropped": self._triples_slm_dropped,
+                "triples_unbound_dropped": self._triples_unbound_dropped,
             },
         )
 
@@ -1700,6 +1778,7 @@ async def _insert_ingestion_fact(
     data: dict[str, Any],
     evidence_set: dict[str, Any],
     derived_from: list[Any],
+    source_id: str | None = None,
 ) -> None:
     """Write one source-owned ('ingestion') fact via the §3 ON CONFLICT upsert.
 
@@ -1769,6 +1848,20 @@ async def _insert_ingestion_fact(
     # source_credibility→max) and skip the insert. A no-op for the row count;
     # never resurrects a closed row (the filter is open-only, matching the
     # partial index's WHERE).
+    # DQ R1: corroboration requires a DISTINCT source. The relation backend
+    # emits no real per-triple score, so every observation lands on the 0.5
+    # floor and any re-assert used to lift it (0.50 → 0.75 → …). A recurring
+    # digest format therefore MANUFACTURED corroboration for itself: the same
+    # channel reposting the same boilerplate looked like independent sources
+    # agreeing, and garbage triples climbed out of the floor band on repetition
+    # alone. The lift is now suppressed when this source already backs the row.
+    #
+    # The contributing sources are tracked in ``data.source_ids`` ON THE FACT
+    # rather than resolved from ``signals`` via ``derived_from``: enrichment
+    # runs BEFORE ``write_canonical_signal`` (``source_actor._process_one``), so
+    # at fact-write time the incoming signal has NO row in ``signals`` yet and a
+    # join-based check would silently never fire. A self-contained ledger also
+    # makes the corroboration basis auditable in place.
     existing_id = await conn.fetchval(
         """
         UPDATE facts
@@ -1776,6 +1869,10 @@ async def _insert_ingestion_fact(
            -- with a bounded noisy-OR so N agreeing sources raise belief above
            -- any single one (was GREATEST/max; now matches the analyst
            -- collapse_open_triple path so both producers agree).
+           -- DQ R1: ...but ONLY from a source not already in this fact's
+           -- data.source_ids ledger. A repeat from a source already there
+           -- unions lineage and refreshes the row while leaving confidence
+           -- exactly where it was.
            -- DQ Phase 5: the ceiling is 0.75 when the INCOMING observation is at
            -- or below the heuristic floor (0.5) — floor-only corroboration (the
            -- relation backend emits no real per-triple score) must NOT manufacture
@@ -1785,13 +1882,33 @@ async def _insert_ingestion_fact(
            -- already-higher genuine confidence — GREATEST(existing, capped) so a
            -- floor observation can't drag a real 0.9 fact down to 0.75.
            -- Corroboration only ever raises; floor+floor still tops out at 0.75.
-           SET confidence   = GREATEST(
-                                facts.confidence,
-                                LEAST(
-                                  CASE WHEN $4 <= 0.5 THEN 0.75 ELSE 0.99 END,
-                                  1.0 - (1.0 - facts.confidence) * (1.0 - $4)
+           SET confidence   = CASE
+                                WHEN $8::text IS NOT NULL
+                                 AND COALESCE(facts.data->'source_ids', '[]'::jsonb)
+                                     ? $8::text
+                                THEN facts.confidence
+                                ELSE GREATEST(
+                                  facts.confidence,
+                                  LEAST(
+                                    CASE WHEN $4 <= 0.5 THEN 0.75 ELSE 0.99 END,
+                                    1.0 - (1.0 - facts.confidence) * (1.0 - $4)
+                                  )
                                 )
-                              ),
+                              END,
+               -- Append this source to the fact's corroboration ledger (set
+               -- semantics — a repeat never grows it).
+               data         = CASE
+                                WHEN $8::text IS NULL
+                                  OR COALESCE(facts.data->'source_ids', '[]'::jsonb)
+                                     ? $8::text
+                                THEN facts.data
+                                ELSE jsonb_set(
+                                       COALESCE(facts.data, '{}'::jsonb),
+                                       '{source_ids}',
+                                       COALESCE(facts.data->'source_ids', '[]'::jsonb)
+                                       || to_jsonb($8::text)
+                                     )
+                              END,
                derived_from = (SELECT array_agg(DISTINCT e)
                                FROM unnest(facts.derived_from || $5::uuid[]) e),
                valid_from   = LEAST(facts.valid_from, $6),
@@ -1818,6 +1935,7 @@ async def _insert_ingestion_fact(
         list(derived_from),
         valid_from,
         source_credibility,
+        source_id,
     )
     if existing_id is not None:
         # An open row already carries this exact triple — refreshed in place,
@@ -1847,13 +1965,34 @@ async def _insert_ingestion_fact(
             -- new belief but never LOWER an already-higher genuine confidence (a
             -- floor observation can't drag a real 0.9 fact to 0.75); floor+floor
             -- corroboration still tops out at 0.75.
-            confidence   = GREATEST(
-                             facts.confidence,
-                             LEAST(
-                               CASE WHEN EXCLUDED.confidence <= 0.5 THEN 0.75 ELSE 0.99 END,
-                               1.0 - (1.0 - facts.confidence) * (1.0 - EXCLUDED.confidence)
+            -- DQ R1: the lift also requires a DISTINCT source here — a repeat
+            -- from a source already in the fact's ledger is a re-assert, not
+            -- corroboration, so it unions lineage without raising belief.
+            confidence   = CASE
+                             WHEN $13::text IS NOT NULL
+                              AND COALESCE(facts.data->'source_ids', '[]'::jsonb)
+                                  ? $13::text
+                             THEN facts.confidence
+                             ELSE GREATEST(
+                               facts.confidence,
+                               LEAST(
+                                 CASE WHEN EXCLUDED.confidence <= 0.5 THEN 0.75 ELSE 0.99 END,
+                                 1.0 - (1.0 - facts.confidence) * (1.0 - EXCLUDED.confidence)
+                               )
                              )
-                           ),
+                           END,
+            data         = CASE
+                             WHEN $13::text IS NULL
+                               OR COALESCE(facts.data->'source_ids', '[]'::jsonb)
+                                  ? $13::text
+                             THEN facts.data
+                             ELSE jsonb_set(
+                                    COALESCE(facts.data, '{}'::jsonb),
+                                    '{source_ids}',
+                                    COALESCE(facts.data->'source_ids', '[]'::jsonb)
+                                    || to_jsonb($13::text)
+                                  )
+                           END,
             derived_from = (SELECT array_agg(DISTINCT e)
                             FROM unnest(facts.derived_from || EXCLUDED.derived_from) e),
             -- Holes-B Wave 0: keep the MOST credible backing source.
@@ -1873,6 +2012,7 @@ async def _insert_ingestion_fact(
         json.dumps(evidence_set),
         list(derived_from),
         source_credibility,
+        source_id,
     )
 
 
@@ -1894,16 +2034,175 @@ def _concat_text(payload: Mapping[str, Any], text_fields: list[str]) -> str:
     return "\n".join(parts)
 
 
-def _entities_to_triples(entities: list[Any]) -> list[dict[str, Any]]:
-    """Reconstruct (subject, predicate, object) triples from relation entities.
+def _relations_to_triples(relations: list[Any]) -> list[dict[str, Any]]:
+    """Adapt the stamped ``payload['relations']`` pairs to the triple shape.
 
-    The upstream ``ner_multilingual`` stage de-dupes triple endpoints into a
-    flat ``entities`` list where each entity carries its ``predicate`` context
-    (``ner.py``). We pair entities that share a predicate: the first is the
-    subject, the second the object. A single entity for a predicate yields no
-    triple (no object endpoint). This is a best-effort reconstruction; when it
-    is lossy the ``/extract`` fallback in ``_extract_relation`` provides the
-    authoritative triples.
+    Pure projection — the head/tail binding is the extractor's own, so nothing
+    is inferred here. Endpoint offsets ride along so the write path can quote
+    the sentence the relation was read from as the fact's evidence excerpt.
+    """
+    out: list[dict[str, Any]] = []
+    for rel in relations:
+        if not isinstance(rel, dict):
+            continue
+        subject = str(rel.get("subject", "")).strip()
+        predicate = str(rel.get("predicate", "")).strip()
+        obj = str(rel.get("object", "")).strip()
+        if not subject or not predicate or not obj:
+            continue
+        out.append({
+            "subject": subject,
+            "predicate": predicate,
+            "object": obj,
+            # Absent → None, so the write path applies its documented floor
+            # instead of laundering a fabricated 1.0.
+            "confidence": rel.get("confidence"),
+            "subject_start": _as_offset(rel.get("subject_start")),
+            "subject_end": _as_offset(rel.get("subject_end")),
+            "object_start": _as_offset(rel.get("object_start")),
+            "object_end": _as_offset(rel.get("object_end")),
+        })
+    return out
+
+
+def _as_offset(value: Any) -> int:
+    """Coerce a payload offset to an int; ``-1`` means "unknown"."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
+
+
+def _pair_is_bound(
+    subj: Mapping[str, Any],
+    obj: Mapping[str, Any],
+    *,
+    text: str,
+    max_gap: int,
+) -> bool:
+    """Is this candidate (subject, object) pair provably adjacent in the text?
+
+    Three constraints, ALL required — a candidate that cannot satisfy them is
+    refused rather than emitted on a guess:
+
+      * **Located** — both endpoints carry a real character offset. Without one
+        there is no evidence they were ever near each other.
+      * **Text order** — the subject occurs before the object. The legacy list
+        has no direction, and assuming SVO order at least stops the inversions
+        ("the Republican party / member of / Zelensky").
+      * **Same sentence** — no sentence/bullet break between them, and no more
+        than ``max_gap`` characters. This is what kills the cross-bullet
+        bindings a TASS-style digest post produces, where two unrelated
+        headlines in one message were fused into a single relation.
+
+    The sentence test needs the offsets to address THIS text; when the recorded
+    span doesn't match the surface we hold (a payload rendered from a different
+    field set), we fall back to the distance bound alone rather than trusting a
+    slice that means nothing.
+    """
+    s_start = _as_offset(subj.get("start"))
+    s_end = _as_offset(subj.get("end"))
+    o_start = _as_offset(obj.get("start"))
+    if s_start < 0 or o_start < 0:
+        return False
+    if o_start < s_start:
+        return False
+    gap_from = s_end if s_end >= 0 else s_start
+    if o_start - gap_from > max_gap:
+        return False
+    if text:
+        surface = str(subj.get("text", ""))
+        aligned = (
+            s_end > s_start
+            and text[s_start:s_end].lower() == surface.lower()
+        )
+        if aligned and _SENTENCE_BREAK_RE.search(text, gap_from, o_start):
+            return False
+    return True
+
+
+#: Sentence / list-item boundary. Bullets, pipes and newlines count: a digest
+#: post ("⚡️ A ... \n⚡️ B ...") is one document but many unrelated statements,
+#: and binding across those breaks is what fused separate headlines into one
+#: relation. Terminators INSIDE an endpoint's own span ("Apple Inc.") are never
+#: consulted — only the text strictly BETWEEN the two endpoints is.
+_SENTENCE_BREAK_RE = re.compile(r"[.!?;\n\r•·–—|]")
+
+
+def _offset_aligned_text(payload: Mapping[str, Any], text_fields: list[str]) -> str:
+    """The source text in the SAME rendering the upstream NER measured offsets
+    against — concatenated fields with the markdown wrappers stripped.
+
+    ``ner._extract_text`` strips "[**t**](url)" → "t" BEFORE the extractor sees
+    the text, so every offset on ``payload['entities']`` indexes the stripped
+    form. Comparing them against the raw concatenation would misalign every
+    telegram signal, so the same two substitutions are applied here.
+    """
+    text = _concat_text(payload, text_fields)
+    if not text:
+        return ""
+    text = _MD_LINK_RE.sub(r"\1", text)
+    return _MD_BOLD_RE.sub(r"\1", text).strip()
+
+
+def _triple_excerpt(
+    text: str,
+    triple: Mapping[str, Any],
+    *,
+    fallback: str,
+    max_chars: int = 512,
+) -> str:
+    """The sentence a triple was read from — the fact's human-verification hook.
+
+    Expands from the endpoint offsets out to the enclosing sentence/bullet
+    bounds, so ``evidence_set.text_excerpt`` quotes the clause that actually
+    asserts the relation rather than the head of the document. Falls back to
+    ``fallback`` (the leading text) whenever the offsets are unusable, so the
+    excerpt is never empty when ANY source text is available.
+    """
+    if not text:
+        return fallback
+    offsets = [
+        _as_offset(triple.get(key))
+        for key in ("subject_start", "subject_end", "object_start", "object_end")
+    ]
+    located = [o for o in offsets if 0 <= o <= len(text)]
+    if not located:
+        return fallback
+    lo, hi = min(located), max(located)
+    left = 0
+    for match in _SENTENCE_BREAK_RE.finditer(text, 0, lo):
+        left = match.end()
+    right_match = _SENTENCE_BREAK_RE.search(text, hi)
+    right = right_match.end() if right_match else len(text)
+    return text[left:right].strip()[:max_chars] or fallback
+
+
+def _entities_to_triples(
+    entities: list[Any],
+    *,
+    text: str = "",
+    max_gap: int = 160,
+) -> tuple[list[dict[str, Any]], int]:
+    """Re-bind triples from a LEGACY relation-entity list. Returns
+    ``(triples, dropped_candidate_pairs)``.
+
+    The upstream ``ner_multilingual`` stage flattens the extractor's triples
+    into a de-duped entity list where each entity keeps only its ``predicate``
+    label. That list is document-wide, is NOT in text order, and has already
+    lost any endpoint that a previous predicate group claimed first — so the
+    pairing is not recoverable by position. Pairing members by LIST INDEX (what
+    this did) manufactured relations wholesale: "Russia / founded by / Pavel
+    Durov" from a post reading "Telegram founder Pavel Durov", "Donetsk /
+    founded by / Kiev" from "the war launched by the Kiev regime", a France24
+    reporter bound as an IRGC spokesperson.
+
+    So we no longer reconstruct — we CORROBORATE. Members are sorted into text
+    order and only adjacent candidates that :func:`_pair_is_bound` can place in
+    the same sentence become triples; everything else is dropped and counted.
+    Dropping is the correct outcome: ``_extract_relation`` falls through to the
+    authoritative ``/extract`` pairs when this yields nothing, and a fact that
+    was never asserted is strictly better than one that was invented.
     """
     by_pred: dict[str, list[dict[str, Any]]] = {}
     order: list[str] = []
@@ -1911,8 +2210,8 @@ def _entities_to_triples(entities: list[Any]) -> list[dict[str, Any]]:
         if not isinstance(ent, dict):
             continue
         pred = str(ent.get("predicate", "")).strip()
-        text = str(ent.get("text", "")).strip()
-        if not pred or not text:
+        surface = str(ent.get("text", "")).strip()
+        if not pred or not surface:
             continue
         if pred not in by_pred:
             by_pred[pred] = []
@@ -1920,12 +2219,23 @@ def _entities_to_triples(entities: list[Any]) -> list[dict[str, Any]]:
         by_pred[pred].append(ent)
 
     triples: list[dict[str, Any]] = []
+    dropped = 0
     for pred in order:
         members = by_pred[pred]
-        # Pair consecutive (subject, object) members sharing the predicate.
-        for i in range(0, len(members) - 1, 2):
-            subj = members[i]
-            obj = members[i + 1]
+        # Text order — the emission order is triple order, not reading order.
+        located = sorted(
+            (e for e in members if _as_offset(e.get("start")) >= 0),
+            key=lambda e: _as_offset(e.get("start")),
+        )
+        kept = 0
+        i = 0
+        while i + 1 < len(located):
+            subj, obj = located[i], located[i + 1]
+            if not _pair_is_bound(subj, obj, text=text, max_gap=max_gap):
+                # Refused: retry this object as the next candidate's subject
+                # rather than consuming both.
+                i += 1
+                continue
             # None (not 1.0) when neither endpoint carried a score, so the
             # write-path resolver applies the default rather than a fake 1.0.
             conf = subj.get("confidence", obj.get("confidence", None))
@@ -1934,8 +2244,17 @@ def _entities_to_triples(entities: list[Any]) -> list[dict[str, Any]]:
                 "predicate": pred,
                 "object": obj.get("text", ""),
                 "confidence": conf,
+                "subject_start": _as_offset(subj.get("start")),
+                "subject_end": _as_offset(subj.get("end")),
+                "object_start": _as_offset(obj.get("start")),
+                "object_end": _as_offset(obj.get("end")),
             })
-    return triples
+            kept += 1
+            i += 2
+        # Volume impact = what index-pairing WOULD have emitted, minus what
+        # survived the binding test.
+        dropped += max(0, len(members) // 2 - kept)
+    return triples, dropped
 
 
 def _parse_llm_triples(content: str) -> list[dict[str, Any]]:

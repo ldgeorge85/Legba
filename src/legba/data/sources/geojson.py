@@ -9,8 +9,16 @@ pulls the document over ``httpx`` (honoring stored ETag / Last-Modified like
 the RSS handler), parses it, and yields one :class:`Signal` per geographic
 feature with:
 
-  * ``modality = "structured"``
-  * ``mime_type = "application/geo+json"``
+  * ``modality = "structured"`` — UNLESS the feature's properties carry
+    substantial free-text prose (``description`` / ``instruction`` / etc.,
+    see ``_PROSE_KEYS`` + ``_PROSE_MIN_LEN``), in which case that prose is
+    flattened to ``payload["raw_body"]`` and ``modality = "text"`` instead, so
+    the text pipeline (``signal_summarizer``, opensearch indexing) can see it.
+    NWS severe-weather alerts are the motivating case; most GIS feeds (USGS,
+    EONET) carry no such prose and stay ``structured`` unchanged.
+  * ``mime_type = "application/geo+json"`` always, regardless of the above —
+    the UI's mime_type-first renderer resolution still draws the map from the
+    inlined geometry either way.
   * ``media_ref`` pointing at the source document URL (REFERENCE, not inlined
     bytes — the per-feature geometry IS inlined in the payload because it is
     small and the value of the signal)
@@ -96,6 +104,23 @@ _GEO_KEYS: tuple[str, ...] = (
 
 #: Feature property keys we probe for a canonical / source URL.
 _URL_KEYS: tuple[str, ...] = ("url", "link", "source_url", "canonical_url")
+
+#: Feature property keys that may carry free-text PROSE (as opposed to a
+#: title / tag / category label) — general across geojson feeds, not
+#: NWS-specific. NWS alerts are the richest known case: `description` (the
+#: full bulletin) and `instruction` (public-safety guidance) are BOTH real
+#: paragraphs, so both are probed and concatenated (not first-match) rather
+#: than picking just one. Checked in this fixed order for determinism.
+_PROSE_KEYS: tuple[str, ...] = ("description", "instruction", "summary", "details", "body")
+
+#: Minimum combined length (chars) of `_PROSE_KEYS` text before a feature is
+#: treated as text-bearing (`modality="text"` + `payload["raw_body"]`) rather
+#: than the default `structured`. Keeps the flatten GENERAL instead of
+#: NWS-hardcoded while still excluding short tag/label values that happen to
+#: share a probed key name — e.g. EONET's `description` is usually a short
+#: category-style string (observed median ~28 chars), and USGS carries no
+#: prose property at all. Both stay `structured`, unchanged, below this floor.
+_PROSE_MIN_LEN = 200
 
 
 # ---------------------------------------------------------------------------
@@ -488,6 +513,22 @@ class GeoJSONSourceHandler:
                 geo_codes = [iso2]
         canonical = _first_str(properties, _URL_KEYS) or None
 
+        # DQ sweep (R7): a feature can carry real prose in its properties —
+        # NWS alerts populate `description` (the full bulletin) + `instruction`
+        # (public-safety guidance), both real paragraphs — that the text
+        # pipeline can never see while modality stays "structured":
+        # `signal_summarizer` only scans `WHERE modality='text'`, and
+        # opensearch's `_BEST_BODY_FIELDS` never looks inside `properties`.
+        # Flatten it to `payload["raw_body"]` (the same top-level field the
+        # RSS handler uses) and flip modality to "text" for those rows only.
+        # `_PROSE_MIN_LEN` keeps this GENERAL rather than NWS-hardcoded while
+        # leaving one-liner / tag-shaped values alone — USGS has no prose
+        # property at all, and EONET's `description` is usually a short
+        # category-style string — both stay `structured`, byte-identical to
+        # today.
+        prose = _extract_prose(properties)
+        has_prose = len(prose) >= _PROSE_MIN_LEN
+
         # Re-wrap as a minimal, self-contained GeoJSON Feature so the UI
         # renderer receives a valid `application/geo+json` fragment directly
         # from the payload (no re-fetch needed to draw the map).
@@ -509,6 +550,8 @@ class GeoJSONSourceHandler:
             "geojson": geojson_feature,
             "source_url": self._config.url,
         }
+        if has_prose:
+            payload["raw_body"] = prose
 
         content_hash = hashlib.sha256(
             json.dumps(
@@ -520,12 +563,17 @@ class GeoJSONSourceHandler:
         ).hexdigest()
 
         # Source-first pivot (P-06): the Signal is target-agnostic. We stamp
-        # the source identity + the structured/geo+json modality. ``media_ref``
-        # is a REFERENCE to the source document; the per-feature geometry lives
-        # inline in the payload for the renderer.
+        # the source identity + the structured/geo+json modality (or "text"
+        # for a prose-bearing feature, per the DQ-sweep flatten above).
+        # ``mime_type`` stays `application/geo+json` either way — the UI's
+        # mime_type-first renderer resolution still draws the map from the
+        # inlined geometry; only the modality (and downstream text-pipeline
+        # eligibility) changes. ``media_ref`` is a REFERENCE to the source
+        # document; the per-feature geometry lives inline in the payload for
+        # the renderer.
         return Signal(
             source_id=ctx.source_id,
-            modality="structured",
+            modality="text" if has_prose else "structured",
             mime_type=GEOJSON_MIME_TYPE,
             media_ref=self._config.url,
             payload=payload,
@@ -602,6 +650,25 @@ def _first_str(properties: dict[str, Any], keys: tuple[str, ...]) -> str:
         if isinstance(val, (int, float)) and not isinstance(val, bool):
             return str(val)
     return ""
+
+
+def _extract_prose(properties: dict[str, Any]) -> str:
+    """Concatenate any free-text prose fields present in feature properties.
+
+    Probes :data:`_PROSE_KEYS` and joins every non-empty match (in that fixed
+    order) with a blank line — NWS alerts populate both `description` and
+    `instruction`, and both matter. Returns ``""`` when the feature carries
+    none of these keys (the common case — USGS, EONET, and most other GIS
+    feeds have no free-text property at all).
+    """
+    parts: list[str] = []
+    for key in _PROSE_KEYS:
+        val = properties.get(key)
+        if isinstance(val, str):
+            stripped = val.strip()
+            if stripped:
+                parts.append(stripped)
+    return "\n\n".join(parts)
 
 
 def _country_from_geometry(geometry: Any) -> str | None:

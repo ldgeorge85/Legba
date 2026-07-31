@@ -1138,7 +1138,12 @@ async def _build_entity_researcher(
     pairs in, tombstone+redirect merges out). Its ``kind_deps`` carry the
     resolved primary LLM, the pg_pool, and the budget reporter. The descriptor's
     ``method.llm.merge_mode`` gates the ONLY mutating behavior (``'apply'`` vs
-    the dry-run default ``'adjudicate_only'``)."""
+    the dry-run default ``'adjudicate_only'``).
+
+    R9b: ``trgm_limit`` was READ here and then never passed to the deps — dead
+    config in the X-1 sense, so a descriptor PUT enabling the trigram probe did
+    nothing at all. It is now threaded (with its ``trgm_min_degree`` floor);
+    both ship at their in-source defaults, so today's behavior is unchanged."""
     from ..data.analysts.entity_researcher import EntityResearcherDeps
 
     llm = await resolve_llm()
@@ -1148,6 +1153,12 @@ async def _build_entity_researcher(
         descriptor, "max_pairs", default=EntityResearcherDeps.max_pairs)
     trgm_limit = _read_method_llm_option(
         descriptor, "trgm_limit", default=EntityResearcherDeps.trgm_limit)
+    # R9b — the trigram probe's link-count floor. Default 0 (no floor) keeps the
+    # shipped behavior byte-identical; raising trgm_limit WITHOUT this is the
+    # unbounded ~61s self-join, so the two are set together in the descriptor.
+    trgm_min_degree = _read_method_llm_option(
+        descriptor, "trgm_min_degree",
+        default=EntityResearcherDeps.trgm_min_degree)
     same_min = _read_method_llm_option(
         descriptor, "same_min_confidence",
         default=EntityResearcherDeps.same_min_confidence)
@@ -1177,6 +1188,8 @@ async def _build_entity_researcher(
             budget=getattr(deps, "budget", None),
             apply=(merge_mode == "apply"),
             max_pairs=int(max_pairs),
+            trgm_limit=int(trgm_limit),
+            trgm_min_degree=int(trgm_min_degree),
             same_min_confidence=float(same_min),
             max_tokens=int(max_tokens),
             temperature=float(temperature),
@@ -1301,12 +1314,12 @@ async def _build_deterministic(
     ``options["sub_handler"]`` — the descriptor must populate that field
     (validated by the kind itself, not here).
 
-    Two deterministic sub-handlers reach for the SELF-HOSTED vLLM plane
+    Three deterministic sub-handlers reach for the SELF-HOSTED vLLM plane
     (``llm.primary.openai_compat`` — NEVER Anthropic / Opus, that plane is
-    consult/deep only). Both resolve the descriptor's ``method.llm.primary`` via
+    consult/deep only). All resolve the descriptor's ``method.llm.primary`` via
     the same ``resolve_llm()`` path and merge the handler into ``deps.extras``
     under their own key; the shared :func:`_wire_deterministic_llm` applies the
-    ``_is_anthropic_component`` hard-refuse + degrade-not-break for both:
+    ``_is_anthropic_component`` hard-refuse + degrade-not-break for each:
 
       * ``signal_summarizer`` — ALWAYS-ON (no env flag). Its sweep distills long
         signal bodies on the CORE plane ($0). Wired whenever the bound
@@ -1316,6 +1329,14 @@ async def _build_deterministic(
         (``LEGBA_FACT_CONTENTION_LLM_TIEBREAK``, default OFF). Breaks a NEAR-TIE
         abstain with a bounded vLLM call. Key:
         ``fact_contention_arbiter.LLM_DEPS_EXTRA_KEY``.
+      * ``claim_watch`` (W-B2) — the bearing-CONFIRM leg's batched second
+        opinion over gate-passed edges. Wired whenever the bound sub-handler is
+        ``claim_watch`` AND the descriptor declares ``method.llm.primary``; the
+        shipped descriptor declares none, so the leg is inert until an operator
+        adds one. Key: ``bearing_gate.CONFIRM_LLM_DEPS_EXTRA_KEY``. (The GATE
+        leg's 8B client is NOT wired here — its component id is a run OPTION
+        this builder cannot see, so ``bearing_gate`` resolves it lazily from
+        the registry itself.)
 
     No LLM ref (or the sub-handler doesn't want one, or the flag is off) →
     ``deps`` is threaded UNMODIFIED, so every other deterministic sub-handler
@@ -1366,6 +1387,31 @@ async def _build_deterministic(
             component_id=component_id,
             extra_key=_TIEBREAK_LLM_KEY,
             purpose="fact_contention_tiebreak",
+        )
+
+    # claim_watch — the W-B2 CONFIRM leg's $0 core-plane client. Wired only for
+    # the bound sub-handler AND only when the descriptor declares
+    # method.llm.primary, so the shipped (llm-less) claim_watch descriptor is
+    # byte-for-byte unchanged: no llm block => no wiring => the confirm leg is
+    # inert and stamps nothing. Same shared helper as signal_summarizer, so the
+    # Anthropic hard-refuse applies here too — a deterministic handler may
+    # never route onto the billed plane.
+    if (
+        is_deterministic
+        and sub_handler == "claim_watch"
+        and component_id is not None
+    ):
+        from ..data.analysts.deterministic_handlers.bearing_gate import (
+            CONFIRM_LLM_DEPS_EXTRA_KEY as _CLAIM_WATCH_CONFIRM_KEY,
+        )
+
+        deps = await _wire_deterministic_llm(
+            descriptor,
+            deps,
+            resolve_llm,
+            component_id=component_id,
+            extra_key=_CLAIM_WATCH_CONFIRM_KEY,
+            purpose="claim_watch_bearing_confirm",
         )
 
     # corpus_indexer — always-on OpenSearch INDEX PLANE sweep (no LLM). Build +
@@ -2171,6 +2217,62 @@ def infer_llm_subprovider(component_id: str, *, endpoint: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _extract_llm_ref_component_id(
+    descriptor: AnalystDescriptor, key: str, value: Any,
+) -> str | None:
+    """Shape-tolerant ``method.llm.<key>`` StackRef extraction, shared by
+    :func:`_primary_llm_component_id` / :func:`_narrate_llm_component_id` /
+    :func:`_verify_llm_component_id`.
+
+    Recognized shapes:
+
+      * a Mapping with a non-empty string ``"raw"`` key — the property-factory
+        form (``{"raw": ..., "factory_kind": "stack_ref", "expected_family":
+        "llm_provider"}``) or the registry's model_dump of it;
+      * a live :class:`Property.StackRef` instance (``.raw`` attribute);
+      * a bare non-empty string.
+
+    ``value is None`` (the key simply absent) is the ordinary, silent
+    "not configured" case — every caller's own docstring already documents
+    that as zero-regression and it is NEVER warned here.
+
+    A value that IS present but matches NONE of the recognized shapes is a
+    descriptor AUTHORING MISTAKE — e.g. ``{"stack_ref": "llm.primary.
+    openai_compat"}`` instead of the property-factory form above. Live
+    2026-07-30: this exact shape left the W-B2 claim_watch bearing-CONFIRM
+    leg dark with ZERO trace — ``_primary_llm_component_id`` returned
+    ``None`` silently, indistinguishable from an operator who simply never
+    configured ``method.llm.primary`` at all (the documented, expected
+    default for that descriptor). Log it LOUD (WARNING, token
+    ``llm_ref_malformed``) so a malformed ref is distinguishable from an
+    absent one, while still returning ``None`` — the build must never fail
+    here; whatever plane this key would have wired just stays unwired,
+    exactly as it already did before this guard, only silently.
+    """
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        raw = value.get("raw")
+        if isinstance(raw, str) and raw:
+            return raw
+        reason = "mapping has no non-empty string 'raw' key"
+    else:
+        raw = getattr(value, "raw", None)
+        if isinstance(raw, str) and raw:
+            return raw
+        if isinstance(value, str) and value:
+            return value
+        reason = "neither a mapping, a StackRef-shaped object, nor a string"
+    logger.warning(
+        "analyst_deps_builder.llm_ref_malformed analyst=%r key=%s reason=%s "
+        "value=%r — degrading to no-ref for method.llm.%s (build NOT failed; "
+        "whatever plane this key wires stays unwired until the descriptor is "
+        "corrected)",
+        descriptor.identity.id, key, reason, value, key,
+    )
+    return None
+
+
 def _primary_llm_component_id(descriptor: AnalystDescriptor) -> str | None:
     """Extract the StackRef ``raw`` field from ``descriptor.method.llm.primary``.
 
@@ -2178,23 +2280,14 @@ def _primary_llm_component_id(descriptor: AnalystDescriptor) -> str | None:
     with ``raw`` + ``expected_family`` keys) when the body comes back
     from the registry, OR as a live :class:`Property.StackRef` instance
     in tests that construct the descriptor in-process.  Both shapes are
-    handled.
+    handled. A PRESENT-but-malformed entry logs a loud
+    ``llm_ref_malformed`` WARNING (see :func:`_extract_llm_ref_component_id`)
+    rather than degrading silently.
     """
     llm = getattr(descriptor.method, "llm", None) or {}
     if not isinstance(llm, Mapping):
         return None
-    primary = llm.get("primary")
-    if primary is None:
-        return None
-    if isinstance(primary, Mapping):
-        raw = primary.get("raw")
-        return str(raw) if isinstance(raw, str) and raw else None
-    raw = getattr(primary, "raw", None)
-    if isinstance(raw, str) and raw:
-        return raw
-    if isinstance(primary, str) and primary:
-        return primary
-    return None
+    return _extract_llm_ref_component_id(descriptor, "primary", llm.get("primary"))
 
 
 def _narrate_llm_component_id(descriptor: AnalystDescriptor) -> str | None:
@@ -2202,26 +2295,17 @@ def _narrate_llm_component_id(descriptor: AnalystDescriptor) -> str | None:
 
     The OPTIONAL second LLM ref for the per-phase split (journal §4.1): the voice
     (field-notes + NARRATE) plane. ``method.llm`` is an open ``dict[str, Any]``
-    (schemas/analyst.py), so the ``narrate`` key needs NO schema change. Absent /
-    malformed → None, and the caller leaves the voice on the primary handler
-    (zero-regression). Handles the same shape variants as
+    (schemas/analyst.py), so the ``narrate`` key needs NO schema change. Absent
+    → None, silently (zero-regression); the caller leaves the voice on the
+    primary handler. A PRESENT-but-malformed entry logs a loud
+    ``llm_ref_malformed`` WARNING instead (see
+    :func:`_extract_llm_ref_component_id`). Handles the same shape variants as
     :func:`_primary_llm_component_id` (registry model_dump vs live StackRef).
     """
     llm = getattr(descriptor.method, "llm", None) or {}
     if not isinstance(llm, Mapping):
         return None
-    narrate = llm.get("narrate")
-    if narrate is None:
-        return None
-    if isinstance(narrate, Mapping):
-        raw = narrate.get("raw")
-        return str(raw) if isinstance(raw, str) and raw else None
-    raw = getattr(narrate, "raw", None)
-    if isinstance(raw, str) and raw:
-        return raw
-    if isinstance(narrate, str) and narrate:
-        return narrate
-    return None
+    return _extract_llm_ref_component_id(descriptor, "narrate", llm.get("narrate"))
 
 
 def _verify_llm_component_id(descriptor: AnalystDescriptor) -> str | None:
@@ -2230,27 +2314,18 @@ def _verify_llm_component_id(descriptor: AnalystDescriptor) -> str | None:
     The OPTIONAL judge LLM ref for the P0-T2 faithfulness verify pass: the
     cross-family 8B judge plane (the live ``slm.internal`` Llama-3.1-8B at deploy).
     ``method.llm`` is an open ``dict[str, Any]`` (schemas/analyst.py), so the
-    ``verify`` key needs NO schema change. Absent / malformed → None, and the
-    caller leaves ``verify_judge`` unset so the verify pass degrades to its
-    deterministic citation-presence floor (zero-regression). Handles the same
+    ``verify`` key needs NO schema change. Absent → None, silently
+    (zero-regression); the caller leaves ``verify_judge`` unset so the verify
+    pass degrades to its deterministic citation-presence floor. A
+    PRESENT-but-malformed entry logs a loud ``llm_ref_malformed`` WARNING
+    instead (see :func:`_extract_llm_ref_component_id`). Handles the same
     shape variants as :func:`_primary_llm_component_id` (registry model_dump vs
     live StackRef).
     """
     llm = getattr(descriptor.method, "llm", None) or {}
     if not isinstance(llm, Mapping):
         return None
-    verify = llm.get("verify")
-    if verify is None:
-        return None
-    if isinstance(verify, Mapping):
-        raw = verify.get("raw")
-        return str(raw) if isinstance(raw, str) and raw else None
-    raw = getattr(verify, "raw", None)
-    if isinstance(raw, str) and raw:
-        return raw
-    if isinstance(verify, str) and verify:
-        return verify
-    return None
+    return _extract_llm_ref_component_id(descriptor, "verify", llm.get("verify"))
 
 
 # ---------------------------------------------------------------------------

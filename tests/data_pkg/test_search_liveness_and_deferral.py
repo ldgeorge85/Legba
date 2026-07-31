@@ -271,21 +271,50 @@ def test_a_meta_analyst_self_allows_its_web_pack():
     assert "ActionPackRef(pack_id=base_binding.pack.identity.id)" in body
 
 
-def test_the_shipped_pack_is_still_inert_until_an_operator_points_it():
-    """Granting the pack does not activate search. The ToolSpec's rung-0 opt-in
-    gate (no `provider` key) is still closed in the shipped descriptor."""
+def test_the_shipped_pack_points_at_the_shipped_searxng_service():
+    """2026-07-28: the shipped descriptor ACTIVATES search — it declares
+    ``config.provider -> search.searxng.local`` (see the descriptor's own
+    header comment: "ACTIVATED 2026-07-28: the runtime binds this component
+    into ToolContext.search"). Granting the pack + a target allowing it now
+    DOES reach a live provider; this test pins that current contract in
+    place of the pre-activation "still inert" assertion it replaces.
+
+    The rung-0 opt-in gate MECHANISM itself — no `provider` key ⇒ no route
+    — is UNCHANGED and stays covered generically (independent of this one
+    shipped descriptor) by
+    ``test_search_provider_layer.py::test_route_rung0_opt_in_gate`` /
+    ``test_tool_config_shorthand_and_nested_block``. This test additionally
+    re-derives the inert baseline FROM the shipped config (minus its
+    `provider` key) to show the liveness is that explicit opt-in, not a new
+    always-on default.
+    """
     from pathlib import Path
 
     import yaml
 
-    from legba.data.stack.search import resolve_tool_search_route
+    from legba.data.stack.search import SearchRoute, resolve_tool_search_route
 
     root = Path(__file__).resolve().parents[2]
     body = yaml.safe_load(
         (root / "descriptors" / "action_pack_web_access.yaml").read_text()
     )
     cfg = next(t["config"] for t in body["tools"] if t["name"] == "web_search")
-    assert resolve_tool_search_route(cfg) is None
+
+    # The shipped ref resolves — live by design, not inert.
+    assert resolve_tool_search_route(cfg) == SearchRoute(
+        component_id="search.searxng.local", source="config.provider",
+    )
+    # expected_family is documentation only (the load-bearing family check is
+    # assert_search_component at bind time, covered by
+    # test_builder_rejects_a_route_pointed_at_the_wrong_family) — pin that the
+    # shipped ref still names it correctly.
+    assert cfg["provider"]["expected_family"] == "search_provider"
+
+    # The gate that IS still live: this is an explicit operator opt-in, not a
+    # code default. Strip the shipped `provider` key and the SAME config goes
+    # back to inert.
+    inert_cfg = {k: v for k, v in cfg.items() if k != "provider"}
+    assert resolve_tool_search_route(inert_cfg) is None
 
 
 # ---------------------------------------------------------------------------

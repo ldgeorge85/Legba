@@ -149,17 +149,20 @@ docker exec legba-legba-registry-1 python -m legba.data.migrate
 > `docker compose run --rm --no-deps --entrypoint python legba-registry -m legba.data.migrate`
 >
 > A fresh deploy applies the single proven baseline
-> (`deploy/baseline/0001_baseline.sql`) and then this runner applies any FUTURE
-> (`0054`+) migrations. The baseline pre-seeds the ledger to `0053`; on a
-> baseline-provisioned DB `migrate` then applies the thirty-two post-baseline
-> migrations (`0054`–`0085`) and advances the head to `0085`. (`deploy/deploy.sh`
-> does both steps for you.)
+> (`deploy/baseline/0001_baseline.sql`) and then this runner applies every
+> FUTURE (`0054`+) migration. The baseline pre-seeds the ledger to `0053`;
+> `migrate` then advances the head to the highest-numbered file in
+> `src/legba/data/migrations/` — the current head is listed in
+> [RELEASE_STATE.md](RELEASE_STATE.md) (regenerated per release), so this doc
+> never hardcodes it. (`deploy/deploy.sh` does both steps for you.)
 
-Verify (migration head should be **0085**; ISO countries table fully seeded):
+Verify (the head must equal the highest-numbered migration file on disk; ISO
+countries table fully seeded):
 
 ```
+ls src/legba/data/migrations/ | sort | tail -1                  # expected head
 docker exec legba-postgres-1 psql -U legba -d legba \
-    -c "SELECT name FROM legba_data_migrations ORDER BY name"   # head 0085
+    -c "SELECT max(name) FROM legba_data_migrations"            # actual head
 docker exec legba-postgres-1 psql -U legba -d legba \
     -c "SELECT count(*) FROM iso_countries"                     # expect 249
 ```

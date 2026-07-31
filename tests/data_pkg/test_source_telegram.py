@@ -36,6 +36,7 @@ from legba.data.sources.telegram import (
     TelegramChannelSourceConfig,
     TelegramChannelSourceHandler,
     _env_resolver,
+    rotate_channel_order,
 )
 
 # ---------------------------------------------------------------------------
@@ -1677,3 +1678,478 @@ async def test_guard_per_channel_timeout_abandons_hung_channel_continues_others(
     assert [s.payload["channel"]["username"] for s in out] == ["good"]
     cursors = await store.get("telegram_cursor")
     assert cursors == {"good": 42}  # hung channel's cursor not advanced
+
+
+# ---------------------------------------------------------------------------
+# R5 — round-robin channel rotation (tail-starvation fix)
+#
+# Measured failure this fixes: 100 of 105 live telegram polls ended `capped`
+# (the source actor's outer wall-clock/entry budget cut the pull), and because
+# the channel walk followed FIXED CONFIG ORDER every poll, the three newest
+# channels — positions 26/27/28 of a 28-channel descriptor — had effectively
+# never been polled at all. The walk now starts where the previous poll
+# stopped, and records that position AHEAD of each channel, because a poll cut
+# mid-walk never reaches the end of `pull` to record anything.
+#
+# Every test below drives the handler exactly the way the source actor does:
+# consume the async generator, then STOP CONSUMING and close it. That close is
+# the whole point — it is what a capped poll looks like from in here.
+# ---------------------------------------------------------------------------
+
+_ROTATION_KEY = "telegram_rotation"
+
+
+def _rotation_channels(n: int) -> list[str]:
+    """n channel handles, config order, distinguishable by index."""
+    return [f"@ch{i:02d}" for i in range(n)]
+
+
+def _rotation_client(handles: list[str], *, rounds: int = 1) -> _StubTelegramClient:
+    """One stub channel per handle, each holding ``rounds`` messages.
+
+    Message ids are unique across channels (``idx * 1000 + round``) so a cursor
+    leaking between channels shows up as a wrong id, not a silent pass.
+    """
+    now = datetime.now(tz=timezone.utc)
+    states = {}
+    for idx, ref in enumerate(handles):
+        h = ref.lstrip("@")
+        states[h] = _StubChannelState(
+            entity=_StubEntity(username=h, id=idx + 1, title=h.upper()),
+            messages=[
+                _StubMessage(
+                    id=idx * 1000 + r,
+                    text=f"{h}-m{r}",
+                    date=now - timedelta(minutes=rounds - r),
+                )
+                for r in range(1, rounds + 1)
+            ],
+        )
+    return _StubTelegramClient(states)
+
+
+def _seed_round(client: _StubTelegramClient, handles: list[str], round_no: int) -> None:
+    """Every channel posts one new message.
+
+    Live channels keep producing between polls — which is exactly why a
+    fixed-order walk starves the tail: the head of ``channels`` has something
+    new to deliver on EVERY poll, so it eats the whole budget every time and
+    the walk never gets further down the list.
+
+    Each round REPLACES the channel's message list rather than appending, so
+    every channel has exactly ONE pending message whenever it is visited and
+    a poll's budget maps one-to-one onto channels served. Message ids still
+    increase monotonically, so the cursor arithmetic is the real one.
+    """
+    now = datetime.now(tz=timezone.utc)
+    for idx, ref in enumerate(handles):
+        h = ref.lstrip("@")
+        client._channels[h].messages = [
+            _StubMessage(id=idx * 1000 + round_no, text=f"{h}-r{round_no}", date=now),
+        ]
+
+
+async def _poll_with_entry_budget(
+    handler: TelegramChannelSourceHandler,
+    ctx: SourceContext,
+    max_entries: int,
+) -> list[str]:
+    """Run ONE poll bounded by ENTRIES, the way the source actor bounds it.
+
+    Mirrors ``SourceCore.pull_once`` exactly, including the ordering that
+    matters: the budget is checked BEFORE the entry is processed, so the entry
+    that trips the cap is pulled from the generator and DISCARDED, and the
+    generator is left suspended inside the channel it came from. Then the
+    consumer stops consuming and closes it — which is all a "capped" poll ever
+    is from the handler's side. Returns the handles SERVED before the cut.
+    """
+    served: list[str] = []
+    count = 0
+    agen = handler.pull(ctx)
+    try:
+        async for sig in agen:
+            if count >= max_entries:
+                break  # the cap — this entry is discarded, as the actor does
+            count += 1
+            handle = sig.payload["channel"]["username"]
+            if handle not in served:
+                served.append(handle)
+    finally:
+        await agen.aclose()
+    return served
+
+
+# --- the pure ordering rule ------------------------------------------------
+
+
+def test_rotate_channel_order_without_pointer_keeps_config_order():
+    pairs = [("@a", "a"), ("b", "b"), ("telegram://c", "c")]
+    assert rotate_channel_order(pairs, None) == pairs
+    assert rotate_channel_order(pairs, "") == pairs
+
+
+def test_rotate_channel_order_starts_at_pointer_and_wraps():
+    pairs = [("@a", "a"), ("b", "b"), ("c", "c"), ("d", "d")]
+    assert rotate_channel_order(pairs, "c") == [
+        ("c", "c"), ("d", "d"), ("@a", "a"), ("b", "b"),
+    ]
+    # Pointing at the head is a no-op rotation, not a wrap.
+    assert rotate_channel_order(pairs, "a") == pairs
+
+
+def test_rotate_channel_order_unknown_pointer_degrades_to_config_order():
+    """A channel removed from `channels` (or renamed) leaves a dangling
+    pointer. Falling back to the top re-polls a channel early at worst; it
+    must never skip the tail, and the next poll re-anchors the pointer."""
+    pairs = [("@a", "a"), ("b", "b")]
+    assert rotate_channel_order(pairs, "gone") == pairs
+    assert rotate_channel_order([], "a") == []
+
+
+# --- rotation across polls -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_rotation_visits_every_channel_across_capped_polls():
+    """THE R5 regression: 28 live channels, a budget that affords 10 entries.
+
+    Every channel posts once between polls, so every poll is capped — the live
+    shape of the descriptor that starved. Under fixed config order this walks
+    ch00..ch10 on EVERY poll (the head always has something new) and ch11..ch27
+    are never polled at all; the assertion below on the union fails outright.
+    With rotation, three capped polls reach all 28.
+    """
+    handles = _rotation_channels(28)
+    cfg = _make_config(channels=handles, lookback_hours=72)
+    client = _rotation_client(handles, rounds=0)
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+    store = InMemoryStateStore()
+
+    attempted: list[list[str]] = []
+    for poll_no in range(1, 4):
+        _seed_round(client, handles, poll_no)
+        client.get_entity_calls.clear()
+        await _poll_with_entry_budget(handler, _ctx_with_state(store), 10)
+        attempted.append(list(client.get_entity_calls))
+
+    # Each poll resumes where the last one was cut — no poll re-grinds the head.
+    assert [poll[0] for poll in attempted] == ["ch00", "ch11", "ch22"]
+    # Union covers the whole descriptor, tail channels included. Fixed order
+    # yields only the 11 channels of the first slice here.
+    visited = {h for poll in attempted for h in poll}
+    assert visited == {f"ch{i:02d}" for i in range(28)}
+
+
+@pytest.mark.asyncio
+async def test_rotation_pointer_advances_past_served_channels_on_a_capped_poll():
+    """A capped poll records where the NEXT one starts, even though it never
+    reaches the end of `pull` (the generator is closed mid-walk)."""
+    handles = _rotation_channels(6)
+    cfg = _make_config(channels=handles, lookback_hours=72)
+    client = _rotation_client(handles)
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+    store = InMemoryStateStore()
+
+    served = await _poll_with_entry_budget(handler, _ctx_with_state(store), 3)
+    assert served == ["ch00", "ch01", "ch02"]
+
+    pointer = await store.get(_ROTATION_KEY)
+    # ch03 was reached and cut; the pointer is already PAST it, so no single
+    # busy channel can park the rotation on itself.
+    assert pointer["next_handle"] == "ch04"
+    assert pointer["updated_at"]
+
+
+@pytest.mark.asyncio
+async def test_rotation_pointer_wraps_after_a_complete_poll():
+    """A poll that walks every channel leaves the pointer back at the head —
+    a full sweep restarts at the top, it does not drift."""
+    handles = _rotation_channels(4)
+    cfg = _make_config(channels=handles, lookback_hours=72)
+    client = _rotation_client(handles)
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+    store = InMemoryStateStore()
+
+    out = [s async for s in handler.pull(_ctx_with_state(store))]
+    assert len(out) == 4
+    assert (await store.get(_ROTATION_KEY))["next_handle"] == "ch00"
+
+
+@pytest.mark.asyncio
+async def test_rotation_pointer_survives_a_fresh_handler_instance():
+    """Persistence proof. The source actor builds a NEW handler for every
+    poll, so the pointer only works if it lives in the state store — an
+    instance attribute would reset to config order on every single poll."""
+    handles = _rotation_channels(6)
+    cfg = _make_config(channels=handles, lookback_hours=72)
+    store = InMemoryStateStore()
+
+    first = TelegramChannelSourceHandler(
+        client_factory=lambda **_: _rotation_client(handles),
+    )
+    await _configure_handler(first, cfg)
+    assert await _poll_with_entry_budget(first, _ctx_with_state(store), 2) == [
+        "ch00", "ch01",
+    ]
+
+    # A brand-new handler object, sharing nothing but the state store.
+    second_client = _rotation_client(handles)
+    second = TelegramChannelSourceHandler(client_factory=lambda **_: second_client)
+    await _configure_handler(second, cfg)
+    served = await _poll_with_entry_budget(second, _ctx_with_state(store), 2)
+    assert served == ["ch03", "ch04"]   # resumes past ch02 (reached + cut)
+    assert second_client.get_entity_calls[0] == "ch03"
+
+
+@pytest.mark.asyncio
+async def test_rotation_keeps_per_channel_cursors_isolated():
+    """Cursors stay per-channel under rotation: a channel served in a LATER
+    poll resumes from its OWN cursor, and no channel inherits another's."""
+    handles = _rotation_channels(4)
+    cfg = _make_config(channels=handles, lookback_hours=72)
+    client = _rotation_client(handles, rounds=2)
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+    store = InMemoryStateStore()
+
+    # Poll 1 serves ch00/ch01 (2 messages each), is cut on ch02's first entry.
+    await _poll_with_entry_budget(handler, _ctx_with_state(store), 4)
+    cursors = await store.get("telegram_cursor")
+    assert cursors == {"ch00": 2, "ch01": 1002}   # idx*1000 + round
+
+    # Poll 2 resumes at ch03 and wraps; every channel ends on its OWN max id
+    # (ch00 -> 2, ch01 -> 1002, ch02 -> 2002, ch03 -> 3002), never a shared or
+    # leaked value.
+    [s async for s in handler.pull(_ctx_with_state(store))]
+    cursors = await store.get("telegram_cursor")
+    assert cursors == {"ch00": 2, "ch01": 1002, "ch02": 2002, "ch03": 3002}
+
+
+@pytest.mark.asyncio
+async def test_capped_poll_checkpoints_cursors_of_channels_it_finished():
+    """A cut poll keeps the progress of the channels it FINISHED — and only
+    those. The cut channel's cursor must NOT advance: the actor discards the
+    entry it was cut on, so persisting it would drop a message for good."""
+    handles = _rotation_channels(4)
+    cfg = _make_config(channels=handles, lookback_hours=72)
+    client = _rotation_client(handles)
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+    store = InMemoryStateStore()
+
+    await _poll_with_entry_budget(handler, _ctx_with_state(store), 2)
+    cursors = await store.get("telegram_cursor")
+    assert cursors == {"ch00": 1, "ch01": 1001}
+    assert "ch02" not in cursors   # reached, cut mid-walk, cursor NOT advanced
+
+
+@pytest.mark.asyncio
+async def test_rotation_pointer_ignores_a_channel_dropped_from_config():
+    """A pointer left on a channel the operator has since removed degrades to
+    config order (fail-open) rather than losing the poll."""
+    handles = _rotation_channels(3)
+    cfg = _make_config(channels=handles, lookback_hours=72)
+    client = _rotation_client(handles)
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+    store = InMemoryStateStore({_ROTATION_KEY: {"next_handle": "retired_channel"}})
+
+    out = [s async for s in handler.pull(_ctx_with_state(store))]
+    assert [s.payload["channel"]["username"] for s in out] == [
+        "ch00", "ch01", "ch02",
+    ]
+    assert (await store.get(_ROTATION_KEY))["next_handle"] == "ch00"
+
+
+@pytest.mark.asyncio
+async def test_rotation_pointer_survives_a_garbage_record():
+    """A malformed rotation record is treated as absent, not fatal."""
+    handles = _rotation_channels(2)
+    cfg = _make_config(channels=handles, lookback_hours=72)
+    client = _rotation_client(handles)
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+    store = InMemoryStateStore({_ROTATION_KEY: "not-a-dict"})
+
+    out = [s async for s in handler.pull(_ctx_with_state(store))]
+    assert [s.payload["channel"]["username"] for s in out] == ["ch00", "ch01"]
+
+
+# --- rotation vs. the A7 guards --------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_floodwait_cycle_abort_advances_rotation_past_the_flooding_channel(
+    monkeypatch,
+):
+    """GUARD 2 unaffected. A flood abort still defers the rest of the cycle and
+    persists the server wait; rotation resumes AFTER the flooding channel so a
+    single rate-limited channel cannot pin the whole descriptor to itself."""
+    from legba.data.sources import telegram as tg_mod
+
+    class FakeFloodWait(Exception):
+        def __init__(self, seconds: int) -> None:
+            super().__init__(f"flood {seconds}s")
+            self.seconds = seconds
+
+    monkeypatch.setattr(tg_mod, "_flood_wait_error_class", lambda: FakeFloodWait)
+
+    handles = _rotation_channels(3)
+    client = _rotation_client(handles)
+    client._channels["ch00"].error_script = [FakeFloodWait(seconds=600)]
+    cfg = _make_config(
+        channels=handles, flood_wait_abort_seconds=30, backoff_base_seconds=0.0,
+        lookback_hours=72,
+    )
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+    store = InMemoryStateStore()
+
+    out = [s async for s in handler.pull(_ctx_with_state(store))]
+    assert out == []
+    assert "ch01" not in client.iter_calls        # cycle really did abort
+    assert (await store.get(_FLOODWAIT_KEY)) is not None   # wait persisted
+    assert (await store.get(_ROTATION_KEY))["next_handle"] == "ch01"
+
+
+@pytest.mark.asyncio
+async def test_per_channel_timeout_still_isolates_and_rotation_moves_on():
+    """GUARD 5 unaffected under rotation: a hung channel is abandoned for the
+    poll, the next channel still delivers, and the rotation advances past both.
+    """
+
+    class _HangingThenOkClient(_StubTelegramClient):
+        async def get_entity(self, handle: str):
+            self.get_entity_calls.append(handle)
+            state = self._channels.get(handle)
+            if state is None:
+                raise KeyError(handle)
+            if getattr(state, "hang", False):
+                await asyncio.sleep(100)
+            return state.entity
+
+    now = datetime.now(tz=timezone.utc)
+    hung = _StubChannelState(
+        entity=_StubEntity(username="hung", id=1, title="H"),
+        messages=[_StubMessage(id=1, text="x", date=now)],
+    )
+    hung.hang = True  # type: ignore[attr-defined]
+    good = _StubChannelState(
+        entity=_StubEntity(username="good", id=2, title="G"),
+        messages=[_StubMessage(id=42, text="ok", date=now)],
+    )
+    client = _HangingThenOkClient({"hung": hung, "good": good})
+    cfg = _make_config(
+        channels=["@hung", "@good"],
+        per_channel_timeout_seconds=0.2,
+        cycle_timeout_seconds=30.0,
+    )
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+    store = InMemoryStateStore()
+
+    out = [s async for s in handler.pull(_ctx_with_state(store))]
+    assert [s.payload["channel"]["username"] for s in out] == ["good"]
+    cursors = await store.get("telegram_cursor")
+    assert cursors == {"good": 42}   # hung channel's cursor not advanced
+    assert (await store.get(_ROTATION_KEY))["next_handle"] == "hung"
+
+
+@pytest.mark.asyncio
+async def test_health_record_carries_rotation_coverage():
+    """The health record (the actor's window into a non-productive poll) says
+    where the rotation started, so 'which channels did this poll reach' is
+    answerable from the state store."""
+    handles = _rotation_channels(3)
+    cfg = _make_config(channels=handles, lookback_hours=72)
+    client = _rotation_client(handles)
+    handler = TelegramChannelSourceHandler(client_factory=lambda **_: client)
+    await _configure_handler(handler, cfg)
+    store = InMemoryStateStore({_ROTATION_KEY: {"next_handle": "ch01"}})
+
+    [s async for s in handler.pull(_ctx_with_state(store))]
+    health = await store.get(_HEALTH_KEY)
+    assert health["state"] == "healthy"
+    assert health["detail"]["rotation_start"] == "ch01"
+    assert health["detail"]["channels_deferred"] == []
+
+
+# ---------------------------------------------------------------------------
+# R5 — poll bounds this handler advertises to the source actor
+# ---------------------------------------------------------------------------
+
+
+def test_handler_advertises_a_budget_above_its_own_cycle_guard():
+    """The advertised wall-clock budget must EXCEED cycle_timeout_seconds —
+    otherwise the actor truncates the walk before the handler's own A7 cycle
+    guard ever applies, which is precisely how the tail starved."""
+    cfg = _make_config(channels=["@a"], cycle_timeout_seconds=180.0)
+    handler = TelegramChannelSourceHandler(config=cfg)
+    assert handler.poll_budget_seconds > cfg.cycle_timeout_seconds
+    assert handler.poll_budget_seconds == 200.0
+
+
+def test_handler_advertises_an_entry_cap_that_fits_a_whole_sweep():
+    """One full page per channel in the rotation: the entry cap must not be
+    what ends a sweep (a catch-up page persists its cursor only when it
+    returns WHOLE — cut it mid-flight and the channel re-reads the same
+    messages on every visit). The wall clock is the intended bound."""
+    cfg = _make_config(channels=["@a", "@b", "@c"], per_channel_message_limit=200)
+    handler = TelegramChannelSourceHandler(config=cfg)
+    assert handler.max_entries_per_poll >= cfg.per_channel_message_limit
+    assert handler.max_entries_per_poll == 600
+
+
+def test_handler_advertisement_tracks_configured_guards():
+    cfg = _make_config(
+        channels=["@a", "@b"], cycle_timeout_seconds=90.0,
+        per_channel_message_limit=50,
+    )
+    handler = TelegramChannelSourceHandler(config=cfg)
+    assert handler.poll_budget_seconds == 110.0
+    assert handler.max_entries_per_poll == 100
+
+
+def test_live_shape_advertisement_is_clamped_by_the_actor_not_the_handler():
+    """The shipped descriptor's shape (28 channels x 50 messages) asks for
+    more than the actor allows — deliberately. The handler states what it
+    wants; the ceiling belongs to the actor (resolve_poll_bounds clamps to
+    1000), so this handler can ask generously without owning the invariant."""
+    cfg = _make_config(
+        channels=[f"@ch{i}" for i in range(28)], per_channel_message_limit=50,
+    )
+    handler = TelegramChannelSourceHandler(config=cfg)
+    assert handler.max_entries_per_poll == 1400
+    assert handler.poll_budget_seconds == 200.0
+
+
+def test_handler_advertisement_before_configure_uses_schema_defaults():
+    """A bare-constructed handler (no config resolved yet) still answers — the
+    actor asks before `pull` has run."""
+    handler = TelegramChannelSourceHandler()
+    assert handler.poll_budget_seconds == 200.0
+    assert handler.max_entries_per_poll == 200
+
+
+def test_explicit_config_overrides_win_over_the_derived_advertisement():
+    cfg = _make_config(
+        channels=["@a"], poll_budget_seconds=45.0, max_entries_per_poll=25,
+    )
+    handler = TelegramChannelSourceHandler(config=cfg)
+    assert handler.poll_budget_seconds == 45.0
+    assert handler.max_entries_per_poll == 25
+
+
+def test_poll_bound_overrides_default_to_unset_and_reject_nonsense():
+    cfg = TelegramChannelSourceConfig(
+        api_id_secret="a", api_hash_secret="b", session_secret="c",
+    )
+    assert cfg.poll_budget_seconds is None
+    assert cfg.max_entries_per_poll is None
+    with pytest.raises(ValidationError):
+        _make_config(poll_budget_seconds=0.0)
+    with pytest.raises(ValidationError):
+        _make_config(max_entries_per_poll=-1)

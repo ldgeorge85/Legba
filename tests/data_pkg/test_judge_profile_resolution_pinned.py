@@ -175,6 +175,18 @@ _EXPECTED_FAIL_CLASSES = {
     "double_counted": "soft_fail",
     "indicator_uncited_triggered": "soft_fail",
     "unscoped_absence_claim": "soft_fail",
+    # V-B (2026-07-31) — a scoped negative ("no NEW / large-scale X") that a
+    # row of the analyst's OWN retained input slice reports. HARD by the same
+    # earned-severity rule as V-D: the verdict must NAME the violating title.
+    "absence_slice_contradicted": "hard_fail",
+    # V-D (2026-07-31) — a judge contradiction that could not POINT at the
+    # refutation (no resolvable verbatim evidence quote). Still a failure; the
+    # unearned hard-fail severity is what the demotion removes.
+    "judge_contradicted_unquoted": "soft_fail",
+    # V-C (2026-07-31) — prose misquoting the platform's OWN metadata (an
+    # effective_confidence / tier the cited output's captured column
+    # contradicts). Soft: an overclaim about provenance, not a fabricated fact.
+    "metadata_mismatch": "soft_fail",
 }
 
 
@@ -257,8 +269,8 @@ def test_structural_badge_resolution_pinned() -> None:
 # 4. The per-CLAIM-KIND judge profile registry
 # ---------------------------------------------------------------------------
 _EXPECTED_PROFILES = {
-    "citation_support": ("citsupp.v3", False),
-    "absence": ("absence.v1", True),
+    "citation_support": ("citsupp.v4", False),
+    "absence": ("absence.v2", True),
     "synthesis": ("synthesis.v0", False),
     "forward_looking": ("fwd.v0", False),
     "structure": ("structure.v0", False),

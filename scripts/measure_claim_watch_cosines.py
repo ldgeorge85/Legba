@@ -6,10 +6,11 @@ vector-plane cosine distribution.
 
 ``claim_watch`` (:mod:`legba.data.analysts.deterministic_handlers.claim_watch`)
 matches new signals against the standing open-question set. Its vector plane
-requires ``cosine(question_thesis, signal_body) >= VECTOR_SIM_FLOOR`` (0.60)
-before the semantic plane contributes anything to the fused weight; in
-production that floor almost never clears (live plane mix: entity=511 edges,
-entity+geo=66, vector+entity+geo=1). The working hypothesis under test: a
+requires ``cosine(question_thesis, signal_body) >= VECTOR_SIM_FLOOR`` before
+the semantic plane contributes anything to the fused weight (import the
+current value from claim_watch — this measurement RAN at the original 0.60
+floor and is WHY it moved to 0.45; the plane mix below is the pre-move state:
+entity=511 edges, entity+geo=66, vector+entity+geo=1). Hypothesis tested: a
 LONG signal-body embedding compared against a SHORT thesis-sentence embedding
 is a structural asymmetry that caps the achievable cosine regardless of how
 genuinely related the pair is — and a SHORT DIGEST (title+summary) embedding
@@ -84,7 +85,7 @@ METHOD
        shared entity) — the accidental-similarity noise floor the vector
        plane actually contends with on every run, because claim_watch does
        not pre-filter by desk before computing cosine.
-6. Report p50/p90/p99/max (+ hit-rate at the current 0.60 floor) per bucket,
+6. Report p50/p90/p99/max (+ hit-rate at the floor under test) per bucket,
    per embedding side (body vs digest), per desk and pooled.
 
 This script changes NOTHING: no threshold, no claim_watch.py edit, no writes

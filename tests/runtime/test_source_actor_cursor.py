@@ -53,6 +53,7 @@ from legba.runtime.source_actor import (
     SourceDeps,
     _RawConfig,
     bulk_highwater_advance,
+    resolve_poll_bounds,
 )
 
 
@@ -513,3 +514,142 @@ async def test_poisoned_future_cursor_self_heals_on_read():
     cursor = await store.get("cursor")
     advanced = datetime.fromisoformat(cursor["last_pulled_at"])
     assert advanced <= datetime.now(tz=timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# C (R5, 2026-07-30) — PER-SOURCE poll bounds.
+#
+# The generic 30s / 100-entry bounds are sized for the modal source (one page
+# of an RSS feed). They are not universal: the telegram handler walks ~30
+# channels behind its own 180s cycle guard, so the outer 30s budget truncated
+# 100 of 105 live polls — the actor was cutting the pull long before the
+# handler's own economics ever applied, and the tail of the channel list was
+# never reached at all. Each source now resolves its own bounds
+# (descriptor.config > handler advertisement > the generic defaults), clamped
+# to a ceiling the descriptor cannot exceed.
+# ---------------------------------------------------------------------------
+
+
+def _bounds_descriptor(**config) -> SourceDescriptor:
+    return _poll_descriptor(f"source.test.bounds_{uuid4().hex[:8]}").model_copy(
+        update={"config": dict(config)},
+    )
+
+
+class _AdvertisingHandler(_StubHandler):
+    """Handler that advertises its own bounds — the telegram pattern.
+
+    Attributes are set only when supplied, so the no-advertisement case is a
+    handler that genuinely lacks them (``getattr`` -> None), not one carrying
+    an explicit null.
+    """
+
+    def __init__(self, signals=None, **advertised) -> None:
+        super().__init__(signals or [])
+        for name, value in advertised.items():
+            setattr(self, name, value)
+
+
+def test_poll_bounds_default_when_nobody_declares_anything():
+    """Every source that says nothing keeps EXACTLY the historical bounds —
+    R5 is a widening for the kinds that opt in, not a change for the rest."""
+    budget, entries = resolve_poll_bounds(
+        _bounds_descriptor(url="http://unused"), _AdvertisingHandler(),
+    )
+    assert (budget, entries) == (30.0, 100)
+
+
+def test_poll_bounds_take_the_handler_advertisement():
+    """The handler knows its own cost; the actor asks (the same
+    handler-advertises/actor-reads contract as ``health_state_key``)."""
+    budget, entries = resolve_poll_bounds(
+        _bounds_descriptor(url="http://unused"),
+        _AdvertisingHandler(poll_budget_seconds=200.0, max_entries_per_poll=400),
+    )
+    assert (budget, entries) == (200.0, 400)
+
+
+def test_poll_bounds_descriptor_config_overrides_the_handler():
+    """The descriptor is the operator's tuning surface — live-PUT per source,
+    no code change — so it wins over the handler's derived default."""
+    budget, entries = resolve_poll_bounds(
+        _bounds_descriptor(poll_budget_seconds=120, max_entries_per_poll=250),
+        _AdvertisingHandler(poll_budget_seconds=200.0, max_entries_per_poll=400),
+    )
+    assert (budget, entries) == (120.0, 250)
+
+
+def test_poll_bounds_unwrap_the_property_factory_shape():
+    """Descriptor config values may arrive wrapped ({"raw": ...}) — the same
+    unwrap every other actor-side config read performs."""
+    budget, entries = resolve_poll_bounds(
+        _bounds_descriptor(
+            poll_budget_seconds={"raw": 90, "ui_hint": "seconds"},
+            max_entries_per_poll={"raw": 300},
+        ),
+        _AdvertisingHandler(),
+    )
+    assert (budget, entries) == (90.0, 300)
+
+
+def test_poll_bounds_are_clamped_to_the_ceilings():
+    """A poll must still finish inside Dapr's drain window and reach its
+    cursor-advance: no descriptor value may park an actor indefinitely."""
+    budget, entries = resolve_poll_bounds(
+        _bounds_descriptor(poll_budget_seconds=99_999, max_entries_per_poll=10**6),
+        _AdvertisingHandler(),
+    )
+    assert budget == 240.0
+    assert entries == 1000
+
+
+def test_poll_bounds_allow_a_source_to_ask_for_LESS_than_the_default():
+    """Only the ceiling is enforced — a cheap source may ask for a shorter
+    poll than the generic default."""
+    budget, entries = resolve_poll_bounds(
+        _bounds_descriptor(poll_budget_seconds=5, max_entries_per_poll=10),
+        _AdvertisingHandler(),
+    )
+    assert (budget, entries) == (5.0, 10)
+
+
+def test_poll_bounds_ignore_garbage_and_fall_through():
+    """A bad tuning knob degrades to the next source of truth (and is logged),
+    never takes the source offline. Bools are rejected explicitly: `True` is
+    an int in Python and would silently mean a 1-second budget."""
+    # Garbage in the descriptor → the handler's advertisement still applies.
+    budget, entries = resolve_poll_bounds(
+        _bounds_descriptor(poll_budget_seconds="banana", max_entries_per_poll=True),
+        _AdvertisingHandler(poll_budget_seconds=200.0, max_entries_per_poll=400),
+    )
+    assert (budget, entries) == (200.0, 400)
+    # Garbage everywhere → the proven defaults.
+    budget, entries = resolve_poll_bounds(
+        _bounds_descriptor(poll_budget_seconds=-5, max_entries_per_poll=0),
+        _AdvertisingHandler(poll_budget_seconds=None, max_entries_per_poll="lots"),
+    )
+    assert (budget, entries) == (30.0, 100)
+
+
+@pytest.mark.asyncio
+async def test_advertised_entry_cap_governs_the_pull():
+    """End to end: the resolved cap — not the module default — is what bounds
+    the walk. Same 150-entry backlog, two different advertisements."""
+    source_id = f"source.test.cap_adv_{uuid4().hex[:8]}"
+    base = datetime(2025, 6, 1, 9, 0, tzinfo=timezone.utc)
+    entries = [_entry(source_id, base + timedelta(minutes=i)) for i in range(150)]
+
+    async def _written(handler) -> int:
+        sd = _poll_descriptor(source_id)
+        deps = StandardDeps(pg_pool=_FakePool(), nats_publish=None)
+        core = SourceCore(
+            f"source::{source_id}::{uuid4().hex[:6]}",
+            SourceDeps(descriptor=sd, deps=deps),
+        )
+        _wire_core(core, InMemoryStateStore(), handler)
+        return (await core.pull_once())["signals_written"]
+
+    assert await _written(_AdvertisingHandler(entries)) == 100          # default
+    assert await _written(
+        _AdvertisingHandler(entries, max_entries_per_poll=150),
+    ) == 150                                                            # widened

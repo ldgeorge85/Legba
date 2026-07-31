@@ -9,7 +9,9 @@ fold onto its bare "X" twin). The fix: an article-prefixed surface with no cue
 falls through to `entity`, not `person`.
 
 Locked here:
-  * article-prefixed no-cue surfaces → `entity` (NOT person);
+  * article-prefixed no-cue surfaces are NEVER `person` — and, since R8, carry
+    the SPECIFIC class the shared canon gives their bare twin when it knows
+    one (`entity` only when no gazetteer recognises the surface);
   * article-prefixed CUE surfaces still classify by their cue (org/location/…);
   * UN-prefixed two-cap names still default to `person` (unchanged);
   * a name initial "A." is NOT treated as the article "a".
@@ -22,13 +24,46 @@ import pytest
 from legba.data.filters.ner import _classify_entity_text as clf
 
 
-@pytest.mark.parametrize("s", [
-    # Article-prefixed, NO cue among cfeatures above → entity (NOT person).
+#: The E6 invariant: an article-prefixed no-cue surface is NEVER `person`.
+_ARTICLE_NO_CUE_SURFACES = [
     "the Indian Ocean", "The Economist", "the Kerch Strait", "the White House",
     "a Su-34", "the World Cup", "the Palace of Justice", "the Strait of Malacca",
+]
+
+
+@pytest.mark.parametrize("s", _ARTICLE_NO_CUE_SURFACES)
+def test_article_no_cue_is_never_person(s):
+    assert clf(s) != "person", f"{s!r} must not be person, got {clf(s)!r}"
+
+
+@pytest.mark.parametrize("s,expected", [
+    # R8 tightened the landing: the shared-canon gazetteer runs BEFORE the
+    # article rule, so an article-prefixed surface it recognises now gets the
+    # SPECIFIC class its bare twin already had. That is the point — a generic
+    # `entity` pair is always GRAY and never auto-merges, so "the White House"
+    # could not fold onto "White House" while one of them was class-less.
+    ("the Indian Ocean", "location"),        # trailing geographic feature
+    ("the Kerch Strait", "location"),        # trailing geographic feature
+    ("the Palace of Justice", "location"),   # leading place head
+    ("the White House", "organization"),     # curated metonymic seat
+    # Still unrecognised by every gazetteer → the generic bucket, unchanged.
+    ("The Economist", "entity"),
+    ("a Su-34", "entity"),
+    ("the World Cup", "entity"),
+    ("the Strait of Malacca", "entity"),
 ])
-def test_article_no_cue_is_entity_not_person(s):
-    assert clf(s) == "entity", f"{s!r} should be entity, got {clf(s)!r}"
+def test_article_no_cue_class(s, expected):
+    assert clf(s) == expected, f"{s!r} should be {expected}, got {clf(s)!r}"
+
+
+@pytest.mark.parametrize("s", [
+    "the White House", "the Kerch Strait", "the Indian Ocean",
+])
+def test_article_twin_shares_its_bare_class(s):
+    # The fold this test family exists for: both surfaces must carry the SAME
+    # class or the merge candidate can never reach the auto band.
+    bare = s.split(" ", 1)[1]
+    assert clf(s) == clf(bare), f"{s!r} and {bare!r} must agree"
 
 
 @pytest.mark.parametrize("s,expected", [

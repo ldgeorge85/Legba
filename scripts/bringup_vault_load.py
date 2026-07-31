@@ -38,6 +38,10 @@ def parse_env(path: Path) -> dict[str, str]:
 MAPPING = [
     ("llm.primary.api_key",          "OPENAI_API_KEY"),
     ("llm.anthropic.api_key",         "CONSULT_API_KEY"),
+    # Cross-family judge endpoints (2026-07-30): OpenRouter free tier +
+    # Cerebras PAYG. Consumed by the llm.judge.* stack components only.
+    ("llm.judge.openrouter.api_key",  "OPENROUTER_API_KEY"),
+    ("llm.judge.cerebras.api_key",    "CEREBRAS_API_KEY"),
     # ACLED OAuth2 password grant — username (the account email) + password.
     ("source.acled.username",         "ACLED_USERNAME"),
     ("source.acled.password",         "ACLED_PASSWORD"),
@@ -97,16 +101,24 @@ def store(secret_id: str, plaintext: str, notes: str | None) -> dict:
 
 
 def main() -> int:
-    env_path = Path("/usr/local/deployments/active/legba/.env")
+    # Repo-relative by default (works on any clone); LEGBA_ENV_FILE overrides.
+    env_path = Path(
+        os.environ.get("LEGBA_ENV_FILE")
+        or Path(__file__).resolve().parents[1] / ".env"
+    )
     env = parse_env(env_path)
     failures: list[str] = []
     loaded: list[str] = []
     skipped: list[str] = []
+    absent: list[str] = []
 
     for secret_id, env_key in MAPPING:
         plaintext = env.get(env_key)
         if not plaintext:
-            failures.append(f"{secret_id}: missing env key {env_key}")
+            # An unset key is not an error: the vault loads what the operator
+            # provided, and every consumer degrades on a missing credential.
+            # Failures are reserved for the vault actually rejecting a store.
+            absent.append(f"{secret_id} (env {env_key} unset)")
             continue
         try:
             if already_exists(secret_id):
@@ -123,6 +135,10 @@ def main() -> int:
     print("Skipped (already present):")
     for s in skipped:
         print(f"  = {s}")
+    if absent:
+        print("Absent (env key unset — consumer degrades):")
+        for s in absent:
+            print(f"  - {s}")
     if failures:
         print("Failures:")
         for s in failures:

@@ -104,6 +104,64 @@ NOT_JSON = "<html>not geojson at all</html>"
 NOT_GEOJSON = json.dumps({"type": "Soup", "ingredients": []})
 
 
+# --- R7 (DQ sweep) fixtures: prose-flattening / modality-flip coverage ------
+
+#: NWS-shaped feature: `properties.description` (the full bulletin) AND
+#: `properties.instruction` (public-safety guidance) are both real paragraphs
+#: — the motivating case for the prose flatten.
+_NWS_DESCRIPTION = (
+    "At 415 PM CDT, a severe thunderstorm was located near Chesterfield, "
+    "moving east at 35 mph. HAZARD: 60 mph wind gusts and quarter size hail. "
+    "SOURCE: Radar indicated. IMPACT: Expect damage to roofs, siding, and "
+    "trees. Locations impacted include St. Louis, Clayton, and University City."
+)
+_NWS_INSTRUCTION = (
+    "For your protection move to an interior room on the lowest floor of a "
+    "building."
+)
+
+NWS_FEATURE_COLLECTION = json.dumps({
+    "type": "FeatureCollection",
+    "features": [
+        {
+            "type": "Feature",
+            "id": "urn:oid:2.49.0.1.840.0.abc123",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[
+                    [-90.1, 38.5], [-90.0, 38.5], [-90.0, 38.6], [-90.1, 38.5],
+                ]],
+            },
+            "properties": {
+                "headline": "Severe Thunderstorm Warning issued for St. Louis County",
+                "description": _NWS_DESCRIPTION,
+                "instruction": _NWS_INSTRUCTION,
+                "severity": "Severe",
+                "areaDesc": "St. Louis, MO",
+            },
+        },
+    ],
+})
+
+#: EONET-shaped feature: `properties.description` IS present, but is a short
+#: category-style tag, not a bulletin — well under the prose length floor.
+EONET_FEATURE_COLLECTION = json.dumps({
+    "type": "FeatureCollection",
+    "features": [
+        {
+            "type": "Feature",
+            "id": "EONET_6321",
+            "geometry": {"type": "Point", "coordinates": [-119.4, 36.8]},
+            "properties": {
+                "title": "Wildfire - California, United States",
+                "description": "Wildfires",
+                "link": "https://eonet.gsfc.nasa.gov/api/v3/events/EONET_6321",
+            },
+        },
+    ],
+})
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -259,6 +317,106 @@ async def test_pull_bare_geometry_document_wraps_feature():
     assert s.payload["geojson"]["geometry"]["type"] == "Point"
     # No id / properties → stable content-hash fallback id.
     assert s.payload["external_id"]
+
+
+# ---------------------------------------------------------------------------
+# R7 (DQ sweep) — prose-bearing features flatten to modality="text"
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_nws_shaped_feature_flattens_prose_and_flips_modality():
+    """(a) An NWS-shaped feature — `description` + `instruction` real
+    paragraphs — gets its prose flattened to `payload["raw_body"]` and its
+    modality flipped to "text" so `signal_summarizer` (`WHERE
+    modality='text'`) and opensearch's `_BEST_BODY_FIELDS` (which reads
+    `payload.raw_body`) can both see it."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=NWS_FEATURE_COLLECTION, request=req)
+
+    signals = await _collect(_make_handler(handler).pull(_make_ctx(), since=None))
+    assert len(signals) == 1
+    s = signals[0]
+
+    # The modality flip — the whole point of this fix.
+    assert s.modality == "text"
+    # mime_type is UNCHANGED — the UI's mime_type-first renderer resolution
+    # still draws the map from the inlined geometry regardless of modality.
+    assert s.mime_type == GEOJSON_MIME_TYPE
+
+    # The full bulletin + instruction are flattened, concatenated in that
+    # fixed order, exactly as `_extract_prose` joins them.
+    assert s.payload["raw_body"] == f"{_NWS_DESCRIPTION}\n\n{_NWS_INSTRUCTION}"
+    # The raw properties dict is untouched — still carries the same text
+    # nested, plus everything else the feature had.
+    assert s.payload["properties"]["description"] == _NWS_DESCRIPTION
+    assert s.payload["properties"]["instruction"] == _NWS_INSTRUCTION
+    # Title still comes from the headline (unaffected by the prose flatten).
+    assert s.payload["title"] == "Severe Thunderstorm Warning issued for St. Louis County"
+    # The geo+json fragment is still inlined for the map renderer.
+    assert s.payload["geojson"]["geometry"]["type"] == "Polygon"
+
+
+@pytest.mark.asyncio
+async def test_usgs_shaped_feature_unchanged_and_byte_identical():
+    """(b) A USGS-shaped feature (no prose property at all) is completely
+    unaffected by the R7 change — same modality, same payload keys, no
+    `raw_body` added. Regression guard: this must never flip."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=FEATURE_COLLECTION, request=req)
+
+    signals = await _collect(_make_handler(handler).pull(_make_ctx(), since=None))
+    assert len(signals) == 2
+    s = signals[0]
+
+    assert s.modality == "structured"
+    assert s.mime_type == GEOJSON_MIME_TYPE
+    assert "raw_body" not in s.payload
+    # Full payload shape, byte-identical to the pre-fix contract (same keys
+    # the "Happy path" test above already exercises individually).
+    assert s.payload == {
+        "external_id": "us6000abcd",
+        "title": "M 5.2 - 10km W of Somewhere",
+        "geometry_type": "Point",
+        "properties": {
+            "title": "M 5.2 - 10km W of Somewhere",
+            "mag": 5.2,
+            "place": "10km W of Somewhere",
+            "url": "https://earthquake.invalid/event/us6000abcd",
+            "iso3": "USA",
+        },
+        "geojson": {
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [-122.4, 37.8, 8.0]},
+            "properties": {
+                "title": "M 5.2 - 10km W of Somewhere",
+                "mag": 5.2,
+                "place": "10km W of Somewhere",
+                "url": "https://earthquake.invalid/event/us6000abcd",
+                "iso3": "USA",
+            },
+            "id": "us6000abcd",
+        },
+        "source_url": "https://example.invalid/feed.geojson",
+    }
+
+
+@pytest.mark.asyncio
+async def test_eonet_shaped_short_description_stays_structured():
+    """(c) An EONET-shaped feature has a `description` KEY, but it's a short
+    category-style tag (well under `_PROSE_MIN_LEN`) — the length guard keeps
+    it `structured`, unchanged, with no `raw_body` added."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=EONET_FEATURE_COLLECTION, request=req)
+
+    signals = await _collect(_make_handler(handler).pull(_make_ctx(), since=None))
+    assert len(signals) == 1
+    s = signals[0]
+
+    assert s.modality == "structured"
+    assert s.mime_type == GEOJSON_MIME_TYPE
+    assert "raw_body" not in s.payload
+    assert s.payload["properties"]["description"] == "Wildfires"
 
 
 # ---------------------------------------------------------------------------

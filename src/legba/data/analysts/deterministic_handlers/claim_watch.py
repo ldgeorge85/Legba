@@ -10,8 +10,10 @@ and side-writes append-only markers — NEVER content:
   * ``bearing_edges`` rows (migration 0107): "new evidence bears on old
     question", one per (signal, question) match above the fused threshold,
     with the contributing planes, the fused weight, ``provenance_class='live'``
-    and this matcher's version. The UNIQUE (src_id, dst_id, edge_kind)
-    constraint + ON CONFLICT DO NOTHING make re-runs idempotent.
+    and this matcher's version — plus, when the bearing pipeline below is on,
+    the semantic-judgment stamp in ``data`` (migration 0116). The UNIQUE
+    (src_id, dst_id, edge_kind) constraint + ON CONFLICT DO NOTHING make
+    re-runs idempotent.
   * ``review_flags`` rows (migration 0107) ONLY for matched questions that
     trace to LIVE products via a FORWARD walk over ``output_consumption``
     (migration 0106): each non-superseded consumer output reached gets one
@@ -27,9 +29,52 @@ and side-writes append-only markers — NEVER content:
     gauge: open review_flags whose flagged consumer is still a live
     (non-superseded) head.
 
-NO alerts, no LLM calls, no writes to analysis outputs, no recomposition,
-no correction content — detect-and-mark only (the standing arbiter
-discipline; the 0107 forbid-delete trigger enforces the flag side).
+No alerts, no writes to analysis outputs, no recomposition, no correction
+content — detect-and-mark only (the standing arbiter discipline; the 0107
+forbid-delete trigger enforces the flag side).
+
+The BEARING PIPELINE (W-B1/W-B2) — the one LLM seam
+---------------------------------------------------
+The MATCHING above is and stays fully deterministic. What 3.3.0 adds is a
+POST-MATCH filter: once the matcher has decided which edges it would write,
+each candidate is put to a small self-hosted model as a plain question —
+"does this signal bear on this thesis?" — and a NO means the edge is not
+written. See :mod:`.bearing_gate` for the whole leg; the seam here is one
+call between the matching pass and the write block, and every knob it reads
+is read in :func:`handle` so the X-1 catalog stays the honest contract.
+
+Why a model at all, in a handler whose whole point was determinism: two
+rounds of deterministic levers (3.1 the measured vector floor; 3.2 the meta
+exclusion, the global hub discount, the omnibus/duplicate dampers) hit their
+ceiling at ~0.21 write precision on the K-4 gold population, and the residual
+failures are pairs where every plane is honestly positive and the signal
+still does not bear on the thesis. That distinction lives in neither the
+entity set nor the embedding neighbourhood, so no re-weighting of those
+planes can make it. The idle 8B answers it at specificity 0.900 on 242 gold
+pairs with a naive prompt — i.e. it is measured to be good at exactly the
+operation it is used for, REFUSING.
+
+Three properties that keep this from being a new failure mode:
+
+  * **Default OFF.** ``bearing_gate`` defaults to ``'off'`` in code, so a
+    descriptor with no ``method.options`` block behaves byte-for-byte like
+    3.2.0 and constructs no client at all. It is turned on with a descriptor
+    PUT at deploy.
+  * **The outage never silences the matcher.** An unreachable / timed-out /
+    unparseable gate STAMPS AND WRITES (``data.bearing_gate='unavailable'``),
+    as does an over-budget candidate (``'deferred'``). A gate that failed
+    closed would convert one 8B outage into a silent hole in the bearing
+    plane; consumers filter on the stamp instead.
+  * **Everything is counted.** ``bearing_gated_out`` (the refusals),
+    ``bearing_gate_errors``, ``bearing_gate_deferred`` and the confirm leg's
+    four counters ride every receipt, and the gate's tallies ride the receipt
+    TITLE whenever it is on.
+
+A second, BATCHED judgment over the gate-YES edges only — the $0 core plane,
+echo-bound by pair id — records ``data.bearing_confirm`` +
+``bearing_confirm_reason`` on the edge. It never blocks an edge (by then the
+edge is already written); it is a richer second reading for the consumers and
+for the measurement loop.
 
 Matching planes (fused into one weight)
 ---------------------------------------
@@ -341,6 +386,17 @@ from legba.data._entity_resolve import resolve_keeper
 from ...facts.decay import retention_factor
 from ...provenance.models import FindingPayload
 from ....runtime.analyst_method import AnalystMethodResult
+from .bearing_gate import (
+    DEFAULT_BEARING_CONFIRM_CAP,
+    DEFAULT_BEARING_GATE,
+    DEFAULT_BEARING_GATE_CAP,
+    DEFAULT_BEARING_GATE_REF,
+    EdgeCandidate,
+    bearing_counter_defaults,
+    gate_enabled,
+    run_bearing_pipeline,
+    signal_digest,
+)
 from .alert_trigger_scan import (
     _load_class_watermarks,
     _mark_seeded,
@@ -371,10 +427,16 @@ CURSOR_KEY = "_cursor"
 #: weighted by desk-relative entity SPECIFICITY; 3.1.0 = the measured vector
 #: floor (0.60 → 0.45); 3.2.0 = the three K-4 levers — meta-question
 #: exclusion, the GLOBAL (signal-side) ubiquity discount composed onto the
-#: desk-relative one, and the omnibus/duplicate signal dampers. Rows written
-#: under each model stay readable and stay attributable to the model that
-#: made them.
-MATCHER_VERSION = "claim_watch/3.2.0"
+#: desk-relative one, and the omnibus/duplicate signal dampers; 3.3.0 = the
+#: BEARING PIPELINE seam — the fusion model is byte-for-byte 3.2.0, but a
+#: post-match semantic gate may now REFUSE an edge the matcher would have
+#: written (see :mod:`.bearing_gate`), so a 3.3.0 row is a row that survived a
+#: filter a 3.2.0 row never faced. That is a difference in what the population
+#: MEANS, which is exactly what this stamp exists to record — even though the
+#: gate ships OFF and an off run writes the same rows 3.2.0 wrote.
+#: Rows written under each model stay readable and stay attributable to the
+#: model that made them.
+MATCHER_VERSION = "claim_watch/3.3.0"
 
 #: review_flags.reason for flags this matcher writes.
 FLAG_REASON = "new_evidence_bears_on_open_question"
@@ -1094,12 +1156,16 @@ _FORWARD_WALK_SQL = """
      LIMIT $3
 """
 
+# ``data`` (migration 0116) carries the bearing-gate stamp. With the gate OFF
+# the writer binds '{}' — the column's own DEFAULT — so a gate-off run stores
+# exactly the bytes 3.2.0 stored and the X-1 "absent option changes nothing"
+# contract holds at the storage layer, not merely in the handler.
 _INSERT_EDGE_SQL = """
     INSERT INTO bearing_edges
         (edge_kind, src_kind, src_id, src_as_of, dst_kind, dst_id, dst_as_of,
-         weight, planes, provenance_class, matcher_version)
+         weight, planes, provenance_class, matcher_version, data)
     VALUES ('bears_on', 'signal', $1, $2, 'hypothesis', $3, $4, $5,
-            $6::text[], 'live', $7)
+            $6::text[], 'live', $7, $8::jsonb)
     ON CONFLICT (src_id, dst_id, edge_kind) DO NOTHING
 """
 
@@ -1281,6 +1347,17 @@ def _build_receipt(counters: Mapping[str, Any]) -> FindingPayload:
         damping.append(f"{url_dupes} duplicate url(s) dropped")
     if damping:
         title = f"{title} [{'; '.join(damping)}]"
+    # The BEARING GATE in the title whenever it is ON, for the same reason the
+    # abandonment and the v3.2 levers are: a receipt reading "3 edges" while a
+    # model refused 40 more — or while the 8B was down and 43 edges carry an
+    # 'unavailable' stamp — is not a receipt of what happened.
+    if counters.get("bearing_gate_mode") == "on":
+        title = (
+            f"{title} {{gate {counters.get('bearing_gate_yes', 0)} yes / "
+            f"{counters.get('bearing_gated_out', 0)} refused / "
+            f"{counters.get('bearing_gate_errors', 0)} unavailable / "
+            f"{counters.get('bearing_gate_deferred', 0)} deferred}}"
+        )
     body = "\n".join(f"{k}={counters[k]}" for k in sorted(counters))
     return FindingPayload(
         title=title[:2048],
@@ -1391,6 +1468,26 @@ async def handle(
             options.get("max_questions_per_signal", MAX_QUESTIONS_PER_SIGNAL)
         ),
     )
+    # W-B1/W-B2 — THE BEARING PIPELINE (see :mod:`.bearing_gate`). Read HERE,
+    # in the sub-handler's own module, so the X-1 catalog drift guard (which
+    # sweeps ``options.get("...")`` call sites out of this file) holds every
+    # knob to the catalog with no delegation exception; the values are passed
+    # to the pipeline as explicit arguments. DEFAULT OFF in code: a descriptor
+    # with no ``method.options`` block is byte-identical to 3.2.0, and turning
+    # the pipeline on is a descriptor PUT at deploy, not a rebuild.
+    bearing_gate_mode = options.get("bearing_gate", DEFAULT_BEARING_GATE)
+    bearing_gate_ref = str(
+        options.get("bearing_gate_ref", DEFAULT_BEARING_GATE_REF)
+    ).strip() or DEFAULT_BEARING_GATE_REF
+    bearing_gate_cap = max(
+        0, int(options.get("bearing_gate_cap", DEFAULT_BEARING_GATE_CAP))
+    )
+    bearing_confirm_cap = max(
+        0, int(options.get("bearing_confirm_cap", DEFAULT_BEARING_CONFIRM_CAP))
+    )
+    # Resolved once so the OFF path costs literally nothing: with the gate off
+    # the per-signal text digest below is never even built.
+    bearing_gate_on = gate_enabled(bearing_gate_mode)
 
     counters: dict[str, Any] = {
         "seeded": False,
@@ -1434,6 +1531,11 @@ async def handle(
         "staleness_debt": 0,
         "match_threshold": threshold,
         "matcher_version": MATCHER_VERSION,
+        # W-B1/W-B2 — seeded at their INERT values on every path (including
+        # the seed run and the no-signals early return), so every receipt
+        # carries the full set and "the gate wrote nothing" is readable
+        # without knowing which build produced the row.
+        **bearing_counter_defaults(),
     }
 
     now = datetime.now(timezone.utc)
@@ -1892,7 +1994,7 @@ async def handle(
         str(q["id"]): question_age_factor(q["produced_at"], now)
         for q in question_rows
     }
-    edge_rows: list[tuple[Any, datetime, Any, datetime, float, list[str]]] = []
+    edge_rows: list[EdgeCandidate] = []
     matched_questions: dict[str, datetime] = {}
     last_processed: Any | None = None
     processed_count = 0
@@ -2002,16 +2104,26 @@ async def handle(
             counters["edges_dropped_run_cap"] += len(cands) - edge_cap
             cands = cands[:edge_cap]
 
+        # Only the gate reads this text, so an OFF run never pays for it.
+        s_digest = signal_digest(s["payload"]) if (cands and bearing_gate_on) else ""
         for weight, planes, q in cands:
             edge_rows.append(
-                (s["id"], s["fetched_at"], q["id"], q["produced_at"], weight, planes)
+                EdgeCandidate(
+                    signal_id=s["id"],
+                    signal_as_of=s["fetched_at"],
+                    signal_text=s_digest,
+                    question_id=q["id"],
+                    question_as_of=q["produced_at"],
+                    question_thesis=str(q["thesis"] or ""),
+                    weight=weight,
+                    planes=planes,
+                )
             )
+            # matches_* count what the DETERMINISTIC matcher produced — the
+            # gate's refusals are counted separately (bearing_gated_out), so
+            # the two together give the gate's measured effect on this run.
             for p in planes:
                 counters[f"matches_{p}"] += 1
-            qid = str(q["id"])
-            prev = matched_questions.get(qid)
-            if prev is None or s["fetched_at"] > prev:
-                matched_questions[qid] = s["fetched_at"]
         last_processed = s
         processed_count += 1
 
@@ -2047,20 +2159,56 @@ async def handle(
         )
 
     # ------------------------------------------------------------------
+    # W-B1/W-B2 — THE BEARING PIPELINE. The one seam between "the matcher
+    # decided to write this edge" and "the edge is written".
+    #
+    # Placed HERE, after the whole matching pass and before any write, for
+    # three reasons that are all about correctness rather than tidiness:
+    #   * the confirm leg is BATCHED, so it needs the run's full candidate
+    #     set, not one signal's slice;
+    #   * the gate budget is PER RUN, so applying it inside the per-signal
+    #     loop would need the same cross-signal state anyway;
+    #   * ``matched_questions`` drives the review_flags leg, and a flag must
+    #     only exist for a question some edge ACTUALLY reached. Rebuilding it
+    #     from the SURVIVORS is the only correct construction — a gated-out
+    #     pair must not flag a downstream product for re-review.
+    # No pool connection is held across these calls (the matching block's
+    # connection was released above), so a slow 8B never parks a connection.
+    #
+    # OFF by default: the call below returns the input list untouched and
+    # constructs no client at all.
+    # ------------------------------------------------------------------
+    edge_rows = await run_bearing_pipeline(
+        edge_rows,
+        deps=deps,
+        mode=bearing_gate_mode,
+        gate_ref=bearing_gate_ref,
+        gate_cap=bearing_gate_cap,
+        confirm_cap=bearing_confirm_cap,
+        counters=counters,
+    )
+    for cand in edge_rows:
+        qid = str(cand.question_id)
+        prev = matched_questions.get(qid)
+        if prev is None or cand.signal_as_of > prev:
+            matched_questions[qid] = cand.signal_as_of
+
+    # ------------------------------------------------------------------
     # Writes — edges, then flags, then the cursor advance (the watermark
     # moves ONLY after the writes landed, the 0091 ordering discipline).
     # ------------------------------------------------------------------
     async with pool.acquire() as conn:
-        for src_id, src_as_of, dst_id, dst_as_of, weight, planes in edge_rows:
+        for cand in edge_rows:
             tag = await conn.execute(
                 _INSERT_EDGE_SQL,
-                src_id,
-                src_as_of,
-                dst_id,
-                dst_as_of,
-                weight,
-                planes,
+                cand.signal_id,
+                cand.signal_as_of,
+                cand.question_id,
+                cand.question_as_of,
+                cand.weight,
+                cand.planes,
                 MATCHER_VERSION,
+                json.dumps(cand.data_payload()),
             )
             if tag.endswith(" 1"):
                 counters["edges_written"] += 1

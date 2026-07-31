@@ -12,6 +12,8 @@ disposable DB in test_consolidation_supersession.py).
 
 from __future__ import annotations
 
+import json
+import logging
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -105,3 +107,96 @@ async def test_empty_consolidation_body_falls_back_in_tier_voice():
     assert result.finding.entry_kind == "consolidation"
     assert result.finding.body == "(empty consolidation)"
     assert result.finding.title == "Journal consolidation"
+
+
+# ---------------------------------------------------------------------------
+# Consolidation prose-shape guard — live defect 2026-07-31 02:07Z. A
+# gather-timeout left NARRATE emitting a raw tool-call envelope
+# (``{"tool": "get_source_health", "call": {...}}``) that task #236's
+# ``_guard_against_tool_call_leak`` does NOT catch (its allowlist has no
+# ``"call"`` key, and the envelope is well over its 120-char short-content
+# floor) — it sailed through and was persisted verbatim. These tests exercise
+# the SECOND, tier-scoped backstop added at the persist boundary.
+# ---------------------------------------------------------------------------
+
+_LEAKED_TOOL_CALL_JSON = json.dumps({
+    "tool": "get_source_health",
+    "call": {
+        "metric": "feed_health",
+        "window": "7d",
+        "detail": "full",
+        "reason": "checking collection posture before reflecting on this cycle",
+    },
+})
+
+
+@pytest.mark.asyncio
+async def test_tool_call_json_body_rejected_and_retried_recovers():
+    """A leaked tool-call envelope on the first narrate pass triggers ONE
+    retry; a clean retry recovers and publishes normally (not trace-only)."""
+    scripted = [
+        "field notes",                 # field-notes seam
+        _LEAKED_TOOL_CALL_JSON,         # narrate — the leaked shape
+        "# Inner landscape\n\nThe week held steady; I keep carrying the "
+        "worry from last cycle forward, watching the tower settle.",  # retry
+    ]
+    deps = InlineTargetDeps(llm=_ScriptedLLM(scripted), system_prompt="C", max_rounds=1)
+    result = await run_method([{"title": "s"}], _options(CONSOLIDATOR_ANALYST_ID), deps)
+    assert result.finding.entry_kind == "consolidation"
+    assert result.finding.body.startswith("# Inner landscape")  # recovered prose, not JSON
+    assert getattr(result, "force_trace_only", False) is False
+    rejected_steps = [
+        s for s in result.intermediate_steps
+        if s.get("kind") == "consolidation_shape_rejected"
+    ]
+    recovered_steps = [
+        s for s in result.intermediate_steps
+        if s.get("kind") == "consolidation_shape_recovered"
+    ]
+    assert rejected_steps and recovered_steps
+
+
+@pytest.mark.asyncio
+async def test_tool_call_json_body_rejected_still_bad_on_retry_writes_no_entry(
+    caplog: pytest.LogCaptureFixture,
+):
+    """A retry that ALSO leaks tool-call JSON forces TRACE_ONLY (no persisted
+    journal_entries row) and logs the distinct
+    ``consolidation_shape_rejected`` WARNING token — an absent entry beats a
+    garbage one."""
+    scripted = [
+        "field notes",
+        _LEAKED_TOOL_CALL_JSON,  # narrate — leaked shape
+        _LEAKED_TOOL_CALL_JSON,  # retry — STILL leaked
+    ]
+    deps = InlineTargetDeps(llm=_ScriptedLLM(scripted), system_prompt="C", max_rounds=1)
+    with caplog.at_level(logging.WARNING, logger="legba.data.analysts.journal_assessor"):
+        result = await run_method([{"title": "s"}], _options(CONSOLIDATOR_ANALYST_ID), deps)
+    assert result.finding.entry_kind == "consolidation"
+    assert getattr(result, "force_trace_only", False) is True
+    fatal_steps = [
+        s for s in result.intermediate_steps
+        if s.get("kind") == "consolidation_shape_rejected_fatal"
+    ]
+    assert fatal_steps
+    assert any(
+        "consolidation_shape_rejected" in rec.message for rec in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_prose_consolidation_body_unaffected_by_shape_guard():
+    """Ordinary prose never trips the guard — zero-regression path."""
+    scripted = [
+        "field notes",
+        "# Inner landscape\n\nThe quiet held; nothing to report but the "
+        "usual steady watch over the wire this week.",
+    ]
+    deps = InlineTargetDeps(llm=_ScriptedLLM(scripted), system_prompt="C", max_rounds=1)
+    result = await run_method([{"title": "s"}], _options(CONSOLIDATOR_ANALYST_ID), deps)
+    assert result.finding.body.startswith("# Inner landscape")
+    assert getattr(result, "force_trace_only", False) is False
+    assert not [
+        s for s in result.intermediate_steps
+        if s.get("kind", "").startswith("consolidation_shape_rejected")
+    ]

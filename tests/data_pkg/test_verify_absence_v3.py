@@ -19,7 +19,7 @@ Coverage maps to the design doc §3.6:
   * an unbounded/unscoped absence → unsupported;
   * the SAME absence prose graded across repeated (mock-deterministic) runs →
     the SAME verdict (the anti-0.0/0.2/1.0 guard);
-  * the critique payload stamps ``branch_versions.absence == 'absence.v1'``;
+  * the critique payload stamps ``branch_versions.absence == 'absence.v2'``;
   * a finding with ZERO absence spans is byte-identical vs pre-V3 (the pooled-
     ratio + judge-call-count invariant) — the regression that non-absence claims
     are unaffected;
@@ -239,8 +239,14 @@ async def test_absence_judge_contradicted(monkeypatch):
         {"marker": "[1]", "signal_id": sid, "title": "Missile strike hits the airbase, casualties reported"}
     ]
     judge = _PartitionJudge(
-        shared_json='{"verdicts": ["supported", "supported"]}',
-        absence_json='{"verdicts": ["contradicted"]}',
+        shared_json='{"verdicts": ["supported", "supported"], "quotes": ["", ""]}',
+        # V-D: the contradiction QUOTES the cited evidence verbatim, so it EARNS
+        # the hard class (an unquotable contradiction demotes — see
+        # test_verify_hardfail_quote.py).
+        absence_json=(
+            '{"verdicts": ["contradicted"], "quotes": '
+            '["Missile strike hits the airbase, casualties reported"]}'
+        ),
     )
     rep = await verify_finding_faithfulness(body=body, citations=citations, judge_llm=judge)
     assert rep.judge_status == "llm"
@@ -308,7 +314,7 @@ async def test_absence_variance_regression(monkeypatch):
 
 
 async def test_absence_branch_version_stamped(monkeypatch):
-    """The critique payload carries ``branch_versions.absence == 'absence.v1'``
+    """The critique payload carries ``branch_versions.absence == 'absence.v2'``
     (and the citation_support profile version), so a recalibration is a visible,
     greppable per-kind version bump."""
     monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
@@ -320,8 +326,8 @@ async def test_absence_branch_version_stamped(monkeypatch):
     rep = await verify_finding_faithfulness(body=body, citations=citations, judge_llm=judge)
     payload = build_faithfulness_critique_payload(rep, analyzed_output_id=uuid4())
     verification = payload["data"]["verification"]
-    assert verification["branch_versions"]["absence"] == "absence.v1"
-    assert verification["branch_versions"]["citation_support"] == "citsupp.v3"
+    assert verification["branch_versions"]["absence"] == "absence.v2"
+    assert verification["branch_versions"]["citation_support"] == "citsupp.v4"
     # branch_scores surfaces both kinds' sub-ratios (never an opaque single number).
     assert verification["branch_scores"]["absence"]["checkable"] == 1
     assert verification["branch_scores"]["citation_support"]["checkable"] == 2
@@ -387,7 +393,11 @@ async def test_non_absence_contradiction_still_works(monkeypatch):
     )
     citations = [{"marker": "[1]", "signal_id": sid, "title": "Reserves fell for a third month"}]
     judge = _PartitionJudge(
-        shared_json='{"verdicts": ["supported", "contradicted"]}',
+        # V-D: the contradiction quotes the cited evidence verbatim → hard class.
+        shared_json=(
+            '{"verdicts": ["supported", "contradicted"], '
+            '"quotes": ["", "Reserves fell for a third month"]}'
+        ),
         absence_json='{"verdicts": []}',
     )
     rep = await verify_finding_faithfulness(body=body, citations=citations, judge_llm=judge)

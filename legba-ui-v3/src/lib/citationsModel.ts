@@ -31,7 +31,7 @@
  */
 
 /** The record kind a citation drills into. */
-export type CitationRefKind = 'finding' | 'signal'
+export type CitationRefKind = 'finding' | 'signal' | 'situation_register'
 
 /** One citation: a marker that maps to the record it cites. */
 export interface Citation {
@@ -114,7 +114,26 @@ export function extractCitations(body: Record<string, unknown> | null | undefine
     const o = item as Record<string, unknown>
     const marker = normalizeMarker(o['marker'])
     const refId = str(o['ref_id']) ?? str(o['signal_id']) ?? str(o['signalId'])
-    const refKind: CitationRefKind = str(o['ref_kind']) === 'finding' ? 'finding' : 'signal'
+    const rawKind = str(o['ref_kind'])
+    // The continuity SITUATION REGISTER is a real citation with NO single drill
+    // target by design (minting one would be a fabricated anchor) — render it
+    // as a labeled, non-drilling chip instead of skipping it as unresolved.
+    if (rawKind === 'situation_register') {
+      if (!marker) continue
+      const cite: Citation = {
+        marker,
+        refId: '',
+        refKind: 'situation_register',
+        signalId: '',
+        title: str(o['title']) ?? 'Open-situation register',
+        source: undefined,
+      }
+      const passage = str(o['evidence_text'])
+      if (passage) cite.evidenceText = passage
+      out.push(cite)
+      continue
+    }
+    const refKind: CitationRefKind = rawKind === 'finding' ? 'finding' : 'signal'
     if (!marker || !refId) continue
     const cite: Citation = {
       marker,

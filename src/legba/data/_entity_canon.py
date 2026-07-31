@@ -792,6 +792,17 @@ _UNIT_NOUNS: frozenset[str] = frozenset({
     "hectare", "hectares", "acre", "acres", "km", "kilometre", "kilometres",
     "kilometer", "kilometers", "mile", "miles", "metre", "metres", "meter",
     "meters", "mw", "gw", "kwh", "twh", "mwh", "kt", "ounce", "ounces",
+    # R10 (2026-07-29 live junk census) — the LENGTH / SPEED / SHIPPING measure
+    # units the census found leaking whole ("175 centimeters", "53 nautical
+    # miles", "80 km / h", "50,000 dwt"). Same conservative contract as the set
+    # above: a unit noun only makes a surface junk when EVERY other token is a
+    # number / qualifier, so "Foot Locker" / "Scotland Yard" / "Knots Landing"
+    # keep their nominal token and survive.
+    "centimetre", "centimetres", "centimeter", "centimeters",
+    "millimetre", "millimetres", "millimeter", "millimeters",
+    "inch", "inches", "foot", "feet", "yard", "yards",
+    "knot", "knots", "kph", "mph", "kmh",
+    "dwt", "teu", "boe", "mmbtu", "mcf", "bcf", "tcf",
     "troop", "troops", "soldier", "soldiers", "missile", "missiles",
     "drone", "drones", "rocket", "rockets", "warhead", "warheads",
     "people", "casualties", "casualty", "death", "deaths",
@@ -809,28 +820,85 @@ _CURRENCY_CODES: frozenset[str] = frozenset({
     "hkd", "sgd", "rmb", "rs", "us$", "s$", "c$", "hk$", "a$", "nz$", "r$",
     "n$", "aed", "sar", "qar", "kwd", "zar", "ngn", "php", "idr", "myr",
 })
-_CURRENCY_PREFIX_RE = re.compile(rf"^[a-z]{{0,3}}[{re.escape(_CURRENCY_SYMBOL_CHARS)}]")
+#: R10 — the DOTTED prefix form ("U.S.$318") joins the plain one ("US$525"):
+#: NER emits both, and only the plain one was recognised.
+_CURRENCY_PREFIX_RE = re.compile(rf"^[a-z.]{{0,4}}[{re.escape(_CURRENCY_SYMBOL_CHARS)}]")
+#: R10 — a currency CODE glued straight onto the digits ("RMB7.92bn"). Requires
+#: a following digit so a bare code token ("rs") is left to the _CURRENCY_CODES
+#: membership test and a real hyphenated designator ("RS-28") is not mistaken
+#: for money.
+_CURRENCY_CODE_PREFIX_RE = re.compile(
+    r"^(?:usd|eur|gbp|jpy|cny|inr|krw|aud|cad|chf|hkd|sgd|rmb|rs)(?=[0-9])",
+    re.IGNORECASE,
+)
 #: A magnitude abbreviation glued to a number token ("1.5B", "307mln", "5bn").
 _MAGNITUDE_SUFFIX_RE = re.compile(
     r"(?:k|m|mn|mln|mil|b|bn|bln|bil|t|tn|tln|trn|trln)$", re.IGNORECASE)
+#: R10 — a percent marker glued to the digits ("12pc", "3.5pct", "45%"). A
+#: percent is a UNIT in its own right, so it marks the surface as a measure.
+_PERCENT_SUFFIX_RE = re.compile(r"(?:%|pc|pct|percent)$", re.IGNORECASE)
+#: R10 — the dash forms a RANGE token wears ("$ 123m-$184 m", "2003-2006").
+_QTY_RANGE_SPLIT_RE = re.compile(r"[-–—]")
 
 
-def _qty_number_core(t: str) -> tuple[bool, bool]:
-    """Return ``(is_number, wore_currency_prefix)`` for a candidate quantity token.
+def _qty_number_core_atom(t: str) -> tuple[bool, bool, bool]:
+    """``(is_number, wore_money_marker, wore_magnitude)`` for ONE dashless token.
 
-    Strips an optional leading currency cluster (``$`` / ``US$`` / ``€``) and a
-    trailing magnitude / percent suffix (``B`` / ``mln`` / ``%``) and reports
-    whether the remainder is a bare number — so ``"$5B"``, ``"€1.5b"``,
-    ``"307mln"`` and ``"US$525"`` all read as numbers (the second flag also
-    marks the surface as carrying a currency)."""
+    Strips an optional leading currency cluster (``$`` / ``US$`` / ``U.S.$`` /
+    a code glued to the digits, ``RMB7.92``), then a trailing percent marker
+    (``%`` / ``pc`` / ``pct``), then a trailing magnitude abbreviation (``B`` /
+    ``mln`` / ``bn``), and reports whether the remainder is a bare number.
+
+    ``wore_money_marker`` covers currency AND percent — both are units, so the
+    caller may reject the surface on the number alone. ``wore_magnitude`` is
+    deliberately NOT set for a SINGLE-digit core ("3M" is the industrial
+    conglomerate, "59B" is a quantity): a one-digit stem carrying a one-letter
+    magnitude is far more often a brand than a measure, and precision beats
+    recall on this gate.
+    """
     s = t
+    money = False
     m = _CURRENCY_PREFIX_RE.match(s)
-    had_cur = bool(m)
     if m:
+        money = True
         s = s[m.end():]
-    s = s.rstrip("%")
-    s = _MAGNITUDE_SUFFIX_RE.sub("", s)
-    return (bool(_NUM_TOKEN_RE.match(s)), had_cur)
+    else:
+        code = _CURRENCY_CODE_PREFIX_RE.match(s)
+        if code:
+            money = True
+            s = s[code.end():]
+    depercented = _PERCENT_SUFFIX_RE.sub("", s)
+    if depercented != s:
+        money = True
+        s = depercented
+    demagnitude = _MAGNITUDE_SUFFIX_RE.sub("", s)
+    digits = demagnitude.replace(",", "").replace(".", "")
+    magnitude = demagnitude != s and len(digits) >= 2
+    s = demagnitude
+    return (bool(_NUM_TOKEN_RE.match(s)), money, magnitude)
+
+
+def _qty_number_core(t: str) -> tuple[bool, bool, bool]:
+    """``(is_number, wore_money_marker, wore_magnitude)`` for a quantity token.
+
+    Delegates to :func:`_qty_number_core_atom`, first splitting a RANGE token on
+    its dash: ``"$ 123m-$184 m"`` arrives as the single token ``123m-$184``, and
+    a range is a number only when EVERY part is. That per-part rule is also what
+    keeps the designator classes safe — ``F-16`` / ``Su-57`` / ``B-52`` /
+    ``COVID-19`` each carry a part that is not a number, so none of them reads
+    as a quantity.
+    """
+    parts = [p for p in _QTY_RANGE_SPLIT_RE.split(t) if p]
+    if len(parts) <= 1:
+        return _qty_number_core_atom(t)
+    money = magnitude = False
+    for part in parts:
+        is_num, had_money, had_mag = _qty_number_core_atom(part)
+        if not is_num:
+            return (False, False, False)
+        money = money or had_money
+        magnitude = magnitude or had_mag
+    return (True, money, magnitude)
 
 #: COUNT-noun "units" (point/seat/vote) that also occur in PLACE names
 #: ("Five Points", "Four Points" — real neighborhoods use spelled number-WORDS).
@@ -862,6 +930,17 @@ _QTY_QUALIFIERS: frozenset[str] = frozenset({
     "between", "estimated", "as", "high", "low", "cubic", "worth", "point",
     "day", "days", "year", "years", "hour", "hours", "month", "months",
     "week", "weeks",
+    # R10 (2026-07-29 live junk census) — the comparators the census found
+    # leading a money surface ("above US$ 331 billion"), the measurement
+    # ADJECTIVES that sit between the number and its unit ("53 nautical
+    # miles", "5 square km"), the rate tail ("12pc rate") and the per-unit
+    # connectors NER leaves spaced ("80 km / h"). Every one of these fires
+    # ONLY alongside a real number AND a unit/currency marker, so a bare
+    # "Square" (the payments firm), "Above the Law" or "Exchange Rate" keeps
+    # its nominal token and is never flagged.
+    "above", "below", "beyond", "exceeding", "totalling", "totaling",
+    "nautical", "square", "metric", "statute", "rate", "rates",
+    "h", "hr", "hrs", "/",
 })
 
 #: A bare number token: leading digit, then digits / thousands-separators /
@@ -895,22 +974,34 @@ def _is_quantity_unit_phrase(stripped: str) -> bool:
             has_count_unit = True
         elif t in _QTY_QUALIFIERS:
             continue
-        elif t in _CURRENCY_CODES or all(ch in _CURRENCY_SYMBOL_CHARS for ch in t):
-            # a bare currency symbol ("$") / code ("usd") — a money marker.
+        elif (t in _CURRENCY_CODES or _PERCENT_SUFFIX_RE.fullmatch(t)
+                or all(ch in _CURRENCY_SYMBOL_CHARS for ch in t)):
+            # a bare currency symbol ("$") / code ("usd") / percent marker ("%",
+            # spaced off its number in "3.50 % to 3.75 %") — a money/measure mark.
             has_unit = True
         else:
             # a number wearing a currency prefix and/or magnitude suffix
             # ("$5B", "€1.5b", "307mln", "US$525") — the spaced-symbol shapes the
             # old set missed. A currency prefix ALSO marks the surface as money.
-            is_num, had_cur = _qty_number_core(t)
+            is_num, had_money, had_magnitude = _qty_number_core(t)
             if not is_num:
                 return False  # a nominal token — not a pure quantity phrase
             has_digit = True
-            if had_cur:
+            if had_money:
                 has_unit = True
+            if had_magnitude:
+                has_num_word = True
     # A measurement/currency unit is junk with ANY number (digit or word):
     # "188,000 barrels", "four million euros", "seven tons".
     if has_unit and (has_digit or has_num_word):
+        return True
+    # R10 — a DIGIT carrying a MAGNITUDE and nothing nominal is a bare quantity
+    # ("1.4 bln", "59B", "$ 123m-$184 m"). Reachable only when every token
+    # already passed the number/qualifier/unit filter above, so a real name
+    # keeps its nominal token ("Boeing 737", "Group of 20", "Fortune 500",
+    # "Area 51") and a number-WORD without a digit stays a place name
+    # ("Five Points", "Seven Sisters").
+    if has_digit and has_num_word:
         return True
     # A count-noun unit (point/seat/vote) is junk ONLY with a DIGIT number
     # ("300 seats", "45 votes") — a number-WORD form is a place ("Five Points").
@@ -956,6 +1047,19 @@ _TEMPORAL_MODIFIED_NOUNS: frozenset[str] = frozenset({
 })
 
 _YEAR_RE = re.compile(r"^(?:19|20)\d{2}$")
+#: R10 — a year RANGE ("2003 to 2006", "1999-2001", "2014/15"). A single year is
+#: already junk; the range shape slipped through every gate because it is neither
+#: a bare year nor a quantity. Anchored on the whole surface, and both endpoints
+#: must be year-shaped, so a real referent carrying a year ("Vision 2030",
+#: "1948 Arab-Israeli War") is untouched.
+_YEAR_RANGE_RE = re.compile(
+    r"^(?:19|20)\d{2}\s*(?:to|through|until|till|and|[-–—/])\s*"
+    r"(?:(?:19|20)\d{2}|\d{2})$",
+    re.IGNORECASE,
+)
+#: R10 — a bare DECADE ("2030s", "1970s", "70s", "'80s"). Never a referent, and
+#: the two-digit form clears the length>2 floor so nothing else caught it.
+_DECADE_RE = re.compile(r"^['’‘]?(?:(?:1[5-9]|20)\d0s|\d0s)$")
 _ORDINAL_CENTURY_RE = re.compile(r"^\d{1,3}(?:st|nd|rd|th)\s+century$", re.IGNORECASE)
 _PAST_N_RE = re.compile(
     r"^past\s+\d+\s+(?:hours?|days?|weeks?|months?|years?)$", re.IGNORECASE
@@ -1010,6 +1114,8 @@ def _is_temporal_surface(stripped: str) -> bool:
     no_article = _ARTICLE_RE.sub("", low).strip()
     if (
         _YEAR_RE.match(no_article)
+        or _YEAR_RANGE_RE.match(no_article)       # R10 — "2003 to 2006"
+        or _DECADE_RE.match(no_article)           # R10 — "2030s", "70s"
         or _ORDINAL_CENTURY_RE.match(no_article)
         or _PAST_N_RE.match(no_article)
         or _RELATIVE_AGO_RE.match(no_article)     # DQ M2 — "250 years ago"
@@ -1046,6 +1152,59 @@ def _is_temporal_surface(stripped: str) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# R10 (2026-07-29 live junk census) — a CLOCK TIME wearing scaffolding. The
+# anchored ``_CLOCK_RE`` only ever matched a bare time ("6:53PM MDT"); the live
+# leaks carry an attachment or form a range ("4:27 p.m. on Tuesday", "8:30pm to
+# 1:30pm") and so matched nothing at all.
+# ---------------------------------------------------------------------------
+
+#: A time-of-day token, optionally wearing a glued meridiem ("4:27", "8:30pm",
+#: "23:00:15"). The COLON is what makes it unambiguous — a bare number is the
+#: numeric gate's remit, never this one.
+_TIME_TOKEN_RE = re.compile(
+    r"^\d{1,2}:\d{2}(?::\d{2})?(?:\s*[ap]\.?m\.?)?$", re.IGNORECASE
+)
+
+#: Tokens that may accompany a clock time without making the surface a referent:
+#: the meridiem, a timezone abbreviation, a range / attachment connector, and a
+#: weekday or relative day. Deliberately CLOSED — anything outside it (a place,
+#: a person, an org) aborts the match, so "Star Wars: Episode IV" and
+#: "Psalm 23:1" are never touched.
+_TIME_PHRASE_QUALIFIERS: frozenset[str] = frozenset({
+    "am", "pm", "a.m", "p.m", "o'clock", "oclock",
+    "on", "at", "to", "until", "till", "and", "the", "by", "from", "between",
+    "local", "time", "sharp", "approximately", "about", "around",
+    "gmt", "utc", "est", "edt", "cst", "cdt", "mst", "mdt", "pst", "pdt",
+    "akdt", "akst", "hst", "bst", "cet", "cest", "eet", "eest", "ist", "jst",
+    "kst", "msk", "aest", "aedt",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
+    "sunday", "today", "tomorrow", "yesterday", "tonight",
+    "morning", "afternoon", "evening", "night", "noon", "midnight",
+})
+
+
+def _is_clock_phrase(stripped: str) -> bool:
+    """True when the surface is a CLOCK TIME plus nothing but time scaffolding.
+
+    Requires at least one colon-bearing time token and permits only meridiem /
+    timezone / connector / weekday tokens (and a bare day-or-year number)
+    around it. The first token outside that closed vocabulary aborts — so this
+    can only ever fire on a surface that is entirely a timestamp.
+    """
+    tokens = [t.strip(_STRIP_CHARS).lower() for t in stripped.split()]
+    tokens = [t for t in tokens if t]
+    times = 0
+    for t in tokens:
+        if _TIME_TOKEN_RE.match(t):
+            times += 1
+        elif t in _TIME_PHRASE_QUALIFIERS or t in _MONTH_NAMES or t.isdigit():
+            continue
+        else:
+            return False
+    return times > 0
+
+
 def is_demonym(name: str) -> bool:
     """True when ``name`` is a curated NATIONAL demonym (collapses to a country)."""
     return _strip_name(str(name or "")).lower() in _DEMONYM_MAP
@@ -1062,11 +1221,19 @@ def is_junk_entity(name: str) -> bool:
     Then the junk classes are tested on the STRIPPED surface form:
       * the literal base set (``tv`` / ``radio`` / ``online``);
       * residual HTML (tag or unescaped entity still present);
-      * clock-times (``6:53PM MDT``);
+      * clock-times, bare (``6:53PM MDT``) or scaffolded / ranged
+        (``4:27 p.m. on Tuesday``, ``8:30pm to 1:30pm``) — R10;
       * leading-quantifier phrases (``More than 450,000``);
       * pure numeric / percent / currency (``45%``, ``$3.2bn``);
       * money / currency amounts with a compound prefix (``S$2,500``,
-        ``US$ 525 million``);
+        ``US$ 525 million``), a DOTTED / code prefix (``U.S.$318 Million``,
+        ``RMB7.92bn``), a RANGE (``$ 123m-$184 m``), a spaced or abbreviated
+        percent (``3.50 % to 3.75 %``, ``12pc rate``), or a bare
+        number+magnitude with no unit at all (``1.4 bln``, ``59B``) — R10;
+      * measures with a unit + an intervening adjective (``53 nautical
+        miles``, ``175 centimeters``, ``80 km / h``, ``50,000 dwt``) — R10;
+      * a year RANGE (``2003 to 2006``) or a bare decade (``2030s``, ``70s``)
+        — R10;
       * age / time-span tokens (``51 - year - old``, ``centuries``);
       * sports / competition-structure noise (``World Cup``, ``Group F``);
       * pure article / function word (``the`` / ``and`` / ``of``);
@@ -1150,6 +1317,11 @@ def is_junk_entity(name: str) -> bool:
     if low in _TRUNCATED_INSTITUTION_FRAGMENTS:
         return True
     if _CLOCK_RE.match(stripped):
+        return True
+    # R10 — a clock time carrying an attachment or forming a range
+    # ("4:27 p.m. on Tuesday", "8:30pm to 1:30pm"); the anchored _CLOCK_RE
+    # above only ever matched a BARE time.
+    if _is_clock_phrase(stripped):
         return True
     if _QUANTIFIER_RE.match(stripped):
         return True
@@ -1312,6 +1484,17 @@ _ORG_SUFFIX_TOKENS: frozenset[str] = frozenset({
     # one of these names a formation / body, never a person.
     "trust", "regiment", "brigade", "battalion", "corps", "navy", "army",
     "force", "forces", "guard", "mission", "project",
+    # R8 (2026-07 enrichment-quality sweep) — NEWS-OUTLET heads. "Yonhap News"
+    # was typing PERSON off the two-capitalised-tokens default, and a wire
+    # agency is one of the most-mentioned entity families in the feed, so the
+    # person-skew concentrated there. A multi-token surface ending in one of
+    # these names a masthead / broadcaster, never a person.
+    "news", "press", "media", "broadcasting", "broadcaster", "network",
+    "post", "times", "herald", "tribune", "gazette", "chronicle", "journal",
+    "daily", "wire",
+    # R8 — NATIONAL LEGISLATURE heads that are not English words ("State Duma"
+    # was typing PERSON). A body, never a person.
+    "duma", "knesset", "bundestag", "majlis", "politburo", "sejm",
 })
 
 #: Multi-word org suffix phrases (trailing). "Hyundai Motor Group" → "Motor
@@ -1438,6 +1621,10 @@ def is_org_surface(name: str) -> bool:
 #: "European Union", "Falkland Islands Legislative Assembly") is unaffected.
 _SURNAME_LIKE_SUFFIXES: frozenset[str] = frozenset({
     "steel", "bank", "co", "court", "union", "board",
+    # R8 — the news-outlet heads that double as English surnames ("Emily Post",
+    # "Alan Times"). A 3+-token masthead ("The Washington Post", "New York
+    # Times") is unaffected; only the 2-token "<Given> <Head>" shape is guarded.
+    "post", "times", "press", "news",
 })
 
 #: A tiny curated set of common given names used only to disambiguate the
@@ -1448,6 +1635,13 @@ _COMMON_GIVEN_NAMES: frozenset[str] = frozenset({
     "mary", "patricia", "jennifer", "linda", "elizabeth", "susan", "sarah",
     "richard", "joseph", "thomas", "charles", "daniel", "matthew", "andrew",
     "george", "frank", "danny", "billy",
+    # R8 — the news-outlet heads added to the suffix gazetteer widened this
+    # collision ("Emily Post" would have typed organization), so the guard list
+    # widens with them. Still not a general name list.
+    "emily", "emma", "olivia", "sophia", "anna", "laura", "julia", "kate",
+    "katherine", "margaret", "helen", "alice", "grace", "victoria", "rachel",
+    "peter", "paul", "mark", "luke", "henry", "edward", "arthur", "alan",
+    "brian", "kevin", "stephen", "steven", "eric", "jack", "harry", "samuel",
 })
 
 
@@ -1480,6 +1674,10 @@ _PLACE_SUFFIX_TOKENS: frozenset[str] = frozenset({
     # Erciyes" mis-typed PERSON. The leading forms are handled by
     # :data:`_PLACE_HEAD_RE`; these cover the trailing forms.
     "temple", "mount", "fort", "palace", "mosque", "cathedral", "base",
+    # R8 — sub-national administrative heads that dominate the war beat
+    # ("Donetsk Oblast", "Idlib Governorate") plus the open-water head the
+    # trailing-feature rule was missing ("the Indian Ocean").
+    "oblast", "governorate", "ocean",
 })
 
 #: Place HEADS — a surface LEADING with one of these + a following token is a
@@ -1526,6 +1724,27 @@ _KNOWN_PLACES: frozenset[str] = frozenset({
     "buenos aires", "brasilia", "sao paulo", "rio de janeiro", "caracas",
     "sydney", "melbourne", "canberra", "wellington", "auckland",
     "hong kong", "taipei", "macau",
+    # R8 (2026-07 enrichment-quality sweep) — the CONFLICT-BEAT cities the
+    # curated list was missing. Live: "Yekaterinburg" / "Crete" fell to the
+    # generic `entity` bucket, which both blocks auto-merge (a generic pair is
+    # always GRAY) and denies the geocode ladder a place candidate — a story
+    # datelined there was attributed off an incidental country mention instead.
+    "yekaterinburg", "saint petersburg", "st petersburg", "rostov", "sochi",
+    "novosibirsk", "vladivostok", "kaliningrad", "belgorod", "kursk",
+    "kharkiv", "kherson", "mykolaiv", "zaporizhzhia", "dnipro", "lviv",
+    "odesa", "odessa", "mariupol", "donetsk", "luhansk", "sevastopol",
+    "kabul", "kandahar", "islamabad", "lahore", "peshawar", "quetta",
+    "jerusalem", "tel aviv", "haifa", "ramallah", "gaza city", "rafah",
+    "khan younis", "aleppo", "homs", "idlib", "latakia", "raqqa",
+    "mosul", "basra", "erbil", "fallujah", "kirkuk", "najaf",
+    "isfahan", "mashhad", "tabriz", "bandar abbas", "natanz",
+    "jeddah", "mecca", "medina", "hodeidah", "aden", "taiz",
+    "benghazi", "misrata", "port sudan", "omdurman", "el fasher",
+    "goma", "mogadishu", "bamako", "ouagadougou", "niamey", "n'djamena",
+    "alexandria", "damietta", "port said", "suez", "sharm el-sheikh",
+    "crete", "rhodes", "thessaloniki", "izmir", "gaziantep", "diyarbakir",
+    "busan", "incheon", "kaohsiung", "chongqing", "guangzhou", "shenzhen",
+    "kolkata", "chennai", "bengaluru", "hyderabad", "ahmedabad", "srinagar",
 })
 
 
@@ -1594,6 +1813,14 @@ _KNOWN_REGIONS: frozenset[str] = frozenset({
     "south china sea", "east china sea", "sea of azov", "indo-pacific",
     "asia-pacific", "pacific rim", "arabian peninsula", "iberian peninsula",
     "korean peninsula", "great lakes region",
+    # R8 — SUB-NATIONAL regions that carry the story in their own right on the
+    # conflict / disaster beat ("Odisha floods", "Tigray offensive") and were
+    # falling to the generic bucket. Curated + unambiguous (no country/US-state
+    # homonyms).
+    "odisha", "kerala", "punjab", "sindh", "balochistan", "gilgit-baltistan",
+    "tigray", "amhara", "oromia", "darfur", "north kivu", "south kivu",
+    "rakhine", "kachin", "aceh", "papua", "catalonia", "bavaria",
+    "sverdlovsk region", "rostov region", "belgorod region",
 })
 
 
@@ -1647,6 +1874,17 @@ _KNOWN_ORG_SURFACES: frozenset[str] = frozenset({
     "opec", "opec+", "nato", "asean", "brics", "ecowas", "mercosur", "gcc",
     "imf", "wto", "unicef", "unesco", "unhcr", "interpol", "opcw", "iaea",
     "wipo", "unctad", "unrwa",
+    # R8 (2026-07 enrichment-quality sweep) — METONYMIC SEATS of government.
+    # These name the executive body, never a person, but carry no org suffix,
+    # so "White House" was typing PERSON off the two-capitalised-tokens default
+    # and could never fold onto its "the White House" twin.
+    "white house", "kremlin", "pentagon", "state duma", "duma", "knesset",
+    "politburo",
+    # R8 — WIRE AGENCIES / broadcasters whose surface carries no suffix the
+    # gazetteer above would catch. Curated, whole-surface, unambiguous.
+    "yonhap", "tass", "reuters", "xinhua", "interfax", "sputnik", "anadolu",
+    "kyodo", "al jazeera", "associated press", "agence france-presse",
+    "ria novosti", "bloomberg", "politico", "axios",
 })
 
 

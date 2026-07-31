@@ -50,6 +50,35 @@ chain terminates in OUR verifiable copy:
     backfills extraction later). A media failure never fails the row; the
     canonical_url bytes are the primary archive.
 
+**V-E1 — JS-WALL / BOT-CHECK / REDIRECT-INTERSTITIAL REJECTION.**
+(planning/VERIFY_PATH_STRUCTURAL_FIXES_SPEC_2026-07-31.md §V-E, JUDGE_READOUT
+§5: a stored ``archived_text`` reading "JavaScript is disabled in your
+browser" — a Le Monde citation — grounded a judged claim.) A successful
+Trafilatura extraction is not necessarily ARTICLE text — a no-JS fallback
+page, a bot-check interstitial, or a link-shortener redirect notice all
+"extract" cleanly; they are extraction FAILURES wearing the shape of success.
+:func:`_match_wall_pattern` gates every extraction against a curated,
+live-DB-seeded deny list (:data:`_WALL_DENY_PATTERNS`) — see its docstring for
+the corpus audit that produced both the pattern list and the length cutoff
+(:data:`_WALL_MAX_CHARS`). A match REJECTS the text exactly like a Trafilatura
+failure: ``payload.archived_text`` is NOT written (the bytes archive is
+untouched — only the derived-text upgrade is withheld, same discipline as the
+R6b Telegram-widget skip below), counted separately
+(``text_extract_rejected_boilerplate``, distinct from ``text_extract_failed``
+so "Trafilatura found nothing" and "Trafilatura found a wall" stay
+distinguishable) and logged at WARNING with the URL host (never the body —
+hosts are low-cardinality and safe to log, article text is not).
+
+**V-E2 — substance-floor marker (extraction-side half only).** Every
+successful (non-rejected) extraction also stamps
+``payload.archived_text_chars`` — the ``len()`` of the stored
+``archived_text``, in the SAME update as the text itself — a free-to-compute
+receipt of how much was actually extracted. This handler does not consume the
+field (that is the judge-context "substance: thin" labeling — spec item V-E2
+proper — which is explicitly OUT OF SCOPE here: it belongs to the verify-path
+pass). Stamping it now means that pass never has to re-fetch or re-parse a
+body just to learn its length.
+
 **P2-2 LICENSE GATE (posture documented here, on purpose).** Each candidate's
 ``license_class`` is resolved from the signal (``payload.license_class`` — the
 LIC-2 SourceScope→signal stamp — falling back to the manual-batch
@@ -120,7 +149,27 @@ Output ``data`` keys (the cadence receipt the operator reads):
     media_archived      int — media_ref objects stored (the media leg)
     media_failed        int — media_ref fetches that failed (row still archived)
     text_extracted      int — archived objects whose main text reached payload
+                              (payload.archived_text_chars stamped alongside —
+                              V-E2, the substance-floor marker)
     text_extract_failed int — HTML/text objects Trafilatura could not extract
+    text_extract_rejected_boilerplate
+                        int — V-E1: Trafilatura DID return text, but it matched
+                              the JS-wall/bot-check/redirect-interstitial deny
+                              list (:func:`_match_wall_pattern`) — a no-JS
+                              fallback page, a bot challenge, a link-shortener
+                              redirect notice. Treated exactly like a failure:
+                              no payload.archived_text write. Logged at WARNING
+                              with the URL host.
+    text_extract_skipped
+                        int — R6b: objects whose URL is a known no-content-region
+                              page (t.me / Telegram embed-widget previews) —
+                              Trafilatura is never invoked for these, because it
+                              has no article to find and instead extracts the
+                              page CHROME ("Download\nContext\nEmbed\n…
+                              telegram-widget.js…"), which previously polluted
+                              ``payload.archived_text`` for ~30.7% of telegram
+                              rows. The BYTES are still archived; only the
+                              derived-text upgrade is withheld.
     skipped_license     int — P2-2 gate refusals on a REVIEWED forbidding class
     skipped_license_unreviewed
                         int — R-3b fail-closed refusals: web-retrieved origin +
@@ -304,11 +353,15 @@ _UPSERT_ARCHIVE_SQL = """
 # surfaces derive archived/archive_sha256 from this existing column alone);
 # retention_class upgraded to evidence_hold unless the row already sits in a
 # keep-class (retain_always stays retain_always); and, WHEN text was extracted
-# ($3 non-null), payload.archived_text is set AND the corpus dirty-marker
-# contract is honored: indexed_at = NULL re-queues the doc, updated_at = now()
-# protects the re-null from the indexer's version-guarded stamp (BOTH in this
-# same UPDATE — see corpus_indexer's DIRTY-MARKER CONTRACT). With no text,
-# updated_at still bumps (harmless) and indexed_at is left alone.
+# ($3 non-null), payload.archived_text AND payload.archived_text_chars (V-E2 —
+# the substance-floor marker: a free len() of the stored text, so a later
+# verify-side pass can label thin evidence without re-reading bodies) are BOTH
+# set, and the corpus dirty-marker contract is honored: indexed_at = NULL
+# re-queues the doc, updated_at = now() protects the re-null from the
+# indexer's version-guarded stamp (BOTH in this same UPDATE — see
+# corpus_indexer's DIRTY-MARKER CONTRACT). With no text (either Trafilatura
+# failure OR a V-E1 wall-pattern rejection), updated_at still bumps
+# (harmless) and indexed_at is left alone.
 _STAMP_SIGNAL_SQL = """
     UPDATE signals
        SET object_ref = $2,
@@ -316,7 +369,10 @@ _STAMP_SIGNAL_SQL = """
                WHEN retention_class IN ('retain_always', 'evidence_hold')
                THEN retention_class ELSE 'evidence_hold' END,
            payload = CASE WHEN $3::text IS NULL THEN payload
-                          ELSE jsonb_set(payload, '{archived_text}', to_jsonb($3::text)) END,
+                          ELSE jsonb_set(
+                                 jsonb_set(payload, '{archived_text}', to_jsonb($3::text)),
+                                 '{archived_text_chars}', to_jsonb($4::int)
+                               ) END,
            indexed_at = CASE WHEN $3::text IS NULL THEN indexed_at ELSE NULL END,
            updated_at = now()
      WHERE id = $1
@@ -407,11 +463,131 @@ def _is_textual(content_type: str | None, body: bytes) -> bool:
     return head.startswith((b"<!doctype", b"<html", b"<?xml"))
 
 
+#: R6b — hosts whose pages carry no article-shaped main-content region for
+#: Trafilatura to find. A ``t.me/<channel>/<msg>`` (and the ``/s/<channel>/<msg>``
+#: public-preview variant) page is a Telegram embed-WIDGET: nav chrome, a
+#: "Download"/"Context"/"Embed" action row, and the ``telegram-widget.js`` loader
+#: snippet — never the message prose. Trafilatura's main-text heuristic, given
+#: no content region, falls back to that chrome and writes it to
+#: ``payload.archived_text`` as if it were the article — measured at ~30.7% of
+#: archived telegram rows. The raw HTML bytes are still archived either way;
+#: this only withholds the derived-text upgrade for a host that can never
+#: produce one.
+_NO_CONTENT_REGION_HOSTS: frozenset[str] = frozenset({"t.me", "telegram.me"})
+
+
+def _skip_text_extraction(url: str) -> bool:
+    """Whether ``url`` is a known no-article-content page (see
+    :data:`_NO_CONTENT_REGION_HOSTS`) that Trafilatura extraction must be
+    skipped for. Any parse failure degrades to ``False`` (attempt extraction
+    — the existing best-effort ``_extract_text`` failure path already handles
+    a genuinely bad fetch)."""
+    try:
+        host = urlsplit(url).netloc.lower()
+    except ValueError:
+        return False
+    host = host.rsplit("@", 1)[-1].split(":", 1)[0]  # drop userinfo/port
+    return host in _NO_CONTENT_REGION_HOSTS
+
+
+#: V-E1 — deny list of known JS-wall / bot-check / redirect-interstitial
+#: boilerplate. Case-insensitive substring match, gated by :data:`_WALL_MAX_CHARS`
+#: (see :func:`_match_wall_pattern`). Seeded HONESTLY from a read-only live-DB
+#: audit of ``signals.payload.archived_text`` on 2026-07-31 (never guessed):
+#:
+#:   * ``"javascript is disabled"`` / ``"enable javascript"`` — 86 confirmed
+#:     live rows (lemonde.fr x83, press.un.org x3), all exactly the no-JS
+#:     fallback page ("JavaScript is disabled in your browser. Please enable
+#:     JavaScript to proceed...") at 286 chars — the EXACT artifact named in
+#:     JUDGE_READOUT §5.
+#:   * ``"one of your browser extensions seems to be blocking the video
+#:     player"`` — 148 confirmed live rows (france24.com), but ONLY when short
+#:     (see :data:`_WALL_MAX_CHARS` docstring — the identical string also
+#:     occurs as an embedded-video caption inside multi-KB GENUINE articles,
+#:     which must never be rejected).
+#:   * ``"transferring to the website"`` — 83 confirmed live rows (en.irna.ir),
+#:     a Google-redirect interstitial, all exactly 70 chars.
+#:   * ``"we are optimizing your request for the best experience"`` — 1
+#:     confirmed live row (a ShopShield-style bot-mitigation "please wait"
+#:     page reached via a link-shortener).
+#:   * ``"error message heading"`` — 2 confirmed live rows: a literal, never-
+#:     substituted template placeholder ("ERROR MESSAGE HEADING ERROR MESSAGE
+#:     SUBHEADING...") — unambiguous, zero legitimate-prose overlap risk.
+#:   * ``"are you a robot"`` / ``"unusual traffic from your computer
+#:     network"`` / ``"verify you are human"`` / ``"checking your browser
+#:     before accessing"`` — industry-standard bot-challenge phrasing (Google/
+#:     Cloudflare); not observed live in this audit, but included defensively
+#:     — same zero-overlap-risk reasoning as above, and cheap insurance against
+#:     the next walled publisher.
+#:
+#: DELIBERATELY EXCLUDED (found live, considered, rejected as patterns):
+#:   * A GDACS disaster-alert boilerplate paragraph (32 rows) — genuine
+#:     low-information template content from a real page, not a wall. This is
+#:     exactly what the V-E2 substance-floor marker is FOR (thin-but-real),
+#:     not what V-E1 rejection is for (not-real-at-all).
+#:   * CGTN's cookie-notice footer ("By continuing to browse our site you
+#:     agree to our use of cookies...", 77 rows) — appears on articles from
+#:     314 chars up to 7,517 chars; it is decorative chrome CGTN appends to
+#:     EVERY page, never the entire body. A blind "accept cookies" pattern
+#:     would have false-rejected real, cited news content — this is why every
+#:     pattern above was checked against its own live length distribution
+#:     before being kept, not lifted uncritically from the spec's example list.
+_WALL_DENY_PATTERNS: tuple[str, ...] = (
+    "javascript is disabled",
+    "enable javascript",
+    "one of your browser extensions seems to be blocking the video player",
+    "transferring to the website",
+    "we are optimizing your request for the best experience",
+    "error message heading",
+    "are you a robot",
+    "unusual traffic from your computer network",
+    "verify you are human",
+    "checking your browser before accessing",
+)
+
+#: V-E1 length gate: a wall/redirect pattern only REJECTS the extraction when
+#: the whole cleaned text is this short or shorter. Live-audit-derived, not
+#: guessed: the longest confirmed 100%-boilerplate body (no article prose at
+#: all — headline-only stubs included) was 499 chars; the SHORTEST confirmed
+#: GENUINE article that merely happens to contain one of the deny patterns
+#: (an embedded-video caption sentence inside real France24 prose) was 852
+#: chars. 500 sits cleanly in that gap — every pattern hit above this length
+#: is left untouched (and, if genuinely thin, is still visible via the V-E2
+#: ``archived_text_chars`` marker rather than being silently discarded).
+_WALL_MAX_CHARS: int = 500
+
+
+def _match_wall_pattern(text: str) -> str | None:
+    """The matched deny-pattern when ``text`` looks like a JS-wall / bot-check
+    / redirect-interstitial body rather than real extracted prose, else
+    ``None``.
+
+    Both conditions must hold (see :data:`_WALL_DENY_PATTERNS` and
+    :data:`_WALL_MAX_CHARS` docstrings for the live-DB audit behind each):
+
+      1. the text is short (``len(text) <= _WALL_MAX_CHARS``) — a pattern
+         inside a long article is furniture (an embedded-video caption, a
+         cookie-notice footer), not the whole "extraction";
+      2. it contains one of the curated patterns (case-insensitive).
+    """
+    if len(text) > _WALL_MAX_CHARS:
+        return None
+    lowered = text.lower()
+    for pattern in _WALL_DENY_PATTERNS:
+        if pattern in lowered:
+            return pattern
+    return None
+
+
 def _extract_text(body: bytes, encoding: str | None, *, max_chars: int) -> str | None:
     """Trafilatura main-text extraction — bonus only; ``None`` on any failure.
 
     Lazy import (trafilatura is a base dep, but its import is heavy and every
-    other sub-handler would pay it at package import time otherwise)."""
+    other sub-handler would pay it at package import time otherwise). Does
+    NOT apply the V-E1 wall-pattern gate — that is a separate, independently
+    testable check applied by the caller (:func:`_match_wall_pattern`) so a
+    "Trafilatura extracted nothing" outcome and a "Trafilatura extracted a
+    wall" outcome stay distinguishable in the counters."""
     try:
         import trafilatura  # noqa: PLC0415 — deliberate lazy import (see docstring)
 
@@ -512,6 +688,10 @@ def _zero_counters() -> dict[str, int]:
         "media_failed": 0,
         "text_extracted": 0,
         "text_extract_failed": 0,
+        # V-E1 — distinct from text_extract_failed: Trafilatura DID return
+        # text, but it matched the JS-wall/bot-check/redirect deny list.
+        "text_extract_rejected_boilerplate": 0,
+        "text_extract_skipped": 0,
         "skipped_license": 0,
         # R-3b — kept DISTINCT from skipped_license so an operator can measure
         # what fail-closed costs, which is the question that decides whether to
@@ -684,10 +864,29 @@ async def _archive_one(
 
     # ---- bonus text extraction (bytes are the archive either way) ----
     archived_text: str | None = None
-    if _is_textual(content_type, body):
+    if _skip_text_extraction(url):
+        # R6b — a known no-content-region page (t.me widget preview): never
+        # invoke Trafilatura, it would only harvest page chrome. Bytes are
+        # already archived above; only the derived-text upgrade is withheld.
+        counters["text_extract_skipped"] += 1
+    elif _is_textual(content_type, body):
         archived_text = _extract_text(body, encoding, max_chars=max_text_chars)
         if archived_text is not None:
-            counters["text_extracted"] += 1
+            wall_pattern = _match_wall_pattern(archived_text)
+            if wall_pattern is not None:
+                # V-E1 — a JS-wall/bot-check/redirect-interstitial body wearing
+                # the shape of a successful extraction. Reject it exactly like
+                # a Trafilatura failure: no payload.archived_text write, no
+                # corpus dirty-marker requeue. The BYTES stay archived either
+                # way — only the derived-text upgrade is withheld.
+                counters["text_extract_rejected_boilerplate"] += 1
+                logger.warning(
+                    "evidence_archiver.rejected_boilerplate host=%s pattern=%r",
+                    urlsplit(url).hostname, wall_pattern,
+                )
+                archived_text = None
+            else:
+                counters["text_extracted"] += 1
         else:
             counters["text_extract_failed"] += 1
 
@@ -726,7 +925,13 @@ async def _archive_one(
         text_extracted=archived_text is not None,
     )
     async with pool.acquire() as conn:
-        await conn.execute(_STAMP_SIGNAL_SQL, signal_id, object_ref, archived_text)
+        # V-E2 — the substance-floor marker: a free len() alongside the text
+        # itself, so a later verify-side pass never has to re-read the body
+        # to know how much was actually extracted.
+        archived_text_chars = len(archived_text) if archived_text is not None else None
+        await conn.execute(
+            _STAMP_SIGNAL_SQL, signal_id, object_ref, archived_text, archived_text_chars,
+        )
     counters["archived"] += 1
 
 

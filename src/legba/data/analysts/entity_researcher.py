@@ -61,6 +61,26 @@ _VALID_VERDICTS = frozenset({"same", "not_same", "unsure"})
 
 
 @dataclass(frozen=True)
+class ClassCorrection:
+    """An OPTIONAL adjudicator-surfaced class-label correction (P4 Class 6
+    Observation 2, planning/prompt_gallery/p4_judge_bearing.md §Class 6): the
+    adjudicator is fed the UPSTREAM (possibly wrong) ``entity_class`` label as
+    ground truth framing, and routinely reasons PAST that wrong label to the
+    correct read ("Women's Africa Cup of Nations" typed ``person`` for both
+    sides, but the model's own "why" — "word order variant, same tournament" —
+    implicitly corrects it) with no schema field to SURFACE the correction back
+    to the reclassify pipeline. ``side`` names which candidate the correction
+    applies to ('a' | 'b'); ``correct_class`` is the model's proposed
+    replacement, already validated against the closed taxonomy (an invalid/
+    unrecognized class is dropped at parse time — see ``_coerce_class_correction``
+    — never persisted). This NEVER changes the same/not_same verdict itself —
+    it is an independent, optional observation."""
+
+    side: str  # 'a' | 'b'
+    correct_class: str
+
+
+@dataclass(frozen=True)
 class Verdict:
     """One adjudicated pair. ``entity_a``/``entity_b`` are the profile ids in the
     same order as the source :class:`CandidatePair` (left/right)."""
@@ -73,13 +93,16 @@ class Verdict:
     justification: str
     decided_by: str = "llm"
     model_id: str | None = None
+    #: P4 Class 6 Obs. 2 — optional, parsed from the model's reply when it
+    #: flags a wrong upstream entity_class label (see :class:`ClassCorrection`).
+    class_correction: ClassCorrection | None = None
 
 
 _ADJ_SYSTEM = with_preamble(
     """TASK — decide whether two entity NAMES denote the SAME real-world entity, for a knowledge-graph de-duplication pass.
 
 You are given a numbered list of candidate PAIRS. For EACH pair return one verdict. Output ONE JSON array, nothing else — one object per pair, in order. ECHO the two names verbatim in "a" and "b" so the verdict is unambiguously bound to the right pair:
-[{"n": 1, "a": "<A name verbatim>", "b": "<B name verbatim>", "verdict": "same"|"not_same"|"unsure", "confidence": 0.0-1.0, "why": "<=15 words"}]
+[{"n": 1, "a": "<A name verbatim>", "b": "<B name verbatim>", "verdict": "same"|"not_same"|"unsure", "confidence": 0.0-1.0, "why": "<=15 words", "class_correction": {"side": "a"|"b", "correct_class": "<class>"} (OPTIONAL — see below, omit unless a given class is wrong)}]
 
 DECISION RULES (be conservative — a wrong "same" permanently fuses two distinct entities):
 - "same" ONLY when the two names are the identical real referent: a surface variant, alias, abbreviation/acronym, honorific/title variant, or transliteration of ONE entity. (e.g. "Ali Khamenei" = "Ayatollah Ali Khamenei"; "US" = "United States"; "SNSC" = "Supreme National Security Council".)
@@ -91,6 +114,7 @@ DECISION RULES (be conservative — a wrong "same" permanently fuses two distinc
     * a magazine/company vs a geographic feature of the same name ("the Atlantic" the magazine vs "Atlantic" the ocean).
 - "unsure" when you genuinely cannot tell from the names + classes alone. NEVER guess "same" to be helpful — default to "unsure".
 - The entity CLASS is given; a person and an organization are almost never "same".
+- OPTIONAL — CLASS CORRECTION: the entity CLASS you were given for A/B is UPSTREAM data, not guaranteed correct. If your own reasoning about the pair tells you one side's stated class is WRONG (e.g. two names typed "person" that are actually the same sports tournament, or a building typed "person"), you MAY add an OPTIONAL "class_correction" field naming the side and the class you believe is correct: {"side":"a"|"b","correct_class":"<one of: country|organization|corporation|location|person|event|entity>"}. Only add it when you are genuinely confident the GIVEN class is mistyped — omit the field entirely otherwise (most pairs need no correction). When BOTH sides carry the same wrong class, flag side "a". This is a SEPARATE, independent observation — it never changes your same/not_same verdict.
 
 Worked examples:
   1. A="United States" (country) | B="the United States of America" (country) -> {"verdict":"same","confidence":0.98,"why":"full name vs common name, one country"}
@@ -99,6 +123,7 @@ Worked examples:
   4. A="Atlantic" (location) | B="the Atlantic" (organization) -> {"verdict":"not_same","confidence":0.9,"why":"ocean vs magazine, different classes"}
   5. A="Ali Khamenei" (person) | B="Seyyed Ali Khameni" (person) -> {"verdict":"same","confidence":0.9,"why":"honorific plus romanization variant, one person"}
   6. A="Imam Hussein" (person) | B="Imam Hussain" (person) -> {"verdict":"same","confidence":0.9,"why":"ei/ai romanization of one name"}
+  7. A="Continental Youth Football Championship" (person) | B="the Continental Youth Football Championship" (person) -> {"verdict":"same","confidence":0.95,"why":"same tournament, article variant","class_correction":{"side":"a","correct_class":"event"}}
 """
 )
 
@@ -168,6 +193,28 @@ def _norm_name(s: object) -> str:
     return re.sub(r"\s+", " ", str(s or "").strip().lower())
 
 
+def _coerce_class_correction(raw: object) -> ClassCorrection | None:
+    """Parse the OPTIONAL ``class_correction`` field (P4 Class 6 Obs. 2).
+
+    Strict on purpose: a malformed/unrecognized ``side`` or ``correct_class``
+    (e.g. a hallucinated class outside the closed taxonomy) drops the whole
+    correction rather than persisting a garbage hint downstream — the
+    reclassify pipeline only ever sees a validated ``side``/``correct_class``
+    pair, never raw model text. References ``_VALID_ENTITY_CLASSES`` (the
+    closed taxonomy shared with the reclassify pass, defined later in this
+    module) — safe via late binding since this is only ever called at runtime,
+    after the module has finished loading."""
+    if not isinstance(raw, Mapping):
+        return None
+    side = str(raw.get("side") or "").strip().lower()
+    if side not in ("a", "b"):
+        return None
+    correct_class = str(raw.get("correct_class") or "").strip().lower()
+    if correct_class not in _VALID_ENTITY_CLASSES:
+        return None
+    return ClassCorrection(side=side, correct_class=correct_class)
+
+
 def _parse_batch(content: str, batch: list[CandidatePair]) -> list[Verdict]:
     """Bind each model verdict to a pair by its ECHOED names (authoritative),
     falling back to the 1-based ``n`` ONLY when an item echoes no names.
@@ -223,6 +270,7 @@ def _parse_batch(content: str, batch: list[CandidatePair]) -> list[Verdict]:
                 verdict=verdict,
                 confidence=conf,
                 justification=why,
+                class_correction=_coerce_class_correction(item.get("class_correction")),
             )
         )
     return out
@@ -282,6 +330,53 @@ async def _persist(conn, verdicts: list[Verdict]) -> None:
         )
 
 
+async def _record_class_correction_hint(
+    conn, target_id: str, correction: ClassCorrection, *, pair_key: str,
+) -> bool:
+    """Best-effort: stamp the flagged side's ``entity_profiles.data`` with an
+    ``adjudicator_class_hint`` note (P4 Class 6 Obs. 2 — the adjudicator
+    routinely reasons past a WRONG upstream ``entity_class`` label it was fed
+    as ground truth, with no channel to report it back to the reclassify
+    pipeline). Reuses the SAME ``data`` jsonb column + ``jsonb_set`` idiom the
+    reclassify pass already reads/writes (``reclass_seen_at`` / ``reclass``,
+    below) — CHEAP: no new column, no new migration. The reclassify pool SQL
+    (:data:`_RECLASS_SUSPECT_SQL` / :data:`_RECLASS_ENTITY_SUSPECT_SQL`)
+    queue-jumps a hinted row ahead of the lexical-suspect heuristic (see their
+    ORDER BY), so a hint concretely changes queue PRIORITY — it never itself
+    reclassifies; the LLM reclass pass still makes the final call. Never
+    raises: a write failure degrades to "hint not recorded", exactly like
+    every other best-effort annotation in this module (mirrors
+    ``reclassify_entities``'s own apply-failure handling)."""
+    if conn is None or not target_id:
+        return False
+    try:
+        await conn.execute(
+            """
+            UPDATE entity_profiles
+               SET data = jsonb_set(
+                     COALESCE(data, '{}'::jsonb),
+                     '{adjudicator_class_hint}',
+                     $2::jsonb, true
+                   ),
+                   updated_at = now()
+             WHERE id = $1::uuid
+            """,
+            target_id,
+            json.dumps({
+                "correct_class": correction.correct_class,
+                "pair_key": pair_key,
+                "flagged_by": "entity_researcher.adjudicate",
+            }),
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 — best-effort, never sinks the batch
+        logger.warning(
+            "entity_researcher.class_correction_hint_failed pair_key=%s err=%s",
+            pair_key, exc,
+        )
+        return False
+
+
 async def adjudicate_pairs(
     conn,
     llm: LLMHandlerLike,
@@ -293,6 +388,7 @@ async def adjudicate_pairs(
     temperature: float = DEFAULT_ADJ_TEMPERATURE,
     use_cache: bool = True,
     persist: bool = True,
+    apply_class_corrections: bool = False,
 ) -> list[Verdict]:
     """Adjudicate candidate ``pairs`` into same/not_same/unsure verdicts.
 
@@ -302,6 +398,17 @@ async def adjudicate_pairs(
     (never a silent ``same``) so one bad batch can't corrupt the graph. When
     ``persist`` is true every NEW verdict is upserted (human decisions are
     preserved). Returns verdicts for ALL input pairs, cache + fresh.
+
+    ``apply_class_corrections`` (P4 Class 6 Obs. 2, default False — mirrors
+    ``reclassify_entities``'s own ``apply`` gate, so a dry-run pass mutates
+    NO ``entity_profiles`` row, exactly like every other entity_profiles write
+    in this module): when true, every parsed :class:`ClassCorrection` is
+    recorded onto the flagged side's ``entity_profiles.data`` (best-effort —
+    see :func:`_record_class_correction_hint`). The COUNT of verdicts carrying
+    a ``class_correction`` (whether or not this flag is set) is always
+    available to the caller via ``Verdict.class_correction`` on the returned
+    list — ``run_entity_research`` is the counter (``ResearchReport.
+    class_corrections_flagged``).
     """
     if not pairs:
         return []
@@ -345,6 +452,20 @@ async def adjudicate_pairs(
                 await _persist(conn, batch_verdicts)
             except Exception as exc:  # audit-write failure must not lose verdicts
                 logger.warning("entity_researcher.persist_failed err=%s", exc)
+        if apply_class_corrections:
+            pair_by_key = {p.pair_key: p for p in batch}
+            for v in batch_verdicts:
+                if v.class_correction is None:
+                    continue
+                p = pair_by_key.get(v.pair_key)
+                if p is None:
+                    continue
+                target_id = (
+                    p.left_id if v.class_correction.side == "a" else p.right_id
+                )
+                await _record_class_correction_hint(
+                    conn, target_id, v.class_correction, pair_key=v.pair_key,
+                )
         for v in batch_verdicts:
             results[v.pair_key] = v
 
@@ -554,7 +675,11 @@ async def execute_merges(
 # deps-builder / actor wiring, and lets a CLI / one-off cleanup (E6) reuse it.
 # ===========================================================================
 
-from .._entity_candidates import DEFAULT_MIN_TRGM, generate_candidates
+from .._entity_candidates import (
+    DEFAULT_MIN_TRGM,
+    DEFAULT_TRGM_MIN_DEGREE,
+    generate_candidates,
+)
 
 DEFAULT_MAX_PAIRS = 200
 DEFAULT_SAME_MIN_CONF = 0.75
@@ -583,6 +708,16 @@ class ResearchReport:
     #: "changed": 12}, "entity": {"examined": 20, "changed": 5}}. Empty when
     #: reclassify_max == 0 or every pool it was given was allotted 0 rows.
     reclass_by_class: dict[str, dict[str, int]] = field(default_factory=dict)
+    #: P4 Class 6 Obs. 2 (QW1-D fix 3) — how many of THIS pass's adjudicated
+    #: verdicts carried an optional ``class_correction`` (a wrong upstream
+    #: entity_class the adjudicator's own reasoning flagged). Counted
+    #: regardless of ``mode`` (a pure observation, no mutation); the row-level
+    #: hint itself is only WRITTEN to entity_profiles.data in apply mode (see
+    #: ``adjudicate_pairs``'s ``apply_class_corrections``).
+    class_corrections_flagged: int = 0
+    #: up to N {name, side, correct_class, why} for the finding — mirrors
+    #: ``reclass_sample``'s shape.
+    class_correction_sample: tuple[dict, ...] = ()
 
     def summary(self) -> str:
         verb = "would merge" if self.mode == "dry_run" else "merged"
@@ -602,6 +737,11 @@ class ResearchReport:
                     for cls, v in self.reclass_by_class.items()
                 )
                 s += f" [{breakdown} examined/changed]"
+        if self.class_corrections_flagged:
+            s += (
+                f" class_correction: {self.class_corrections_flagged} flagged "
+                "by the adjudicator."
+            )
         return s
 
     def to_data(self) -> dict:
@@ -617,6 +757,8 @@ class ResearchReport:
             "reclass_changed": self.reclass_changed,
             "reclass_sample": list(self.reclass_sample),
             "reclass_by_class": dict(self.reclass_by_class),
+            "class_corrections_flagged": self.class_corrections_flagged,
+            "class_correction_sample": list(self.class_correction_sample),
         }
 
 
@@ -711,6 +853,13 @@ _CORP_SUFFIX_KEYWORDS = (
 #: ("West Berlin", "Novaya Pošta", "Dodge", "Lesedi La Rona") sit typed person
 #: forever. The LLM makes the final call (conservative prompt, 0.75 gate,
 #: real persons kept) — the prefilter only orders the queue.
+#:
+#: P4 Class 6 Obs. 2 (QW1-D fix 3): a row carrying an ``adjudicator_class_hint``
+#: (the adjudicator flagged this exact row's class as wrong while reasoning
+#: about a merge candidate — see ``_record_class_correction_hint``) queue-jumps
+#: AHEAD of the lexical heuristics below — an LLM-confirmed signal on THIS row
+#: outranks a regex guess. The LLM reclassify pass still makes the final call;
+#: the hint only ever affects ORDER, never a filter/decision.
 _RECLASS_SUSPECT_SQL = rf"""
     SELECT id, canonical_name, entity_class
       FROM entity_profiles
@@ -718,7 +867,8 @@ _RECLASS_SUSPECT_SQL = rf"""
     AND merged_into IS NULL
     AND COALESCE(data->>'gc_status', '') NOT IN ('merged', 'junk')
     AND COALESCE(data->>'reclass_seen_at', '') = ''
-    ORDER BY (canonical_name ~* '^(the|a|an)\s') DESC,
+    ORDER BY (data->'adjudicator_class_hint') IS NOT NULL DESC,
+             (canonical_name ~* '^(the|a|an)\s') DESC,
              (
                 canonical_name ~* '\y({_INSTITUTION_KEYWORDS})\y'
              OR canonical_name ~* '\y({_GEOGRAPHY_KEYWORDS})\y'
@@ -750,6 +900,8 @@ _RECLASS_SUSPECT_SQL = rf"""
 #:     article-prefix->entity demotion, `6f270a2`, which now feeds THIS pool)
 #:     gets its LLM look within ~a tick rather than waiting out the historical
 #:     backlog. `reclass_seen_at` drains the pool exactly as it does for person.
+#: P4 Class 6 Obs. 2 (QW1-D fix 3): same adjudicator-hint queue-jump as
+#: ``_RECLASS_SUSPECT_SQL`` above, applied to the generic-entity pool.
 _RECLASS_ENTITY_SUSPECT_SQL = rf"""
     SELECT id, canonical_name, entity_class
       FROM entity_profiles
@@ -757,7 +909,8 @@ _RECLASS_ENTITY_SUSPECT_SQL = rf"""
     AND merged_into IS NULL
     AND COALESCE(data->>'gc_status', '') NOT IN ('merged', 'junk')
     AND COALESCE(data->>'reclass_seen_at', '') = ''
-    ORDER BY (
+    ORDER BY (data->'adjudicator_class_hint') IS NOT NULL DESC,
+             (
                 canonical_name ~* '\y({_INSTITUTION_KEYWORDS})\y'
              OR canonical_name ~* '\y({_GEOGRAPHY_KEYWORDS})\y'
              OR canonical_name ~* '\y({_EVENT_KEYWORDS})\y'
@@ -1099,6 +1252,7 @@ async def run_entity_research(
     max_pairs: int = DEFAULT_MAX_PAIRS,
     min_trgm: float = DEFAULT_MIN_TRGM,
     trgm_limit: int = 0,
+    trgm_min_degree: int = DEFAULT_TRGM_MIN_DEGREE,
     adj_batch: int = DEFAULT_ADJ_BATCH,
     sample_size: int = 12,
     reclassify_max: int = 0,
@@ -1132,18 +1286,28 @@ async def run_entity_research(
     never queried). A pool that ends up with 0 rows is simply skipped (its
     ``reclassify_entities`` call is short-circuited by the empty-candidates
     guard), so setting the share to 0.0 or 1.0 cleanly disables one side."""
-    # trgm_limit<=0 => exact-block-key only (the trgm self-join is too slow for
-    # the cadence until E3.1's bounded blocking). exact_limit is generous (the
-    # exact self-join is sub-second); the final [:max_pairs] bounds adjudication.
+    # trgm_limit<=0 => exact-block-key only. When it IS enabled, trgm_min_degree
+    # bounds the self-join to hub profiles (R9b) — that is what makes the probe
+    # affordable on the actor cadence, and it is the ONLY channel that can
+    # propose a cross-block-key duplicate (Kiev/Kyiv). exact_limit is generous
+    # (the exact self-join is sub-second); the final [:max_pairs] bounds
+    # adjudication, and generate_candidates now ranks by degree WITHIN a band
+    # (R9a) so that truncation keeps the hubs rather than the alphabet.
     pairs = (await generate_candidates(
         conn, min_trgm=min_trgm,
         exact_limit=max(max_pairs * 4, 1000), trgm_limit=int(trgm_limit),
+        trgm_min_degree=int(trgm_min_degree),
     ))[:max_pairs]
     gray = [p for p in pairs if p.band == "gray"]
     auto = len(pairs) - len(gray)
 
     verdicts = await adjudicate_pairs(
         conn, llm, gray, model_id=model_id, batch_size=adj_batch,
+        # P4 Class 6 Obs. 2 (QW1-D fix 3): the entity_profiles.data hint write
+        # is gated on `apply`, mirroring reclassify_entities's own apply gate —
+        # a dry-run pass mutates NO entity_profiles row, exactly like every
+        # other write in this module. The COUNTER below is computed regardless.
+        apply_class_corrections=apply,
     )
     tally = {"same": 0, "not_same": 0, "unsure": 0}
     for v in verdicts:
@@ -1173,6 +1337,29 @@ async def run_entity_research(
             "verdict": v.verdict if v else "auto_merge",
             "confidence": round(v.confidence, 2) if v else 1.0,
             "why": (v.justification[:120] if v else f"auto_merge:{band}"),
+        })
+
+    # P4 Class 6 Obs. 2 (QW1-D fix 3) — the COUNTER (always computed, no
+    # mutation) + a small human sample naming which side + class was flagged.
+    class_corrections_flagged = 0
+    class_correction_sample: list[dict] = []
+    for v in verdicts:
+        if v.class_correction is None:
+            continue
+        class_corrections_flagged += 1
+        if len(class_correction_sample) >= sample_size:
+            continue
+        p = pair_by_pk.get(v.pair_key)
+        flagged_name = None
+        if p is not None:
+            flagged_name = (
+                p.left_name if v.class_correction.side == "a" else p.right_name
+            )
+        class_correction_sample.append({
+            "name": (flagged_name or "?")[:80],
+            "side": v.class_correction.side,
+            "correct_class": v.class_correction.correct_class,
+            "why": v.justification[:120],
         })
 
     # E6c/#219 — reclassify passes (OFF unless reclassify_max > 0). Run AFTER
@@ -1240,6 +1427,8 @@ async def run_entity_research(
         reclass_examined=reclass_examined, reclass_changed=reclass_changed,
         reclass_sample=tuple(reclass_sample),
         reclass_by_class=reclass_by_class,
+        class_corrections_flagged=class_corrections_flagged,
+        class_correction_sample=tuple(class_correction_sample),
     )
 
 
@@ -1276,7 +1465,14 @@ class EntityResearcherDeps:
     apply: bool = False
     max_pairs: int = DEFAULT_MAX_PAIRS
     same_min_confidence: float = DEFAULT_SAME_MIN_CONF
-    trgm_limit: int = 0  # <=0 => exact-block-key only (trgm is too slow pre-E3.1)
+    # <=0 => exact-block-key only. Positive enables the trigram probe, which is
+    # the only channel that can propose a duplicate whose block keys DIFFER
+    # (Kiev/Kyiv); pair it with trgm_min_degree or the self-join is unbounded.
+    trgm_limit: int = 0
+    #: R9b — link-count floor applied to BOTH trigram endpoints. 0 = no floor
+    #: (the historical unbounded ~61s scan). Descriptor-settable alongside
+    #: trgm_limit; see _entity_candidates._TRGM_HUB_SQL for the cost model.
+    trgm_min_degree: int = DEFAULT_TRGM_MIN_DEGREE
     max_tokens: int = DEFAULT_ADJ_MAX_TOKENS
     temperature: float = DEFAULT_ADJ_TEMPERATURE
     batch_size: int = DEFAULT_ADJ_BATCH
@@ -1311,6 +1507,11 @@ def _report_summary(rep: ResearchReport, model_id: str | None) -> FindingPayload
         body += "\n\nReclassify sample:\n" + "\n".join(
             f"- {s['name']}: {s['from']} -> {s['to']}  "
             f"[{s.get('confidence', '')}] {s['why']}" for s in rep.reclass_sample
+        )
+    if rep.class_correction_sample:
+        body += "\n\nClass-correction flags (adjudicator, P4 Class 6):\n" + "\n".join(
+            f"- {s['name']} (side {s['side']}): looks like {s['correct_class']}  "
+            f"{s['why']}" for s in rep.class_correction_sample
         )
     return FindingPayload(
         title=rep.summary()[:2048],
@@ -1356,6 +1557,7 @@ async def run_method(
                 apply=deps.apply, model_id=model_id,
                 same_min_confidence=deps.same_min_confidence,
                 max_pairs=deps.max_pairs, trgm_limit=deps.trgm_limit,
+                trgm_min_degree=deps.trgm_min_degree,
                 adj_batch=deps.batch_size,
                 reclassify_max=deps.reclassify_max,
                 reclass_min_confidence=deps.reclass_min_confidence,

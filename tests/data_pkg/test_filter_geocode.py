@@ -181,6 +181,34 @@ class TestCountryExtraction:
         # Non-state/-tz ISO tokens still work (BR not in the stop-set).
         assert extract_country_iso2_from_text("Activity in BR today") == "BR"
 
+    def test_first_hit_is_by_position_not_by_pass(self):
+        # R4: a bare ISO code EARLIER in the text beats a country NAME later.
+        # (Live: "Netanyahu arrives in US, says Iran ..." resolved IRAN because
+        # the name pass ran to completion before the ISO-token pass.)
+        assert extract_country_iso2_from_text(
+            "Netanyahu arrives in US, says Iran 'first and foremost' agenda"
+        ) == "US"
+        # ... and a NAME earlier still beats a code later.
+        assert extract_country_iso2_from_text("Brazil talks with BR neighbours") == "BR"
+        assert extract_country_iso2_from_text("Greece asks IT for help") == "GR"
+
+    def test_common_word_iso_tokens_are_not_countries(self):
+        # R4: bare uppercase tokens that are ordinary words / newsroom
+        # abbreviations must not resolve. "PR" -> Puerto Rico was the live
+        # TASS headline failure; the rest are the same collision class.
+        assert extract_country_iso2_from_text("PR for Zelensky's terrorism") is None
+        assert extract_country_iso2_from_text("The IT sector expands") is None
+        assert extract_country_iso2_from_text("AI spending accelerates") is None
+        assert extract_country_iso2_from_text("Talks CAN resume, sources say") is None
+        assert extract_country_iso2_from_text("Losses ARE mounting") is None
+        assert extract_country_iso2_from_text("GEO data was withheld") is None
+
+    def test_stopset_does_not_shadow_the_country_name(self):
+        # The stop-set only rejects the BARE TOKEN — the full name still wins.
+        assert extract_country_iso2_from_text("The IT ministry of Italy") == "IT"
+        assert extract_country_iso2_from_text("Reports from Puerto Rico") == "PR"
+        assert extract_country_iso2_from_text("Talks in Georgia stalled") == "GE"
+
 
 # ---------------------------------------------------------------------------
 # TLD fallback

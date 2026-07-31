@@ -45,6 +45,7 @@ from legba.data.analysts.meta_findings_synthesizer import (
     MAX_INPUT_FINDINGS,
     MetaFindingsSynthesizerRunner,
     _coerce_finding,
+    _looks_like_resolvable_evidence,
     _orient,
     _render_user_prompt,
     build_prompt_module,
@@ -367,6 +368,70 @@ def test_coerce_finding_malformed_json_falls_back_with_meta_marker():
     # Still stamped with the meta marker.
     assert f.data.get("meta") is True
     assert f.data.get("contributing_analysts") == ["analyst.x"]
+
+
+# ---------------------------------------------------------------------------
+# P2 gallery finding #3 — evidence-field contamination. _coerce_finding used
+# to copy the model's own `evidence` array verbatim; the model tends to fill
+# it by echoing its OWN citation markers (bare ints, bracketed ints, or
+# composition-tier ref:N / [[ref:N]] strings) — meaningless once this
+# composition's `evidence` is copied forward and rendered as a HIGHER tier's
+# "evidence:" bullets (live captures, P2 gallery §1/§2/§4). Now filtered to
+# genuinely resolvable identifiers only (a URL or a UUID).
+# ---------------------------------------------------------------------------
+
+
+def test_looks_like_resolvable_evidence_accepts_urls_and_uuids():
+    assert _looks_like_resolvable_evidence("https://example.com/a/b") is True
+    assert _looks_like_resolvable_evidence("HTTP://EXAMPLE.COM") is True
+    assert _looks_like_resolvable_evidence(str(uuid4())) is True
+
+
+def test_looks_like_resolvable_evidence_rejects_citation_scheme_soup():
+    # Live-artifact shapes, verbatim from the P2 gallery captures: bare ints,
+    # bracketed ints, and composition-tier ref:N / [[ref:N]] strings.
+    for soup in ("2", "12", "14", "[1]", "[2]", "[9]", "ref:1", "ref:27",
+                 "[[ref:16]]", "", "   ", "not-a-uuid"):
+        assert _looks_like_resolvable_evidence(soup) is False, soup
+
+
+def test_coerce_finding_evidence_drops_bare_citation_scheme_soup():
+    """The live artifact shape (country_composition's Sudan capture,
+    region_composition's Africa capture, world_assessor's escalation-block
+    capture): a model's `evidence` array mixing bare ints, bracket ints, and
+    ref:N / [[ref:N]] strings — NONE of it resolvable — must coerce to an
+    EMPTY evidence array, never scheme soup a parent tier could later render."""
+    raw = json.dumps({
+        "title": "World read",
+        "body": "...",
+        "confidence": 0.6,
+        "evidence": ["2", "12", "14", "[1]", "[2]", "[9]",
+                     "ref:1", "ref:27", "ref:28", "[[ref:16]]"],
+        "tags": [],
+    })
+    f = _coerce_finding(raw, fallback_title="fb", contributing_analysts=["a"])
+    assert f.evidence == []
+
+
+def test_coerce_finding_evidence_keeps_only_resolvable_identifiers():
+    """A mixed list (the observed leadership_transition shape: real URLs
+    alongside a composition's own bare ref markers) keeps ONLY the
+    resolvable entries — URLs and UUIDs — dropping the rest, never blending
+    them as though all were equally trustworthy."""
+    fid = uuid4()
+    raw = json.dumps({
+        "title": "t", "body": "b", "confidence": 0.5,
+        "evidence": [
+            "https://www.aa.com.tr/en/middle-east/mapping-sudan",
+            str(fid),
+            "ref:1",
+            "[[ref:2]]",
+            "3",
+        ],
+        "tags": [],
+    })
+    f = _coerce_finding(raw, fallback_title="fb", contributing_analysts=["a"])
+    assert f.evidence == ["https://www.aa.com.tr/en/middle-east/mapping-sudan", str(fid)]
 
 
 # ---------------------------------------------------------------------------

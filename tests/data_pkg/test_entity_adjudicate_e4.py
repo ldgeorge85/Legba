@@ -25,7 +25,10 @@ import pytest_asyncio
 
 from legba.data._entity_candidates import CandidatePair
 from legba.data.analysts.entity_researcher import (
+    _ADJ_SYSTEM,
+    ClassCorrection,
     Verdict,
+    _coerce_class_correction,
     _coerce_verdict,
     _extract_json_array,
     adjudicate_pairs,
@@ -249,3 +252,165 @@ async def test_human_verdict_not_clobbered(pg_pool):
             "SELECT verdict, decided_by FROM entity_judgement WHERE pair_key=$1",
             p1.pair_key)
     assert row["verdict"] == "not_same" and row["decided_by"] == "human"
+
+
+# ---------------------------------------------------------------------------
+# P4 Class 6 Obs. 2 (QW1-D fix 3) — the OPTIONAL class_correction channel: the
+# adjudicator routinely reasons past a WRONG upstream entity_class label it was
+# fed as ground truth (e.g. "Women's Africa Cup of Nations" typed `person` on
+# both sides) but had no field to SURFACE the correction. Covered here:
+#   * the system prompt describes the optional schema (the model must be told
+#     the shape exists before it can use it);
+#   * parsing: present + well-formed -> populated; absent -> None; malformed
+#     side/class -> dropped (never a garbage hint);
+#   * recording: entity_profiles.data.adjudicator_class_hint is written on the
+#     flagged side ONLY when apply_class_corrections=True (mirrors the dry-run
+#     invariant every other entity_profiles write in this module honors).
+# ---------------------------------------------------------------------------
+
+
+def test_prompt_describes_the_optional_class_correction_schema():
+    assert "class_correction" in _ADJ_SYSTEM
+    assert "correct_class" in _ADJ_SYSTEM
+    assert '"side":"a"|"b"' in _ADJ_SYSTEM or '"side": "a"|"b"' in _ADJ_SYSTEM
+
+
+@pytest.mark.asyncio
+async def test_class_correction_parsed_from_a_well_formed_reply():
+    """No DB needed (mirrors test_prompt_carries_transliteration_guidance):
+    use_cache/persist off means conn is never touched."""
+    p1 = _pair(
+        "Continental Youth Cup", "the Continental Youth Cup",
+        a_cls="person", b_cls="person",
+    )
+    llm = _StubLLM(json.dumps([
+        {"n": 1, "verdict": "same", "confidence": 0.95,
+         "why": "same tournament, article variant",
+         "class_correction": {"side": "a", "correct_class": "event"}},
+    ]))
+    verdicts = await adjudicate_pairs(
+        None, llm, [p1], use_cache=False, persist=False)
+    v = verdicts[0]
+    assert v.verdict == "same"
+    assert v.class_correction == ClassCorrection(side="a", correct_class="event")
+
+
+@pytest.mark.asyncio
+async def test_class_correction_absent_when_not_flagged():
+    p1 = _pair("Foo Corp", "Foo Incorporated",
+               a_cls="organization", b_cls="organization")
+    llm = _StubLLM(json.dumps([{"n": 1, "verdict": "same", "confidence": 0.9}]))
+    verdicts = await adjudicate_pairs(
+        None, llm, [p1], use_cache=False, persist=False)
+    assert verdicts[0].class_correction is None
+
+
+def test_coerce_class_correction_drops_invalid_side():
+    assert _coerce_class_correction(
+        {"side": "c", "correct_class": "event"}) is None
+    assert _coerce_class_correction({"correct_class": "event"}) is None
+
+
+def test_coerce_class_correction_drops_invalid_class():
+    assert _coerce_class_correction(
+        {"side": "a", "correct_class": "spaceship"}) is None
+    assert _coerce_class_correction({"side": "a"}) is None
+
+
+def test_coerce_class_correction_drops_non_mapping():
+    assert _coerce_class_correction(None) is None
+    assert _coerce_class_correction("event") is None
+    assert _coerce_class_correction(["a", "event"]) is None
+
+
+def test_coerce_class_correction_case_insensitive_and_valid():
+    cc = _coerce_class_correction({"side": "B", "correct_class": "Event"})
+    assert cc == ClassCorrection(side="b", correct_class="event")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_class_correction_hint_recorded_when_applied(pg_pool):
+    """apply_class_corrections=True writes entity_profiles.data.
+    adjudicator_class_hint on the FLAGGED side only — the other side of the
+    pair is untouched."""
+    async with pg_pool.acquire() as conn:
+        a_id = await conn.fetchval(
+            "INSERT INTO entity_profiles (canonical_name, entity_class, "
+            "entity_type, data) VALUES ($1,'person','person','{}'::jsonb) "
+            "RETURNING id",
+            "Zzresearchd Continental Youth Cup A",
+        )
+        b_id = await conn.fetchval(
+            "INSERT INTO entity_profiles (canonical_name, entity_class, "
+            "entity_type, data) VALUES ($1,'person','person','{}'::jsonb) "
+            "RETURNING id",
+            "Zzresearchd the Continental Youth Cup B",
+        )
+        p1 = CandidatePair(
+            left_id=str(a_id), left_name="Zzresearchd Continental Youth Cup A",
+            left_class="person",
+            right_id=str(b_id), right_name="Zzresearchd the Continental Youth Cup B",
+            right_class="person",
+            band="gray", score=0.7, signals=("trgm:0.7",), block_key="",
+        )
+        llm = _StubLLM(json.dumps([
+            {"n": 1, "verdict": "same", "confidence": 0.95, "why": "same event",
+             "class_correction": {"side": "a", "correct_class": "event"}},
+        ]))
+        await adjudicate_pairs(conn, llm, [p1], apply_class_corrections=True)
+        flagged = await conn.fetchrow(
+            "SELECT data FROM entity_profiles WHERE id=$1", a_id)
+        other = await conn.fetchrow(
+            "SELECT data FROM entity_profiles WHERE id=$1", b_id)
+    flagged_data = (
+        json.loads(flagged["data"]) if isinstance(flagged["data"], str)
+        else flagged["data"]
+    )
+    other_data = (
+        json.loads(other["data"]) if isinstance(other["data"], str)
+        else other["data"]
+    ) or {}
+    assert flagged_data["adjudicator_class_hint"]["correct_class"] == "event"
+    assert "adjudicator_class_hint" not in other_data
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_class_correction_hint_not_written_without_the_apply_flag(pg_pool):
+    """The DEFAULT (apply_class_corrections=False, mirrors reclassify_entities'
+    own apply gate) must mutate NO entity_profiles row — a dry-run adjudication
+    pass writes only the entity_judgement cache, never the graph."""
+    async with pg_pool.acquire() as conn:
+        a_id = await conn.fetchval(
+            "INSERT INTO entity_profiles (canonical_name, entity_class, "
+            "entity_type, data) VALUES ($1,'person','person','{}'::jsonb) "
+            "RETURNING id",
+            "Zzresearchd Dry Run Cup A",
+        )
+        b_id = await conn.fetchval(
+            "INSERT INTO entity_profiles (canonical_name, entity_class, "
+            "entity_type, data) VALUES ($1,'person','person','{}'::jsonb) "
+            "RETURNING id",
+            "Zzresearchd the Dry Run Cup B",
+        )
+        p1 = CandidatePair(
+            left_id=str(a_id), left_name="Zzresearchd Dry Run Cup A",
+            left_class="person",
+            right_id=str(b_id), right_name="Zzresearchd the Dry Run Cup B",
+            right_class="person",
+            band="gray", score=0.7, signals=("trgm:0.7",), block_key="",
+        )
+        llm = _StubLLM(json.dumps([
+            {"n": 1, "verdict": "same", "confidence": 0.95, "why": "same event",
+             "class_correction": {"side": "a", "correct_class": "event"}},
+        ]))
+        # apply_class_corrections defaults to False.
+        verdicts = await adjudicate_pairs(conn, llm, [p1])
+        row = await conn.fetchrow(
+            "SELECT data FROM entity_profiles WHERE id=$1", a_id)
+    data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+    assert "adjudicator_class_hint" not in (data or {})
+    # the correction was still PARSED (just not applied) — the caller-level
+    # counter (ResearchReport.class_corrections_flagged) can still see it.
+    assert verdicts[0].class_correction is not None

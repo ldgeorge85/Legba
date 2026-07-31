@@ -77,10 +77,25 @@ method:
     # --- kind-specific options (read by _build_entity_researcher) ------------
     merge_mode: apply             # LIVE MERGES (flipped 2026-07-12 after E5 gate + clean dry-run + E1 proof)
     max_pairs: 80                 # hard per-run candidate cap (incremental sweep;
-                                  # ~8 LLM batches — bounded actor-run time)
-    trgm_limit: 0                 # 0 => exact-block-key ONLY (the trgm self-join
-                                  # is ~61s over the live graph; bounded per-record
-                                  # trgm blocking is E3.1). exact = fast + precise.
+                                  # ~8 LLM batches — bounded actor-run time).
+                                  # R9a: candidates are ranked score-then-DEGREE,
+                                  # so this cap now spends itself on the hub
+                                  # duplicates instead of the alphabetical head.
+                                  # Raise it (a PUT, no rebuild) to drain the
+                                  # collision backlog faster — the cost is ~1 LLM
+                                  # batch per 10 extra gray pairs.
+    trgm_limit: 0                 # 0 => exact-block-key ONLY. Positive enables the
+                                  # trigram probe — the ONLY channel that can
+                                  # propose a duplicate whose block keys DIFFER
+                                  # (Kiev/Kyiv). Set it TOGETHER with
+                                  # trgm_min_degree below; unbounded it is a ~61s
+                                  # full self-join over the live graph.
+    trgm_min_degree: 0            # R9b — link-count floor on BOTH trigram
+                                  # endpoints. 0 = no floor (the unbounded scan).
+                                  # A positive floor confines the join to the hub
+                                  # set, which is small AND is where the
+                                  # cross-block-key duplicates actually are.
+                                  # Meaningless while trgm_limit is 0.
     same_min_confidence: 0.75     # a 'same' verdict below this is not merged
     batch_size: 10                # pairs per LLM adjudication call
     # --- E6c reclassify pass (the person-skew fix) --------------------------

@@ -42,7 +42,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Type
+from typing import Mapping, Type
 
 from pydantic import BaseModel
 
@@ -248,6 +248,54 @@ def structural_badge(analyst_id: str | None, structural_verified: bool | None) -
     if base == "structural" and structural_verified is True:
         return "structural-verified"
     return base
+
+
+# QW1-B — the DESK GROUNDING citation vocabulary.
+#
+# A bounded unit's ``data['citations']`` used to hold exactly one entry shape:
+# a ``[N]`` marker bound to a ``signals`` row id. QW1-B adds four MORE citable
+# block kinds (see :mod:`legba.data.analysts.unit_grounding`), none of which is a
+# signal: this unit's own PRIOR READ (a real ``analyst_outputs`` uuid, carried as
+# ``ref_id``), and three SYNTHETIC blocks — the open-situation REGISTER, the DESK
+# BASELINE and the STANDING OPEN QUESTIONS — which have no single substrate id and
+# therefore carry the REAL underlying ids (``situation_ids`` / ``baseline_keys`` /
+# ``question_ids``) and NO ``ref_id`` at all. Minting a ``ref_id`` so a drill link
+# resolves would be a fabricated anchor.
+#
+# THE SET LIVES HERE, not in the producing module, for ONE reason: the CONSUMER is
+# ``provenance.verify``, and ``verify`` importing ``data.analysts.inline_target``
+# would close an import cycle (``runtime.analyst_method`` → ``inline_target``).
+# This module is already imported by both sides, so one definition serves both and
+# no drifting copy is created.
+#
+# NOTE what is deliberately ABSENT: ``'finding'``. That token is the COMPOSITION
+# discriminator (``verify._uses_subclaim_convention``); stamping it on a unit's
+# prior-read citation would route the whole unit finding to the sub-claim verify
+# floor. The prior read gets its own ``ref_kind`` instead.
+GROUNDING_REF_KINDS: frozenset[str] = frozenset({
+    "prior_read",
+    "situation_register",
+    "desk_baseline",
+    "open_questions",
+})
+
+
+def is_grounding_citation(entry: object) -> bool:
+    """True iff a citation entry is a DESK GROUNDING block, not a cited signal.
+
+    The discriminator the verify path uses to admit a block-backed clause: an
+    entry with NO ``signal_id``, a ``ref_kind`` in :data:`GROUNDING_REF_KINDS`,
+    and real captured ``evidence_text``. All three are required — an entry
+    missing its evidence text is not gradeable and must NOT count as support.
+    """
+    if not isinstance(entry, Mapping):
+        return False
+    if entry.get("signal_id"):
+        return False
+    if entry.get("ref_kind") not in GROUNDING_REF_KINDS:
+        return False
+    text = entry.get("evidence_text")
+    return isinstance(text, str) and bool(text.strip())
 
 # An "effective output kind" is either a real OutputKind (writes a row) or the
 # TRACE_ONLY sentinel (skip the row, keep the trace + side-writes).

@@ -75,13 +75,16 @@ logger = logging.getLogger(__name__)
 
 
 __all__ = [
+    "ANALYST_KIND_OPTIONS",
     "HANDLER_OPTIONS",
     "OptionReject",
     "OptionResolution",
     "OptionSpec",
     "RESERVED_OPTION_KEYS",
+    "known_kind_option_names",
     "known_option_names",
     "resolve_handler_options",
+    "resolve_kind_options",
 ]
 
 
@@ -198,6 +201,11 @@ class OptionSpec:
                     return False, None, "expected a list of non-empty strings"
                 if self.choices is not None and item not in self.choices:
                     return False, None, f"'{item}' not one of {list(self.choices)}"
+                # A ``pattern`` binds EVERY member, exactly as it binds the whole
+                # value on a scalar ``str`` — otherwise a list-shaped knob would
+                # be the one place a declared shape guard silently does nothing.
+                if self.pattern is not None and not self.pattern.match(item):
+                    return False, None, f"'{item}' does not match the allowed pattern"
                 out.append(item)
             return True, out, ""
 
@@ -517,6 +525,41 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
             "fact_contention, hypotheses.status is an open vocabulary, and the "
             "value is passed as a bound array parameter, never interpolated.",
         ),
+        # -- W-B1/W-B2 the BEARING PIPELINE (v3.3.0) ---------------------
+        # The handler default is 'off', so declaring these changes NOTHING
+        # until an operator sets them: the X-1 byte-identical contract.
+        OptionSpec(
+            "bearing_gate",
+            "str",
+            "Post-match semantic gate over would-be bearing edges: a small "
+            "self-hosted model is asked whether the signal bears on the "
+            "thesis and a NO refuses the edge. CHOICE-LOCKED because the "
+            "handler treats anything that is not exactly 'on' as OFF — a "
+            "typo'd value must fail the catalog loudly, not silently disable "
+            "a filter the operator believes is running. Ships 'off'.",
+            choices=("on", "off"),
+        ),
+        OptionSpec(
+            "bearing_gate_ref",
+            "str",
+            "Stack component id the gate asks (default the idle self-hosted "
+            "8B). Resolved through the registry + CredentialVault at run "
+            "time, so the endpoint and its basic-auth pair are never in code.",
+            pattern=_IDENT_PATTERN,
+        ),
+        _nonneg_int(
+            "bearing_gate_cap",
+            "Gate calls per run. Candidates past the budget are STAMPED "
+            "'deferred' and written, never dropped — the budget is ours, the "
+            "loss must not be the matcher's. 0 leaves the leg on with no "
+            "calls (everything stamps 'deferred').",
+        ),
+        _nonneg_int(
+            "bearing_confirm_cap",
+            "Core-plane confirm judgments per run over gate-YES edges only. "
+            "The confirm records a second opinion ON the edge and never "
+            "blocks one. 0 disables the leg.",
+        ),
     ),
     "fact_contention_arbiter": (),
     "narrative_mapper": (
@@ -815,9 +858,68 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# THE KIND CATALOG — analyst ``identity.kind`` → its declared knobs
+# ---------------------------------------------------------------------------
+#
+# X-1 shipped ONE catalog, keyed by deterministic SUB-HANDLER, and the schema
+# refused ``method.options`` on every other kind for a good reason: nothing else
+# routed through the catalog, so a block anywhere else could only ever be inert,
+# and a silent inert block is exactly the dead config X-1 exists to remove.
+#
+# QW1-B opens a SECOND, deliberately narrow lane: an analyst KIND may declare
+# knobs read by the kind's own ``run_method`` (not by a deterministic
+# sub-handler). It inherits the whole X-1 contract unchanged — defaults live in
+# the code and are never copied here, unknown keys degrade LOUDLY with a receipt,
+# values are validated, runtime-owned keys are refused — so the only thing that is
+# new is WHERE the knob is read.
+#
+# The lane stays narrow ON PURPOSE: a kind appears here only when its
+# ``run_method`` actually reads ``options[...]``, and the drift guard
+# (``tests/data_pkg/test_handler_options_x1.py``) holds every declared name to a
+# real call site. A kind absent from this map still cannot carry
+# ``method.options`` — the schema refuses it at registration.
+
+#: One focus token: a term (any word/space/punctuation, incl. non-ASCII so an
+#: Arabic or Persian keyword is expressible) with an OPTIONAL ``:weight`` suffix.
+#: Bounded length so a knob cannot smuggle a paragraph into the ranking scan.
+_FOCUS_TOKEN_PATTERN = re.compile(r"^[\w .,'\-/&()]{1,64}(:\d{1,3}(\.\d{1,3})?)?$")
+
+ANALYST_KIND_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
+    "inline_target": (
+        OptionSpec(
+            "slice_focus",
+            "str_list",
+            "Per-unit slice RANKING hints: keyword terms, each optionally "
+            "weighted as 'term:2.5' (default weight 1.0), matched "
+            "case-insensitively against each packed signal's title + body. The "
+            "matched rows are re-ORDERED best-first; the row SET is unchanged "
+            "(this is never a filter — nothing is hidden from the model or from "
+            "derived_from). Absent ⇒ byte-identical recency order.",
+            pattern=_FOCUS_TOKEN_PATTERN,
+        ),
+        OptionSpec(
+            "slice_focus_entity_classes",
+            "str_list",
+            "Per-unit slice RANKING hints over the signal's entity_classes "
+            "array (the 9 retained vertex labels: Entity, Location, "
+            "Organization, Person, Event, Country, Concept, Corporation, "
+            "Software), each optionally weighted as 'Person:2'. Additive with "
+            "slice_focus; same re-order-never-filter contract.",
+            pattern=_FOCUS_TOKEN_PATTERN,
+        ),
+    ),
+}
+
+
 def known_option_names(sub_handler: str) -> tuple[str, ...]:
     """Declared option names for ``sub_handler`` (empty for an unknown one)."""
     return tuple(s.name for s in HANDLER_OPTIONS.get(sub_handler, ()))
+
+
+def known_kind_option_names(kind: str) -> tuple[str, ...]:
+    """Declared option names for analyst ``kind`` (empty for an unknown one)."""
+    return tuple(s.name for s in ANALYST_KIND_OPTIONS.get(kind, ()))
 
 
 # ---------------------------------------------------------------------------
@@ -841,29 +943,78 @@ def resolve_handler_options(
     ``log_context`` (typically ``analyst_id@version``) is folded into the
     warning lines so an operator can find the offending descriptor.
     """
+    return _resolve_against(
+        HANDLER_OPTIONS.get(sub_handler or ""),
+        raw,
+        label=sub_handler,
+        label_noun="sub_handler",
+        unknown_cause="unknown_handler",
+        log_context=log_context,
+    )
+
+
+def resolve_kind_options(
+    kind: str | None,
+    raw: Mapping[str, Any] | None,
+    *,
+    log_context: str = "",
+) -> OptionResolution:
+    """Validate a descriptor's ``method.options`` against the KIND catalog.
+
+    The :data:`ANALYST_KIND_OPTIONS` twin of :func:`resolve_handler_options`, for
+    knobs an analyst KIND's own ``run_method`` reads rather than a deterministic
+    sub-handler. Identical contract in every respect — same reserved-key refusal,
+    same loud degrade, same never-raises, same "an absent block is byte-identical
+    to today" — differing only in which catalog the names are checked against.
+    """
+    return _resolve_against(
+        ANALYST_KIND_OPTIONS.get(kind or ""),
+        raw,
+        label=kind,
+        label_noun="kind",
+        unknown_cause="unknown_kind",
+        log_context=log_context,
+    )
+
+
+def _resolve_against(
+    specs: tuple[OptionSpec, ...] | None,
+    raw: Mapping[str, Any] | None,
+    *,
+    label: str | None,
+    label_noun: str,
+    unknown_cause: str,
+    log_context: str,
+) -> OptionResolution:
+    """The ONE validation traversal both catalogs share.
+
+    Extracted rather than copied: a per-catalog copy of the reserved-key refusal,
+    the private-key refusal, the value validation and the loud-degrade logging is
+    exactly the unsynchronized-copy problem this module's own docstring warns
+    about.
+    """
     if not raw:
         return OptionResolution(accepted={}, rejected=())
 
     accepted: dict[str, Any] = {}
     rejected: list[OptionReject] = []
 
-    specs = HANDLER_OPTIONS.get(sub_handler or "")
     if specs is None:
-        # A sub-handler this build does not register. Every key is unusable,
-        # but the run still proceeds on pure defaults — the dispatcher itself
-        # will fail loudly if the route is genuinely dead.
+        # A route this build does not register. Every key is unusable, but the
+        # run still proceeds on pure defaults — the dispatcher itself will fail
+        # loudly if the route is genuinely dead.
         for key in raw:
             rejected.append(
                 OptionReject(
                     key=str(key),
-                    cause="unknown_handler",
+                    cause=unknown_cause,
                     detail=(
-                        f"sub_handler {sub_handler!r} declares no option "
+                        f"{label_noun} {label!r} declares no option "
                         "catalog in this build"
                     ),
                 )
             )
-        _log(rejected, sub_handler, log_context)
+        _log(rejected, label, log_context)
         return OptionResolution(accepted={}, rejected=tuple(rejected))
 
     by_name = {s.name: s for s in specs}
@@ -895,7 +1046,7 @@ def resolve_handler_options(
                     name,
                     "unknown_key",
                     (
-                        f"{sub_handler} declares no such option; known: "
+                        f"{label} declares no such option; known: "
                         f"{sorted(by_name)}"
                     ),
                 )
@@ -909,19 +1060,19 @@ def resolve_handler_options(
             continue
         accepted[name] = coerced
 
-    _log(rejected, sub_handler, log_context)
+    _log(rejected, label, log_context)
     return OptionResolution(accepted=accepted, rejected=tuple(rejected))
 
 
 def _log(
-    rejected: list[OptionReject], sub_handler: str | None, log_context: str
+    rejected: list[OptionReject], route: str | None, log_context: str
 ) -> None:
     """One WARNING per dropped key — loud degrade, never silent, never fatal."""
     for rej in rejected:
         logger.warning(
-            "handler_options.rejected sub_handler=%s descriptor=%s key=%s "
-            "cause=%s detail=%s — the handler default stands",
-            sub_handler,
+            "handler_options.rejected route=%s descriptor=%s key=%s "
+            "cause=%s detail=%s — the declared default stands",
+            route,
             log_context or "?",
             rej.key,
             rej.cause,

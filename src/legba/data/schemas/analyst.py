@@ -556,14 +556,18 @@ class MethodBlock(BaseModel):
         Refuses ONLY what can never be a legitimate operator intent and can
         never arise from code/registry version skew:
 
-        * options on a non-``deterministic`` kind — no other kind routes
-          through the sub-handler catalog, so such a block could only ever be
-          inert. A silent inert block is exactly the dead config X-1 exists to
-          remove;
         * a non-string or empty key, or a private ``_``-prefixed key (those
           name test hooks, not operator config);
         * a value shape no registry row can round-trip (JSON scalars, and flat
           lists of them, only).
+
+        The "which kinds may carry options at all" question moved UP to
+        :meth:`AnalystDescriptor._check_options_kind` (QW1-B): it needs
+        ``identity.kind``, which a :class:`MethodBlock` cannot see. The rule it
+        enforces is unchanged in spirit — a block that could only ever be inert
+        is refused, because a silent inert block is exactly the dead config X-1
+        exists to remove — but the admissible set is now "a deterministic
+        sub-handler OR a kind that declares a catalog", not "deterministic only".
 
         Everything CATALOG-level — an unknown key for this handler, a value
         outside its declared range — is deliberately NOT refused here. Those
@@ -574,12 +578,6 @@ class MethodBlock(BaseModel):
         """
         if not self.options:
             return
-        if self.kind != "deterministic":
-            raise ValueError(
-                f"method.options is only read for kind=deterministic "
-                f"(got kind={self.kind}); a block on any other kind would be "
-                "silently inert"
-            )
         for key, value in self.options.items():
             if not isinstance(key, str) or not key.strip():
                 raise ValueError("method.options keys must be non-empty strings")
@@ -804,8 +802,45 @@ class AnalystDescriptor(BaseModel):
             and self.method.kind not in ("llm_planner", "llm_single_turn", "critic")
         ):
             raise ValueError("critic analyst method.kind must be an LLM kind")
+        self._check_options_kind()
         self._warn_on_dead_options()
         return self
+
+    def _check_options_kind(self) -> None:
+        """X-1/QW1-B — WHICH kinds may carry ``method.options`` at all.
+
+        Two lanes, and nothing else:
+
+        * ``method.kind == "deterministic"`` — the original X-1 lane; the knobs
+          are read by the routed sub-handler (:data:`HANDLER_OPTIONS`);
+        * an ``identity.kind`` that declares a KIND catalog
+          (:data:`ANALYST_KIND_OPTIONS`, e.g. ``inline_target``) — the knobs are
+          read by that kind's own ``run_method``.
+
+        Anything else is REFUSED at registration, preserving the rule the
+        original gate existed for: a ``method.options`` block that no code path
+        reads could only ever be inert, and a silent inert block is exactly the
+        dead config X-1 exists to remove. Refusing here (rather than warning) is
+        safe because it can only ever fire on a descriptor an operator is
+        writing NOW — unlike a CATALOG-level miss, which a later release can
+        create for a registry row that already exists (hence warn-not-raise
+        there; see :meth:`_warn_on_dead_options`).
+        """
+        if not self.method.options:
+            return
+        if self.method.kind == "deterministic":
+            return
+        from ..analysts.handler_options import ANALYST_KIND_OPTIONS
+
+        kind = str(getattr(self.identity.kind, "value", self.identity.kind))
+        if kind in ANALYST_KIND_OPTIONS:
+            return
+        raise ValueError(
+            f"method.options is only read for method.kind=deterministic or an "
+            f"analyst kind that declares an option catalog "
+            f"({sorted(ANALYST_KIND_OPTIONS)}); got method.kind={self.method.kind} "
+            f"identity.kind={kind} — a block here would be silently inert"
+        )
 
     def _warn_on_dead_options(self) -> None:
         """X-1 — surface catalog-level ``method.options`` problems at REGISTER.
@@ -823,8 +858,20 @@ class AnalystDescriptor(BaseModel):
         """
         if not self.method.options:
             return
-        from ..analysts.handler_options import resolve_handler_options
+        from ..analysts.handler_options import (
+            resolve_handler_options,
+            resolve_kind_options,
+        )
 
+        if self.method.kind != "deterministic":
+            # QW1-B kind lane — checked against the KIND catalog, since no
+            # sub-handler is routed for a non-deterministic analyst.
+            resolve_kind_options(
+                str(getattr(self.identity.kind, "value", self.identity.kind)),
+                self.method.options,
+                log_context=f"{self.identity.id}@register",
+            )
+            return
         resolve_handler_options(
             self.method.sub_handler or self.identity.id,
             self.method.options,

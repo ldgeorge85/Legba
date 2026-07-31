@@ -44,9 +44,11 @@ import { buildNavGroups } from '@/panel-registry/navGroups'
 import { extractScope } from '@/panel-registry/loader'
 import { LAYOUT_PRESETS } from '@/lib/layoutPresets'
 import { cn } from '@/lib/cn'
-import { countryNameForTargetId } from '@/lib/deskNames'
+import { countryNameForTargetId, thematicDeskName, humanizeId } from '@/lib/deskNames'
+import { relativeTime } from '@/lib/findingsViews'
 import type { ConfidenceLevel } from '@/lib/verdictModel'
 import { CONFIDENCE_FILL, useCountryVerdicts, type CountryVerdict } from '@/v4/world/countryVerdicts'
+import { useSupplyChainDesks, type SupplyChainDesk } from '@/v4/world/supplyChainDesks'
 import { selectRow } from '@/state/selection'
 
 const COLLAPSE_KEY = 'legba_nav_collapsed'
@@ -282,6 +284,24 @@ function toDeskRow(v: CountryVerdict): DeskRow {
   }
 }
 
+/** One resolved supply-chain desk row: no composition tier yet, so no
+ *  confidence band — only a name and (when available) a recency stamp. */
+interface SupplyChainDeskRow {
+  targetId: string
+  name: string
+  latestFindingAt: string | null
+}
+
+function toSupplyChainRow(d: SupplyChainDesk): SupplyChainDeskRow {
+  return {
+    targetId: d.targetId,
+    // A registered lane/flow gets its curated name; an unrecognized future id
+    // still degrades honestly via humanizeId's generic de-prefix fallback.
+    name: thematicDeskName(d.targetId) ?? humanizeId(d.targetId),
+    latestFindingAt: d.latestFindingAt,
+  }
+}
+
 /**
  * Desks (U-2) — country desks as first-class, human nav rows: the human
  * country NAME plus its scorecard band chip, sourced from the SAME
@@ -290,49 +310,101 @@ function toDeskRow(v: CountryVerdict): DeskRow {
  * Clicking a row fires the SAME keystone action a Wall band-grid chip does —
  * `selectRow('target', …)` — so the Inspector (and every other subscriber:
  * map, feed, timeline, Why graph) follows the same selection, no new flow.
+ *
+ * Supply-chain follow-up: a "Supply chain" subsection nests the thematic
+ * `lane_*`/`flow_*` desks (`useSupplyChainDesks` — active + tagged
+ * `supply_chain` registry targets, see that module) under the same group,
+ * BELOW the country list, rather than a new top-level section (the U-2 tree
+ * stays deliberately compact). These desks have no `country_composition`
+ * tier yet, so they render name-only (+ an optional recency stamp) — never a
+ * fabricated confidence chip. Clicking one fires the identical
+ * `selectRow('target', …)` a country desk does.
  */
 function DesksSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
-  const { verdicts, isLoading } = useCountryVerdicts()
+  const { verdicts, isLoading: countryLoading } = useCountryVerdicts()
+  const { desks: supplyChainRaw, isLoading: supplyChainLoading } = useSupplyChainDesks()
+
   const desks = useMemo(
     () => [...verdicts.values()].map(toDeskRow).sort((a, b) => a.name.localeCompare(b.name)),
     [verdicts],
   )
+  const supplyChainDesks = useMemo(
+    () => supplyChainRaw.map(toSupplyChainRow).sort((a, b) => a.name.localeCompare(b.name)),
+    [supplyChainRaw],
+  )
+
+  const isLoading = countryLoading || supplyChainLoading
+  const totalCount = desks.length + supplyChainDesks.length
+
   return (
     <CollapsibleSection
       id="desks"
-      title={`Desks (${desks.length})`}
+      title={`Desks (${totalCount})`}
       collapsed={collapsed}
       onToggle={onToggle}
     >
-      {isLoading && desks.length === 0 && (
+      {isLoading && totalCount === 0 && (
         <div className="px-3 py-1 text-label text-ink-3">loading desks…</div>
       )}
-      {!isLoading && desks.length === 0 && (
+      {!isLoading && totalCount === 0 && (
         <div className="px-3 py-1 text-label text-ink-3">no assessed desks yet</div>
       )}
-      <ul className="space-y-px">
-        {desks.map((d) => (
-          <li key={d.targetId}>
-            <button
-              type="button"
-              data-testid={`nav-desk-${d.iso2}`}
-              onClick={() => selectRow('target', d.targetId, d.name, { origin: 'desks' })}
-              title={`${d.name} — ${CONFIDENCE_LABEL[d.confidence]} confidence`}
-              className="w-full flex items-center gap-2 text-left px-3 row-density text-body hover:bg-surf-2 text-ink-2"
-            >
-              <span
-                className="h-2 w-2 shrink-0 rounded-sm"
-                style={{ backgroundColor: CONFIDENCE_FILL[d.confidence] }}
-                aria-hidden
-              />
-              <span className="flex-1 truncate">{d.name}</span>
-              <span className="shrink-0 text-label text-ink-3">
-                {CONFIDENCE_LABEL[d.confidence]}
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
+      {desks.length > 0 && (
+        <ul className="space-y-px">
+          {desks.map((d) => (
+            <li key={d.targetId}>
+              <button
+                type="button"
+                data-testid={`nav-desk-${d.iso2}`}
+                onClick={() => selectRow('target', d.targetId, d.name, { origin: 'desks' })}
+                title={`${d.name} — ${CONFIDENCE_LABEL[d.confidence]} confidence`}
+                className="w-full flex items-center gap-2 text-left px-3 row-density text-body hover:bg-surf-2 text-ink-2"
+              >
+                <span
+                  className="h-2 w-2 shrink-0 rounded-sm"
+                  style={{ backgroundColor: CONFIDENCE_FILL[d.confidence] }}
+                  aria-hidden
+                />
+                <span className="flex-1 truncate">{d.name}</span>
+                <span className="shrink-0 text-label text-ink-3">
+                  {CONFIDENCE_LABEL[d.confidence]}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {supplyChainDesks.length > 0 && (
+        <>
+          <div
+            className="mt-1 px-3 py-1 text-label uppercase tracking-wider text-ink-3"
+            data-testid="nav-desks-supply-chain-header"
+          >
+            Supply chain
+          </div>
+          <ul className="space-y-px">
+            {supplyChainDesks.map((d) => (
+              <li key={d.targetId}>
+                <button
+                  type="button"
+                  data-testid={`nav-desk-${d.targetId}`}
+                  onClick={() => selectRow('target', d.targetId, d.name, { origin: 'desks' })}
+                  title={d.name}
+                  className="w-full flex items-center gap-2 text-left px-3 row-density text-body hover:bg-surf-2 text-ink-2"
+                >
+                  <span className="flex-1 truncate">{d.name}</span>
+                  {d.latestFindingAt && (
+                    <span className="shrink-0 text-label text-ink-3">
+                      {relativeTime(d.latestFindingAt)}
+                    </span>
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </CollapsibleSection>
   )
 }

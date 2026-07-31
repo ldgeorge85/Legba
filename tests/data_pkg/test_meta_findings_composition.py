@@ -391,6 +391,105 @@ def test_extract_ref_markers_empty_body():
     assert synth._extract_ref_markers("", 3) == ([], 0)
 
 
+# --- _defuse_child_ref_markers: child-ref pollution (P2 gallery finding #2) --
+
+
+def test_defuse_child_ref_markers_rewrites_to_unambiguous_form():
+    text = "escalating internal conflict [[ref:16]] (Sudan)"
+    out = synth._defuse_child_ref_markers(text)
+    assert "[[ref:16]]" not in out
+    assert "(child ref 16)" in out
+
+
+def test_defuse_child_ref_markers_multiple_and_idempotent():
+    text = "Brazil [[ref:27]] and Indonesia [[ref:28]] both cited."
+    out = synth._defuse_child_ref_markers(text)
+    assert "[[ref:27]]" not in out and "[[ref:28]]" not in out
+    assert "(child ref 27)" in out and "(child ref 28)" in out
+    # Idempotent: re-running on the already-defused text is a no-op.
+    assert synth._defuse_child_ref_markers(out) == out
+
+
+def test_defuse_child_ref_markers_no_marker_is_unchanged():
+    assert synth._defuse_child_ref_markers("plain prose, no markers") == (
+        "plain prose, no markers"
+    )
+    assert synth._defuse_child_ref_markers("") == ""
+
+
+def test_defuse_child_ref_markers_never_touches_bare_bracket_or_ref_strings():
+    """Bare ``ref:N`` / ``[N]`` shorthand (the OTHER contamination vector,
+    fixed separately in ``_coerce_finding`` — evidence-field contamination)
+    is NOT this function's job; only the doubled-bracket [[ref:N]] shape is
+    rewritten."""
+    text = "evidence ref:1, [2], and [[ref:3]] all appear here"
+    out = synth._defuse_child_ref_markers(text)
+    assert "ref:1" in out
+    assert "[2]" in out
+    assert "[[ref:3]]" not in out
+    assert "(child ref 3)" in out
+
+
+# --- child-ref pollution: end-to-end render (P2 gallery live artifact) ------
+
+
+def test_render_user_prompt_defuses_child_ref_in_body_and_evidence():
+    """Live artifact fixture (P2 gallery §4, the world tier reading the
+    escalation_composition's own block): the CHILD tier's body cites its OWN
+    [[ref:16]]/[[ref:27]]/[[ref:28]] ordinals — over a COMPLETELY different
+    28-block evidence set than the parent (world) tier's 6-block bundle. Left
+    verbatim, the parent model could copy [[ref:16]] into ITS OWN output,
+    silently misattributing to the WRONG evidence (or, at 6 blocks, being
+    caught by the honest out-of-range filter only by luck of the numbers)."""
+    uid = uuid4()
+    row = _subclaim_row(
+        analyst_id="escalation_composition",
+        uid=uid,
+        title="Global Escalation Read",
+        body=(
+            "BLUF: the desk reads indicate the highest near-term escalation "
+            "risk is concentrated in Sudan, Brazil, and China.\n\n"
+            "OBSERVATION:\n"
+            "- Sudan's Armed Forces and the RSF are actively fighting "
+            "[[ref:16]] (Sudan).\n"
+            "- Brazil recalled its ambassador to Argentina [[ref:27]] "
+            "(Brazil)."
+        ),
+        effective_confidence=0.79,
+    )
+    row["evidence"] = ["[[ref:16]]", "[[ref:27]]", "[[ref:28]]"]
+    rendered = synth._render_user_prompt(
+        [row], ["escalation_composition"], include_source_ids=True
+    )
+    # This tier's OWN ordinal handle for the block is untouched.
+    assert "[[ref:1]]" in rendered
+    # The CHILD tier's embedded ordinals are gone from both body and evidence.
+    assert "[[ref:16]]" not in rendered
+    assert "[[ref:27]]" not in rendered
+    assert "[[ref:28]]" not in rendered
+    # Rewritten to the unambiguous, non-resolvable form.
+    assert "(child ref 16)" in rendered
+    assert "(child ref 27)" in rendered
+    assert "(child ref 28)" in rendered
+
+
+def test_render_periphery_block_defuses_child_ref_markers():
+    """Periphery rows for a region/world/thematic composition are the SAME
+    lower-tier composition heads as basis rows, just below the floor — they
+    carry the identical embedded-marker pollution risk."""
+    row = _subclaim_row(
+        analyst_id="country_composition",
+        uid=uuid4(),
+        title="A below-floor country read",
+        body="Isolated internal security events [[ref:1]], nothing further.",
+        effective_confidence=0.2,
+    )
+    rendered = synth._render_periphery_block([row], start_ordinal=7, floor=0.5)
+    assert "[[ref:1]]" not in rendered   # the child's embedded marker is gone
+    assert "(child ref 1)" in rendered
+    assert "[[ref:7]]" in rendered       # this tier's OWN periphery ordinal handle
+
+
 # --- end-to-end _run: composition selects the prompt + stamps citations ----
 
 
@@ -512,6 +611,122 @@ async def test_composition_citation_omits_eff_when_row_missing_it():
     assert "derived_from" in cite
 
 
+# ---------------------------------------------------------------------------
+# A2 (verify-path structural fix, 2026-07-31) — the unmarked-basis fallback.
+#
+# JUDGE_READOUT #1: a composition (region_composition et al.) sometimes shipped
+# an EMPTY citations array despite genuinely resting on real basis rows
+# (derived_from non-empty) — the model cited [[ref:N]] zero times, or every
+# marker it used was out of range. These prove the fallback now guarantees the
+# invariant: citations non-empty whenever derived_from is non-empty. Shares the
+# SAME CITE block as region_composition/world_assessor (this test uses
+# country_composition target-scoping — the cheapest fixture path — but the code
+# under test is the one ``is_composition`` branch every composition flavor runs).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_composition_no_markers_falls_back_to_basis_citations():
+    u1, u2 = uuid4(), uuid4()
+    rows = [
+        _subclaim_row(analyst_id="leadership_transition", uid=u1, title="Leadership"),
+        _subclaim_row(analyst_id="energy_security", uid=u2, title="Energy"),
+    ]
+    body = "BLUF: the units point in different directions, no ordinal markers here."
+    llm = _CannedLLM(
+        {"title": "t", "body": body, "confidence": 0.55, "evidence": [], "tags": ["composition"]}
+    )
+    result = await synth.run_method(
+        list(rows),
+        {"analyst_id": "country_composition", "target_id": "country_g20_in", "run_id": uuid4()},
+        _Deps(llm),
+    )
+    assert set(result.derived_from) == {u1, u2}
+    cites = result.finding.data.get("citations")
+    assert isinstance(cites, list) and cites
+    cited_ids = {c["ref_id"] for c in cites}
+    assert cited_ids == {str(u1), str(u2)}
+    assert all(c["resolution"] == "fallback_basis" for c in cites)
+    assert all(c["ref_kind"] == "finding" for c in cites)
+    cite_step = next(s for s in result.intermediate_steps if s.get("phase") == "cite")
+    assert cite_step["citations"] == 2
+    assert cite_step["citations_fallback"] is True
+
+
+@pytest.mark.asyncio
+async def test_composition_all_out_of_range_markers_fall_back_to_basis():
+    """Every [[ref:N]] the model used was out of range (a hallucinated ordinal)
+    — resolved citations is 0 despite the body carrying markers, so the
+    fallback still engages."""
+    u1 = uuid4()
+    rows = [_subclaim_row(analyst_id="escalation", uid=u1, title="Escalation")]
+    body = "An unsupported aside [[ref:9]] cites a sub-claim that was never shown."
+    llm = _CannedLLM(
+        {"title": "t", "body": body, "confidence": 0.5, "evidence": [], "tags": ["c"]}
+    )
+    result = await synth.run_method(
+        list(rows),
+        {"analyst_id": "country_composition", "target_id": "country_g20_in", "run_id": uuid4()},
+        _Deps(llm),
+    )
+    cites = result.finding.data["citations"]
+    assert cites and cites[0]["ref_id"] == str(u1)
+    assert cites[0]["resolution"] == "fallback_basis"
+    cite_step = next(s for s in result.intermediate_steps if s.get("phase") == "cite")
+    assert cite_step["refs_dropped"] == 1
+    assert cite_step["citations_fallback"] is True
+
+
+@pytest.mark.asyncio
+async def test_composition_resolved_markers_never_trigger_fallback():
+    """No-op guarantee: when the model DID cite (the common/working case), the
+    fallback never engages — byte-identical to pre-A2 behavior."""
+    u1, u2 = uuid4(), uuid4()
+    rows = [
+        _subclaim_row(analyst_id="leadership_transition", uid=u1, title="Leadership"),
+        _subclaim_row(analyst_id="energy_security", uid=u2, title="Energy"),
+    ]
+    body = "Leadership looks stable [[ref:1]], energy is tightening [[ref:2]]."
+    llm = _CannedLLM(
+        {"title": "t", "body": body, "confidence": 0.55, "evidence": [], "tags": ["composition"]}
+    )
+    result = await synth.run_method(
+        list(rows),
+        {"analyst_id": "country_composition", "target_id": "country_g20_in", "run_id": uuid4()},
+        _Deps(llm),
+    )
+    cites = result.finding.data["citations"]
+    assert len(cites) == 2
+    assert all("resolution" not in c for c in cites)
+    cite_step = next(s for s in result.intermediate_steps if s.get("phase") == "cite")
+    assert cite_step["citations_fallback"] is False
+
+
+@pytest.mark.asyncio
+async def test_composition_fallback_citations_are_capped():
+    """The unmarked-basis fallback is BOUNDED so a large uncited basis can't
+    balloon the payload with per-citation evidence_text. A REGION run uses the
+    WORLD cap (64, not the per-country 15) so >25 rows can actually reach the
+    fallback bound (mirrors test_region_run_does_not_trim_below_the_member_roster)."""
+    cap = synth._FALLBACK_BASIS_CITATIONS_CAP
+    rows = [
+        _subclaim_row(analyst_id=f"unit_{i}", uid=uuid4(), title=f"Unit {i}",
+                       target_id=f"country_watch_{i}")
+        for i in range(cap + 10)
+    ]
+    body = "No ordinal markers anywhere in this synthesized read."
+    llm = _CannedLLM(
+        {"title": "t", "body": body, "confidence": 0.5, "evidence": [], "tags": ["c"]}
+    )
+    result = await synth.run_method(
+        list(rows),
+        {"analyst_id": "region_composition", "target_id": "region_mena", "run_id": uuid4()},
+        _Deps(llm),
+    )
+    cites = result.finding.data["citations"]
+    assert len(cites) == cap
+
+
 @pytest.mark.asyncio
 async def test_global_meta_run_unchanged_uses_default_prompt_no_citations():
     """No ``target_id`` in options ⇒ the GLOBAL meta: the module default system
@@ -593,9 +808,12 @@ async def test_world_composition_read_slice_includes_meta_and_verify_floor():
     await synth.READ_SLICE(conn, descriptor=desc, target_filter=None)
     # The world branch reads the region-frame roster (empty here → plain read).
     assert any("target_descriptors" in q for q, _ in conn.calls)
-    # The region-head slice read (last call) — no target scope, meta-inclusive,
-    # verify-floored, over the region composition.
-    query, params = conn.calls[-1]
+    # The region-head slice read — no target scope, meta-inclusive,
+    # verify-floored, over the region composition. Selected by content rather
+    # than position: the Phase-1 CONTINUITY register read now trails it.
+    query, params = next(
+        c for c in reversed(conn.calls) if "analyst_outputs" in c[0]
+    )
     assert "target_descriptors" not in query
     assert "f.target_id =" not in query          # no target scope on a global run
     assert "'meta'" not in query                 # include_meta=True → exclusion dropped
@@ -625,7 +843,14 @@ async def test_global_meta_without_verify_still_excludes_meta_and_no_join():
 
 
 class _ContentionConn:
-    """Fake conn routing the two contention SELECTs by SQL content."""
+    """Fake conn routing the two contention SELECTs.
+
+    The GROUP query now computes a per-group ``top_score`` via a correlated
+    subquery against ``fact_contention_values`` (the score-floor fix), so a
+    naive "does the SQL text mention fact_contention_values" check can no
+    longer tell the two queries apart — both do. Only the VALUE query uses
+    ``= ANY(`` (the group-id array bind), so route on that instead.
+    """
 
     def __init__(self, group_rows: list[dict[str, Any]], value_rows: list[dict[str, Any]]):
         self._group_rows = group_rows
@@ -634,7 +859,7 @@ class _ContentionConn:
 
     async def fetch(self, sql: str, *args: Any) -> list[dict[str, Any]]:
         self.calls.append(sql)
-        if "fact_contention_values" in sql:
+        if "= ANY(" in sql:
             return list(self._value_rows)
         return list(self._group_rows)
 
@@ -643,8 +868,10 @@ class _ContentionConn:
 async def test_read_open_contention_assembles_two_sided_groups_only():
     g1, g2 = uuid4(), uuid4()
     groups = [
-        {"id": g1, "subject_key": "khamenei", "predicate_key": "status", "status": "surfaced"},
-        {"id": g2, "subject_key": "lonely", "predicate_key": "x", "status": "contested"},
+        {"id": g1, "subject_key": "khamenei", "predicate_key": "status",
+         "status": "surfaced", "top_score": 0.9},
+        {"id": g2, "subject_key": "lonely", "predicate_key": "x",
+         "status": "contested", "top_score": 0.5},
     ]
     values = [
         {"contention_id": g1, "value_key": "assassinated", "arbiter_score": 0.9,
@@ -657,19 +884,153 @@ async def test_read_open_contention_assembles_two_sided_groups_only():
     ]
     conn = _ContentionConn(groups, values)
     out = await synth.read_open_contention(conn)
-    assert len(out) == 1
-    grp = out[0]
-    assert grp["contention_id"] == str(g1)
+    assert [g["contention_id"] for g in out["groups"]] == [str(g1)]
+    grp = out["groups"][0]
     assert grp["subject_key"] == "khamenei"
     assert {v["value_key"] for v in grp["values"]} == {"assassinated", "alive"}
+    # g2 cleared the floor (0.50) but was dropped for being one-sided — it
+    # still counts as CONSIDERED, and served/suppressed reflect the drop.
+    assert out["considered_count"] == 2
+    assert out["served_count"] == 1
+    assert out["suppressed_count"] == 1
 
 
 @pytest.mark.asyncio
 async def test_read_open_contention_empty_short_circuits():
     conn = _ContentionConn([], [])
-    assert await synth.read_open_contention(conn) == []
+    out = await synth.read_open_contention(conn)
+    assert out == {
+        "groups": [], "served_count": 0, "suppressed_count": 0,
+        "considered_count": 0, "floor": synth.CONTENTION_SCORE_FLOOR_DEFAULT,
+    }
     # Only the group query ran (no value query when there are no groups).
     assert len(conn.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_read_open_contention_default_floor_suppresses_ner_noise():
+    """The live 2026-07-31 P2 gallery capture, used as the fixture: recency
+    ordering was serving pure NER-relation-extraction noise ("zionist |
+    member of | hamas", arbiter_score 0.10) as though it were a live
+    geopolitical dispute, while the highest score system-wide (~0.37) never
+    even cleared the tradecraft preamble's own "speculative" ceiling. The
+    default floor (0.50) must suppress the noise group and report the
+    suppression honestly via the counters — never silently."""
+    noise_id, real_id = uuid4(), uuid4()
+    group_rows = [
+        # Real dispute sorts FIRST by score even though the SQL emits it
+        # first here too — the fix is that the QUERY orders by score, not
+        # that this fake conn re-sorts (it doesn't; see the dedicated
+        # query-shape test below).
+        {"id": real_id, "subject_key": "khamenei", "predicate_key": "status",
+         "status": "surfaced", "top_score": 0.62},
+        {"id": noise_id, "subject_key": "zionist", "predicate_key": "member of",
+         "status": "surfaced", "top_score": 0.10},
+    ]
+    value_rows = [
+        {"contention_id": real_id, "value_key": "assassinated", "arbiter_score": 0.62,
+         "surfaced_winner": True, "distinct_source_count": 4},
+        {"contention_id": real_id, "value_key": "alive", "arbiter_score": 0.3,
+         "surfaced_winner": False, "distinct_source_count": 1},
+        {"contention_id": noise_id, "value_key": "zionism", "arbiter_score": 0.10,
+         "surfaced_winner": True, "distinct_source_count": 1},
+        {"contention_id": noise_id, "value_key": "hamas", "arbiter_score": 0.10,
+         "surfaced_winner": False, "distinct_source_count": 1},
+    ]
+    conn = _ContentionConn(group_rows, value_rows)
+    out = await synth.read_open_contention(conn)
+    assert out["floor"] == synth.CONTENTION_SCORE_FLOOR_DEFAULT == 0.50
+    assert out["considered_count"] == 2
+    assert [g["contention_id"] for g in out["groups"]] == [str(real_id)]
+    assert out["served_count"] == 1
+    assert out["suppressed_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_read_open_contention_all_below_floor_serves_nothing():
+    """Every open group is NER noise this cycle → served=0, but the honest
+    counters still report how many were considered/suppressed (never a bare,
+    unexplained empty list)."""
+    noise_a, noise_b = uuid4(), uuid4()
+    group_rows = [
+        {"id": noise_a, "subject_key": "zionist", "predicate_key": "member of",
+         "status": "surfaced", "top_score": 0.10},
+        {"id": noise_b, "subject_key": "zelenodolsk", "predicate_key": "located in",
+         "status": "surfaced", "top_score": 0.25},
+    ]
+    conn = _ContentionConn(group_rows, [])
+    out = await synth.read_open_contention(conn)
+    assert out["groups"] == []
+    assert out["served_count"] == 0
+    assert out["considered_count"] == 2
+    assert out["suppressed_count"] == 2
+    # Nothing cleared the floor → the value query never even ran.
+    assert len(conn.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_read_open_contention_score_floor_is_overridable():
+    real_id = uuid4()
+    group_rows = [
+        {"id": real_id, "subject_key": "khamenei", "predicate_key": "status",
+         "status": "surfaced", "top_score": 0.35},
+    ]
+    value_rows = [
+        {"contention_id": real_id, "value_key": "assassinated", "arbiter_score": 0.35,
+         "surfaced_winner": True, "distinct_source_count": 2},
+        {"contention_id": real_id, "value_key": "alive", "arbiter_score": 0.2,
+         "surfaced_winner": False, "distinct_source_count": 1},
+    ]
+    # Below the 0.50 default...
+    conn = _ContentionConn(group_rows, value_rows)
+    out = await synth.read_open_contention(conn)
+    assert out["served_count"] == 0
+    # ...but clears an explicit, looser caller-supplied floor.
+    conn2 = _ContentionConn(group_rows, value_rows)
+    out2 = await synth.read_open_contention(conn2, score_floor=0.3)
+    assert out2["served_count"] == 1
+    assert out2["floor"] == 0.3
+
+
+@pytest.mark.asyncio
+async def test_read_open_contention_group_query_orders_by_score_not_recency():
+    """Regression guard for the fix itself: the GROUP query's ORDER BY must
+    rank by the per-group score, not ``updated_at`` (the bug this fix
+    replaces)."""
+    conn = _ContentionConn([], [])
+    await synth.read_open_contention(conn)
+    group_sql = conn.calls[0]
+    assert "top_score DESC" in group_sql
+    assert "updated_at" not in group_sql
+
+
+def test_resolve_contention_floor_default(monkeypatch):
+    monkeypatch.delenv(synth.CONTENTION_SCORE_FLOOR_ENV, raising=False)
+    assert synth._resolve_contention_floor() == synth.CONTENTION_SCORE_FLOOR_DEFAULT
+
+
+def test_resolve_contention_floor_clamps(monkeypatch):
+    monkeypatch.setenv(synth.CONTENTION_SCORE_FLOOR_ENV, "5.0")
+    assert synth._resolve_contention_floor() == 1.0
+    monkeypatch.setenv(synth.CONTENTION_SCORE_FLOOR_ENV, "-2")
+    assert synth._resolve_contention_floor() == 0.0
+
+
+def test_resolve_contention_floor_bad_env_falls_back(monkeypatch):
+    monkeypatch.setenv(synth.CONTENTION_SCORE_FLOOR_ENV, "not-a-number")
+    assert synth._resolve_contention_floor() == synth.CONTENTION_SCORE_FLOOR_DEFAULT
+
+
+def test_render_contested_absent_line_reports_suppression_honestly():
+    line = synth._render_contested_absent_line(considered=679, suppressed=679, floor=0.5)
+    assert "679" in line
+    assert "0.50" in line
+    assert "CONTESTED FACTS" in line
+
+
+def test_render_contested_absent_line_nothing_open_at_all():
+    line = synth._render_contested_absent_line(considered=0, suppressed=0, floor=0.5)
+    assert line == "CONTESTED FACTS: no open fact disputes this cycle."
 
 
 def test_render_contested_block_names_both_sides_and_marker():
@@ -784,3 +1145,89 @@ async def test_world_composition_honest_empty_no_llm_no_citations_no_contested()
     assert "empty_slice" in result.finding.tags
     assert "citations" not in result.finding.data
     assert "contested" not in result.finding.data
+
+
+@pytest.mark.asyncio
+async def test_world_composition_run_renders_honest_absent_line_when_all_suppressed():
+    """The score-floor fix, end-to-end: a NON-empty world run whose contention
+    read (the new score-floored dict payload) found open disputes but NOTHING
+    cleared the floor renders the honest one-liner in place of the CONTESTED
+    FACTS header block — never a silent absence — and stamps the
+    served/suppressed counters onto the finding envelope."""
+    br, inn = uuid4(), uuid4()
+    rows = [
+        _country_read_row(uid=br, target_id="country_g20_br", title="Brazil"),
+        _country_read_row(uid=inn, target_id="country_g20_in", title="India"),
+    ]
+    body = "BLUF: the country reads diverge. Brazil looks stable [[ref:1]]."
+    llm = _CannedLLM(
+        {"title": "World read", "body": body, "confidence": 0.5,
+         "evidence": [], "tags": ["world"]}
+    )
+    contention_payload = {
+        "groups": [],
+        "served_count": 0,
+        "suppressed_count": 679,
+        "considered_count": 679,
+        "floor": 0.5,
+    }
+    result = await synth.run_method(
+        list(rows),
+        {"analyst_id": "world_assessor", "composition": True,
+         "contention_groups": contention_payload, "run_id": uuid4()},
+        _Deps(llm),
+    )
+    prompt = llm.calls[-1]["messages"][0]["content"]
+    assert "CONTESTED FACTS: 679 open dispute(s) considered" in prompt
+    assert "no contested-fact block above threshold" in prompt
+    # The old header (implying a live, populated dispute list) must NOT appear.
+    assert "surface BOTH sides" not in prompt
+    assert result.finding.data["contested_facts"] == {
+        "served_count": 0, "suppressed_count": 679,
+        "considered_count": 679, "floor": 0.5,
+    }
+    assert "contested" not in result.finding.data  # nothing was ever resolvable
+
+
+@pytest.mark.asyncio
+async def test_world_composition_run_stamps_served_suppressed_counters_when_populated():
+    """The counters are ALSO stamped on a normal populated-contested-block run
+    (not just the honest-empty case) — envelope honesty is unconditional
+    whenever the world composition attempted the gather."""
+    br, inn = uuid4(), uuid4()
+    gid = uuid4()
+    rows = [
+        _country_read_row(uid=br, target_id="country_g20_br", title="Brazil"),
+        _country_read_row(uid=inn, target_id="country_g20_in", title="India"),
+    ]
+    body = (
+        f"BLUF: Brazil looks stable [[ref:1]]. Khamenei's status is disputed "
+        f"[[contested:{gid}]]."
+    )
+    llm = _CannedLLM(
+        {"title": "World read", "body": body, "confidence": 0.5,
+         "evidence": [], "tags": ["world"]}
+    )
+    contention_payload = {
+        "groups": [{
+            "contention_id": str(gid), "subject_key": "khamenei",
+            "predicate_key": "status",
+            "values": [{"value_key": "assassinated", "surfaced_winner": True},
+                       {"value_key": "alive", "surfaced_winner": False}],
+        }],
+        "served_count": 1,
+        "suppressed_count": 3,
+        "considered_count": 4,
+        "floor": 0.5,
+    }
+    result = await synth.run_method(
+        list(rows),
+        {"analyst_id": "world_assessor", "composition": True,
+         "contention_groups": contention_payload, "run_id": uuid4()},
+        _Deps(llm),
+    )
+    assert result.finding.data["contested_facts"] == {
+        "served_count": 1, "suppressed_count": 3,
+        "considered_count": 4, "floor": 0.5,
+    }
+    assert [c["contention_id"] for c in result.finding.data["contested"]] == [str(gid)]

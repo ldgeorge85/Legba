@@ -17,7 +17,9 @@ questions you're already forming.
 [SETUP.md](SETUP.md) (from-zero bootstrap) → [RUNBOOK.md](RUNBOOK.md) (day-2
 operations, migrations, troubleshooting) → [UI.md](UI.md) (the workstation) →
 [DATA_SOURCES.md](DATA_SOURCES.md) (adding feeds) →
-[MANUAL_INGEST_FORMAT.md](MANUAL_INGEST_FORMAT.md) (hand-loading data, if present).
+[MANUAL_INGEST_FORMAT.md](MANUAL_INGEST_FORMAT.md) (hand-loading data, if present)
+→ [OPERATING_YOUR_INSTANCE.md](OPERATING_YOUR_INSTANCE.md) (the practice layer:
+seeding, corpus curation, measurement, data quality, gate governance).
 
 **"How does it work?" (understanding)**
 [ARCHITECTURE.md](ARCHITECTURE.md) (the four planes, why it's shaped this way)
@@ -47,6 +49,7 @@ mutation rules) → [ACQUISITION.md](ACQUISITION.md) (the ingest plane) →
 | [FAQ.md](FAQ.md) | Plain answers to a newcomer's actual questions. |
 | [SETUP.md](SETUP.md) | From-zero bootstrap to a running instance. |
 | [RUNBOOK.md](RUNBOOK.md) | Day-2 operations: migrations, registration, troubleshooting. |
+| [OPERATING_YOUR_INSTANCE.md](OPERATING_YOUR_INSTANCE.md) | The practice layer beside the runbook: seeding your own world, curating a corpus, re-measuring inherited constants, the DQ sweep, gate governance. |
 | [UI.md](UI.md) | The operator workstation, panel by panel. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The four planes and the reasoning behind the shape. |
 | [FLOWS.md](FLOWS.md) | End-to-end narratives: life of a signal, a finding, a composition. |

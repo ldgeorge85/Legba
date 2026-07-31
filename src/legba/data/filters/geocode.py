@@ -54,15 +54,22 @@ publisher's origin. ``transform`` runs, in order:
 2. **entities** (in-body NER): the ``country`` / ``location`` -class
    entities the upstream ner_multilingual filter stamped onto
    ``payload.entities`` — the place the *story* is about. **Subject guard
-   (S-2):** a ``country``-class entity is an explicit subject and keeps this
-   slot's priority, but a ``location``-class entity (a city / dateline) counts
-   as the subject ONLY when it also appears in the ``title``. A location a
-   person was merely *mentioned at* (an inter-Korean story whose envoy spoke in
-   Brasília) is demoted below every in-body country sweep — it may still resolve
-   if nothing else does, but it can no longer out-vote the story's real subject.
+   (S-2 / R4):** an entity counts as the SUBJECT when its surface appears in a
+   LEAD zone (the title, or the opening :data:`_LEAD_CHARS` of a body field);
+   subjects are ordered by where they appear — earliest zone, then earliest
+   offset — so "Iraqi authorities detained a man acting in Ukraine's interests"
+   files under Iraq, not Ukraine. A location a person was merely *mentioned at*
+   (an inter-Korean story whose envoy spoke in Brasília) is demoted below every
+   in-body country sweep — it may still resolve if nothing else does, but it
+   can no longer out-vote the story's real subject.
 3. **title / text / raw_body** (in-body gazetteer): a country-name / ISO
    sweep via :mod:`pycountry` over each configured text field — ``text`` is
-   the telegram/chat body. The first text hit wins.
+   the telegram/chat body. Each field is swept TWICE: its LEAD zone at this
+   tier, then (below the entity tiers) the whole field, because a country named
+   only deep in the body is usually incidental — the live R4 sweep found
+   "Russian scientist beaten in Yekaterinburg" filed under AFGHANISTAN off a
+   "war in Afghanistan" clause buried in the body. Within a zone the first hit
+   BY POSITION wins, counting bare ISO codes and full names alike.
 4. **TLD fallback (WEAK publisher-origin)**: ONLY when ``tld_fallback`` is
    True AND every in-body candidate above failed. Derives country from the
    ``signal.canonical_url`` (or ``payload["link"]``) ccTLD — e.g. ``.br`` →
@@ -113,6 +120,7 @@ import pycountry
 from pydantic import BaseModel, ConfigDict, Field
 
 from ._country_geometry import country_iso2_for_point, representative_point
+from .._entity_canon import canonicalize_entity
 from ..sources._contract import Signal
 from ._contract import FilterContext, FilterHealth
 
@@ -731,7 +739,72 @@ _TZ_ABBREVS = frozenset({
     # mis-attribution in NWS alert titles ("Effective until 3:00 AM ...").
     "AM", "PM",
 })
-_GEO_TOKEN_STOPSET = _US_STATE_CODES | _TZ_ABBREVS
+
+# R4: bare uppercase tokens that are ORDINARY ENGLISH WORDS / newsroom
+# abbreviations before they are ISO country codes. Live 2026-07 sweep: a TASS
+# headline "PR for Zelensky's terrorism" geocoded to PUERTO RICO because "PR"
+# is ISO-3166 alpha-2 for Puerto Rico. The same collision class covers "IT"
+# (Italy), "AI" (Anguilla), "IS" (Iceland), "NO" (Norway), "TO" (Tonga), "BY"
+# (Belarus), "DO" (Dominican Republic), "BE" (Belgium), "SO" (Somalia) and the
+# alpha-3 words "AND" (Andorra), "ARE" (UAE), "CAN" (Canada), "NOR" (Norway),
+# "PER" (Peru), "ARM" (Armenia), "PAN" (Panama), "FIN" (Finland), "NAM"
+# (Namibia), "TON" (Tonga), "GEO" (Georgia), "VAT" (Holy See), "COD" (DR
+# Congo), "GIN" (Guinea).
+#
+# A news body NEVER refers to those countries by their bare code — it writes
+# the name — so rejecting the token costs no recall while removing a whole
+# family of catastrophic mis-attributions. Codes that DO appear bare in copy
+# and tables ("US", "BR", "UAE", "GBR") are deliberately NOT listed.
+_COMMON_WORD_ISO_TOKENS = frozenset({
+    # alpha-2 that are English words / newsroom abbreviations
+    "AI", "AS", "BE", "BY", "DO", "ID", "IE", "IS", "IT", "MY", "NO", "PR",
+    "RE", "SO", "TO",
+    # alpha-3 that are English words
+    "AND", "ARE", "CAN", "NOR", "PER", "ARM", "PAN", "FIN", "NAM", "TON",
+    "GEO", "VAT", "COD", "GIN",
+})
+_GEO_TOKEN_STOPSET = _US_STATE_CODES | _TZ_ABBREVS | _COMMON_WORD_ISO_TOKENS
+
+
+def _first_country_hit(text: str) -> tuple[int, str] | None:
+    """``(offset, iso2)`` of the EARLIEST country mention in ``text``.
+
+    Both mention forms compete on POSITION: a full country name (case-
+    insensitive, whole-word) and a bare uppercase ISO2/3 token that survives
+    :data:`_GEO_TOKEN_STOPSET`. On an exact tie the NAME wins (it is the
+    longer, less ambiguous surface).
+
+    Position-merging the two passes is R4's first repair. The old code ran the
+    NAME sweep to completion FIRST and only consulted ISO tokens when it found
+    nothing, so "Netanyahu arrives in US, says Iran 'first and foremost' on the
+    agenda" resolved to IRAN — the name "Iran" (offset 33) beat the code "US"
+    (offset 21) purely because of pass order, not text order.
+    """
+    if not text:
+        return None
+    best: tuple[int, str] | None = None
+    m = _COUNTRY_REGEX.search(text)
+    if m:
+        iso = _COUNTRY_NAME_INDEX.get(m.group(1).lower())
+        if iso:
+            best = (m.start(), iso)
+    # Only ISO tokens STRICTLY LEFT of the name hit can beat it.
+    limit = best[0] if best is not None else len(text)
+    for m2 in _ISO_TOKEN_REGEX.finditer(text):
+        if m2.start() >= limit:
+            break
+        token = m2.group(1)
+        if token in _GEO_TOKEN_STOPSET:
+            # US state postal code / timezone abbrev / common word — not a
+            # country signal.
+            continue
+        if len(token) == 2:
+            c = pycountry.countries.get(alpha_2=token)
+        else:
+            c = pycountry.countries.get(alpha_3=token)
+        if c is not None:
+            return m2.start(), c.alpha_2
+    return best
 
 
 def extract_country_iso2_from_text(text: str) -> str | None:
@@ -740,29 +813,40 @@ def extract_country_iso2_from_text(text: str) -> str | None:
     Used by inference: feed the title, then the body. Returns ``None``
     if no hit. Case-insensitive on names; ISO codes require uppercase to
     avoid false positives ("at" the preposition vs "AT" Austria).
+
+    "First" is by POSITION IN THE TEXT — see :func:`_first_country_hit`.
+    """
+    hit = _first_country_hit(text)
+    return hit[1] if hit is not None else None
+
+
+# R4: how much of a text field counts as its LEAD — the dateline plus opening
+# paragraph, where a wire story names its subject. A country named ONLY past
+# this point is treated as incidental (a historical aside, a reaction quote, a
+# "see also" tail) and ranks below every subject-position candidate. 400 chars
+# is ~1 newswire lead paragraph; a title is always shorter, so a title zone is
+# the whole title.
+_LEAD_CHARS = 400
+
+
+def _country_entity_query(text: str) -> str:
+    """Best geocoder query for a ``country``-class NER surface.
+
+    A demonym ("Iraqi") or bare alias ("US") is a poor geocoder query and, in
+    the demonym case, the exact surface the NER emits for the ACTOR of a story
+    ("Iraqi authorities detained ..."). The shared canon resolves it to the
+    country name the gazetteer knows; anything the canon does not type as a
+    country is passed through verbatim (a mis-classed city keeps its own name).
     """
     if not text:
-        return None
-    m = _COUNTRY_REGEX.search(text)
-    if m:
-        name = m.group(1).lower()
-        iso = _COUNTRY_NAME_INDEX.get(name)
-        if iso:
-            return iso
-
-    # Try uppercase ISO tokens; pycountry membership filter.
-    for m2 in _ISO_TOKEN_REGEX.finditer(text):
-        token = m2.group(1)
-        if token in _GEO_TOKEN_STOPSET:
-            # US state postal code / timezone abbrev — not a country signal.
-            continue
-        if len(token) == 2:
-            c = pycountry.countries.get(alpha_2=token)
-        else:
-            c = pycountry.countries.get(alpha_3=token)
-        if c is not None:
-            return c.alpha_2
-    return None
+        return text
+    try:
+        canonical, cls = canonicalize_entity(text, "country")
+    except Exception:                                            # pragma: no cover
+        return text
+    if canonical and cls == "country":
+        return canonical
+    return text
 
 
 # D5: NER entity classes whose text is a place we can hand to the geocoder.
@@ -1244,13 +1328,29 @@ class GeocodeHandler:
         is appended LAST and ONLY when ``tld_fallback`` is enabled — so a
         ``.uk`` / ``t.me`` host can never beat an in-body place mention.
 
-        S-2 subject guard: NER ``location`` entities are split into SUBJECT
-        locations (their text appears in the ``title``) and INCIDENTAL ones
-        (a dateline / a place a person was merely mentioned at). Subject
-        locations and all ``country``-class entities keep the ``entities``
-        slot's priority; incidental locations are demoted below every in-body
-        country sweep (above only the weak TLD fallback), so they can no longer
-        out-vote the story's actual subject.
+        S-2/R4 subject guard — SUBJECT POSITION decides, for BOTH candidate
+        families. A story's subject is named in its title or its opening lines;
+        a country named only deep in the body is usually incidental ("... the
+        longest since the war in Afghanistan"). Each configured text field is
+        therefore split into a LEAD zone (:data:`_LEAD_CHARS`; a title is
+        entirely lead) and the full field, and NER place entities are split
+        into SUBJECT mentions (their surface occurs in some lead zone) and
+        INCIDENTAL ones. The emitted order is:
+
+          1. ``geo.location_name`` (structured hint), at its ``infer_from`` slot;
+          2. ZONE-MAJOR, walking the configured text fields in order: the
+             SUBJECT entities that appear in THAT zone (earliest offset first,
+             ``country`` before ``location`` on a tie), then that zone's own
+             LEAD sweep. So everything the title attests outranks everything
+             the body's opening attests, which outranks everything below;
+          3. ``country``-class entities that appear in NO lead zone;
+          4. each text field's FULL sweep (the legacy deep-body hit);
+          5. incidental ``location``-class entities;
+          6. the WEAK publisher-origin (TLD) fallback.
+
+        Tiers 1-2 are the subject tiers. Everything a previous release emitted
+        is still emitted, only re-ranked, so a signal that resolved before
+        still resolves.
         """
         out: list[str] = []
 
@@ -1262,24 +1362,79 @@ class GeocodeHandler:
 
         entities_enabled = "entities" in self._config.infer_from
         country_ents, location_ents = _partition_place_entities(payload.get("entities"))
-        title_val = payload.get("title")
-        title_lc = title_val.lower() if isinstance(title_val, str) else ""
-        subject_locations = (
-            [loc for loc in location_ents if loc.lower() in title_lc]
-            if title_lc
-            else []
-        )
-        body_only_locations = [
-            loc for loc in location_ents if loc not in subject_locations
-        ]
 
+        # LEAD zones, strongest first (``infer_from`` order — ``title`` leads
+        # by default). A title is shorter than the cap, so its zone is whole.
+        zone_fields: list[str] = []
+        lead_zones: list[str] = []
+        for field_name in self._config.infer_from:
+            if field_name in ("geo", "entities"):
+                continue
+            value = payload.get(field_name)
+            if isinstance(value, str) and value.strip():
+                zone_fields.append(field_name)
+                lead_zones.append(value[:_LEAD_CHARS].lower())
+
+        def _subject_rank(text: str) -> tuple[int, int] | None:
+            """(zone index, offset) of ``text``'s first lead-zone mention."""
+            needle = text.lower()
+            for zone_index, zone in enumerate(lead_zones):
+                offset = zone.find(needle)
+                if offset >= 0:
+                    return zone_index, offset
+            return None
+
+        # Rank 0 = country-class, 1 = location-class: on an exact positional
+        # tie the explicit country subject wins. Subjects are grouped BY ZONE
+        # so a body-lead mention can never outrank the title's own sweep.
+        subjects_by_zone: dict[int, list[tuple[int, int, str, bool]]] = {}
+        body_countries: list[str] = []
+        body_locations: list[str] = []
+        for class_rank, ents in ((0, country_ents), (1, location_ents)):
+            for ent in ents:
+                rank = _subject_rank(ent)
+                if rank is None:
+                    (body_countries if class_rank == 0 else body_locations).append(ent)
+                else:
+                    subjects_by_zone.setdefault(rank[0], []).append(
+                        (rank[1], class_rank, ent, class_rank == 0)
+                    )
+        for bucket in subjects_by_zone.values():
+            bucket.sort(key=lambda item: (item[0], item[1]))
+
+        # Zone-major emission: everything the title attests (its entities, then
+        # its own sweep) before anything the body's opening attests, and so on
+        # down the configured fields. ``entities`` no longer emits at its own
+        # slot — an entity is only a subject BY VIRTUE of the zone it appears
+        # in, so it is emitted with that zone.
+        zone_index = 0
         for field_name in self._config.infer_from:
             if field_name == "entities":
-                # Explicit country subjects + title-corroborated locations.
-                for cand in country_ents:
-                    _add(cand)
-                for cand in subject_locations:
-                    _add(cand)
+                continue
+            if field_name != "geo":
+                if field_name not in zone_fields:
+                    continue                      # field absent / empty
+                if entities_enabled:
+                    for _o, _c, ent, is_country in subjects_by_zone.get(zone_index, ()):
+                        _add(_country_entity_query(ent) if is_country else ent)
+                zone_index += 1
+            for candidate in self._candidates_for_field(
+                field_name, signal, payload, max_chars=_LEAD_CHARS
+            ):
+                _add(candidate)
+
+        # Country entities named only deep in the body — an explicit country
+        # mention still outranks a bare gazetteer hit in the same zone, but
+        # neither outranks the lead.
+        if entities_enabled:
+            for ent in body_countries:
+                _add(_country_entity_query(ent))
+
+        # DEEP sweep — the whole field (the pre-R4 behavior), so nothing that
+        # used to resolve stops resolving; it simply no longer outranks a
+        # subject-position candidate.
+        for field_name in self._config.infer_from:
+            if field_name in ("geo", "entities"):
                 continue
             for candidate in self._candidates_for_field(field_name, signal, payload):
                 _add(candidate)
@@ -1289,7 +1444,7 @@ class GeocodeHandler:
         # place a person was mentioned at may still resolve if nothing more
         # authoritative did, but never beats the story subject.
         if entities_enabled:
-            for cand in body_only_locations:
+            for cand in body_locations:
                 _add(cand)
 
         # WEAK publisher-origin fallback — last resort, opt-out-able.
@@ -1311,9 +1466,15 @@ class GeocodeHandler:
         field_name: str,
         signal: Signal,
         payload: dict[str, Any],
+        *,
+        max_chars: int | None = None,
     ) -> list[str]:
         """Return the (possibly multiple) candidate query strings for one
-        ``infer_from`` field, in priority order."""
+        ``infer_from`` field, in priority order.
+
+        ``max_chars`` restricts a text field's sweep to its LEAD zone (R4);
+        ``None`` sweeps the whole field.
+        """
         if field_name == "geo":
             geo = payload.get("geo")
             if isinstance(geo, dict):
@@ -1322,13 +1483,15 @@ class GeocodeHandler:
                     return [loc.strip()]
             return []
         if field_name == "entities":
-            # Handled (with the S-2 subject split) directly in
+            # Handled (with the S-2/R4 subject split) directly in
             # _derive_candidates — never reached from the field loop.
             return []
         # All other fields are text — sweep for a country mention.
         value = payload.get(field_name)
         if not isinstance(value, str) or not value.strip():
             return []
+        if max_chars is not None:
+            value = value[:max_chars]
         iso = extract_country_iso2_from_text(value)
         if iso:
             try:

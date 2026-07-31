@@ -44,6 +44,7 @@ import asyncio
 import base64
 import logging
 import socket
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import (
@@ -60,6 +61,10 @@ import httpx
 
 from ...registry.credentials import CredentialResolverProtocol, MissingSecretError
 from ...registry.health import HealthState, StackComponentHealth
+# R11 per-run receipt accounting. ``legba.data.run_accounting`` is stdlib-only
+# and its package ``__init__`` imports nothing, so this costs no import weight
+# and cannot cycle back into the stack plane. No account bound → no-op.
+from ...run_accounting import prompt_digest, record_llm_call
 from ...schemas.stack import LLMProviderConfig
 
 logger = logging.getLogger(__name__)
@@ -214,6 +219,20 @@ class HardLLMFailure(Exception):
         super().__init__(message)
         self.status = status
         self.body = body
+
+
+#: R11 — how a raised call classifies in the ``analyst_traces.llm_calls``
+#: receipt. Keyed by exception CLASS NAME (not the class) so a subclass or a
+#: re-declared double still buckets sensibly; anything unrecognized is "error".
+#: The receipt never carries an exception MESSAGE — provider bodies can echo
+#: request content and 4xx bodies can name credential ids.
+_CALL_STATUS_BY_EXC: Mapping[str, str] = {
+    "TransientLLMFailure": "transient_fail",
+    "HardLLMFailure": "hard_fail",
+    "BudgetExhausted": "budget_exhausted",
+    "CancelledError": "cancelled",
+    "TimeoutError": "timeout",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -549,8 +568,32 @@ class LLMProviderHandler:
             **kwargs,
         )
 
-        data = await self._call_chat(payload)
-        response = self._parse_response(data, model=chosen_model)
+        # R11 — the single chokepoint every provider-plane LLM call passes
+        # through (no subclass overrides ``chat_complete``, and the base
+        # ``stream_complete`` delegates here), so this is where a run's
+        # ``analyst_traces.llm_calls`` receipt is accumulated. Records BOTH
+        # outcomes: a failed call is exactly the evidence the receipt was
+        # missing. Entirely defensive — the accounting is wrapped so it can
+        # never fail a call, and it is a no-op when no run account is bound.
+        _acct_started = time.monotonic()
+        _acct_response: LLMResponse | None = None
+        _acct_exc: BaseException | None = None
+        try:
+            data = await self._call_chat(payload)
+            response = self._parse_response(data, model=chosen_model)
+            _acct_response = response
+        except BaseException as exc:
+            _acct_exc = exc
+            raise
+        finally:
+            self._account_call(
+                model=chosen_model,
+                messages=wire_messages,
+                system=wire_system,
+                started_monotonic=_acct_started,
+                response=_acct_response,
+                exc=_acct_exc,
+            )
 
         # Report tokens for budget tracking.
         if ctx is not None and ctx.budget is not None:
@@ -597,6 +640,72 @@ class LLMProviderHandler:
             usage=response.usage,
             raw_chunk=response.raw_response,
         )
+
+    # ---- R11 receipt accounting ------------------------------------------
+
+    def _account_call(
+        self,
+        *,
+        model: str,
+        messages: list[Mapping[str, Any]],
+        system: str | None,
+        started_monotonic: float,
+        response: "LLMResponse | None",
+        exc: BaseException | None,
+    ) -> None:
+        """Record one completed/failed call into the bound run account.
+
+        Pure instrumentation: swallows everything. A raise here would either
+        fail a run that succeeded or mask the provider exception propagating
+        out of the ``finally`` that calls it — both unacceptable for a receipt
+        field. When no run account is bound (the registry process, the filter
+        plane, ad-hoc scripts, most tests) ``record_llm_call`` is a no-op and
+        this costs one dict build.
+        """
+        try:
+            prompt_sha, prompt_chars = prompt_digest(messages, system)
+            fields: dict[str, Any] = {
+                "component_id": self._instance_id or None,
+                "subprovider": self.subprovider,
+                "model": model,
+                "duration_ms": int((time.monotonic() - started_monotonic) * 1000),
+                "prompt_sha256": prompt_sha,
+                "prompt_chars": prompt_chars,
+            }
+            if exc is not None:
+                fields["status"] = _CALL_STATUS_BY_EXC.get(
+                    type(exc).__name__, "error",
+                )
+                fields["error"] = type(exc).__name__
+                http_status = getattr(exc, "status", None)
+                if isinstance(http_status, int):
+                    fields["http_status"] = http_status
+            else:
+                fields["status"] = "success"
+                if response is not None:
+                    usage = response.usage
+                    fields.update(
+                        prompt_tokens=usage.prompt_tokens,
+                        completion_tokens=usage.completion_tokens,
+                        reasoning_tokens=usage.reasoning_tokens,
+                        total_tokens=usage.total_tokens,
+                        cost_estimate_usd=usage.cost_estimate_usd,
+                        finish_reason=response.finish_reason,
+                        tool_call_count=len(response.tool_calls),
+                    )
+                    # Prompt-caching receipt (Anthropic). Recorded only when
+                    # NON-ZERO so every uncached provider's receipt stays
+                    # byte-identical, and so `cache_read_tokens` appearing in
+                    # a receipt is itself the evidence that a cached prefix
+                    # was actually hit — the field you read to confirm the
+                    # breakpoints are working on a live consult.
+                    if usage.cache_read_tokens:
+                        fields["cache_read_tokens"] = usage.cache_read_tokens
+                    if usage.cache_write_tokens:
+                        fields["cache_write_tokens"] = usage.cache_write_tokens
+            record_llm_call(**fields)
+        except Exception:  # pragma: no cover — instrumentation must never bite
+            logger.debug("llm.account_call failed", exc_info=True)
 
     # ---- Provider hooks (subclass overrides) -----------------------------
 

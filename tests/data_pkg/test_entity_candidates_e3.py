@@ -310,3 +310,168 @@ async def test_block_key_sql_article_semantics(pg_pool):
     assert _ordered_tokens("the Zzx Front") == _ordered_tokens("Zzx Front")
     assert _ordered_tokens("Deir an Nur") != _ordered_tokens("Deir Nur")
     assert _ordered_tokens("Congo Republic") != _ordered_tokens("Republic Congo")
+
+
+# ===========================================================================
+# R9 (2026-07-29 DQ sweep) — DEGREE-AWARE RANKING + the BOUNDED trigram probe.
+#
+# The defect R9a closes: candidates were emitted score-ordered with no
+# tiebreak, and the exact probe's only ORDER BY was the block key itself, so
+# the whole 0.80 gray band came out ALPHABETICALLY. The researcher's per-run
+# cap (live: 80 pairs, twice a day, against ~2,000 new profiles a day) then
+# took the head of that alphabet forever — the live sweep found it burning the
+# budget on "multi - billion dollar << multi - billion - dollar" while the
+# graph's top hubs (TEHRAN/TEHRAN- at ~2,800 links, Kiev/Kyiv at ~1,060) sat
+# unproposed. R9b closes the second half: Kiev/Kyiv have DIFFERENT block keys,
+# so no ordering could have saved them — only the trigram probe can propose
+# that pair, and it was hard-disabled for being an unbounded full scan.
+#
+# These are unit tests: a fake conn dispatches on the probe SQL, so the ranking
+# and the probe ROUTING are exercised without a database (the DB-backed
+# behaviour is covered by the integration tests above).
+# ===========================================================================
+
+
+class _FakeConn:
+    """Returns canned rows per probe and records every query it was asked.
+
+    Rows are plain dicts — asyncpg Records are mappings with ``.keys()``, which
+    is all ``generate_candidates`` uses of them.
+    """
+
+    def __init__(self, *, exact=(), alias=(), trgm=()):
+        self._exact = list(exact)
+        self._alias = list(alias)
+        self._trgm = list(trgm)
+        self.calls: list[tuple[str, tuple]] = []
+
+    async def fetch(self, sql: str, *args):
+        self.calls.append((sql, args))
+        if "entity_block_key" in sql:
+            return self._exact
+        if "ANY($1::text[])" in sql:
+            return self._alias
+        return self._trgm
+
+    def probe_sql(self, needle: str) -> str | None:
+        for sql, _args in self.calls:
+            if needle in sql:
+                return sql
+        return None
+
+    def args_for(self, needle: str) -> tuple | None:
+        for sql, args in self.calls:
+            if needle in sql:
+                return args
+        return None
+
+
+def _exact_row(*, aid, aname, bid, bname, degree, cls="organization", ntok=1):
+    return {
+        "aid": aid, "aname": aname, "acls": cls, "ageo": None,
+        "bid": bid, "bname": bname, "bcls": cls, "bgeo": None,
+        "bk": aname.lower(), "ntok": ntok, "degree": degree,
+    }
+
+
+@pytest.mark.asyncio
+async def test_ranking_breaks_score_ties_by_endpoint_degree():
+    """R9a — inside a band, the HUB duplicate outranks the trivia.
+
+    Both pairs are single-token exact keys, so both score 0.80; before the
+    tiebreak the winner was whichever the SQL happened to emit first, which is
+    exactly how a 2,800-link hub loses its slot to a spaced-hyphen fragment.
+    """
+    conn = _FakeConn(exact=[
+        _exact_row(aid="a1", aname="Multi - Billion Dollar", bid="b1",
+                   bname="Multi - Billion - Dollar", degree=3),
+        _exact_row(aid="a2", aname="Tehran", bid="b2", bname="Tehran-",
+                   degree=2804),
+    ])
+    pairs = await generate_candidates(conn, exact_limit=1000, trgm_limit=0)
+    assert [p.left_name for p in pairs] == ["Tehran", "Multi - Billion Dollar"]
+    assert pairs[0].degree == 2804
+    assert {p.score for p in pairs} == {0.80}, "same band — degree is the ONLY split"
+
+
+@pytest.mark.asyncio
+async def test_degree_never_outranks_the_band():
+    """Degree is a TIEBREAK, not a promotion: a deterministic auto_merge still
+    sorts ahead of a far higher-degree gray pair."""
+    conn = _FakeConn(exact=[
+        _exact_row(aid="a1", aname="Zzq Council", bid="b1",
+                   bname="the Zzq Council", degree=1, ntok=2),   # auto_merge
+        _exact_row(aid="a2", aname="Tehran", bid="b2", bname="Tehran-",
+                   degree=99999),                                 # gray
+    ])
+    pairs = await generate_candidates(conn, exact_limit=1000, trgm_limit=0)
+    assert [p.band for p in pairs] == ["auto_merge", "gray"]
+
+
+@pytest.mark.asyncio
+async def test_exact_probe_orders_and_reports_degree():
+    """The SQL must carry the ranking it promises: the LIMIT has to truncate the
+    LOW-degree tail, not the alphabetical one, or the Python sort only reorders
+    an already-wrong 1,000 rows."""
+    from legba.data._entity_candidates import _EXACT_SQL
+
+    assert "signal_entity_links" in _EXACT_SQL
+    assert "(a.deg + b.deg) AS degree" in _EXACT_SQL
+    assert "ORDER BY (a.deg + b.deg) DESC" in _EXACT_SQL
+
+
+@pytest.mark.asyncio
+async def test_trgm_probe_is_skipped_when_the_limit_is_zero():
+    """The shipped default: no trigram query is issued at all."""
+    conn = _FakeConn()
+    await generate_candidates(conn, exact_limit=1000, trgm_limit=0)
+    assert conn.probe_sql("similarity(") is None
+
+
+@pytest.mark.asyncio
+async def test_trgm_floor_routes_to_the_bounded_hub_query():
+    """R9b — with a floor, the self-join runs over the HUB set only, and the
+    floor reaches the query as a parameter."""
+    conn = _FakeConn()
+    await generate_candidates(
+        conn, min_trgm=0.6, exact_limit=1000, trgm_limit=400,
+        trgm_min_degree=25,
+    )
+    sql = conn.probe_sql("similarity(")
+    assert sql is not None, "a positive trgm_limit must issue the probe"
+    assert "GROUP BY entity_id" in sql and "HAVING count(*) >= $3" in sql
+    assert conn.args_for("similarity(") == (0.6, 400, 25)
+
+
+@pytest.mark.asyncio
+async def test_trgm_without_a_floor_still_runs_but_warns(caplog):
+    """Byte-identical to the historical behaviour (the CLI + the DB-backed tests
+    above rely on it), but no longer SILENT — an unbounded ~61s scan inside an
+    actor run is how this probe got disabled in the first place."""
+    conn = _FakeConn()
+    with caplog.at_level("WARNING"):
+        await generate_candidates(
+            conn, exact_limit=1000, trgm_limit=400, trgm_min_degree=0,
+        )
+    sql = conn.probe_sql("similarity(")
+    assert sql is not None and "GROUP BY entity_id" not in sql
+    assert conn.args_for("similarity(") == (0.55, 400)
+    assert "trgm_unbounded" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_alias_probe_carries_degree_so_it_is_not_starved():
+    """The gazetteer lever scores 0.80 like every other gray pair, so without a
+    degree of its own a curated alias would sort BELOW every high-degree exact
+    collision and fall off the cap. It reports its endpoints' degrees too."""
+    conn = _FakeConn(alias=[
+        {"id": "m1", "canonical_name": "Myanmar", "entity_class": "country",
+         "geo_country": None, "norm": "myanmar", "deg": 400},
+        {"id": "m2", "canonical_name": "Burma", "entity_class": "location",
+         "geo_country": None, "norm": "burma", "deg": 120},
+    ])
+    pairs = await generate_candidates(conn, exact_limit=1000, trgm_limit=0)
+    assert len(pairs) == 1, pairs
+    assert pairs[0].signals == ("country_alias",)
+    assert pairs[0].band == "gray"          # country x location stays adjudicated
+    assert pairs[0].degree == 520

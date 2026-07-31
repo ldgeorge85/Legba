@@ -50,6 +50,7 @@ from typing import Any, ClassVar, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .._entity_canon import DEFAULT_CLASS, canonicalize_entity
 from ..sources._contract import Signal
 from ..stack.nlp_service import (
     NlpServiceAuthError,
@@ -110,6 +111,10 @@ class NERModelMissing(NERServiceUnconfigured):
 #      → organization; ``President``, ``Mr.``, ``Dr.``, two-or-more capitalised
 #      tokens with no cue → person.
 #   3. Fallback: ``entity`` (the generic bucket — always in the taxonomy).
+#
+# R8 (2026-07) put a deterministic gazetteer tier IN FRONT of tiers 1-2 and
+# guarded tier 1 against inverted triples — see the R8 block further down for
+# the full precedence and the live mis-classifications that forced it.
 #
 # Operators can override via :attr:`NERMultilingualConfig.taxonomy_map`
 # which keys on cue tokens, not spaCy labels.
@@ -176,6 +181,110 @@ _SOFTWARE_CUES: frozenset[str] = frozenset({
     "linux", "windows", "android", "ios", "kubernetes", "docker",
     "python", "tensorflow", "pytorch",
 })
+
+# ---------------------------------------------------------------------------
+# R8 (2026-07 enrichment-quality sweep) — HIGH-PRECISION SIGNALS BEFORE THE
+# PERSON DEFAULT.
+#
+# The tiered heuristic above ends in "two capitalised tokens with no cue →
+# person". That default was assigning `person` to "White House", "Yonhap News",
+# "Russian Federation" and "State Duma", while real places ("Kyiv", "Crete",
+# "Yekaterinburg", "Germany") fell to the generic `entity` bucket and inverted
+# GLiREL triples typed people as places ("Seyyed Ali Khamenei" → location,
+# "Keir Starmer" → location). Downstream, entity auto-merge requires the SAME
+# SPECIFIC CLASS on both sides (`_entity_candidates._class_compatible`), so
+# unstable classes were the proximate blocker on 570 exact-key duplicate
+# clusters (Zelensky ×9, Trump ×7, ...).
+#
+# The repair is deterministic and precision-first: consult the SHARED CANON
+# gazetteer (`legba.data._entity_canon` — the same ISO-3166 dataset the
+# `iso_countries` table is generated from, plus the curated org / place / region
+# surfaces the resolver already trusts) BEFORE any predicate or cue heuristic,
+# then honorifics, then the (now guarded) predicate mapping, then the existing
+# cue ladder. Nothing here invents a class outside the closed taxonomy, and the
+# original fallback still runs last — this only shrinks how often it is reached.
+# ---------------------------------------------------------------------------
+
+#: Classes the canon may assert. A canon hit is authoritative: these come from
+#: whole-surface gazetteers, not from shape heuristics.
+_CANON_CLASSES: frozenset[str] = frozenset({"country", "organization", "location"})
+
+#: LEADING personal titles / honorifics. A surface whose FIRST token is one of
+#: these (with at least one token after it) names a person — "Seyyed Ali
+#: Khamenei", "Ayatollah Ali Khamenei", "Sheikh Mohammed", "King Salman". The
+#: canon probe runs FIRST, so the place readings ("Prince Edward Island",
+#: "King County", "Mount Hermon") are already resolved and never reach here.
+_PERSON_HONORIFICS: frozenset[str] = frozenset({
+    "mr", "mrs", "ms", "miss", "dr", "prof", "sir", "lord", "lady", "dame",
+    "rev", "fr", "rabbi", "imam", "sheikh", "shaikh", "sheik", "seyyed",
+    "sayyed", "sayyid", "syed", "ayatollah", "mullah", "hojjatoleslam",
+    "pope", "cardinal", "bishop", "archbishop", "patriarch",
+    "king", "queen", "prince", "princess", "emir", "sultan", "tsar", "sheikha",
+    "gen", "col", "maj", "capt", "lt", "sgt", "adm", "cmdr", "brig",
+})
+
+#: ALL-CAPS acronyms that are NOT organizations — diseases, economic /
+#: technical measures, newsroom shorthand. Everything else matching
+#: :data:`_ACRONYM_RE` is an institution far more often than not (IAEA, IRGC,
+#: SBU, FSB, IDF, TASS, HTS, SDF), and the alternative was the generic bucket.
+_NON_ORG_ACRONYMS: frozenset[str] = frozenset({
+    "COVID", "SARS", "MERS", "HIV", "AIDS", "EBOLA", "FLU",
+    "GDP", "CPI", "PPI", "IPO", "ETF", "FX", "VAT",
+    "API", "URL", "PDF", "FAQ", "GPS", "DNA", "RNA", "LGBT", "NGO", "IED",
+    "AI", "IT", "TV", "PR", "HR", "EV", "UAV", "ICBM", "SUV",
+    # ALL-CAPS headline residue — an ordinary English word is not an acronym.
+    "THE", "AND", "NOT", "BUT", "FOR", "ALL", "NEW", "TOP", "KEY", "MORE",
+    "WAR", "OIL", "GAS", "AID", "DEAD", "LIVE", "JUST", "OVER",
+})
+
+#: An acronym surface: a single 3-5 letter ALL-CAPS token. Below 3 letters the
+#: collision rate with ordinary abbreviations is too high to call.
+_ACRONYM_RE = re.compile(r"^[A-Z]{3,5}$")
+
+#: A multi-token surface whose tokens are ALL capitalised words — the exact
+#: shape the person fallback exists for. Used to refuse an INVERTED GLiREL
+#: triple that would type such a surface as a place ("(Iran, country of
+#: citizenship, Seyyed Ali Khamenei)"). Single-token surfaces are deliberately
+#: excluded so an unknown city ("Damietta") still takes the predicate's word
+#: for it.
+_TITLECASE_WORD_RE = re.compile(r"^[A-Z][\w'’\-]*$", re.UNICODE)
+
+
+def _looks_like_personal_name(tokens: list[str]) -> bool:
+    """True for a multi-token, all-capitalised, cue-free surface.
+
+    Deliberately shape-only: by the time this runs the canon has already
+    claimed every country / organization / place surface it knows, so what is
+    left in this shape is overwhelmingly a personal name.
+    """
+    if len(tokens) < 2:
+        return False
+    return all(_TITLECASE_WORD_RE.match(tok) for tok in tokens)
+
+
+#: A leading English article, stripped for the second canon probe only.
+_ARTICLE_PREFIX_RE = re.compile(r"^(?:the|a|an)\s+", re.IGNORECASE)
+
+
+def _canon_class(text: str) -> str | None:
+    """Class the shared canon asserts for ``text``, or ``None``.
+
+    Probes the surface as-is and, when that yields nothing, with a leading
+    article stripped — so "the White House" types the same as "White House"
+    (article twins carrying the SAME class is what lets them fold together).
+    """
+    probes = [text]
+    unarticled = _ARTICLE_PREFIX_RE.sub("", text, count=1)
+    if unarticled and unarticled != text:
+        probes.append(unarticled)
+    for probe in probes:
+        try:
+            canonical, cls = canonicalize_entity(probe, DEFAULT_CLASS)
+        except Exception:                                        # pragma: no cover
+            return None
+        if canonical and cls in _CANON_CLASSES:
+            return cls
+    return None
 
 # ---------------------------------------------------------------------------
 # M11 — non-Latin NER routing (translate-then-NER).
@@ -370,6 +479,14 @@ def _classify_entity_text(
     ``slot`` is ``"subject"`` or ``"object"`` — used to apply predicate
     heuristics to the object slot only (e.g. ``place of birth`` → the
     *object* is the location, not the subject).
+
+    Precedence (R8): operator overrides, then the shared-canon gazetteer
+    (country / organization / place — deterministic whole-surface matches),
+    then leading honorifics, then the predicate mapping, then the cue ladder,
+    then acronym shape, and only then the original article / two-capitalised-
+    tokens fallbacks. Every tier above the fallback is high-precision by
+    construction, so the person default is reached far less often — see the
+    R8 block above for why that matters to entity auto-merge.
     """
     t = text.strip()
     if not t:
@@ -384,11 +501,41 @@ def _classify_entity_text(
             if cue.lower() in lower_tokens:
                 return cls
 
+    # CORPORATION cue first — the canon folds every company surface into the
+    # broader ``organization``, and ``corporation`` is the more specific (and
+    # merge-compatible) class, so the legal-form suffix keeps its precedence.
+    if lower_tokens & _CORPORATION_CUES:
+        return "corporation"
+
+    # R8 tier 1 — SHARED CANON GAZETTEER. A country name / demonym / alias, a
+    # curated region or place, an org suffix / head / infix, a known org
+    # acronym or masthead. Authoritative: whole-surface dataset matches beat
+    # every shape heuristic below, including a garbage predicate.
+    canon_cls = _canon_class(t)
+    if canon_cls is not None:
+        return canon_cls
+
+    # R8 tier 2 — LEADING HONORIFIC. "Seyyed Ali Khamenei" was typing location
+    # off an inverted triple; a personal title in front of a name settles it.
+    if len(tokens) >= 2 and tokens[0].lower().rstrip(".") in _PERSON_HONORIFICS:
+        return "person"
+
     # Predicate-driven mapping.
     if slot == "object":
-        if lo_pred in _COUNTRY_PREDICATES:
+        # R8 — a place predicate may NOT overrule an obvious personal-name
+        # shape. GLiREL routinely inverts its triples ("(Iran, country of
+        # citizenship, Seyyed Ali Khamenei)"), and the canon has already
+        # claimed every place surface it recognises, so a cue-free multi-token
+        # capitalised leftover here is a person ("Keir Starmer"), not a place.
+        # A single-token unknown ("Damietta") still takes the predicate.
+        place_predicate = (
+            lo_pred in _COUNTRY_PREDICATES or lo_pred in _LOCATION_PREDICATES
+        )
+        if place_predicate and _looks_like_personal_name(tokens):
+            pass
+        elif lo_pred in _COUNTRY_PREDICATES:
             return "country"
-        if lo_pred in _LOCATION_PREDICATES:
+        elif lo_pred in _LOCATION_PREDICATES:
             return "location"
         if lo_pred in _ORG_OBJECT_PREDICATES:
             return "organization"
@@ -418,6 +565,17 @@ def _classify_entity_text(
     # — persons never auto-merge, so a mis-classed "the X" can never fold onto
     # its bare "X" twin. An exact match — no trailing-punct strip — so a name
     # initial "A." is not mistaken for the article "a".)
+    # R8 tier 3 — a bare ALL-CAPS acronym is an institution far more often than
+    # anything else in this feed (IAEA / IRGC / SBU / FSB / IDF / HTS), and the
+    # alternative is the generic bucket, which never auto-merges. Diseases and
+    # economic / technical shorthand are excluded by name.
+    if (
+        len(tokens) == 1
+        and _ACRONYM_RE.match(t)
+        and t not in _NON_ORG_ACRONYMS
+    ):
+        return "organization"
+
     if tokens and tokens[0].lower() in {"the", "a", "an"}:
         return "entity"
 
@@ -828,6 +986,9 @@ class NERMultilingualHandler:
 
         triples = data.get("triples", []) if isinstance(data, dict) else []
         emitted = self._triples_to_entities(triples, text=extract_text, language=language)
+        relations = self._triples_to_relations(
+            triples, text=extract_text, language=language,
+        )
 
         self._signals_out += 1
         self._last_success_at = datetime.now(tz=timezone.utc)
@@ -837,6 +998,7 @@ class NERMultilingualHandler:
             language=language,
             text_en=text_en,
             title_en=title_en,
+            relations=relations,
         )
 
     # ----------------------------------------------------------- health_check
@@ -1105,6 +1267,86 @@ class NERMultilingualHandler:
                 })
         return emitted
 
+    def _triples_to_relations(
+        self,
+        triples: list[dict[str, Any]],
+        *,
+        text: str,
+        language: str,
+    ) -> list[dict[str, Any]]:
+        """Preserve the /extract head/tail PAIRS as a first-class payload surface.
+
+        :meth:`_triples_to_entities` flattens the same triples into the
+        contractual entity list and de-dupes on the endpoint TEXT — which
+        destroys the pairing. An entity already emitted by an earlier triple is
+        skipped in a later one, so the surviving flat list no longer says which
+        head went with which tail, and a downstream consumer that re-pairs it by
+        position invents relations that were never extracted (live: a post
+        reading "Telegram founder Pavel Durov" yielded "Russia / founded by /
+        Pavel Durov" once "Telegram" had been de-duped into an earlier group).
+
+        Facts are built from PAIRS, so the pairs are stamped ALONGSIDE the
+        entities instead of being reconstructed by position downstream. Both
+        endpoints must clear the same gates the entity list applies (quantity /
+        date / number rejection + the configured class vocabulary), so
+        ``relations`` never carries an endpoint ``entities`` would have refused.
+
+        Best-effort character offsets are attached for each endpoint: the object
+        is located AFTER the subject where possible, so a repeated surface
+        ("Iran … Iran") resolves to the occurrence that actually participates in
+        this relation rather than always the first one.
+        """
+        if not triples:
+            return []
+        emitted: list[dict[str, Any]] = []
+        text_lower = text.lower()
+        overrides = self._config.taxonomy_map
+
+        for triple in triples:
+            if not isinstance(triple, dict):
+                continue
+            subj = str(triple.get("subject", "")).strip()
+            obj = str(triple.get("object", "")).strip()
+            pred = str(triple.get("predicate", "")).strip()
+            if not subj or not obj or not pred:
+                continue
+            if _is_nonentity_candidate(subj) or _is_nonentity_candidate(obj):
+                continue
+            subj_class = _classify_entity_text(
+                subj, predicate=pred, slot="subject", overrides=overrides,
+            )
+            obj_class = _classify_entity_text(
+                obj, predicate=pred, slot="object", overrides=overrides,
+            )
+            if subj_class not in self._vocabulary or obj_class not in self._vocabulary:
+                continue
+            subj_start, subj_end = _find_span(text_lower, subj.lower())
+            obj_start, obj_end = _find_span(
+                text_lower, obj.lower(), start_at=subj_end if subj_end >= 0 else 0,
+            )
+            if obj_start < 0:
+                # No occurrence after the subject — fall back to the first one
+                # (the object legitimately precedes the subject in the surface
+                # form: "Cupertino-based Apple Inc.").
+                obj_start, obj_end = _find_span(text_lower, obj.lower())
+            emitted.append({
+                "subject": subj,
+                "predicate": pred,
+                "object": obj,
+                "subject_class": subj_class,
+                "object_class": obj_class,
+                "subject_start": subj_start,
+                "subject_end": subj_end,
+                "object_start": obj_start,
+                "object_end": obj_end,
+                "lang": language,
+                # The hosted /extract contract returns no per-relation score.
+                # Carry one ONLY when present so the fact write path applies its
+                # documented floor rather than laundering a fabricated 1.0.
+                "confidence": triple.get("confidence"),
+            })
+        return emitted
+
     def _annotate(
         self,
         signal: Signal,
@@ -1113,6 +1355,7 @@ class NERMultilingualHandler:
         language: str | None,
         text_en: str | None = None,
         title_en: str | None = None,
+        relations: list[dict[str, Any]] | None = None,
     ) -> Signal:
         """Return a copy of ``signal`` with ``payload['entities']`` set.
 
@@ -1126,6 +1369,13 @@ class NERMultilingualHandler:
         new_payload["entities"] = entities
         new_payload["ner_language"] = language
         new_payload["entities_hash"] = _entities_hash(entities)
+        # The extractor's REAL head/tail pairs, kept beside the flattened entity
+        # list so the fact stage never has to guess which endpoints went
+        # together. Always stamped (even empty) on a route that ran the
+        # extractor, so a consumer can distinguish "ran, no pairs" from "this
+        # payload predates the pair surface" (absent key → legacy).
+        if relations is not None:
+            new_payload["relations"] = relations
         if text_en:
             new_payload["text_en"] = text_en
         if title_en:
@@ -1138,14 +1388,21 @@ class NERMultilingualHandler:
 # ---------------------------------------------------------------------------
 
 
-def _find_span(text_lower: str, needle_lower: str) -> tuple[int, int]:
+def _find_span(
+    text_lower: str, needle_lower: str, *, start_at: int = 0
+) -> tuple[int, int]:
     """Best-effort substring locate. Returns ``(-1, -1)`` when not found —
     consumers treat that as "offset unknown". The hosted /extract endpoint
     doesn't return offsets so this is a degraded surface compared to
-    spaCy."""
+    spaCy.
+
+    ``start_at`` bounds the search to the text at/after that index, which lets
+    a relation resolve its object to the occurrence FOLLOWING its subject
+    rather than always the document's first mention of that surface.
+    """
     if not needle_lower:
         return -1, -1
-    idx = text_lower.find(needle_lower)
+    idx = text_lower.find(needle_lower, max(0, start_at))
     if idx < 0:
         return -1, -1
     return idx, idx + len(needle_lower)

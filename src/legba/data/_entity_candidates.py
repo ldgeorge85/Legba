@@ -17,7 +17,9 @@ signals, all backed by indexes from migration 0088:
      (father/son never auto-block). A functional btree indexes it.
   2. TRIGRAM similarity — ``similarity(lower(name), lower(name)) >= min_trgm``,
      GIN-accelerated (``%``), for typo / phonetic near-misses the exact key
-     misses ("Netanyahu" / "Netanyahoo").
+     misses ("Netanyahu" / "Netanyahoo") and for the SURFACE VARIANTS that share
+     no block-key token at all (Kiev/Kyiv). OPT-IN (``trgm_limit``) and, with a
+     ``trgm_min_degree`` floor, bounded to the hub set — R9b.
   3. COUNTRY-ALIAS gazetteer (E4a recall lever) — curated exact official-vs-
      common state-name equivalences (:mod:`._country_aliases`: Myanmar/Burma,
      Czechia/Czech Republic, ...) that share NO block-key token and no trigram
@@ -26,9 +28,12 @@ signals, all backed by indexes from migration 0088:
 
 Each pair is SCOPED (same-or-compatible ``entity_class``, no ``geo_country``
 conflict), HARD-NEGATIVE-filtered (junk fragment; incompatible class; geo
-clash), and BANDED. **This module never merges** — the ``band`` is a SUGGESTION
-the entity_researcher (E4) may fast-path or send to the LLM. E4 is the sole
-merge authority (tombstone + redirect, reversible, ledgered — MP:DEC-B).
+clash), BANDED, and RANKED by band score then combined endpoint DEGREE (R9a —
+the researcher's per-run cap is small relative to the duplicate backlog, so the
+ranking decides what is ever adjudicated at all). **This module never merges**
+— the ``band`` is a SUGGESTION the entity_researcher (E4) may fast-path or send
+to the LLM. E4 is the sole merge authority (tombstone + redirect, reversible,
+ledgered — MP:DEC-B).
 
 BANDS
 -----
@@ -80,6 +85,11 @@ _SPECIFIC_CLASSES: frozenset[str] = frozenset(
 
 DEFAULT_MIN_TRGM = 0.55
 DEFAULT_LIMIT = 500
+#: Link-count floor for the OPT-IN trigram probe (R9b). ``0`` = no floor, i.e.
+#: the historical unbounded self-join — kept as the default so an explicit
+#: ``trgm_limit>0`` behaves exactly as it always did. See
+#: :func:`generate_candidates` for the cost model behind raising it.
+DEFAULT_TRGM_MIN_DEGREE = 0
 
 
 def _class_compatible(a: str | None, b: str | None) -> bool:
@@ -149,6 +159,12 @@ class CandidatePair:
     score: float  # 0..1, higher = more likely the same referent (ranking)
     signals: tuple[str, ...]  # e.g. ('exact_block_key',) or ('trgm:0.78',)
     block_key: str
+    #: R9a — COMBINED endpoint degree: ``signal_entity_links`` rows pointing at
+    #: the two sides. The ranking TIEBREAK inside a band, so the per-run cap
+    #: spends itself on the duplicates that actually fragment the graph instead
+    #: of on whatever sorted first. 0 when the probe did not compute it (the
+    #: unbounded trigram path — see :func:`generate_candidates`).
+    degree: int = 0
 
     @property
     def pair_key(self) -> str:
@@ -169,6 +185,28 @@ def _active(p: str = "") -> str:
 
 _ACTIVE = _active()
 
+#: R9a — one profile's DEGREE: how many signals mention it. Index-backed by
+#: ``idx_sel_entity`` (0001), so this is a per-row index scan, not a table walk.
+#: ``{p}`` is the outer alias it correlates to.
+_DEGREE_SQL = (
+    "(SELECT count(*) FROM signal_entity_links l WHERE l.entity_id = {p}.id)"
+)
+
+#: R9a — the exact-block-key probe, ordered by COMBINED endpoint degree.
+#:
+#: The pair SET is unchanged (a self-join on the block key already implies a
+#: collision); what changed is which pairs survive ``LIMIT $1`` and, through the
+#: ``degree`` column, where they land in the caller's ranking. Before, the only
+#: ordering was ``a.bk`` — alphabetical — so the researcher's per-run budget was
+#: spent on whatever block key sorted first ("multi - billion dollar" and
+#: friends) while the graph's actual hubs (TEHRAN/TEHRAN- at ~2,800 links,
+#: Kiev/Kyiv at ~1,060) sat unproposed indefinitely: the cap is 80 pairs twice a
+#: day against ~2,000 new profiles a day, so an unlucky alphabetical position
+#: was a permanent sentence, not a delay.
+#:
+#: Cost: the ``colliding`` CTE narrows to block keys with 2+ members (a few
+#: hundred rows live, off the functional index from 0088) BEFORE any degree is
+#: computed, so the correlated count runs over the collision set only.
 _EXACT_SQL = f"""
 WITH keyed AS (
     SELECT id, canonical_name, entity_class, geo_country,
@@ -176,16 +214,24 @@ WITH keyed AS (
       FROM entity_profiles
      WHERE {_ACTIVE}
        AND entity_block_key(canonical_name) <> ''
+), colliding AS (
+    SELECT bk FROM keyed GROUP BY bk HAVING count(*) > 1
+), sided AS (
+    SELECT k.id, k.canonical_name, k.entity_class, k.geo_country, k.bk,
+           {_DEGREE_SQL.format(p="k")} AS deg
+      FROM keyed k
+      JOIN colliding c ON c.bk = k.bk
 )
 SELECT a.id AS aid, a.canonical_name AS aname, a.entity_class AS acls,
        a.geo_country AS ageo,
        b.id AS bid, b.canonical_name AS bname, b.entity_class AS bcls,
        b.geo_country AS bgeo,
        a.bk AS bk,
-       array_length(string_to_array(a.bk, ' '), 1) AS ntok
-  FROM keyed a
-  JOIN keyed b ON a.bk = b.bk AND a.id < b.id
- ORDER BY a.bk
+       array_length(string_to_array(a.bk, ' '), 1) AS ntok,
+       (a.deg + b.deg) AS degree
+  FROM sided a
+  JOIN sided b ON a.bk = b.bk AND a.id < b.id
+ ORDER BY (a.deg + b.deg) DESC, a.bk
  LIMIT $1
 """
 
@@ -193,12 +239,13 @@ SELECT a.id AS aid, a.canonical_name AS aname, a.entity_class AS acls,
 #: ``_country_aliases.normalize_country_surface``) is a curated alias surface.
 #: A plain filter scan (no index) — the surface list is a couple dozen strings
 #: and the table is small; nothing like the trigram self-JOIN's cost.
-_ALIAS_NORM_EXPR = SQL_NORM_TEMPLATE.format(col="canonical_name")
+_ALIAS_NORM_EXPR = SQL_NORM_TEMPLATE.format(col="p.canonical_name")
 _COUNTRY_ALIAS_SQL = f"""
-SELECT id, canonical_name, entity_class, geo_country,
-       {_ALIAS_NORM_EXPR} AS norm
-  FROM entity_profiles
- WHERE {_ACTIVE}
+SELECT p.id, p.canonical_name, p.entity_class, p.geo_country,
+       {_ALIAS_NORM_EXPR} AS norm,
+       {_DEGREE_SQL.format(p="p")} AS deg
+  FROM entity_profiles p
+ WHERE {_active("p")}
    AND {_ALIAS_NORM_EXPR} = ANY($1::text[])
 """
 
@@ -207,6 +254,9 @@ SELECT id, canonical_name, entity_class, geo_country,
 #: country is not that country); the generic bucket is allowed but always GRAY.
 _ALIAS_PROBE_CLASSES: frozenset[str] = frozenset({"country", "location", "entity", ""})
 
+#: The UNBOUNDED trigram self-join: every active profile is a candidate outer
+#: row, so this is a full scan (~61s over the live 22k — the E3 review's perf
+#: finding). Reached only when no degree floor is set.
 _TRGM_SQL = f"""
 SELECT a.id AS aid, a.canonical_name AS aname, a.entity_class AS acls,
        a.geo_country AS ageo,
@@ -221,6 +271,52 @@ SELECT a.id AS aid, a.canonical_name AS aname, a.entity_class AS acls,
  WHERE {_active("a")}
    AND {_active("b")}
    AND similarity(lower(a.canonical_name), lower(b.canonical_name)) >= $1
+ ORDER BY sim DESC
+ LIMIT $2
+"""
+
+#: R9b — the HUB-BOUNDED trigram probe: the same join, restricted on BOTH sides
+#: to profiles carrying at least ``$3`` signal links.
+#:
+#: WHY BOTH SIDES. Filtering one side leaves the other as a full outer scan, so
+#: the cost is unchanged; filtering both turns an N-row self-join into an H-row
+#: one, and H is tiny (live: ~22k active profiles, but only the low hundreds
+#: carry 25+ links). That is also where the value is — the fragmentation that
+#: matters is between two names the graph actually leans on (Kiev/Kyiv at
+#: ~1,060 links each), and those are exactly the pairs the exact-block-key probe
+#: can NEVER propose because their block keys differ. The trade is honest and
+#: bounded: a hub-vs-longtail typo is not found by this probe at any floor > 0.
+#:
+#: COST MODEL. One hash aggregate over ``signal_entity_links`` (index-only on
+#: ``idx_sel_entity``, a single pass — NOT a per-row correlated count, which is
+#: what makes the floor cheap even though it must consider every profile), then
+#: an H x H trigram join. Cost scales with H^2-ish, and H falls fast as the
+#: floor rises, so the floor is the throttle: raise it if a run gets slow, lower
+#: it to buy recall. ``trgm_limit`` still caps the rows returned.
+_TRGM_HUB_SQL = f"""
+WITH deg AS (
+    SELECT entity_id, count(*) AS n
+      FROM signal_entity_links
+     GROUP BY entity_id
+    HAVING count(*) >= $3
+), hubs AS (
+    SELECT p.id, p.canonical_name, p.entity_class, p.geo_country, d.n AS deg
+      FROM entity_profiles p
+      JOIN deg d ON d.entity_id = p.id
+     WHERE {_active("p")}
+)
+SELECT a.id AS aid, a.canonical_name AS aname, a.entity_class AS acls,
+       a.geo_country AS ageo,
+       b.id AS bid, b.canonical_name AS bname, b.entity_class AS bcls,
+       b.geo_country AS bgeo,
+       similarity(lower(a.canonical_name), lower(b.canonical_name)) AS sim,
+       (a.deg + b.deg) AS degree
+  FROM hubs a
+  JOIN hubs b
+    ON a.id < b.id
+   AND lower(b.canonical_name) % lower(a.canonical_name)
+   AND a.entity_class = b.entity_class
+ WHERE similarity(lower(a.canonical_name), lower(b.canonical_name)) >= $1
  ORDER BY sim DESC
  LIMIT $2
 """
@@ -246,6 +342,7 @@ async def generate_candidates(
     min_trgm: float = DEFAULT_MIN_TRGM,
     exact_limit: int = DEFAULT_LIMIT,
     trgm_limit: int = DEFAULT_LIMIT,
+    trgm_min_degree: int = DEFAULT_TRGM_MIN_DEGREE,
 ) -> list[CandidatePair]:
     """Emit deduped, ranked candidate merge pairs over the ACTIVE keeper set.
 
@@ -253,9 +350,26 @@ async def generate_candidates(
     official-vs-common state names), then the trigram probe (exact + trgm are
     index-backed by migration 0088), applies the hard-negative gates, bands
     each survivor, and dedups by ``pair_key`` (earlier probes win; later ones
-    only append their signal). Ordered by ``score`` descending (auto_merge
-    candidates first). Pure read — never mutates, never raises for a normal
-    empty result.
+    only append their signal). Pure read — never mutates, never raises for a
+    normal empty result.
+
+    RANKING (R9a) — ``score`` DESC, then combined endpoint ``degree`` DESC.
+    The caller truncates to its per-run cap (``max_pairs``, live 80 twice a
+    day), so the tiebreak decides what gets adjudicated at all: without it the
+    order inside the 0.80 gray band was the exact probe's ``ORDER BY a.bk``,
+    i.e. alphabetical, and the top-degree duplicates were never reached. Degree
+    is a RANKING signal only — it never changes a band, a gate or a merge
+    decision.
+
+    ``trgm_min_degree`` (R9b) is the trigram probe's link-count floor, applied
+    to BOTH endpoints. It is the throttle that makes that probe affordable at
+    all: unbounded it is a ~61s full self-join (hence the shipped
+    ``trgm_limit=0``, probe OFF), while a floor confines it to the hub set,
+    which is both small and where the cross-block-key duplicates live
+    (Kiev/Kyiv share no block-key token, so ONLY this probe can propose them).
+    ``0`` keeps the historical unbounded query; enabling ``trgm_limit`` without
+    a floor logs a warning rather than silently burning a minute of the
+    actor's run — see :data:`_TRGM_HUB_SQL` for the cost model.
     """
     out: dict[str, CandidatePair] = {}
 
@@ -292,6 +406,7 @@ async def generate_candidates(
             score=1.0 if band == "auto_merge" else 0.80,
             signals=("exact_block_key",),
             block_key=str(r["bk"] or ""),
+            degree=int(r["degree"] or 0),
         )
         out[pair.pair_key] = pair
 
@@ -347,6 +462,7 @@ async def generate_candidates(
                         band=existing.band, score=existing.score,
                         signals=existing.signals + ("country_alias",),
                         block_key=existing.block_key,
+                        degree=existing.degree,
                     )
                 continue
             both_country = (
@@ -361,16 +477,37 @@ async def generate_candidates(
                 score=1.0 if band == "auto_merge" else 0.80,
                 signals=("country_alias",),
                 block_key=f"country_alias:{alias_group_key(aname) or ''}",
+                degree=int(ra["deg"] or 0) + int(rb["deg"] or 0),
             )
 
     # 3) TRIGRAM pairs (always GRAY — a fuzzy match needs the adjudicator).
-    #    OPT-IN + bounded: the current trgm self-join is an un-blocked full scan
-    #    (~61s over 22k rows live — the review's perf finding), too slow for the
-    #    actor cadence. Callers pass trgm_limit<=0 to SKIP it (exact-block-key
-    #    only — fast + high-precision); a proper per-record top-K trgm blocking
-    #    (E3.1) will re-enable recall. Tests/CLI still pass a positive limit.
-    for r in ([] if int(trgm_limit) <= 0
-              else await conn.fetch(_TRGM_SQL, float(min_trgm), int(trgm_limit))):
+    #    OPT-IN: callers pass trgm_limit<=0 to SKIP it entirely (exact-block-key
+    #    only — fast + high-precision), which is what the live descriptor ships.
+    #    When it IS enabled, `trgm_min_degree` decides WHICH query runs: a floor
+    #    confines the self-join to the hub set (R9b — bounded, and the only
+    #    channel that can propose a cross-block-key duplicate like Kiev/Kyiv),
+    #    while a floor of 0 keeps the historical un-blocked full scan.
+    trgm_rows: list = []
+    if int(trgm_limit) > 0:
+        if int(trgm_min_degree) > 0:
+            trgm_rows = await conn.fetch(
+                _TRGM_HUB_SQL, float(min_trgm), int(trgm_limit),
+                int(trgm_min_degree),
+            )
+        else:
+            # Loud, not fatal: this is the ~61s shape, and a silent minute
+            # inside an actor run is how the probe got disabled in the first
+            # place. Small fixtures + the CLI legitimately want it.
+            logger.warning(
+                "entity_candidates.trgm_unbounded trgm_limit=%s — no "
+                "trgm_min_degree floor; the self-join scans every active "
+                "profile (~61s live). Set a floor to bound it.",
+                int(trgm_limit),
+            )
+            trgm_rows = await conn.fetch(
+                _TRGM_SQL, float(min_trgm), int(trgm_limit),
+            )
+    for r in trgm_rows:
         aname, bname = str(r["aname"] or ""), str(r["bname"] or "")
         acls, bcls = str(r["acls"] or ""), str(r["bcls"] or "")
         if not _accept(aname, bname, acls, bcls, r["ageo"], r["bgeo"]):
@@ -387,6 +524,7 @@ async def generate_candidates(
                 band=existing.band, score=existing.score,
                 signals=existing.signals + (f"trgm:{float(r['sim']):.2f}",),
                 block_key=existing.block_key,
+                degree=existing.degree,
             )
             continue
         sim = float(r["sim"] or 0.0)
@@ -396,9 +534,18 @@ async def generate_candidates(
             band="gray", score=min(0.79, sim),  # cap below the exact single-token 0.80
             signals=(f"trgm:{sim:.2f}",),
             block_key="",
+            # Only the hub-bounded query carries degrees; the unbounded one
+            # would have to count links for every scanned row to report it.
+            degree=(int(r["degree"] or 0) if "degree" in r.keys() else 0),
         )
 
-    return sorted(out.values(), key=lambda p: p.score, reverse=True)
+    # R9a — score first (auto_merge before gray), then combined endpoint degree,
+    # so the caller's per-run cap lands on the duplicates that actually fragment
+    # the graph rather than on whichever block key sorted first.
+    return sorted(out.values(), key=lambda p: (p.score, p.degree), reverse=True)
 
 
-__all__ = ["CandidatePair", "generate_candidates", "DEFAULT_MIN_TRGM"]
+__all__ = [
+    "CandidatePair", "generate_candidates", "DEFAULT_MIN_TRGM",
+    "DEFAULT_TRGM_MIN_DEGREE",
+]

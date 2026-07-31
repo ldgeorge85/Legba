@@ -28,7 +28,11 @@ from legba.data.analysts.entity_researcher import (
 from legba.data.config import PostgresConfig
 from legba.data.provenance.kinds import TRACE_ONLY
 
-_REPO = Path("/usr/local/deployments/active/legba")
+#: Resolved from THIS file, not hardcoded: an absolute path to the main
+#: checkout reads another tree's descriptors when the suite runs from a
+#: worktree, silently testing the wrong YAML. Mirrors ``DESCRIPTOR_DIR`` in
+#: ``test_handler_options_x1.py``.
+_REPO = Path(__file__).resolve().parents[2]
 
 
 @pytest_asyncio.fixture
@@ -84,6 +88,68 @@ def test_descriptor_yaml_validates():
     # 'entity' pool; shipped OFF (0.0 = 100% person, pre-#219 behavior).
     assert 0.0 <= float(llm["reclass_entity_share"]) <= 1.0
     assert float(llm["reclass_entity_share"]) == 0.0
+    # R9b: the trigram probe ships OFF, and its bounding floor ships alongside
+    # it so the two are never set apart. Both are shape-asserted, not pinned to
+    # a value — they are expected to move by descriptor PUT.
+    assert int(llm["trgm_limit"]) >= 0
+    assert int(llm["trgm_min_degree"]) >= 0
+    assert int(llm["trgm_limit"]) == 0, "the unbounded probe must ship disabled"
+
+
+# ---------------------------------------------------------------------------
+# R9 — the descriptor knobs must REACH the deps. `trgm_limit` was read from the
+# descriptor and then dropped on the floor (never passed to EntityResearcherDeps),
+# so a PUT enabling the trigram probe did precisely nothing — dead config in the
+# X-1 sense, and invisible because the shipped value equalled the default.
+# ---------------------------------------------------------------------------
+
+
+async def _build_deps(**llm_overrides):
+    from legba.data.schemas.analyst import AnalystDescriptor
+    from legba.runtime.analyst_deps_builder import _build_entity_researcher
+
+    body = yaml.safe_load(
+        (_REPO / "descriptors/analyst_entity_researcher.yaml").read_text())
+    body.setdefault("identity", {})["version"] = "0" * 16
+    body["method"]["llm"].update(llm_overrides)
+    desc = AnalystDescriptor.model_validate(body, strict=False)
+    handler = analysts_pkg.discover_analyst_kinds()["entity_researcher"]
+
+    async def _resolve_llm():
+        return _EmptyLLM()
+
+    class _Deps:
+        budget = None
+
+    _run, deps, _kind = await _build_entity_researcher(
+        desc, handler, _resolve_llm, pg_pool=None, deps=_Deps(),
+    )
+    return deps
+
+
+@pytest.mark.asyncio
+async def test_shipped_descriptor_builds_the_documented_deps():
+    deps = await _build_deps()
+    assert deps.max_pairs == 80          # the live per-run candidate cap
+    assert deps.trgm_limit == 0          # probe OFF
+    assert deps.trgm_min_degree == 0     # no floor (moot while the probe is off)
+
+
+@pytest.mark.asyncio
+async def test_trgm_knobs_reach_the_deps_bundle():
+    """THE regression guard for the dropped read: a PUT of these two must be
+    observable in the bundle the handler actually runs with."""
+    deps = await _build_deps(trgm_limit=400, trgm_min_degree=25)
+    assert deps.trgm_limit == 400
+    assert deps.trgm_min_degree == 25
+
+
+@pytest.mark.asyncio
+async def test_candidate_cap_is_descriptor_settable():
+    """R9a's other half — the per-run cap is the knob that decides how much of
+    the (now degree-ranked) collision backlog each tick drains."""
+    deps = await _build_deps(max_pairs=300)
+    assert deps.max_pairs == 300
 
 
 @pytest.mark.integration

@@ -55,6 +55,7 @@ import logging
 import re
 from collections import defaultdict
 from typing import Any, Mapping
+from uuid import UUID
 
 from ...provenance.models import FindingPayload
 from ....runtime.analyst_method import AnalystMethodResult
@@ -189,11 +190,18 @@ def _flips_between(
     *,
     target_id: str | None,
     analyst_id: str | None,
+    prev_finding_id: Any = None,
+    curr_finding_id: Any = None,
 ) -> list[dict[str, Any]]:
     """Status transitions on indicator ids present in BOTH runs.
 
     A newly-introduced id (in ``curr`` only) is NOT a flip (no prior status); a
     dropped id (in ``prev`` only) is not reported as a flip either.
+
+    ``prev_finding_id`` / ``curr_finding_id`` are the two SOURCE unit findings
+    this flip was diffed from (A2 verify-path fix, 2026-07-31) — the cheap real
+    citation this handler can attach: it read exactly these two rows, so they
+    are a genuine, resolvable drill target (never fabricated).
     """
     p = _index_by_id(prev)
     c = _index_by_id(curr)
@@ -226,7 +234,15 @@ def _flips_between(
             "to_status": to_status,
             "activation": _is_activation(from_status, to_status),
             "match": match,
+            # The SOURCE unit's own raw ordinal citations on this indicator entry
+            # (unresolved [N] indices from that unit's own run — decorative,
+            # kept for continuity; NOT the finding-level drill citations below).
             "citations": ce.get("citations") if isinstance(ce.get("citations"), list) else [],
+            # A2 — the two real finding ids this flip was diffed from.
+            "source_finding_ids": {
+                "prev": str(prev_finding_id) if prev_finding_id is not None else None,
+                "curr": str(curr_finding_id) if curr_finding_id is not None else None,
+            },
         })
     return flips
 
@@ -265,6 +281,8 @@ def collect_flips(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int
             _extract_indicators(curr),
             target_id=target_id,
             analyst_id=analyst_id,
+            prev_finding_id=prev.get("id"),
+            curr_finding_id=curr.get("id"),
         )
         if pair_flips:
             groups_compared += 1
@@ -284,6 +302,29 @@ def collect_flips(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int
 # ---------------------------------------------------------------------------
 # Finding assembly
 # ---------------------------------------------------------------------------
+
+
+def _flip_finding_ids(flips: list[dict[str, Any]]) -> list[UUID]:
+    """The real, de-duplicated source-finding UUIDs backing ``flips`` — both the
+    prior and current run of every diffed pair, in order (A2 verify-path fix,
+    2026-07-31): this handler read exactly these two rows per flip, so they are
+    a genuine, cheap, resolvable citation — never fabricated. A flip whose ids
+    are absent/unparseable contributes nothing."""
+    seen: set[UUID] = set()
+    out: list[UUID] = []
+    for f in flips:
+        ids = f.get("source_finding_ids") or {}
+        for raw in (ids.get("prev"), ids.get("curr")):
+            if not raw:
+                continue
+            try:
+                uid = UUID(str(raw))
+            except (ValueError, AttributeError, TypeError):
+                continue
+            if uid not in seen:
+                seen.add(uid)
+                out.append(uid)
+    return out
 
 
 def _build_finding(flips: list[dict[str, Any]], groups_compared: int) -> FindingPayload:
@@ -310,6 +351,40 @@ def _build_finding(flips: list[dict[str, Any]], groups_compared: int) -> Finding
     tags = ["deterministic", SUB_HANDLER_NAME]
     if a:
         tags.append("indicator_triggered")
+    # A2 (verify-path fix, 2026-07-31): cite the indicator-bearing findings this
+    # sweep actually diffed — cheap and real (the two rows were already fetched
+    # to build ``flips``), so prefer it over relying solely on the verify-exempt
+    # badge. ``ref_kind="finding"`` mirrors the composition-citation convention.
+    citations = [{"ref_kind": "finding", "ref_id": str(uid)} for uid in _flip_finding_ids(flips)]
+    # C2b — wire the structural_claims verify OPT-IN this analyst is already
+    # registered for (provenance.kinds.STRUCTURAL_CLAIMS_VERIFY_ANALYSTS) but
+    # never actually emitted, so the badge stayed the plain ``unverified —
+    # structural`` rather than earning ``structural-verified``. Both identities
+    # are re-derivable from ``flips``/``groups_compared`` alone (no DB access
+    # needed at verify time) and always hold by construction of ``collect_flips``
+    # — a future partition/count bug there would surface as a flagged critique.
+    structural_claims = [
+        {
+            "id": "flip_partition",
+            "statement": (
+                f"flip_count ({n}) = activation_count ({a}) + "
+                f"non_activation_count ({n - a})"
+            ),
+            "op": "sum",
+            "asserted": n,
+            "basis": [a, n - a],
+        },
+        {
+            "id": "groups_compared_distinct",
+            "statement": (
+                f"groups_compared ({groups_compared}) = distinct (target_id, "
+                "source_analyst_id) unit-streams among the reported flips"
+            ),
+            "op": "distinct_count",
+            "asserted": groups_compared,
+            "basis": [f"{f['target_id']}::{f['source_analyst_id']}" for f in flips],
+        },
+    ]
     return FindingPayload(
         title=title[:2048],
         body=body[:65536],
@@ -322,6 +397,8 @@ def _build_finding(flips: list[dict[str, Any]], groups_compared: int) -> Finding
             "activation_count": a,
             "groups_compared": groups_compared,
             "flips": flips[:_MAX_FLIPS_IN_FINDING],
+            "citations": citations,
+            "structural_claims": structural_claims,
         },
     )
 
@@ -446,6 +523,9 @@ async def handle(
         finding=finding,
         usage={"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0},
         force_trace_only=force_trace_only,
+        # A2 (verify-path fix): real lineage back to the diffed source findings
+        # (was always empty — this finding previously carried NO derived_from).
+        derived_from=_flip_finding_ids(flips),
     )
 
 

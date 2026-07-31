@@ -392,6 +392,31 @@ async def test_capped_zero_written_does_not_consult_health(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_capped_is_still_recorded_at_a_handler_advertised_cap() -> None:
+    """R5 — the cap moved (per-source resolution), the PROVENANCE did not.
+
+    A poll cut at the source's OWN resolved entry cap still records
+    ``capped=True``, so the 'is this source being truncated?' question stays
+    answerable from ``source_poll_outcomes`` — that column is how the
+    starvation was diagnosed in the first place (100 of 105 polls capped).
+    """
+    class _AdvertisingStubHandler(_StubHandler):
+        max_entries_per_poll = 2      # this source's own bound, not the default
+
+    core, pool, _store, _sid = _build(
+        _AdvertisingStubHandler([_entry("source.test") for _ in range(5)])
+    )
+
+    result = await core.pull_once()
+    assert result["signals_written"] == 2          # cut at the advertised cap
+
+    row = pool.outcome_writes[0]
+    assert row["capped"] is True
+    assert row["outcome"] == "success"             # it produced
+    assert row["signals_written"] == 2
+
+
+@pytest.mark.asyncio
 async def test_outcome_write_failure_does_not_mask_pull() -> None:
     # The provenance INSERT raises; pull_once must still return its summary and
     # not propagate (best-effort write).

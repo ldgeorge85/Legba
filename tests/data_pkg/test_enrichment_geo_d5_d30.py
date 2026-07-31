@@ -341,6 +341,227 @@ class TestSubjectGuardS2:
 
 
 # ===========================================================================
+# R4 — SUBJECT POSITION. Six live 2026-07 mis-attributions on multi-actor
+# geopolitical stories (7 of 20 sampled), each reproduced with the title/body
+# shape it failed on, plus the single-country stories that were already right.
+#
+# The mechanism in every failure: the raw-text country sweep outranked the
+# story's subject, so the FIRST incidental country name anywhere in the body
+# won. Fixed by (a) sweeping each field's LEAD zone before any deep-body hit,
+# (b) ranking NER place entities by where they appear (title first), (c) an
+# ISO-collision stop-set, (d) the TLD fallback staying below all content.
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+class TestSubjectPositionR4:
+    async def test_bare_iso_code_in_title_beats_later_country_name(self):
+        # LIVE: "Netanyahu arrives in US, says Iran 'first and foremost'
+        # agenda" filed under IRAN. The name sweep ran to completion before the
+        # ISO-token sweep, so "Iran" (offset 33) beat "US" (offset 21) on pass
+        # order rather than text order. Both now compete on POSITION.
+        backend = _StubBackend(
+            {
+                "United States": _result("United States", "US"),
+                "Iran, Islamic Republic of": _result("Iran", "IR"),
+            }
+        )
+        handler = GeocodeHandler(GeocodeConfig(precision="country"), backend=backend)
+        sig = _signal(
+            title="Netanyahu arrives in US, says Iran 'first and foremost' agenda",
+            text=(
+                "Israeli Prime Minister Benjamin Netanyahu landed in Washington "
+                "on Monday. Iran, he said, was first and foremost on the agenda."
+            ),
+            entities=[
+                {"class": "person", "text": "Benjamin Netanyahu"},
+                {"class": "country", "text": "Iran"},
+                {"class": "country", "text": "US"},
+            ],
+            canonical_url="https://www.reuters.com/world/middle-east/1",
+        )
+        out = await handler.transform(sig, _ctx())
+        assert out.payload["geo"]["country_iso2"] == "US"
+        assert backend.calls[0] == "United States"
+
+    async def test_leading_actor_demonym_beats_later_title_country(self):
+        # LIVE: "Iraqi authorities detained ... acting in Ukraine's interests"
+        # filed under UKRAINE. "Iraqi" is a demonym the name sweep cannot see;
+        # NER types it `country` (canon demonym map) and it leads the title, so
+        # subject-position ordering puts Iraq first — and the canon resolves the
+        # demonym surface to a country name the geocoder can actually answer.
+        backend = _StubBackend(
+            {"Iraq": _result("Iraq", "IQ"), "Ukraine": _result("Ukraine", "UA")}
+        )
+        handler = GeocodeHandler(GeocodeConfig(precision="country"), backend=backend)
+        sig = _signal(
+            title="Iraqi authorities detained a man acting in Ukraine's interests",
+            text=(
+                "BAGHDAD, July 20. /TASS/. Iraqi security services detained a man "
+                "who was acting in the interests of Ukraine, the agency said."
+            ),
+            entities=[
+                {"class": "country", "text": "Iraqi"},
+                {"class": "country", "text": "Ukraine"},
+            ],
+            canonical_url="https://tass.com/world/1",
+        )
+        out = await handler.transform(sig, _ctx())
+        assert out.payload["geo"]["country_iso2"] == "IQ"
+        assert backend.calls[0] == "Iraq"
+
+    async def test_deep_body_aside_does_not_beat_title_location(self):
+        # LIVE: "Russian scientist beaten in Yekaterinburg" filed under
+        # AFGHANISTAN off an incidental "war in Afghanistan" clause deep in the
+        # body. The title's location is the subject; the aside is now ranked
+        # below it. (Depends on the NER filter typing Yekaterinburg `location`
+        # — the R8 half of this fix.)
+        backend = _StubBackend(
+            {
+                "Yekaterinburg": _result("Russia", "RU", precision="municipality"),
+                "Afghanistan": _result("Afghanistan", "AF"),
+            }
+        )
+        handler = GeocodeHandler(GeocodeConfig(precision="country"), backend=backend)
+        sig = _signal(
+            title="Russian scientist beaten in Yekaterinburg",
+            text=(
+                "A scientist was assaulted near his home on Sunday evening. " * 8
+                + "Colleagues called it the worst such attack since the war in "
+                "Afghanistan."
+            ),
+            entities=[{"class": "location", "text": "Yekaterinburg"}],
+            canonical_url="https://tass.com/society/2",
+        )
+        out = await handler.transform(sig, _ctx())
+        assert out.payload["geo"]["country_iso2"] == "RU"
+        assert backend.calls[0] == "Yekaterinburg"
+
+    async def test_incidental_body_country_does_not_beat_title_city(self):
+        # LIVE: "Kyiv wants to put a Cossack statue ..." filed under RUSSIA off
+        # incidental Moscow/Soviet mentions in the body.
+        backend = _StubBackend(
+            {
+                "Kyiv": _result("Ukraine", "UA", precision="municipality"),
+                "Russian Federation": _result("Russia", "RU"),
+            }
+        )
+        handler = GeocodeHandler(GeocodeConfig(precision="country"), backend=backend)
+        sig = _signal(
+            title="Kyiv wants a Cossack statue instead of the Soviet soldiers monument",
+            text=(
+                "The city council proposed replacing the monument. " * 10
+                + "A similar statue stands in Moscow, Russia."
+            ),
+            entities=[{"class": "location", "text": "Kyiv"}],
+            canonical_url="https://t.me/tass_agency/3",
+        )
+        out = await handler.transform(sig, _ctx())
+        assert out.payload["geo"]["country_iso2"] == "UA"
+        assert backend.calls[0] == "Kyiv"
+
+    async def test_publisher_origin_never_beats_content(self):
+        # LIVE: a BBC Greece-wildfires story filed under the UNITED KINGDOM.
+        # The .uk origin must sit below every content-derived candidate — and
+        # here it is never even queried.
+        backend = _StubBackend(
+            {
+                "Greece": _result("Greece", "GR"),
+                "United Kingdom": _result("United Kingdom", "GB"),
+            }
+        )
+        handler = GeocodeHandler(GeocodeConfig(precision="country"), backend=backend)
+        sig = _signal(
+            title="Greece wildfires force thousands to flee homes near Athens",
+            text=(
+                "Firefighters battled blazes on several fronts overnight. " * 20
+                + "The UK Foreign Office advised travellers to check guidance."
+            ),
+            entities=[{"class": "country", "text": "Greece"}],
+            canonical_url="https://www.bbc.co.uk/news/world-europe-1",
+        )
+        out = await handler.transform(sig, _ctx())
+        assert out.payload["geo"]["country_iso2"] == "GR"
+        assert "United Kingdom" not in backend.calls
+
+    async def test_bare_pr_token_is_not_puerto_rico(self):
+        # LIVE: TASS "PR for Zelensky's terrorism" filed under PUERTO RICO —
+        # bare "PR" is ISO alpha-2 for Puerto Rico. The story falls through to
+        # what the body actually attests.
+        backend = _StubBackend(
+            {
+                "Russia": _result("Russia", "RU"),
+                "Puerto Rico": _result("Puerto Rico", "PR"),
+            }
+        )
+        handler = GeocodeHandler(GeocodeConfig(precision="country"), backend=backend)
+        sig = _signal(
+            title="PR for Zelensky's terrorism",
+            text="Western coverage amounts to PR for the Kiev regime, Russia said.",
+            entities=[{"class": "country", "text": "Russia"}],
+            canonical_url="https://tass.com/politics/4",
+        )
+        out = await handler.transform(sig, _ctx())
+        assert out.payload["geo"]["country_iso2"] == "RU"
+        assert "Puerto Rico" not in backend.calls
+
+    async def test_single_country_domestic_story_unchanged_egypt(self):
+        # KEEP-TEST: the 13/20 that were already right must stay right.
+        backend = _StubBackend(
+            {"Damietta": _result("Egypt", "EG", precision="municipality"),
+             "Egypt": _result("Egypt", "EG")}
+        )
+        handler = GeocodeHandler(GeocodeConfig(precision="country"), backend=backend)
+        sig = _signal(
+            title="Fire breaks out at Damietta port in Egypt",
+            text="A blaze erupted at the Damietta container terminal on Sunday.",
+            entities=[
+                {"class": "location", "text": "Damietta"},
+                {"class": "country", "text": "Egypt"},
+            ],
+            canonical_url="https://english.ahram.org.eg/news/1",
+        )
+        out = await handler.transform(sig, _ctx())
+        assert out.payload["geo"]["country_iso2"] == "EG"
+
+    async def test_single_country_domestic_story_unchanged_india(self):
+        # KEEP-TEST: an Indian state flood story still resolves to India via the
+        # title's location entity.
+        backend = _StubBackend(
+            {"Odisha": _result("India", "IN", precision="region"),
+             "India": _result("India", "IN")}
+        )
+        handler = GeocodeHandler(GeocodeConfig(precision="country"), backend=backend)
+        sig = _signal(
+            title="Odisha floods displace thousands",
+            text="Heavy rain across Odisha, India, forced evacuations overnight.",
+            entities=[{"class": "location", "text": "Odisha"}],
+            canonical_url="https://www.thehindu.com/news/1",
+        )
+        out = await handler.transform(sig, _ctx())
+        assert out.payload["geo"]["country_iso2"] == "IN"
+
+    async def test_lead_zone_country_beats_deep_body_country(self):
+        # The zone split with NO entities at all: the body's opening names the
+        # subject, a later paragraph names an incidental other country.
+        backend = _StubBackend(
+            {"Egypt": _result("Egypt", "EG"), "France": _result("France", "FR")}
+        )
+        handler = GeocodeHandler(GeocodeConfig(precision="country"), backend=backend)
+        sig = _signal(
+            title="Port fire contained after two days",
+            text=(
+                "Egypt's civil defence brought the blaze under control. " * 8
+                + "A similar fire hit a terminal in France last year."
+            ),
+            canonical_url="https://example.com/news/1",
+        )
+        out = await handler.transform(sig, _ctx())
+        assert out.payload["geo"]["country_iso2"] == "EG"
+        assert backend.calls[0] == "Egypt"
+
+
+# ===========================================================================
 # D5 — EONET geometry reverse-geocode (geojson source path)
 # ===========================================================================
 

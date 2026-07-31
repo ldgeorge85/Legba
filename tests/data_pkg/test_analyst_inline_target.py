@@ -39,13 +39,17 @@ from legba.data.analysts.inline_target import (
     KIND_NAME,
     PROMPT_MODULE_PATH,
     SCHEMA_VERSION,
+    _MAX_SNIPPET_CHARS,
     _build_citation_index,
     _coerce_finding,
     _extract_citations,
     _gather,
+    _is_dead_row,
     _normalize_citation_markers,
     _orient,
+    _render_signal,
     _render_user_prompt,
+    _signal_body,
     _title_from_text,
     _unwrap_envelope_body,
     build_prompt_module,
@@ -767,11 +771,14 @@ def test_build_citation_index_flags_truncated_long_source():
 
 
 def test_orient_sorts_newest_first():
+    # Each row carries a title: this test is about RECENCY ORDER, and a row
+    # with neither title nor body is a dead citation the QW1-A prune drops
+    # before numbering (covered by its own tests below).
     ids = [uuid4() for _ in range(3)]
     inputs = [
-        {"id": ids[0], "produced_at": "2026-05-17T10:00:00+00:00"},
-        {"id": ids[1], "produced_at": "2026-05-19T14:00:00+00:00"},
-        {"id": ids[2], "produced_at": "2026-05-18T09:30:00+00:00"},
+        {"id": ids[0], "title": "older", "produced_at": "2026-05-17T10:00:00+00:00"},
+        {"id": ids[1], "title": "newest", "produced_at": "2026-05-19T14:00:00+00:00"},
+        {"id": ids[2], "title": "middle", "produced_at": "2026-05-18T09:30:00+00:00"},
     ]
     sliced, derived = _orient(inputs, "india_energy")
     assert sliced[0]["id"] == ids[1]   # 2026-05-19 first
@@ -785,9 +792,11 @@ def test_orient_handles_missing_id():
     from `derived_from`.  Rows with a string id get parsed to UUID."""
     valid_uuid = uuid4()
     inputs = [
-        {"id": str(valid_uuid), "produced_at": "2026-05-19T14:00:00+00:00"},
-        {"produced_at": "2026-05-18T09:30:00+00:00"},          # no id
-        {"id": "not-a-uuid", "produced_at": "2026-05-17T10:00:00+00:00"},  # bad id
+        {"id": str(valid_uuid), "title": "a",
+         "produced_at": "2026-05-19T14:00:00+00:00"},
+        {"title": "b", "produced_at": "2026-05-18T09:30:00+00:00"},   # no id
+        {"id": "not-a-uuid", "title": "c",
+         "produced_at": "2026-05-17T10:00:00+00:00"},                 # bad id
     ]
     sliced, derived = _orient(inputs, "india_energy")
     assert len(sliced) == 3                                     # all kept
@@ -1697,17 +1706,102 @@ async def test_run_method_persists_citations_in_finding_data():
 
 
 @pytest.mark.asyncio
-async def test_run_method_no_markers_leaves_no_citations_key():
-    """A finding whose prose carries no [N] markers does NOT add a citations key
-    (no empty-list noise) — back-compat for non-citing synthesis."""
-    inputs = [_signal_row(id_=uuid4())]
+async def test_run_method_no_markers_falls_back_to_basis_citations():
+    """A2 (verify-path structural fix, 2026-07-31): a finding whose prose
+    carries NO [N] markers at all — previously the "no citations key" defect
+    class (JUDGE_READOUT #1: narrative_coordination shipped exactly this shape)
+    — now falls back to citing the rendered basis directly (the run WAS
+    reasoned over real evidence: ``derived_from``/``sliced`` is non-empty), so
+    the key is never silently absent. Each fallback entry is flagged
+    ``resolution: "fallback_basis"`` and carries a REAL signal id."""
+    sig_id = uuid4()
+    inputs = [_signal_row(id_=sig_id)]
     fixture = {
         "title": "t", "body": "Prose with no citation markers at all.",
         "confidence": 0.5, "evidence": [], "tags": [],
     }
     llm = _StubLLMHandler(content_override=json.dumps(fixture))
     result = await run_method(inputs, {"target_id": "t"}, InlineTargetDeps(llm=llm))
-    assert "citations" not in result.finding.data
+    citations = result.finding.data.get("citations")
+    assert isinstance(citations, list) and citations
+    assert citations[0]["signal_id"] == str(sig_id)
+    assert citations[0]["resolution"] == "fallback_basis"
+    # the non-empty-citations-when-derived_from-is-non-empty invariant (A2).
+    assert bool(citations) == bool(result.derived_from)
+    cite_step = next(
+        s for s in result.intermediate_steps
+        if s.get("phase") == "reflect" and s.get("kind") == "coerce_finding"
+    )
+    assert cite_step["citation_markers"] == 0
+    assert cite_step["citations_resolved"] == 0
+    assert cite_step["citations_fallback"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_method_resolved_markers_never_trigger_fallback():
+    """No-op guarantee: when the model DID cite (the common/working case), the
+    fallback never engages — byte-identical to pre-A2 behavior."""
+    sig_ids = [uuid4(), uuid4()]
+    inputs = [
+        _signal_row(id_=sig_ids[0], produced_at="2026-05-19T14:00:00+00:00"),
+        _signal_row(id_=sig_ids[1], produced_at="2026-05-18T09:30:00+00:00"),
+    ]
+    fixture = {
+        "title": "t", "body": "Claim one [1].",
+        "confidence": 0.5, "evidence": [], "tags": [],
+    }
+    llm = _StubLLMHandler(content_override=json.dumps(fixture))
+    result = await run_method(inputs, {"target_id": "t"}, InlineTargetDeps(llm=llm))
+    citations = result.finding.data["citations"]
+    assert len(citations) == 1
+    assert "resolution" not in citations[0]
+    cite_step = next(
+        s for s in result.intermediate_steps
+        if s.get("phase") == "reflect" and s.get("kind") == "coerce_finding"
+    )
+    assert cite_step["citations_fallback"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_method_out_of_range_markers_fall_back_to_basis():
+    """Every marker the model used was OUT OF RANGE (a hallucinated ordinal
+    beyond the real slice) — resolved_count is 0 despite marker_count>0, so the
+    fallback still engages (never leaves citations empty on real evidence)."""
+    sig_id = uuid4()
+    inputs = [_signal_row(id_=sig_id)]
+    fixture = {
+        "title": "t", "body": "Claim citing a signal that doesn't exist [99].",
+        "confidence": 0.5, "evidence": [], "tags": [],
+    }
+    llm = _StubLLMHandler(content_override=json.dumps(fixture))
+    result = await run_method(inputs, {"target_id": "t"}, InlineTargetDeps(llm=llm))
+    citations = result.finding.data["citations"]
+    assert citations and citations[0]["signal_id"] == str(sig_id)
+    assert citations[0]["resolution"] == "fallback_basis"
+
+
+@pytest.mark.asyncio
+async def test_run_method_fallback_citations_are_capped():
+    """The unmarked-basis fallback is BOUNDED (_FALLBACK_BASIS_CITATIONS_CAP) so
+    a large uncited slice can't balloon the payload with per-citation
+    source_text/snippet fields."""
+    from datetime import datetime, timedelta, timezone
+
+    from legba.data.analysts.inline_target import _FALLBACK_BASIS_CITATIONS_CAP
+
+    base = datetime(2026, 5, 19, 14, 0, 0, tzinfo=timezone.utc)
+    inputs = [
+        _signal_row(id_=uuid4(), produced_at=(base - timedelta(hours=i)).isoformat())
+        for i in range(_FALLBACK_BASIS_CITATIONS_CAP + 10)
+    ]
+    fixture = {
+        "title": "t", "body": "Prose with no citation markers at all.",
+        "confidence": 0.5, "evidence": [], "tags": [],
+    }
+    llm = _StubLLMHandler(content_override=json.dumps(fixture))
+    result = await run_method(inputs, {"target_id": "t"}, InlineTargetDeps(llm=llm))
+    citations = result.finding.data["citations"]
+    assert len(citations) == _FALLBACK_BASIS_CITATIONS_CAP
 
 
 # ---------------------------------------------------------------------------
@@ -2029,3 +2123,367 @@ async def test_run_method_gather_only_empty_slice_no_binding_still_noops():
     assert "empty_slice" in result.finding.tags
     phases = [s["phase"] for s in result.intermediate_steps]
     assert "reason" not in phases
+
+
+# ---------------------------------------------------------------------------
+# QW1-A — unit-slice RENDER quality cleans
+#
+# Evidence: planning/prompt_gallery/p1_units.md (the live `country_watch_ir`
+# 120-row slice all 8 broad units read) + p5_substrate_legs.md §3.
+# Every fixture below is the SHAPE of a real live row, not a hypothetical.
+# ---------------------------------------------------------------------------
+
+
+def _gdelt_payload(**overrides: Any) -> dict[str, Any]:
+    """A GDELT ``gdelt_files`` payload — the exact shape ``row_to_signal``
+    writes, including the 61-column CAMEO record under ``raw_body`` as a
+    MAPPING (this is what used to be stringified into the prompt)."""
+    payload: dict[str, Any] = {
+        "external_id": "1316254950",
+        "published_at": "20260731",
+        "date_added": "20260731161500",
+        "title": "PRESIDENT <-> IRAN: fight in Iran",
+        "geo": {"full_name": "Iran", "country_code_fips": "IR", "lat": 32, "lon": 53},
+        "actors": {
+            "actor1_code": "GOV", "actor1_name": "PRESIDENT",
+            "actor2_code": "IRN", "actor2_name": "IRAN",
+        },
+        "event_code": "190",
+        "event_base_code": "190",
+        "event_root_code": "19",
+        "quad_class": "4",
+        "goldstein_scale": -10.0,
+        "tone": -2.15311004784689,
+        "num_mentions": 10,
+        "num_sources": 1,
+        "num_articles": 10,
+        "source_url": "https://www.breitbart.com/clips/2026/07/30/cotton/",
+        # The FULL 61-column record, verbatim off a live row — this is the
+        # 1,400+ chars that used to be str()'d into the prompt.
+        "raw_body": {
+            "Year": "2026", "AvgTone": "-2.15311004784689", "SQLDATE": "20260731",
+            "DATEADDED": "20260731161500", "EventCode": "190", "MonthYear": "202607",
+            "QuadClass": "4",
+            "SOURCEURL": "https://www.breitbart.com/clips/2026/07/30/cotton/",
+            "Actor1Code": "GOV", "Actor1Name": "PRESIDENT", "Actor2Code": "IRN",
+            "Actor2Name": "IRAN", "NumSources": "1", "IsRootEvent": "1",
+            "NumArticles": "10", "NumMentions": "10", "FractionDate": "2026.5781",
+            "ActionGeo_Lat": "32", "Actor1Geo_Lat": "32", "Actor2Geo_Lat": "32",
+            "EventBaseCode": "190", "EventRootCode": "19",
+            "GLOBALEVENTID": "1316254950", "ActionGeo_Long": "53",
+            "ActionGeo_Type": "1", "Actor1Geo_Long": "53", "Actor1Geo_Type": "1",
+            "Actor2Geo_Long": "53", "Actor2Geo_Type": "1", "GoldsteinScale": "-10.0",
+            "Actor1Type1Code": "GOV", "Actor1Type2Code": "", "Actor1Type3Code": "",
+            "Actor2Type1Code": "", "Actor2Type2Code": "", "Actor2Type3Code": "",
+            "Actor1EthnicCode": "", "Actor2EthnicCode": "", "Actor1CountryCode": "",
+            "Actor2CountryCode": "IRN", "ActionGeo_ADM1Code": "IR",
+            "ActionGeo_ADM2Code": "", "ActionGeo_FullName": "Iran",
+            "Actor1Geo_ADM1Code": "IR", "Actor1Geo_ADM2Code": "",
+            "Actor1Geo_FullName": "Iran", "Actor2Geo_ADM1Code": "IR",
+            "Actor2Geo_ADM2Code": "", "Actor2Geo_FullName": "Iran",
+            "ActionGeo_FeatureID": "IR", "Actor1Geo_FeatureID": "IR",
+            "Actor1Religion1Code": "", "Actor1Religion2Code": "",
+            "Actor2Geo_FeatureID": "IR", "Actor2Religion1Code": "",
+            "Actor2Religion2Code": "", "Actor1KnownGroupCode": "",
+            "Actor2KnownGroupCode": "", "ActionGeo_CountryCode": "IR",
+            "Actor1Geo_CountryCode": "IR", "Actor2Geo_CountryCode": "IR",
+        },
+    }
+    payload.update(overrides)
+    return payload
+
+
+# --- clean 1: GDELT dict dumps -> one prose line ---------------------------
+
+
+def test_gdelt_record_renders_as_prose_not_a_dict_dump():
+    """P1 gallery [6]: a CAMEO record rode into the prompt as ~1,500 chars of
+    ``'Actor1Geo_FeatureID': 'IR'`` key-value junk. It must render as ONE
+    readable line carrying the same facts."""
+    row = {
+        "id": uuid4(), "title": "PRESIDENT <-> IRAN: fight in Iran",
+        "produced_at": "2026-07-31T16:15:25+00:00",
+        "data": _gdelt_payload(),
+    }
+    block = _render_signal(1, row)
+
+    # The junk is GONE — no python-dict syntax, no raw column names.
+    assert "'GLOBALEVENTID'" not in block
+    assert "Actor1Geo_FeatureID" not in block
+    assert "{'Year'" not in block
+    # The INFORMATION survives: actors, event class, location, date, source.
+    assert "PRESIDENT" in block and "IRAN" in block
+    assert "fight" in block                     # CAMEO root 19 label
+    assert "location: Iran" in block
+    assert "event date: 2026-07-31" in block
+    assert "Goldstein -10.0" in block
+    assert "10 mentions" in block
+    assert "https://www.breitbart.com/clips/2026/07/30/cotton/" in block
+    # And it says what it IS — a machine coding, not a quotable report.
+    assert "structured event record" in block
+    assert _signal_body(row).kind == "gdelt_prose"
+
+
+def test_gdelt_prose_is_a_fraction_of_the_dump():
+    """The whole point: the same facts in a fraction of the context. GDELT is
+    the highest-volume source on the platform (1,813 of 5,377 live 24h rows),
+    so this multiplies across every slice of every unit, every cycle."""
+    payload = _gdelt_payload()
+    row = {"id": uuid4(), "data": payload}
+    prosed = _signal_body(row).text
+    dumped = str(payload["raw_body"])
+    assert len(dumped) > 1_400                    # the live dump size
+    assert len(prosed) < len(dumped) / 3
+    assert len(prosed) < 600
+
+
+def test_gdelt_row_with_an_archived_article_prefers_the_real_prose():
+    """~28% of live GDELT rows also carry the archived article they coded.
+    Real prose beats our synthesized line."""
+    row = {
+        "id": uuid4(),
+        "data": _gdelt_payload(archived_text="Iranian forces struck two tankers."),
+    }
+    body = _signal_body(row)
+    assert body.kind == "archived"
+    assert body.text == "Iranian forces struck two tankers."
+
+
+def test_gdelt_citation_snippet_matches_the_rendered_prose():
+    """The judge's WORKING text must be the bytes the analyst read — a GDELT
+    citation may never be graded against a dict dump the render suppressed."""
+    row = {
+        "id": uuid4(), "title": "PRESIDENT <-> IRAN: fight in Iran",
+        "source_url": "https://example.test/x", "data": _gdelt_payload(),
+    }
+    index = _build_citation_index([row])
+    assert index[1]["snippet"] == _signal_body(row).text
+    assert "'GLOBALEVENTID'" not in (index[1]["source_text"] or "")
+
+
+# --- clean 2: dead citations ----------------------------------------------
+
+
+def test_dead_row_is_dropped_before_the_slice_is_numbered():
+    """P1 gallery [4]: ``(untitled)`` + empty snippet — a bare t.me forward the
+    model can cite and ground NOTHING on. 632 of 5,377 rows in a live 24h
+    window were this. Dropped, and counted in the ORIENT receipt."""
+    live_id, dead_id = uuid4(), uuid4()
+    inputs = [
+        {"id": live_id, "title": "Oil price rises after Iran stops ships",
+         "produced_at": "2026-07-31T16:27:00+00:00", "data": {}},
+        {"id": dead_id, "produced_at": "2026-07-31T16:30:23+00:00",
+         "source_url": "https://t.me/Irna_en/37631", "data": {}},
+    ]
+    stats: dict[str, Any] = {}
+    sliced, derived = _orient(inputs, "country_watch_ir", stats=stats)
+
+    assert [r["id"] for r in sliced] == [live_id]
+    assert derived == [live_id]
+    assert stats["dropped_dead_rows"] == 1
+    # And the renumbering is dense — the surviving row is [1], with no [2]
+    # placeholder where the dead row used to sit.
+    prompt = _render_user_prompt(sliced, "country_watch_ir")
+    assert "[1] Oil price rises" in prompt
+    assert "[2]" not in prompt
+    assert "Number of signals: 1" in prompt
+
+
+def test_headline_only_row_is_KEPT():
+    """P1 gallery [5]: a real headline with an empty body IS evidence — only
+    the both-empty case is dead. Keep-test for the drop above."""
+    row = {"id": uuid4(),
+           "title": "Oil price rises after Iran says it stops ships in Hormuz",
+           "produced_at": "2026-07-31T16:27:00+00:00", "data": {}}
+    stats: dict[str, Any] = {}
+    sliced, _ = _orient([row], "country_watch_ir", stats=stats)
+    assert len(sliced) == 1
+    assert stats["dropped_dead_rows"] == 0
+    assert stats["empty_body_rows"] == 1
+
+
+def test_telegram_row_is_no_longer_dead_because_text_now_renders():
+    """The 653-row/day telegram feed stamps NO title and puts the message body
+    ONLY in ``payload.text`` — which the pre-QW1-A precedence never read, so
+    every one of them was a dead citation."""
+    row = {
+        "id": uuid4(), "produced_at": "2026-07-31T16:30:23+00:00",
+        "source_url": "https://t.me/Irna_en/37631",
+        "data": {"text": "IRGC says it intercepted a hostile drone over Bandar "
+                         "Imam Khomeini early on Thursday."},
+    }
+    assert not _is_dead_row(row)
+    body = _signal_body(row)
+    assert body.kind == "message"
+    assert "hostile drone" in body.text
+    sliced, _ = _orient([row], "country_watch_ir")
+    assert len(sliced) == 1
+
+
+# --- clean 3: untranslated bodies ------------------------------------------
+
+
+def test_translated_body_is_preferred_over_raw_arabic():
+    """aljazeera.arabic: 104/104 live rows carry ``text_en`` (the M13 NLLB body
+    translation) alongside an Arabic ``raw_body``. Render the English."""
+    row = {
+        "id": uuid4(), "language": "ar",
+        "data": {
+            "title": "كيف تؤمن إيران غذاءها رغم الحرب؟",
+            "title_en": "How does Iran secure its food despite the war?",
+            "raw_body": "تعتمد إيران على الإنتاج الزراعي المحلي الذي يغطي نحو 85% "
+                        "من احتياجاتها الغذائية، إلى جانب المخزون الإستراتيجي.",
+            "text_en": "Iran relies on domestic agricultural production covering "
+                       "about 85% of its food needs, alongside strategic reserves.",
+        },
+    }
+    body = _signal_body(row)
+    assert body.kind == "translated"
+    assert "strategic reserves" in body.text
+    block = _render_signal(2, row)
+    assert "How does Iran secure its food" in block      # title_en still wins
+    assert "تعتمد إيران" not in block                     # raw script is gone
+
+
+def test_untranslated_body_renders_an_honest_marker():
+    """P1 gallery [2]: translated TITLE, raw Arabic BODY, no translation and no
+    distilled brief — say so instead of spending context on script the analyst
+    cannot cite and the judge cannot grade."""
+    row = {
+        "id": uuid4(), "language": "ar",
+        "data": {
+            "title_en": "How does Iran secure its food despite the war?",
+            "raw_body": "تعتمد إيران على الإنتاج الزراعي المحلي الذي يغطي نحو 85% "
+                        "من احتياجاتها الغذائية، إلى جانب المخزون الإستراتيجي.",
+        },
+    }
+    body = _signal_body(row)
+    assert body.kind == "untranslated"
+    assert body.text == "[body untranslated: ar]"
+    block = _render_signal(2, row)
+    assert "How does Iran secure its food" in block       # the English handle
+    assert "[body untranslated: ar]" in block
+    assert "تعتمد إيران" not in block
+
+
+def test_untranslated_marker_names_the_language_or_says_unknown():
+    row = {"id": uuid4(),
+           "data": {"title": "제목", "raw_body": "이란은 국내 농업 생산에 의존하고 "
+                                                "있으며 전략 비축량도 보유하고 있다."}}
+    assert _signal_body(row).text == "[body untranslated: unknown]"
+
+
+def test_short_non_latin_body_is_not_flagged():
+    """Keep-test: a handful of non-Latin characters cannot establish a script —
+    a mostly-English body must render untouched."""
+    text = ("Iran's foreign ministry spokesman said the strait remains open to "
+            "compliant traffic, calling the escort operation a provocation.")
+    row = {"id": uuid4(), "data": {"raw_body": text}}
+    body = _signal_body(row)
+    assert body.kind == "raw"
+    assert body.text == text
+
+
+# --- clean 4: full distilled/archived bodies over teasers ------------------
+
+
+def test_archived_full_article_beats_the_rss_teaser():
+    """Live 24h: ~1.6k rows hold an archived FULL article (2,000-5,000 chars)
+    while the render showed a ~113-char teaser of the same story."""
+    teaser = "Energy prices have soared again since fighting resumed."
+    article = ("Iran has said it struck two tankers trying to pass through the "
+               "strait of Hormuz under US military escort. " * 20)
+    row = {"id": uuid4(), "data": {"summary": teaser, "archived_text": article}}
+    body = _signal_body(row)
+    assert body.kind == "archived"
+    assert body.text.startswith("Iran has said it struck two tankers")
+    assert len(body.text) > len(teaser) * 5
+
+
+def test_distilled_body_outranks_everything():
+    """Keep-test: our Stage-2 English brief stays the top of the precedence."""
+    row = {"id": uuid4(), "data": {
+        "distilled_body": "DISTILLED", "text_en": "TRANSLATED", "text": "MESSAGE",
+        "archived_text": "ARCHIVED", "raw_body": "RAW", "summary": "TEASER",
+    }}
+    assert _signal_body(row) == ("DISTILLED", "distilled")
+
+
+def test_teaser_only_row_renders_byte_identically_to_before():
+    """Keep-test: the rows with nothing but a summary are untouched — same
+    title line, same provenance line, same snippet."""
+    row = {
+        "id": uuid4(), "title": "Iran, Armenia seek to turn corridor into engine",
+        "produced_at": "2026-07-31T16:10:02+00:00",
+        "source_url": "https://www.tehrantimes.com/news/528733/",
+        "data": {"summary": "TEHRAN- In line with realizing transport diplomacy.",
+                 "published_at": "2026-07-31T14:16:46+00:00"},
+    }
+    assert _render_signal(7, row) == (
+        "[7] Iran, Armenia seek to turn corridor into engine\n"
+        "    ingested=2026-07-31T16:10:02+00:00 "
+        "published=2026-07-31T14:16:46+00:00 "
+        "source=https://www.tehrantimes.com/news/528733/\n"
+        "    snippet=TEHRAN- In line with realizing transport diplomacy."
+    )
+    assert _signal_body(row).kind == "teaser"
+
+
+def test_body_is_still_bounded_per_item():
+    """Growing the prompt with REAL content is the point; growing it without a
+    bound is not."""
+    row = {"id": uuid4(), "data": {"archived_text": "x" * 50_000}}
+    assert len(_signal_body(row).text) == _MAX_SNIPPET_CHARS
+
+
+def test_html_is_still_stripped_from_a_full_body():
+    """Keep-test: the fuller fields go through the same HTML→text clean."""
+    row = {"id": uuid4(), "data": {
+        "archived_text": "<p>Iran <b>struck</b> two tankers.</p><script>x()</script>"
+    }}
+    assert _signal_body(row).text == "Iran struck two tankers."
+
+
+# --- the ORIENT receipt ----------------------------------------------------
+
+
+def test_orient_receipt_counts_every_clean():
+    inputs = [
+        {"id": uuid4(), "title": "t", "produced_at": "2026-07-31T05:00:00+00:00",
+         "data": _gdelt_payload()},                                    # gdelt_prose
+        {"id": uuid4(), "title": "t", "produced_at": "2026-07-31T04:00:00+00:00",
+         "language": "ar",
+         "data": {"raw_body": "تعتمد إيران على الإنتاج الزراعي المحلي الذي يغطي "
+                              "نحو 85% من احتياجاتها الغذائية."}},     # untranslated
+        {"id": uuid4(), "title": "t", "produced_at": "2026-07-31T03:00:00+00:00",
+         "data": {"archived_text": "A full archived article about Hormuz."}},
+        {"id": uuid4(), "title": "t", "produced_at": "2026-07-31T02:00:00+00:00",
+         "data": {"summary": "A thin teaser."}},                       # teaser
+        {"id": uuid4(), "produced_at": "2026-07-31T01:00:00+00:00", "data": {}},
+        {"id": None, "title": "[ASSESSED STRUCTURE] A - B - C (+4 more)",
+         "produced_at": None,
+         "data": {"summary": "Analysis-derived structure.",
+                  "duplicates_collapsed": 4}},
+    ]
+    stats: dict[str, Any] = {}
+    _orient(inputs, None, stats=stats)
+    assert stats["gdelt_prosed"] == 1
+    assert stats["untranslated_marked"] == 1
+    assert stats["dropped_dead_rows"] == 1
+    assert stats["full_body_rows"] == 2          # gdelt prose + archived
+    assert stats["teaser_rows"] == 2             # teaser + the structure row
+    assert stats["structures_collapsed"] == 4
+
+
+@pytest.mark.asyncio
+async def test_run_method_orient_step_carries_the_render_receipt():
+    """The receipt must reach ``analyst_traces``, not just the logger."""
+    llm = _StubLLMHandler()
+    inputs = [{"id": uuid4(), "title": "t",
+               "produced_at": "2026-07-31T05:00:00+00:00",
+               "data": _gdelt_payload()}]
+    result = await run_method(inputs, {"target_id": "country_watch_ir"}, llm)
+    orient = next(s for s in result.intermediate_steps if s["phase"] == "orient")
+    assert orient["gdelt_prosed"] == 1
+    assert orient["dropped_dead_rows"] == 0
+    assert orient["full_body_rows"] == 1

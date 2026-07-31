@@ -14,6 +14,7 @@ arc under test:
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -929,8 +930,9 @@ async def test_empty_lens_still_empty_after_fallback_stays_honest():
 
 @pytest.mark.asyncio
 async def test_empty_narrate_fallback_is_lens_only():
-    """A non-lens tier with an empty NARRATE keeps its pre-existing honest
-    empty body — the fallback never fires off the lens path."""
+    """A non-VOICES tier (entry) with an empty NARRATE keeps its pre-existing
+    honest empty body — the fallback never fires off the lens/lens_diff
+    path."""
     binding = _FakeBinding(outputs={"get_calibration": {
         "available": True, "forecast_unproven": True, "calibration_thin": True,
     }})
@@ -961,6 +963,94 @@ async def test_nonempty_lens_narrate_never_triggers_fallback():
     kinds = [s.get("kind") for s in result.intermediate_steps]
     assert "empty_lens_fallback" not in kinds
     assert len(llm.calls) == 3
+
+
+# ---------------------------------------------------------------------------
+# P3 finding (2026-07-31 sweep) — the SAME E-1 empty-read gap, on lens_diff.
+# A healthy roster (all four faculties ran) still shipped "(empty chorus
+# diff)" because the E-1 fallback was wired to entry_kind == "lens" only.
+# ---------------------------------------------------------------------------
+
+
+def _lens_diff_options(binding: Any) -> dict[str, Any]:
+    return {
+        "analyst_id": "lens_diff",
+        "agency_binding": binding,
+        "gather_tool_bindings": {},
+    }
+
+
+@pytest.mark.asyncio
+async def test_empty_lens_diff_narrate_falls_back_and_recovers():
+    """Empty NARRATE on the chorus-diff tier gets ONE fallback narrate
+    (the lens_diff-specific redirect, NOT the lens tier's tower-corpus one)
+    and its cited prose becomes the read."""
+    ref = uuid4()
+    binding = _FakeBinding(outputs={"get_calibration": {
+        "available": True, "forecast_unproven": True, "calibration_thin": True,
+    }})
+    scripted = [
+        '{"done": true}',                       # GATHER
+        "field notes over the four voices",     # seam
+        "",                                      # NARRATE → EMPTY (the live kill)
+        f"AGREE: all four faculties converge on the nexus holding "
+        f"[[ref:{ref}]]. These are four declared priors, not the space of "
+        "priors.",                               # fallback narrate
+    ]
+    llm = _ScriptedLLM(scripted)
+    deps = InlineTargetDeps(
+        llm=llm, system_prompt="LENS_DIFF", max_rounds=1, agency_binding=binding,
+    )
+    result = await run_method([], _lens_diff_options(binding), deps)
+    payload = result.finding
+    assert payload.entry_kind == "lens_diff"
+    assert "all four faculties converge" in payload.body
+    assert payload.body != "(empty chorus diff)"
+    assert ref in payload.cited_substrate_refs
+    # The fallback prompt carried the lens_diff-specific redirect (its own
+    # instruments), NOT the lens tier's tower-corpus wording.
+    fallback_prompt = llm.calls[3]["messages"][0]["content"]
+    assert "get_lens_reads" in fallback_prompt
+    assert "VERIFIED TOWER CORPUS" not in fallback_prompt
+    # Trace: the fallback fired and recovered, tier-scoped kind names.
+    kinds = [s.get("kind") for s in result.intermediate_steps
+             if s.get("phase") == "narrate"]
+    assert "empty_lens_diff_fallback" in kinds
+    assert "empty_lens_diff_fallback_recovered" in kinds
+
+
+@pytest.mark.asyncio
+async def test_empty_lens_diff_still_empty_after_fallback_logs_warning(caplog):
+    """Fallback narrate ALSO empty → the read stays honestly '(empty chorus
+    diff)' with 0 claims (never fabricated) AND a WARNING is logged — a
+    healthy roster shipping an empty diff is worth an operator's attention
+    even though the run itself succeeds (trace-only, never fails the run)."""
+    binding = _FakeBinding(outputs={"get_calibration": {
+        "available": True, "forecast_unproven": True, "calibration_thin": True,
+    }})
+    scripted = [
+        '{"done": true}',   # GATHER
+        "field notes",      # seam
+        "",                 # NARRATE → empty
+        "",                 # fallback narrate → STILL empty
+    ]
+    deps = InlineTargetDeps(
+        llm=_ScriptedLLM(scripted), system_prompt="LENS_DIFF", max_rounds=1,
+        agency_binding=binding,
+    )
+    with caplog.at_level(logging.WARNING):
+        result = await run_method([], _lens_diff_options(binding), deps)
+    payload = result.finding
+    assert payload.entry_kind == "lens_diff"
+    assert payload.body == "(empty chorus diff)"
+    assert payload.claims == []
+    kinds = [s.get("kind") for s in result.intermediate_steps
+             if s.get("phase") == "narrate"]
+    assert "empty_lens_diff_fallback_still_empty" in kinds
+    assert any(
+        "empty_lens_diff_fallback.still_empty" in rec.message
+        for rec in caplog.records
+    )
 
 
 @pytest.mark.asyncio

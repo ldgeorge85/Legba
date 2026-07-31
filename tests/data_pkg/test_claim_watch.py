@@ -33,6 +33,7 @@ from legba.data.analysts.deterministic import (
     SUB_HANDLERS,
     TRACE_ONLY,
 )
+from legba.data.analysts.deterministic_handlers import bearing_gate as bg
 from legba.data.analysts.deterministic_handlers import claim_watch as cw
 from legba.data.config import PostgresConfig
 from legba.runtime.analyst_method import AnalystMethodResult
@@ -2275,7 +2276,10 @@ async def test_meta_questions_are_skipped_counted_and_stay_open(
             == "open_question"
         )
     assert {e["dst_id"] for e in edges} == {q_real}
-    assert edges[0]["matcher_version"] == "claim_watch/3.2.0"
+    # The stamp is the ONLY thing that tells an edge written under one model
+    # apart from an edge written under another, so it is pinned to a LITERAL
+    # here — a bump must be a deliberate edit, never a silent inherit.
+    assert edges[0]["matcher_version"] == "claim_watch/3.3.0"
 
 
 async def test_every_meta_class_is_skipped_and_fact_contention_is_not(
@@ -2724,3 +2728,285 @@ async def test_distinct_urls_and_missing_urls_are_never_deduped(
     async with pg_pool.acquire() as conn:
         assert {e["src_id"] for e in await _edges(conn)} == {a, b, c_null}
     assert qid is not None
+
+
+# ---------------------------------------------------------------------------
+# W-B1/W-B2 — THE BEARING PIPELINE, end to end against the substrate
+#
+# The gate's own logic is unit-tested in test_bearing_gate.py. What can only
+# be proven HERE is the part that touches rows: that a gate NO writes no
+# bearing_edges row AND raises no review_flag; that a stamp really lands in
+# bearing_edges.data (migration 0116); that an outage still writes; and that
+# a gate-OFF run is byte-identical to what 3.2.0 wrote.
+# ---------------------------------------------------------------------------
+
+
+class _FakeGateLLM:
+    """Scripted chat_complete for the gate / confirm legs. ``replies`` may
+    hold strings (returned in order) or Exceptions (raised)."""
+
+    def __init__(self, *replies: Any, default: Any = "YES") -> None:
+        self.replies = list(replies)
+        self.default = default
+        self.prompts: list[str] = []
+
+    async def chat_complete(self, messages, **kwargs):
+        self.prompts.append(messages[0]["content"])
+        reply = self.replies.pop(0) if self.replies else self.default
+        if isinstance(reply, Exception):
+            raise reply
+
+        class _R:
+            content = reply
+
+        return _R()
+
+
+def _gate_on(**over: Any) -> dict[str, Any]:
+    """Run options with the pipeline ON (plus the L2 damper off, so these
+    scenes match on entity+geo exactly like their 3.2.0 siblings)."""
+    return {**_L2_OFF, "bearing_gate": "on", **over}
+
+
+def _gate_extras(gate: Any = None, confirm: Any = None) -> dict[str, Any]:
+    extras: dict[str, Any] = {}
+    if gate is not None:
+        extras[bg.SLM_DEPS_EXTRA_KEY] = gate
+    if confirm is not None:
+        extras[bg.CONFIRM_LLM_DEPS_EXTRA_KEY] = confirm
+    return extras
+
+
+async def _edges_with_data(conn: Any) -> list[Any]:
+    return await conn.fetch(
+        "SELECT src_id, dst_id, weight, planes, matcher_version, data "
+        "  FROM bearing_edges ORDER BY created_at, id"
+    )
+
+
+def _edge_data(row: Any) -> dict[str, Any]:
+    raw = row["data"]
+    return json.loads(raw) if isinstance(raw, str) else dict(raw or {})
+
+
+async def _gate_scene(pg_pool, desk: str) -> tuple[UUID, UUID]:
+    """A seeded matcher plus ONE new signal the deterministic matcher would
+    edge (2 shared entities + desk geo = 0.48). Returns (question, signal)."""
+    async with pg_pool.acquire() as conn:
+        qid, ents, _ = await _matchable_question(conn, desk=desk)
+    await _run(pg_pool, **_L2_OFF)  # seed
+    async with pg_pool.acquire() as conn:
+        sid = await _insert_signal(conn, geo=("IR",))
+        await _link_all(conn, sid, ents)
+    return qid, sid
+
+
+async def test_gate_off_is_byte_identical_to_the_pre_gate_matcher(
+    pg_pool, clean_slate
+):
+    """The X-1 contract, proven at the STORAGE layer: a run with no bearing
+    option writes the same row 3.2.0 wrote — an empty ``data``, which is the
+    0116 column default — and never touches the model."""
+    qid, sid = await _gate_scene(pg_pool, "kw3_gate_off")
+    llm = _FakeGateLLM("NO")  # would refuse everything IF it were consulted
+    c = _counters(await _run(pg_pool, extras=_gate_extras(llm), **_L2_OFF))
+
+    assert llm.prompts == []                     # never consulted
+    assert c["edges_written"] == 1
+    assert c["bearing_gate_mode"] == "off"
+    async with pg_pool.acquire() as conn:
+        edges = await _edges_with_data(conn)
+    assert len(edges) == 1
+    assert (edges[0]["src_id"], edges[0]["dst_id"]) == (sid, qid)
+    assert _edge_data(edges[0]) == {}
+
+
+async def test_gate_yes_writes_the_edge_with_its_stamp(pg_pool, clean_slate):
+    qid, sid = await _gate_scene(pg_pool, "kw3_gate_yes")
+    result = await _run(
+        pg_pool, extras=_gate_extras(_FakeGateLLM("YES")), **_gate_on()
+    )
+    c = _counters(result)
+    assert c["edges_written"] == 1
+    assert c["bearing_gate_yes"] == 1 and c["bearing_gated_out"] == 0
+    assert c["bearing_gate_mode"] == "on"
+    assert c["bearing_gate_ref"] == bg.DEFAULT_BEARING_GATE_REF
+    # The gate's tallies ride the TITLE, not only the counters.
+    assert "gate 1 yes / 0 refused" in result.finding.title
+
+    async with pg_pool.acquire() as conn:
+        edges = await _edges_with_data(conn)
+    assert len(edges) == 1
+    data = _edge_data(edges[0])
+    assert data["bearing_gate"] == "yes"
+    assert data["bearing_gate_ref"] == bg.DEFAULT_BEARING_GATE_REF
+    assert data["bearing_gate_prompt"] == bg.GATE_PROMPT_VERSION
+    assert edges[0]["src_id"] == sid and edges[0]["dst_id"] == qid
+
+
+async def test_gate_no_writes_no_row_and_raises_no_review_flag(
+    pg_pool, clean_slate
+):
+    """The whole point of the leg, and the reason ``matched_questions`` is
+    rebuilt from the SURVIVORS: a refused pair must not flag a downstream
+    product for re-review either."""
+    async with pg_pool.acquire() as conn:
+        qid, ents, _ = await _matchable_question(conn, desk="kw3_gate_no")
+        consumer = await _insert_consumer(conn)
+        await _consume(conn, consumer, qid)
+    await _run(pg_pool, **_L2_OFF)  # seed
+    async with pg_pool.acquire() as conn:
+        sid = await _insert_signal(conn, geo=("IR",))
+        await _link_all(conn, sid, ents)
+
+    c = _counters(
+        await _run(pg_pool, extras=_gate_extras(_FakeGateLLM("NO")), **_gate_on())
+    )
+    assert c["edges_written"] == 0
+    assert c["bearing_gated_out"] == 1
+    # The DETERMINISTIC matcher still counts what IT produced — the two
+    # together are the gate's measured effect on this run.
+    assert c["matches_entity"] == 1
+    assert c["flags_written"] == 0
+
+    async with pg_pool.acquire() as conn:
+        assert await _edges_with_data(conn) == []
+        assert await _flags(conn) == []
+        # The cursor still advanced: the signal WAS fully processed.
+        assert await _signals_after_cursor(conn) == 0
+    assert sid is not None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [RuntimeError("connection refused"), "I am not sure about this one."],
+)
+async def test_an_8b_outage_never_silences_the_matcher(
+    pg_pool, clean_slate, reply
+):
+    """STAMP-AND-WRITE. A gate that failed closed would turn one host outage
+    into a silent hole in the bearing plane."""
+    qid, sid = await _gate_scene(pg_pool, f"kw3_gate_out_{uuid4().hex[:6]}")
+    c = _counters(
+        await _run(pg_pool, extras=_gate_extras(_FakeGateLLM(reply)), **_gate_on())
+    )
+    assert c["edges_written"] == 1
+    assert c["bearing_gate_errors"] == 1
+    assert c["bearing_gated_out"] == 0  # an outage is NOT a refusal
+
+    async with pg_pool.acquire() as conn:
+        edges = await _edges_with_data(conn)
+    assert _edge_data(edges[0])["bearing_gate"] == "unavailable"
+    assert (edges[0]["src_id"], edges[0]["dst_id"]) == (sid, qid)
+
+
+async def test_over_the_gate_budget_the_edge_is_stamped_deferred_not_dropped(
+    pg_pool, clean_slate
+):
+    async with pg_pool.acquire() as conn:
+        qid, ents, _ = await _matchable_question(conn, desk="kw3_gate_cap")
+    await _run(pg_pool, **_L2_OFF)  # seed
+    async with pg_pool.acquire() as conn:
+        s1 = await _insert_signal(conn, geo=("IR",))
+        await _link_all(conn, s1, ents)
+        s2 = await _insert_signal(conn, geo=("IR",))
+        await _link_all(conn, s2, ents)
+
+    llm = _FakeGateLLM(default="YES")
+    c = _counters(
+        await _run(
+            pg_pool, extras=_gate_extras(llm), **_gate_on(bearing_gate_cap=1)
+        )
+    )
+    assert c["edges_written"] == 2       # the budget is OURS, not the edge's
+    assert c["bearing_gate_calls"] == 1
+    assert c["bearing_gate_deferred"] == 1
+
+    async with pg_pool.acquire() as conn:
+        stamps = {
+            _edge_data(e)["bearing_gate"] for e in await _edges_with_data(conn)
+        }
+    assert stamps == {"yes", "deferred"}
+    assert (qid, s1, s2) is not None
+
+
+async def test_the_confirm_leg_stamps_a_verdict_and_a_reason(
+    pg_pool, clean_slate
+):
+    qid, sid = await _gate_scene(pg_pool, "kw3_confirm")
+    confirm = _FakeGateLLM(
+        '[{"id": "e0", "bears": "no", "reason": "different dispute entirely"}]'
+    )
+    c = _counters(
+        await _run(
+            pg_pool,
+            extras=_gate_extras(_FakeGateLLM("YES"), confirm),
+            **_gate_on(),
+        )
+    )
+    # A confirm 'no' NEVER retracts the edge — the gate already wrote it.
+    assert c["edges_written"] == 1
+    assert c["bearing_confirm_no"] == 1
+    assert c["bearing_confirm_calls"] == 1
+
+    async with pg_pool.acquire() as conn:
+        data = _edge_data((await _edges_with_data(conn))[0])
+    assert data["bearing_gate"] == "yes"
+    assert data["bearing_confirm"] == "no"
+    assert data["bearing_confirm_reason"] == "different dispute entirely"
+    assert data["bearing_confirm_prompt"] == bg.CONFIRM_PROMPT_VERSION
+    assert (qid, sid) is not None
+
+
+async def test_an_unwired_confirm_leg_stamps_only_the_gate(pg_pool, clean_slate):
+    """The SHIPPED state: the claim_watch descriptor declares no
+    ``method.llm.primary``, so the deps builder wires no confirm client. The
+    leg did not run — which must not read as an outage on every edge."""
+    qid, sid = await _gate_scene(pg_pool, "kw3_confirm_unwired")
+    c = _counters(
+        await _run(pg_pool, extras=_gate_extras(_FakeGateLLM("YES")), **_gate_on())
+    )
+    assert c["bearing_confirm_unavailable"] == 0
+    assert c["bearing_confirm_calls"] == 0
+    async with pg_pool.acquire() as conn:
+        data = _edge_data((await _edges_with_data(conn))[0])
+    assert data["bearing_gate"] == "yes"
+    assert "bearing_confirm" not in data
+    assert (qid, sid) is not None
+
+
+async def test_every_bearing_counter_rides_every_receipt(pg_pool, clean_slate):
+    """Including the SEED run and the nothing-to-do run — a receipt that
+    silently omits the gate counters cannot be read as "the gate wrote
+    nothing" without knowing which build produced it."""
+    expected = set(bg.bearing_counter_defaults())
+    seed = _counters(await _run(pg_pool, **_L2_OFF))
+    assert seed["seeded"] is True
+    assert expected <= set(seed)
+    quiet = _counters(await _run(pg_pool, **_L2_OFF))
+    assert quiet["examined_signals"] == 0
+    assert expected <= set(quiet)
+
+
+async def test_the_gate_never_widens_what_the_matcher_considers(
+    pg_pool, clean_slate
+):
+    """A sub-threshold pair is refused by the FUSION MODEL and never becomes a
+    candidate, so the gate is never asked about it — the matcher stays fully
+    deterministic in what it CONSIDERS; the gate can only ever subtract."""
+    async with pg_pool.acquire() as conn:
+        # One shared entity + geo = 0.30 < 0.45: below threshold.
+        qid, ents, _ = await _matchable_question(
+            conn, desk="kw3_gate_subthreshold", n_entities=1
+        )
+    await _run(pg_pool, **_L2_OFF)  # seed
+    async with pg_pool.acquire() as conn:
+        sid = await _insert_signal(conn, geo=("IR",))
+        await _link_all(conn, sid, ents)
+
+    llm = _FakeGateLLM(default="YES")  # would ADMIT it, if it were asked
+    c = _counters(await _run(pg_pool, extras=_gate_extras(llm), **_gate_on()))
+    assert llm.prompts == []
+    assert c["edges_written"] == 0
+    assert c["bearing_gate_calls"] == 0
+    assert (qid, sid) is not None

@@ -437,7 +437,7 @@ embedding and Whisper STT models:
 
 | Model | HuggingFace ID | Purpose | VRAM |
 |-------|---------------|---------|------|
-| NLLB-200-distilled-600M | `facebook/nllb-200-distilled-600M` | Translation | ~1.2GB |
+| NLLB-200-distilled-1.3B | `facebook/nllb-200-distilled-1.3B` | Translation | ~2.6GB |
 | DeBERTa-v3 zero-shot | `MoritzLaurer/deberta-v3-base-zeroshot-v2.0` | Classification | ~500MB |
 | GLiREL-large | `jackboyla/glirel-large-v0` | Relation extraction | ~1.5GB |
 | T5-small | `google-t5/t5-small` | Summarization | ~250MB |

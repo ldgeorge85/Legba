@@ -44,6 +44,11 @@ from uuid import UUID
 import asyncpg
 
 from ._core import is_valid_schema_uri
+# QW1-B — the DESK GROUNDING citation vocabulary lives in ``kinds`` (already
+# imported by both producer and consumer), NOT in the producing analyst module:
+# importing ``data.analysts.inline_target`` from here would close an import cycle
+# through ``runtime.analyst_method``.
+from .kinds import is_grounding_citation
 
 logger = logging.getLogger(__name__)
 
@@ -811,6 +816,25 @@ _FAIL_CLASS_BY_REASON: dict[str, str] = {
     # language ("no outages were reported" on a thin-collection desk). An
     # honesty-PHRASING defect (overclaim family), NOT fabrication — soft.
     "unscoped_absence_claim": FAIL_CLASS_SOFT,
+    # V-B (2026-07-31) — a SCOPED-ABSENCE claim ("no NEW / large-scale X") that a
+    # row of the analyst's OWN retained input slice reports. HARD by the same
+    # earned-severity rule as V-D: the verdict must NAME the violating slice
+    # title, resolved against the candidate set — an unresolvable answer decides
+    # nothing and leaves today's verdict.
+    "absence_slice_contradicted": FAIL_CLASS_HARD,
+    # V-D (2026-07-31) — the judge called the claim CONTRADICTED but could not
+    # point at the refutation: no ``quotes`` entry, or one that is not a verbatim
+    # run of the evidence it was shown. The claim still FAILS; the unearned
+    # hard-fail severity is what the demotion removes (readout finding #4 — half
+    # the Cerebras and three quarters of the same-model hard-fails were false).
+    "judge_contradicted_unquoted": FAIL_CLASS_SOFT,
+    # V-C (2026-07-31) — prose MISQUOTING the platform's own metadata: it states
+    # an effective_confidence / tier the cited output's captured column
+    # contradicts. Newly VISIBLE (previously the judge could not check it at
+    # all). Soft: an overclaim about provenance, not a fabricated world fact —
+    # and the ONE hard-fail rule (V-D) is a quoted EVIDENCE span, which a column
+    # lookup is not.
+    "metadata_mismatch": FAIL_CLASS_SOFT,
 }
 
 
@@ -858,6 +882,30 @@ def _llm_judge_enabled() -> bool:
 # measured, operator-gated step — nothing here changes a live prompt.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# THE JUDGE PIPELINE VERSION (2026-07-31) — the population SPLIT key.
+#
+# The verify gate is the product's keystone, so every structural change to it
+# ships behind ONE version stamp on the critique, the MATCHER_VERSION idiom.
+# Band calibration, the gold-set loop, the correctness scorer and the scorecard
+# all read faithfulness history; without a split key they would POOL critiques
+# graded under different pipelines and read the change as a quality movement.
+#
+# The 2026-07-31 train (V-F claim-splitter hygiene, V-C metadata lookup, V-D
+# earned hard-fail severity, V-B slice-scoped absence, A3's counter) is expected
+# to shift mean faithfulness UPWARD. That shift is a MEASUREMENT CORRECTION —
+# the readout established that both judges over-fail, so the prior mean
+# UNDERSTATED true faithfulness — and must never be reported as findings getting
+# better. Splitting on this stamp is what makes that statement checkable rather
+# than asserted.
+#
+# ONE bump per train. Format ``<train date>/<n>``; a later structural change to
+# the verify path bumps it again, in the same commit as the change.
+# ---------------------------------------------------------------------------
+
+#: Stamped into every faithfulness critique's ``data.verification`` block.
+JUDGE_PIPELINE_VERSION = "2026-07-31/1"
+
 JUDGE_PROFILE_CURRENT = "current"
 JUDGE_PROFILE_INDEPENDENT = "independent"
 _JUDGE_PROFILES_ALLOWED = (JUDGE_PROFILE_CURRENT, JUDGE_PROFILE_INDEPENDENT)
@@ -902,12 +950,20 @@ class UnsupportedSpan:
     # "these two cited ordinals are the same underlying signal". Kept ``int|str``
     # for tolerance (a legacy uuid-marker span could still surface a str).
     markers: list[int | str] = field(default_factory=list)
+    # 2026-07-31 — OPTIONAL free-form evidence for the verdict, when the checker
+    # that emitted it HAS one: the real column value behind a ``metadata_mismatch``
+    # ("prose says 0.68, the column says 0.41"), the violating slice title behind
+    # an ``absence_slice_contradicted``. The ``reason`` stays a bare mapped LABEL
+    # (the ONE fail-class table + its drift guard depend on that); the human
+    # WHY lives here. ``None`` for every pre-existing emitter.
+    detail: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "text": self.text,
             "reason": self.reason,
             "markers": list(self.markers),
+            "detail": self.detail,
             # P2-4 — ADDITIVE hard/soft label (the Primer taxonomy). Derived from
             # the ONE mapping table above; existing readers ignore the extra key.
             "fail_class": fail_class_for_reason(self.reason),
@@ -951,6 +1007,10 @@ class ClaimVerdict:
     # for failures — so the ledger row explains itself without a span join.
     reason: str | None = None
     markers: list[int | str] = field(default_factory=list)
+    # 2026-07-31 — the same OPTIONAL free-form WHY as ``UnsupportedSpan.detail``,
+    # carried on the ledger row so a verdict explains itself without a span join
+    # (and so a deterministically-VERIFIED supported row can say what it checked).
+    detail: str | None = None
 
     @classmethod
     def supported(
@@ -975,6 +1035,7 @@ class ClaimVerdict:
             "markers": list(self.markers),
             "verdict": self.verdict,
             "reason": self.reason,
+            "detail": self.detail,
         }
 
 
@@ -1033,6 +1094,28 @@ class FaithfulnessReport:
     # indicators, world-knowledge guards) — the ledger is provenance, the
     # tallies stay the score.
     claim_verdicts: list[ClaimVerdict] = field(default_factory=list)
+    # 2026-07-31 verify-path structural fixes — the RECEIPTS counters. Every
+    # structural fix in that train ships with a counter here (name → count) so
+    # the class it addresses can be measured, and can never silently regrow:
+    # ``claims_dropped_nonpropositional`` (V-F), ``metadata_verified`` /
+    # ``metadata_mismatch`` / ``metadata_unverifiable`` (V-C),
+    # ``hardfail_demoted_no_quote`` (V-D), ``absence_slice_verified`` /
+    # ``absence_slice_contradicted`` / ``absence_slice_unavailable`` (V-B),
+    # ``citationless_graded`` (A3). ADDITIVE + sparse: a counter appears ONLY
+    # when it fired, so a run that trips nothing is byte-identical to pre-train.
+    counters: dict[str, int] = field(default_factory=dict)
+    # INTERNAL arithmetic provenance (never persisted): the denominator the
+    # ``faithfulness_score`` above was computed over. The floor path's is
+    # ``checkable_claims``; the judge path's is the reconciled
+    # ``effective_checkable`` (which can differ from ``checkable_claims``). The
+    # deterministic post-judge overrides (V-C/V-B) rescore against THIS number so
+    # they can never silently re-base the score onto a different denominator.
+    score_denominator: int | None = None
+
+    def bump(self, name: str, n: int = 1) -> None:
+        """Increment a receipts counter (sparse — absent means never fired)."""
+        if n:
+            self.counters[name] = self.counters.get(name, 0) + n
 
     def as_dict(self) -> dict[str, Any]:
         bounded, truncated = _bounded_claim_verdicts(self.claim_verdicts)
@@ -1052,6 +1135,11 @@ class FaithfulnessReport:
             # P2-4 additive: the size-bounded per-claim ledger + honest cut flag.
             "claim_verdicts": bounded,
             "claim_verdicts_truncated": truncated,
+            # 2026-07-31 additive: the structural-fix receipts counters (sparse)
+            # + the population SPLIT key, so the trace envelope records which
+            # verify pipeline produced this number.
+            "counters": dict(self.counters),
+            "judge_pipeline_version": JUDGE_PIPELINE_VERSION,
         }
 
 
@@ -1108,6 +1196,54 @@ _EVIDENCE_TOTAL_CHARS = 3600
 # pre-existing findings is byte-unchanged. The larger caps above apply ONLY to the
 # new source_text-grounded branch.
 _EVIDENCE_LEGACY_CHARS = 600
+# QW1-B: cap for a DESK GROUNDING block's evidence. Sized to the whole rendered
+# block (the producer captures at 2400 chars — ``unit_grounding.
+# EVIDENCE_TEXT_CHARS``), NOT the 600-char single-signal legacy cap: a 600-char
+# cut would silently hide the tail of a 6-frame situation register and
+# false-demote a faithful claim about a frame the model was actually shown. The
+# same reasoning ``SITUATION_REGISTER_EVIDENCE_CHARS`` carries on the composition
+# side.
+_EVIDENCE_GROUNDING_CHARS = 2400
+
+
+def _grounding_ordinals(citations: Any) -> dict[int, str]:
+    """``{ordinal -> evidence_text}`` for the DESK GROUNDING blocks (QW1-B).
+
+    A unit's grounding blocks (prior read / situation register / desk baseline /
+    standing questions) are CITABLE in the same flat ``[N]`` space as its signals
+    but are NOT ``signals`` rows, so they carry no ``signal_id``. They ARE real,
+    rendered, captured evidence — ``evidence_text`` holds the exact bytes the
+    model was shown — so this map is what lets the verify path grade a clause
+    resting on one instead of scoring it as an unresolved citation.
+
+    EMPTY for every pre-QW1-B finding and every composition (whose entries carry
+    ``signal_id`` or the ``ref_kind='finding'`` sub-claim shape), which is what
+    keeps both existing paths byte-identical.
+    """
+    out: dict[int, str] = {}
+    if not isinstance(citations, (list, tuple)):
+        return out
+    for entry in citations:
+        if not is_grounding_citation(entry):
+            continue
+        marker = entry.get("marker")
+        n = None
+        if isinstance(marker, str):
+            m = _CLAIM_MARKER_RE.search(marker)
+            if m:
+                n = int(m.group(1))
+        if n is None:
+            raw_ordinal = entry.get("ordinal")
+            if isinstance(raw_ordinal, int) and not isinstance(raw_ordinal, bool):
+                n = raw_ordinal
+        if n is None:
+            continue
+        title = entry.get("title")
+        text = str(entry["evidence_text"])
+        if isinstance(title, str) and title.strip() and title.strip() not in text:
+            text = f"{title.strip()}\n{text}"
+        out[n] = text[:_EVIDENCE_GROUNDING_CHARS]
+    return out
 
 
 def _marker_to_evidence(citations: Any) -> dict[int, str]:
@@ -1216,6 +1352,13 @@ def _marker_to_evidence(citations: Any) -> dict[int, str]:
             text = sid
             cap = _EVIDENCE_LEGACY_CHARS
         out[int(m.group(1))] = str(text)[:cap]
+    # QW1-B: fold in the DESK GROUNDING blocks the unit was shown. They occupy
+    # ordinals the signal loop above never visits (no ``signal_id``), so this is
+    # purely additive — a finding with no grounding block is byte-identical.
+    # Without this the judge would be handed NOTHING for a block-backed [N] and
+    # would mark a correctly-cited continuity clause unsupported: the same
+    # "judge handed only a UUID" failure the #116e fix removed for signals.
+    out.update(_grounding_ordinals(citations))
     return out
 
 
@@ -1727,6 +1870,75 @@ class JudgeProfile:
     judge_system: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# V-D (2026-07-31) — HARD/SOFT severity routing: a CONTRADICTION requires a QUOTE.
+#
+# The readout's structural finding #4, seen in BOTH judges: ``judge_contradicted``
+# — the platform's highest-severity verdict, "the finding misstates its own cited
+# source" — was stamped on claims the cited evidence plainly CONFIRMS. Half the
+# Cerebras hard-fails and three quarters of the same-model hard-fails were false.
+# The class is unusable until the severity is EARNED rather than asserted, so the
+# readout carries a standing warning: gate nothing on the hard/soft split.
+#
+# The mechanical rule: a hard fail must be able to POINT AT the refutation. The
+# judge is asked for a ``quotes`` array parallel to ``verdicts``, and a
+# ``contradicted`` verdict is kept HARD only when its quote RESOLVES — a verbatim
+# run of the evidence text the judge was actually shown. Missing, paraphrased, or
+# invented quote ⇒ demoted to the soft ``judge_contradicted_unquoted``, counted
+# ``hardfail_demoted_no_quote``. The claim still FAILS (the score is unchanged by
+# the demotion — only the severity label moves), so a judge that ignores the new
+# field costs nothing but hard-fail precision it had not earned.
+#
+# SCOPE: the judge's contradiction verdict ONLY. The other hard reasons are
+# deterministic and carry their proof by construction — ``unresolved_citation``
+# IS its own evidence (the marker resolves to nothing), and the M13/M15/E-1
+# guards each carry the matched surface in the span text.
+# ---------------------------------------------------------------------------
+
+#: The verdict label ``_run_judge`` substitutes for an unquotable contradiction.
+_VERDICT_CONTRADICTED_UNQUOTED = "contradicted_unquoted"
+#: Its span reason — SOFT (see the fail-class table). Distinct from
+#: ``judge_unsupported`` so calibration can tell a demoted contradiction from a
+#: plain unsupported verdict.
+_JUDGE_CONTRADICTED_UNQUOTED = "judge_contradicted_unquoted"
+#: Shortest quote we will try to resolve. A 1-3 word fragment matches almost any
+#: evidence by accident, which would make the requirement decorative.
+_JUDGE_QUOTE_MIN_CHARS = 16
+
+# The output-shape addendum, appended to every place the judge's JSON shape is
+# stated (the absence rubric + both the unit and composition prompt leads, which
+# the M14 survey call also uses). ONE constant so the requirement cannot drift
+# between routes, and so a prompt diff is a single greppable change.
+_JUDGE_QUOTE_RULE = (
+    ' Alongside "verdicts", return "quotes": a list of the SAME length, one entry '
+    "per claim, in the same order. For a \"contradicted\" verdict the entry MUST be "
+    "a VERBATIM span copied from the evidence above that refutes the claim; for "
+    'every other verdict use "". Never paraphrase and never invent a quote — a '
+    "contradiction whose quote is not found verbatim in the evidence is recorded "
+    "as a lesser, unsupported-class finding."
+)
+
+
+def _normalize_quote_text(text: str) -> str:
+    """Case/whitespace-folded text for verbatim quote resolution."""
+    return re.sub(r"\s+", " ", str(text or "")).strip().casefold()
+
+
+def _quote_resolves(quote: Any, corpus: str) -> bool:
+    """True when ``quote`` is a long-enough VERBATIM run of the shown evidence.
+
+    ``corpus`` is the already-normalized evidence the judge was handed for this
+    partition. Surrounding quotation marks / ellipses are tolerated; everything
+    else must match, so a paraphrase or an invented span fails.
+    """
+    if not isinstance(quote, str):
+        return False
+    cleaned = _normalize_quote_text(quote).strip("\"'“”‘’ .…")
+    if len(cleaned) < _JUDGE_QUOTE_MIN_CHARS:
+        return False
+    return cleaned in corpus
+
+
 # The absence-branch judge system prompt (design §3.4). A NEGATIVE-specific
 # rubric: the free-latitude "is this cited?" framing that produced the 0.0/0.2/
 # 1.0 spread is replaced with an explicit supported/contradicted/unsupported
@@ -1754,8 +1966,9 @@ _ABSENCE_JUDGE_SYSTEM = (
     "because a negative has no citation — a correctly-scoped negative over a "
     "searched set is the normal, faithful shape of an honest low-risk read. "
     'Output strict JSON only: {"verdicts": ["supported"|"contradicted"|'
-    '"unsupported", ...]} with one verdict per claim, in order. Output only the '
-    "JSON object."
+    '"unsupported", ...]} with one verdict per claim, in order.'
+    + _JUDGE_QUOTE_RULE
+    + " Output only the JSON object."
 )
 
 # The versioned profile registry (design §2.2 / §5.2 step 2). ``absence`` and
@@ -1766,12 +1979,12 @@ _ABSENCE_JUDGE_SYSTEM = (
 _JUDGE_PROFILES: dict[str, JudgeProfile] = {
     CLAIM_KIND_CITATION_SUPPORT: JudgeProfile(
         kind=CLAIM_KIND_CITATION_SUPPORT,
-        version="citsupp.v3",
+        version="citsupp.v4",
         judge_system=None,  # rides the existing unit/composition prompt in _run_judge
     ),
     CLAIM_KIND_ABSENCE: JudgeProfile(
         kind=CLAIM_KIND_ABSENCE,
-        version="absence.v1",
+        version="absence.v2",
         judge_system=_ABSENCE_JUDGE_SYSTEM,
     ),
     CLAIM_KIND_SYNTHESIS: JudgeProfile(
@@ -1855,8 +2068,82 @@ _NULL_RESULT_PROMPT_PREFIX = (
 )
 
 
+# ---------------------------------------------------------------------------
+# V-F (2026-07-31) — CLAIM-SPLITTER HYGIENE: drop NON-PROPOSITIONAL spans.
+#
+# The live artifact (judge readout 2026-07-31 §6): a claim whose ENTIRE text was
+# the literal ``(not_observed)`` reached the verdict ledger as a ``no_citation``
+# soft-fail on a Mexico leadership_transition finding. It is a structured-status
+# TOKEN the assessor emitted inline, not a proposition — there is nothing for
+# either the floor or the judge to grade, and grading it manufactures a defect.
+#
+# It slipped through because ``_is_fact_asserting`` only requires two 2+-letter
+# runs, and ``not_observed`` supplies two ("not", "observed") inside ONE token.
+# The rule below is deliberately the narrowest one that catches the artifact: a
+# span whose content, once scaffolding / emphasis / citation markers / wrapping
+# punctuation are stripped, is a SINGLE whitespace-free token (``not_observed``,
+# ``N/A``, ``TBD``, ``—``). A token-with-underscores is an identifier, never a
+# sentence; anything with a space is left alone (a real fragment like "not
+# observed" keeps today's handling — under-dropping is the cheap error here,
+# since a dropped span silently RAISES the score).
+#
+# Dropped at SPLIT time so BOTH the floor and the judge see the same claim list
+# (they share ``_segment_claims``), counted as ``claims_dropped_nonpropositional``
+# in the verification block so the class can never silently regrow.
+# ---------------------------------------------------------------------------
+
+#: Punctuation / wrapper characters stripped before the single-token test.
+_NONPROP_STRIP = "()[]{}<>\"'“”‘’*_`~ \t.,;:!?-–—"
+
+
+def _is_propositional(claim: str) -> bool:
+    """False when a segmented span carries NO proposition to grade (V-F).
+
+    Conservative by construction: only a NON-HEADING span that reduces to ONE
+    whitespace-free token is rejected. HEADING-shaped spans (``### Assessment``,
+    ``**Drivers**``) are left in the stream untouched — they are already inert for
+    both the floor (``_is_fact_asserting``) and the judge (``_is_judgeable_claim``),
+    and they carry the preceding-span CONTEXT the W31 unscoped-absence backstop
+    reads, so removing them here would move a live detector for no gain.
+    Never raises; an empty / whitespace-only span is also non-propositional.
+    """
+    s = claim.strip()
+    if not s:
+        return False
+    if s.lstrip().startswith("#") or _is_bold_heading(s) or _LABELED_SCAFFOLD_RE.match(s):
+        return True
+    # Strip list scaffolding, then every citation marker (a marker-only span is
+    # already re-attached upstream; a ``token [3]`` span reduces here).
+    core = s.lstrip("-*> ").strip()
+    core = _REF_MARKER_RE.sub(" ", _CLAIM_MARKER_RE.sub(" ", core))
+    core = core.strip(_NONPROP_STRIP)
+    if not core:
+        return False
+    # A single whitespace-free token is a status TOKEN / label, not a sentence.
+    return bool(re.search(r"\s", core))
+
+
+def _segment_claims_with_drops(body: str) -> tuple[list[str], list[str]]:
+    """``(claim spans, non-propositional spans dropped)`` — see
+    :func:`_segment_claims`. The drop list feeds the V-F receipts counter; it is
+    NEVER graded, scored, or persisted as a verdict row."""
+    spans = _segment_claims_raw(body)
+    kept = [c for c in spans if _is_propositional(c)]
+    dropped = [c for c in spans if not _is_propositional(c)]
+    return kept, dropped
+
+
 def _segment_claims(body: str) -> list[str]:
-    """Split a finding body into sentence-ish claim spans (deterministic)."""
+    """Split a finding body into sentence-ish claim spans (deterministic).
+
+    V-F: NON-PROPOSITIONAL spans (a bare ``(not_observed)`` status token) are
+    dropped here, so the floor and the judge grade the identical claim list.
+    """
+    return _segment_claims_with_drops(body)[0]
+
+
+def _segment_claims_raw(body: str) -> list[str]:
+    """The pre-V-F segmentation — every sentence-ish span, hygiene NOT applied."""
     if not body:
         return []
     # C1 (2026-07-03): normalize citation-marker drift (full-width 【N】,
@@ -2199,6 +2486,12 @@ def _deterministic_floor(
 
     resolved_ids = _resolved_citation_ids(citations)
     marker_map = _marker_to_signal_id(citations)
+    # QW1-B — the ordinals backed by a DESK GROUNDING block rather than a signal.
+    # A clause citing one IS resting on real, rendered, captured evidence (the
+    # unit's own prior read, the desk's open frames, its baseline band, its
+    # standing questions), so it must not score as an ``unresolved_citation``.
+    # EMPTY for every pre-QW1-B finding ⇒ this floor stays byte-identical.
+    grounding_ords = set(_grounding_ordinals(citations))
 
     claims = [c for c in _segment_claims(body) if _is_fact_asserting(c)]
     supported = 0
@@ -2212,8 +2505,12 @@ def _deterministic_floor(
             spans.append(UnsupportedSpan(text=claim, reason="no_citation"))
             verdicts.append(ClaimVerdict.failed(claim, "no_citation"))
             continue
-        # Supported when ANY marker resolves to a real cited signal_id.
-        ok = any(marker_map.get(n) in resolved_ids for n in markers if marker_map.get(n))
+        # Supported when ANY marker resolves to a real cited signal_id — or, from
+        # QW1-B, to a cited DESK GROUNDING block (real captured evidence with no
+        # signal row behind it).
+        ok = any(
+            marker_map.get(n) in resolved_ids for n in markers if marker_map.get(n)
+        ) or any(n in grounding_ords for n in markers)
         if ok:
             supported += 1
             verdicts.append(ClaimVerdict.supported(claim, list(markers)))
@@ -2237,6 +2534,7 @@ def _deterministic_floor(
         unsupported_spans=spans,
         judge_status="deterministic",
         claim_verdicts=verdicts,
+        score_denominator=checkable,
     )
 
 
@@ -2388,6 +2686,7 @@ def _deterministic_floor_subclaim(
         judge_status="deterministic",
         confidence_ceiling=confidence_ceiling,
         claim_verdicts=verdicts,
+        score_denominator=checkable,
     )
 
 
@@ -2505,6 +2804,8 @@ def _fold_indicators(
         # P2-4: the indicator rows join the per-claim ledger (supported entries
         # were previously recorded nowhere; failures mirror their spans).
         claim_verdicts=floor.claim_verdicts + _indicator_claim_verdicts(indicators),
+        counters=dict(floor.counters),
+        score_denominator=checkable,
     )
 
 
@@ -2971,7 +3272,435 @@ def _fold_guard_spans(
         # the ONE _FAIL_CLASS_BY_REASON table), text mirroring its span.
         claim_verdicts=floor.claim_verdicts
         + [ClaimVerdict.failed(s.text, s.reason, list(s.markers)) for s in guard_spans],
+        counters=dict(floor.counters),
+        score_denominator=checkable,
     )
+
+
+# ---------------------------------------------------------------------------
+# 2026-07-31 — the DETERMINISTIC CLAIM-OVERRIDE seam (shared by V-C + V-B).
+#
+# Both structural fixes in this train do the same thing: a claim the citation-
+# support branch cannot possibly grade (its truthmaker is a DB COLUMN, or the
+# whole INPUT SLICE) is decided DETERMINISTICALLY and its verdict replaced —
+# whichever grader produced the original. One mechanism, so the arithmetic is
+# written and tested once.
+#
+# ARITHMETIC CONTRACT (the reason ``score_denominator`` exists):
+#   * an override on a claim ALREADY in the ledger moves it between the
+#     supported and failed columns and RESCORES over the SAME denominator the
+#     path used (floor: ``checkable_claims``; judge: the reconciled
+#     ``effective_checkable``) — it never re-bases the score;
+#   * an override on a claim the pass did NOT grade (a floor-exempt absence
+#     claim on the judge-off path) only ADDS work when it FAILS — it folds in as
+#     one new checkable-but-unsupported claim, exactly like ``_fold_guard_spans``.
+#     A SUPPORTED verdict on an ungraded claim records its counter and changes
+#     NOTHING: we never manufacture a supported claim to lift a score.
+#   * ADVISORY spans (double_counted / hedge_laundering) are never dropped — they
+#     annotate a claim rather than grade it.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _ClaimOverride:
+    """One deterministic verdict replacement for a claim, by exact span text."""
+
+    text: str
+    # True → VERDICT_SUPPORTED; False → a failure with ``reason``.
+    supported: bool
+    # The receipts counter this override bumps (always, even when it is a no-op).
+    counter: str
+    # None for supported; a reason from the ONE _FAIL_CLASS_BY_REASON table.
+    reason: str | None = None
+    # The human WHY (the real column value / the violating slice title).
+    detail: str | None = None
+
+
+def _apply_claim_overrides(
+    report: FaithfulnessReport, overrides: list[_ClaimOverride]
+) -> FaithfulnessReport:
+    """Replace the verdicts of the named claims + rescore (see the block above).
+
+    Empty ``overrides`` → the report is returned UNCHANGED (byte-identical), so
+    every finding that trips no deterministic check is untouched.
+    """
+    if not overrides:
+        return report
+    by_text: dict[str, _ClaimOverride] = {o.text.strip(): o for o in overrides}
+    counters = dict(report.counters)
+    for ov in overrides:
+        counters[ov.counter] = counters.get(ov.counter, 0) + 1
+
+    supported = report.supported_claims
+    checkable = report.checkable_claims
+    denom = (
+        report.score_denominator
+        if report.score_denominator is not None
+        else report.checkable_claims
+    )
+    applied: dict[str, _ClaimOverride] = {}
+    ledger: list[ClaimVerdict] = []
+    for cv in report.claim_verdicts:
+        key = cv.text.strip()
+        ov = by_text.get(key)
+        if ov is None:
+            ledger.append(cv)
+            continue
+        applied[key] = ov
+        was_supported = cv.verdict == VERDICT_SUPPORTED
+        if ov.supported:
+            if not was_supported:
+                supported += 1
+            ledger.append(
+                ClaimVerdict(
+                    text=cv.text,
+                    verdict=VERDICT_SUPPORTED,
+                    reason=None,
+                    markers=list(cv.markers),
+                    detail=ov.detail,
+                )
+            )
+        else:
+            if was_supported:
+                supported -= 1
+            ledger.append(
+                ClaimVerdict(
+                    text=cv.text,
+                    verdict=fail_class_for_reason(str(ov.reason)),
+                    reason=ov.reason,
+                    markers=list(cv.markers),
+                    detail=ov.detail,
+                )
+            )
+
+    # Spans: drop the stale verdict spans for every claim an override TOUCHED
+    # (advisory notes survive — they annotate, they do not grade), then re-emit
+    # the failures the overrides decided.
+    spans = [
+        s
+        for s in report.unsupported_spans
+        if s.reason in _ADVISORY_REASONS or s.text.strip() not in applied
+    ]
+    for key, ov in applied.items():
+        if ov.supported:
+            continue
+        markers = next(
+            (list(cv.markers) for cv in ledger if cv.text.strip() == key), []
+        )
+        spans.append(
+            UnsupportedSpan(
+                text=ov.text,
+                reason=str(ov.reason),
+                markers=markers,
+                detail=ov.detail,
+            )
+        )
+
+    # Overrides on claims the pass never graded: a FAILURE folds in as new work
+    # (one checkable-but-unsupported claim); a SUPPORTED verdict changes nothing.
+    for key, ov in by_text.items():
+        if key in applied or ov.supported:
+            continue
+        checkable += 1
+        denom += 1
+        spans.append(
+            UnsupportedSpan(text=ov.text, reason=str(ov.reason), detail=ov.detail)
+        )
+        ledger.append(
+            ClaimVerdict(
+                text=ov.text,
+                verdict=fail_class_for_reason(str(ov.reason)),
+                reason=ov.reason,
+                detail=ov.detail,
+            )
+        )
+
+    score = 1.0 if denom <= 0 else supported / denom
+    return FaithfulnessReport(
+        faithfulness_score=score,
+        checkable_claims=checkable,
+        supported_claims=supported,
+        unsupported_spans=spans,
+        judge_status=report.judge_status,
+        judge_unavailable_reason=report.judge_unavailable_reason,
+        confidence_ceiling=report.confidence_ceiling,
+        branch_scores=report.branch_scores,
+        claim_verdicts=ledger,
+        counters=counters,
+        score_denominator=denom,
+    )
+
+
+# ---------------------------------------------------------------------------
+# V-C (2026-07-31) — METADATA CLAIMS: verify by LOOKUP, not exempt blind.
+#
+# The readout's structural finding #3: a claim quoting the platform's OWN
+# metadata — "the unit's effective confidence of 0.68", "these indications are
+# below verification thresholds" — is UNJUDGEABLE from evidence text. Its
+# truthmaker is a COLUMN the judge never sees, so the judge marks it unsupported
+# (or, worse, CONTRADICTED) whether it is right or wrong. Both live artifacts in
+# the readout dossier are of exactly this shape.
+#
+# Exempting the class would hide it. Instead the composition CAPTURED those
+# columns on each citation at synth time (``effective_confidence``, C-TIER
+# ``tier``) precisely so the verify pass can run DB-free — so we LOOK THEM UP:
+#
+#   * MATCH  → the claim is SUPPORTED (``metadata_verified``), detail naming the
+#              real value it was checked against.
+#   * MISMATCH → a soft ``metadata_mismatch`` with the REAL value in the detail.
+#              This is a defect class we previously could not see at all: prose
+#              MISQUOTING its own numbers. It is emitted wherever it occurs.
+#   * columns absent (unit citations name signals, which carry no confidence; a
+#              pre-C-TIER composition carries no tier stamps) → today's path,
+#              counted ``metadata_unverifiable``. Never a fabricated pass.
+#
+# ANTI-LAUNDERING (the one asymmetry, deliberate): a matching metadata value only
+# lifts the claim to SUPPORTED when the metadata assertion IS the claim — a
+# "metadata-dominant" span (see :func:`_metadata_dominant`). A mixed clause that
+# also asserts a first-order world fact ("… hint at an absence of observable
+# sanctions … but these indications are below verification thresholds") gets its
+# metadata leg checked and COUNTED (``metadata_verified_not_dominant``) but keeps
+# the grader's verdict — a checkable number must never certify the prose around
+# it. Mismatch is NOT gated this way: a misquote is a misquote wherever it sits.
+# ---------------------------------------------------------------------------
+
+_METADATA_MISMATCH = "metadata_mismatch"
+
+# "effective confidence of 0.68" / "effective_confidence=0.68" / "confidence: 0.7"
+# — the metadata NOUN followed, within a short non-numeric run, by the value.
+_METADATA_CONFIDENCE_RE = re.compile(
+    r"\b(?:effective[\s_\-]*)?confidence\b[^0-9\n]{0,24}?(\d?\.\d{1,3})\b",
+    re.IGNORECASE,
+)
+
+# Below-the-verification-floor phrasing + the two C-TIER tier NAMES. All assert
+# the SAME column: the cited sub-claim's ``tier`` stamp.
+_METADATA_BELOW_FLOOR_RE = re.compile(
+    r"\bbelow\s+(?:the\s+)?(?:verification\s+|verify\s+)?"
+    r"(?:threshold|thresholds|floor|bar|cut-?off)s?\b"
+    r"|\bbelow[-\s]floor\b"
+    r"|\bperiphery[-\s]tier\b|\btier\s*[:=]\s*periphery\b"
+    r"|\bunverified\s+tier\b",
+    re.IGNORECASE,
+)
+_METADATA_BASIS_TIER_RE = re.compile(
+    r"\bbasis[-\s]tier\b|\btier\s*[:=]\s*basis\b", re.IGNORECASE,
+)
+
+# Framing / hedge / scaffold words that do NOT count as first-order content when
+# testing whether a metadata assertion is the claim's whole point.
+_METADATA_FRAME_WORDS: frozenset[str] = frozenset(
+    """
+    a an the this that these those its it their our unit units finding findings
+    read reads claim claims sub subclaim subclaims block blocks value values
+    score scores number numbers figure figures level levels of for from with at
+    on in to is are was were be been being has have had and or but so as than
+    indicates indicate indicating indicated suggests suggest suggesting reflects
+    reflect means meaning implies imply carries carry carried reported stated
+    shows show shown remains remain stays stay sits sit likely unlikely possible
+    probable certain uncertain tentative provisional weak weakly strong strongly
+    moderate moderately high low conclusion conclusions confidence effective
+    verification verify threshold thresholds floor tier periphery basis
+    unverified below above not no only merely just treated treat should would
+    which while whereas therefore thus hence given
+    """.split()
+)
+
+
+def _marker_metadata_map(
+    citations: Any, *, subclaim: bool
+) -> dict[int, Mapping[str, Any]]:
+    """Map the marker a claim would cite → that citation ENTRY, per convention.
+
+    ``subclaim=True`` keys by the composition sub-claim ORDINAL; ``False`` keys by
+    the unit ``[N]`` marker index. The entry is returned whole so the metadata
+    lookup reads whichever captured column it needs without a second traversal.
+    """
+    if subclaim:
+        return {
+            n: entry
+            for n, entry in _build_ordinal_map(
+                citations, lambda entry, _n: entry
+            ).items()
+            if isinstance(entry, Mapping)
+        }
+    out: dict[int, Mapping[str, Any]] = {}
+    if not isinstance(citations, (list, tuple)):
+        return out
+    for entry in citations:
+        if not isinstance(entry, Mapping):
+            continue
+        marker = entry.get("marker")
+        if not isinstance(marker, str):
+            continue
+        m = _CLAIM_MARKER_RE.search(marker)
+        if m:
+            out[int(m.group(1))] = entry
+    return out
+
+
+def _metadata_dominant(claim: str, matched: str) -> bool:
+    """Is the matched metadata phrase essentially the WHOLE claim? (anti-laundering)
+
+    Strips scaffolding, citation markers and the matched phrase, then counts the
+    words left that are not framing / hedge / metadata vocabulary. Few (≤3) → the
+    claim is ABOUT its own metadata and a verified value decides it; more → the
+    claim also asserts first-order content the column cannot certify.
+    """
+    core = claim.strip().lstrip("#-*> ").strip()
+    core = _REF_MARKER_RE.sub(" ", _CLAIM_MARKER_RE.sub(" ", core))
+    core = core.replace(matched, " ")
+    words = [w for w in re.findall(r"[A-Za-z][A-Za-z'\-]*", core.lower()) if len(w) > 1]
+    residual = [w for w in words if w not in _METADATA_FRAME_WORDS]
+    return len(residual) <= 3
+
+
+def _metadata_claim_override(
+    claim: str, citations: Any, *, subclaim: bool
+) -> _ClaimOverride | None:
+    """The V-C verdict for ONE claim, or ``None`` when it asserts no metadata.
+
+    Deterministic + DB-free: everything checked here was captured onto the
+    citation at synth time. Never raises.
+    """
+    entries = _marker_metadata_map(citations, subclaim=subclaim)
+    if not entries:
+        return None
+    markers = _markers_in_claim(claim, subclaim=subclaim)
+    # The claim's OWN markers when it carries any; otherwise the whole cited set
+    # (a metadata clause routinely states the number without re-citing it).
+    scope = [n for n in markers if n in entries] or sorted(entries)
+
+    conf = _METADATA_CONFIDENCE_RE.search(claim)
+    if conf is not None:
+        try:
+            asserted = float(conf.group(1))
+        except (TypeError, ValueError):
+            asserted = None
+        if asserted is None or not (0.0 <= asserted <= 1.0):
+            return _ClaimOverride(
+                text=claim, supported=True, counter="metadata_unverifiable"
+            )
+        digits = len(conf.group(1).split(".")[-1])
+        real: list[float] = []
+        for n in scope:
+            raw = entries[n].get("effective_confidence")
+            if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+                real.append(float(raw))
+        if not real:
+            # The cited outputs carry no confidence column (unit citations name
+            # SIGNALS; a legacy composition captured none) — today's path.
+            return _ClaimOverride(
+                text=claim, supported=True, counter="metadata_unverifiable"
+            )
+        if any(round(v, digits) == asserted for v in real):
+            counter = (
+                "metadata_verified"
+                if _metadata_dominant(claim, conf.group(0))
+                else "metadata_verified_not_dominant"
+            )
+            return _ClaimOverride(
+                text=claim,
+                supported=True,
+                counter=counter,
+                detail=(
+                    f"effective_confidence={asserted:g} matches the cited "
+                    f"output(s) {sorted(scope)}"
+                ),
+            )
+        return _ClaimOverride(
+            text=claim,
+            supported=False,
+            counter=_METADATA_MISMATCH,
+            reason=_METADATA_MISMATCH,
+            detail=(
+                f"prose asserts effective_confidence={asserted:g}; the cited "
+                f"output(s) {sorted(scope)} carry "
+                + ", ".join(f"{v:g}" for v in real)
+            ),
+        )
+
+    below = _METADATA_BELOW_FLOOR_RE.search(claim)
+    basis = None if below is not None else _METADATA_BASIS_TIER_RE.search(claim)
+    if below is None and basis is None:
+        return None
+    tiered = [n for n in scope if "tier" in entries[n]]
+    if not any("tier" in e for e in entries.values()):
+        # No tier stamps anywhere (pre-C-TIER composition / unit path) — we
+        # cannot know, so we do not decide.
+        return _ClaimOverride(
+            text=claim, supported=True, counter="metadata_unverifiable"
+        )
+    match = below is not None
+    asserted_tier = _PERIPHERY_TIER if match else "basis"
+    wrong = [
+        n
+        for n in scope
+        if (entries[n].get("tier") == _PERIPHERY_TIER) is not match
+    ]
+    matched_text = (below or basis).group(0)  # type: ignore[union-attr]
+    if not wrong:
+        counter = (
+            "metadata_verified"
+            if _metadata_dominant(claim, matched_text)
+            else "metadata_verified_not_dominant"
+        )
+        return _ClaimOverride(
+            text=claim,
+            supported=True,
+            counter=counter,
+            detail=(
+                f"tier={asserted_tier} matches the cited output(s) "
+                f"{sorted(scope)}"
+            ),
+        )
+    if not tiered:
+        return _ClaimOverride(
+            text=claim, supported=True, counter="metadata_unverifiable"
+        )
+    return _ClaimOverride(
+        text=claim,
+        supported=False,
+        counter=_METADATA_MISMATCH,
+        reason=_METADATA_MISMATCH,
+        detail=(
+            f"prose asserts tier={asserted_tier}; the cited output(s) "
+            + ", ".join(
+                f"{n}={entries[n].get('tier') or 'basis'}" for n in sorted(wrong)
+            )
+        ),
+    )
+
+
+def _fold_metadata_claims(
+    report: FaithfulnessReport, *, body: str, citations: Any
+) -> FaithfulnessReport:
+    """Fold the V-C metadata LOOKUP verdicts into a report (both grader paths).
+
+    A finding whose prose asserts no platform metadata produces no overrides →
+    the report is returned UNCHANGED.
+    """
+    if not body:
+        return report
+    subclaim = _uses_subclaim_convention(citations)
+    overrides: list[_ClaimOverride] = []
+    for claim in _segment_claims(body):
+        if not _is_judgeable_claim(claim):
+            continue
+        try:
+            ov = _metadata_claim_override(claim, citations, subclaim=subclaim)
+        except Exception as exc:  # noqa: BLE001 — a lookup must never break verify
+            logger.warning("verify.metadata_claim.failed err=%s", exc)
+            continue
+        if ov is None:
+            continue
+        # An UNVERIFIABLE metadata claim keeps today's verdict: record only the
+        # counter, never a manufactured pass.
+        if ov.counter in ("metadata_unverifiable", "metadata_verified_not_dominant"):
+            report.bump(ov.counter)
+            continue
+        overrides.append(ov)
+    return _apply_claim_overrides(report, overrides)
 
 
 class _JudgeVerdictError(RuntimeError):
@@ -3087,6 +3816,30 @@ async def _maybe_llm_judge(
         floor.judge_unavailable_reason = "judge_empty"
         return floor
 
+    # A3 (2026-07-31) — the CITATION-LESS GUARD. Readout structural finding #1:
+    # findings with no resolvable citations array fail at 26.3% vs a 6.1% base
+    # rate — a zero-citation finding's absence claims are structurally unpassable,
+    # because the judge is handed an EMPTY evidence map and every claim reads as
+    # ungrounded. Two producer classes ship 100% citation-less and ~5-12% of the
+    # rest ship an empty array, some legitimately and some defectively. The
+    # producer-side fixes are V-A; THIS is the guard that makes the class visible
+    # so it can never silently regrow: whenever the judge grades a finding whose
+    # citations resolve to nothing, log it and count ``citationless_graded``.
+    # Counts + logs only — it changes no verdict.
+    _resolved = (
+        _resolved_citation_ordinals(citations)
+        if _uses_subclaim_convention(citations)
+        else _resolved_citation_ids(citations)
+    )
+    if not _resolved:
+        floor.bump("citationless_graded")
+        logger.warning(
+            "verify.judge.citationless_graded claims=%d — the judge graded a "
+            "finding with NO resolvable citations (its evidence map is empty; "
+            "this class fails at ~4x the base rate)",
+            len(verdicts),
+        )
+
     # Refine: when the LLM judge RAN, its per-claim verdicts are AUTHORITATIVE.
     # The judge grades EVERY prose span (via _is_judgeable_claim — INCLUDING the
     # BLUF / synthesis / absence spans the mechanical floor exempts, per the H1
@@ -3102,14 +3855,26 @@ async def _maybe_llm_judge(
     judged_spans: list[UnsupportedSpan] = []
     judged_texts: set[str] = set()
     supported = 0
+    demoted = 0
     for claim_text, verdict in verdicts:
         judged_texts.add(claim_text.strip())
         if verdict == "supported":
             supported += 1
         else:
+            # V-D: a contradiction whose evidence QUOTE did not resolve arrives
+            # as ``contradicted_unquoted`` and lands on the SOFT reason — the
+            # claim still fails, only the severity label moves.
             reason = (
-                "judge_contradicted" if verdict == "contradicted" else "judge_unsupported"
+                "judge_contradicted"
+                if verdict == "contradicted"
+                else (
+                    _JUDGE_CONTRADICTED_UNQUOTED
+                    if verdict == _VERDICT_CONTRADICTED_UNQUOTED
+                    else "judge_unsupported"
+                )
             )
+            if verdict == _VERDICT_CONTRADICTED_UNQUOTED:
+                demoted += 1
             judged_spans.append(UnsupportedSpan(text=claim_text, reason=reason))
     checkable = len(verdicts)
     judge_score = 1.0 if checkable == 0 else supported / checkable
@@ -3182,6 +3947,15 @@ async def _maybe_llm_judge(
         # and on the M14 whole-finding survey path (one rubric, no partition).
         branch_scores=branch_scores,
         claim_verdicts=judge_ledger + carried_ledger,
+        # The floor's receipts counters carry through the judge refinement (they
+        # record deterministic work already done, not a judge verdict), plus the
+        # V-D hard→soft demotions this judge run produced.
+        counters=(
+            {**floor.counters, "hardfail_demoted_no_quote": demoted}
+            if demoted
+            else dict(floor.counters)
+        ),
+        score_denominator=effective_checkable,
     )
 
 
@@ -3246,8 +4020,8 @@ async def _judge_claim_partition(
     claims: list[str],
     evidence_prompt: str,
     system: str,
-) -> list[str]:
-    """Send ONE partition of claims to the judge; return its verdict list.
+) -> list[tuple[str, str]]:
+    """Send ONE partition of claims to the judge; return ``[(verdict, quote)]``.
 
     Factored out of :func:`_run_judge` so the V3 absence partition AND the M14
     whole-finding survey call reuse the identical call + parse machinery with
@@ -3256,6 +4030,11 @@ async def _judge_claim_partition(
     ONE-verdict-per-claim honesty contract from #116d). ``evidence_prompt`` is
     the per-branch user message already carrying the evidence map + numbered
     claim list.
+
+    V-D: ``quotes`` is the OPTIONAL parallel array of verbatim evidence spans —
+    ``""`` for every entry a judge omits, a wrong-length array ignored wholesale
+    (a misaligned quote is worse than none). Resolution against the shown
+    evidence is the CALLER's job (it holds the evidence map).
     """
     response = await judge_llm.chat_complete(
         [{"role": "user", "content": evidence_prompt}],
@@ -3293,12 +4072,21 @@ async def _judge_claim_partition(
         raise _JudgeVerdictError(
             f"judge returned {len(raw)} verdicts for {len(claims)} claims"
         )
-    out: list[str] = []
-    for verdict in raw:
+    # V-D: the parallel quote array. A judge that omits it, or returns a
+    # misaligned one, yields empty quotes — every contradiction then demotes
+    # rather than risking a quote attached to the wrong claim.
+    quotes_raw = parsed.get("quotes")
+    quotes: list[str] = (
+        [q if isinstance(q, str) else "" for q in quotes_raw]
+        if isinstance(quotes_raw, list) and len(quotes_raw) == len(claims)
+        else [""] * len(claims)
+    )
+    out: list[tuple[str, str]] = []
+    for verdict, quote in zip(raw, quotes):
         v = str(verdict).strip().lower()
         if v not in ("supported", "unsupported", "contradicted"):
             v = "unsupported"
-        out.append(v)
+        out.append((v, quote))
     return out
 
 
@@ -3311,9 +4099,16 @@ async def _run_judge(
 ) -> tuple[list[tuple[str, str]], dict[str, dict[str, int | float]]]:
     """Call the judge LLM; return ``([(claim_text, verdict), ...], branch_scores)``.
 
-    ``verdict`` ∈ {supported, unsupported, contradicted}, in ORIGINAL claim order.
-    ``branch_scores`` maps each claim-kind that was JUDGED to
-    ``{"checkable", "supported", "score"}`` (design §2.3 telemetry).
+    ``verdict`` ∈ {supported, unsupported, contradicted, contradicted_unquoted},
+    in ORIGINAL claim order. ``branch_scores`` maps each claim-kind that was
+    JUDGED to ``{"checkable", "supported", "score"}`` (design §2.3 telemetry).
+
+    V-D: ``contradicted_unquoted`` is a ``contradicted`` verdict whose evidence
+    QUOTE did not resolve — the judge either omitted it or wrote something that is
+    not a verbatim run of the evidence THIS partition was shown. Substituted here,
+    at the only place that holds both the evidence map and the raw response; the
+    caller maps it to the soft ``judge_contradicted_unquoted`` reason. The claim
+    still FAILS either way — only the severity label moves.
 
     ROUTING (M14 first, then the V3 partition — the two never compete):
 
@@ -3377,7 +4172,9 @@ async def _run_judge(
             "fact (an event, number, name, or place) that is absent from, or "
             "contradicted by, ALL of the sub-claims. Answer strict JSON only: "
             '{"verdicts": ["supported"|"unsupported"|"contradicted", ...]} with '
-            "one verdict per claim, in order.\n\n"
+            "one verdict per claim, in order."
+            + _JUDGE_QUOTE_RULE
+            + "\n\n"
             + tier_rubric
             + f"N -> sub-claim: {json.dumps({str(k): v for k, v in evidence.items()})}"
         )
@@ -3387,6 +4184,8 @@ async def _run_judge(
             "N -> sub-claim (the evidence the analyst searched): "
             f"{json.dumps({str(k): v for k, v in evidence.items()})}"
         )
+        # V-D: the evidence THIS run showed the judge (see quote_corpus below).
+        evidence_values: dict[Any, Any] = dict(evidence)
     else:
         # UNIT branch. Feed the judge the cited signal's TEXT (title / F-train
         # SOURCE+summary lines), not an opaque signal_id — a judge handed only a
@@ -3412,15 +4211,33 @@ async def _run_judge(
             "number, name, or place) that is absent from, or contradicted by, ALL of "
             "the evidence. "
             'Answer strict JSON only: {"verdicts": ["supported"|"unsupported"|'
-            '"contradicted", ...]} with one verdict per claim, in order.\n\n'
+            '"contradicted", ...]} with one verdict per claim, in order.'
+            + _JUDGE_QUOTE_RULE
+            + "\n\n"
             f"[N] -> evidence: {json.dumps(cited)}"
         )
         absence_evidence_line = (
             f"[N] -> evidence (the evidence the analyst searched): {json.dumps(cited)}"
         )
+        evidence_values = dict(cited)
 
     def _numbered(claim_list: list[str]) -> str:
         return "\n".join(f"{i}. {c}" for i, c in enumerate(claim_list, start=1))
+
+    # V-D: the normalized EVIDENCE CORPUS a hard-fail quote must resolve against
+    # — exactly the text this call showed the judge, so a "quote" lifted from the
+    # CLAIM itself (or invented) cannot pass. Built once per run.
+    quote_corpus = _normalize_quote_text(
+        " \n ".join(str(v) for v in evidence_values.values())
+    )
+
+    def _severity(verdict: str, quote: str) -> str:
+        """V-D — keep a contradiction HARD only when its quote resolves."""
+        if verdict != "contradicted":
+            return verdict
+        if _quote_resolves(quote, quote_corpus):
+            return verdict
+        return _VERDICT_CONTRADICTED_UNQUOTED
 
     # M14 whole-finding survey — retained as-is (the ≤1-positive special case):
     # ONE call, the WHOLE claim list, the survey rubric on both the system role
@@ -3440,7 +4257,10 @@ async def _run_judge(
         )
         if not survey_verdicts:
             return [], {}
-        return list(zip(claims, survey_verdicts)), {}
+        return (
+            [(c, _severity(v, q)) for c, (v, q) in zip(claims, survey_verdicts)],
+            {},
+        )
 
     # V3 partition — split graded claims by kind, preserving each claim's
     # ORIGINAL index so verdicts can be re-zipped in span order. The absence
@@ -3471,8 +4291,8 @@ async def _run_judge(
         )
         if not shared_verdicts:
             return [], {}  # judge_empty on the load-bearing partition → soft-fail
-        for i, v in zip(shared_idx, shared_verdicts):
-            verdicts_by_idx[i] = v
+        for i, (v, q) in zip(shared_idx, shared_verdicts):
+            verdicts_by_idx[i] = _severity(v, q)
 
     if absence_idx:
         absence_claims = [claims[i] for i in absence_idx]
@@ -3492,8 +4312,8 @@ async def _run_judge(
         )
         if not absence_verdicts:
             return [], {}  # judge_empty on the absence partition → soft-fail
-        for i, v in zip(absence_idx, absence_verdicts):
-            verdicts_by_idx[i] = v
+        for i, (v, q) in zip(absence_idx, absence_verdicts):
+            verdicts_by_idx[i] = _severity(v, q)
 
     # Re-zip in ORIGINAL span order + record per-branch sub-scores (design §2.3).
     out: list[tuple[str, str]] = []
@@ -3514,6 +4334,423 @@ async def _run_judge(
     return out, branch_scores
 
 
+# ---------------------------------------------------------------------------
+# V-B (2026-07-31) — SCOPED-ABSENCE claims judged against the SLICE, not the
+# citation subset. The readout's 6x hard-fail enrichment class.
+#
+# "No NEW / LARGE-SCALE / TIGHTENED X" is a claim about the WHOLE input slice —
+# every row the analyst read. The judge is shown only the CITATION subset, so it
+# reads topical term-PRESENCE as contradiction and hard-fails these at ~6x the
+# base rate (83% of same-model hard-fails were absence claims; internal_stability
+# alone carried 17 of 40 Cerebras hard-fails). The measured artifacts are exactly
+# this: "None of the 25 recent signals report new or tightened sanctions
+# designations … affecting Haiti", hard-failed because the slice mentions Haiti
+# and sanctions — not because any row reports a new designation.
+#
+# The slice IS retained: ``analyst_traces.input_row_refs``, one row per run
+# (run_id is the PK), written before the verify pass runs in the same actor turn.
+# It was simply never consulted. Two stages, cheapest first:
+#
+#   STAGE 1 (deterministic, always) — take the claim's CONTENT terms (its own
+#     nouns, minus stopwords, minus the absence/scope vocabulary, minus the
+#     DESK'S OWN country tokens — every title on a country desk names the
+#     country, so those collide with everything and carry no signal) and screen
+#     the slice TITLES for a term collision. NO collision ⇒ nothing in the slice
+#     is even topically about the thing said to be absent ⇒ the absence is
+#     VERIFIED against its actual scope: ``absence_slice_verified``.
+#   STAGE 2 (one bounded LLM call, only on a collision) — the candidate titles
+#     go to the judge route: "does any of these violate this scoped negative?"
+#     A violation must NAME the violating title, resolved against the candidate
+#     set the same way V-D resolves an evidence quote — an unresolvable answer
+#     decides nothing. This is the Haiti / "Sanctioned-headline" class, i.e.
+#     exactly where the value is, and the only place cost is spent.
+#
+# HONESTY (B3): a slice that cannot be read — no run_id passed, trace pruned by
+# the retention sweep, a read error — degrades to TODAY'S behavior, counted
+# ``absence_slice_unavailable``. We never fabricate a pass from a missing slice.
+#
+# W31 COEXISTENCE: a claim already flagged ``unscoped_absence_claim`` is SKIPPED
+# (counted ``absence_slice_scope_flagged``). The two checks are orthogonal — W31
+# is about the claim's SCOPE LANGUAGE (a world-scoped negative on a thin desk),
+# V-B about its CONTENT against the slice — and letting a content pass erase the
+# phrasing flag would silently retire a live detector. Once the producer scopes
+# the prose ("in collected reporting"), W31 clears and V-B takes over.
+# ---------------------------------------------------------------------------
+
+_ABSENCE_SLICE_CONTRADICTED = "absence_slice_contradicted"
+
+#: Retained-slice rows we will look at (the cadence slice caps at 120; 360 is
+#: three windows of headroom and still one bounded query).
+_ABSENCE_SLICE_TITLE_CAP = 360
+#: Candidate titles carried into the ONE stage-2 call, per finding.
+_ABSENCE_SLICE_CANDIDATE_CAP = 24
+#: A screen term present in this FRACTION of the slice titles or more
+#: discriminates nothing (the desk's own country name is the canonical case) and
+#: is dropped from stage 1. Data-driven, so it needs no per-desk gazetteer.
+_ABSENCE_SLICE_UBIQUITY = 0.6
+#: Minimum content terms a claim must yield before stage 1 means anything. A
+#: claim with none ("nothing of note was observed") is unscreenable — today's path.
+_ABSENCE_SLICE_MIN_TERMS = 1
+
+# The SCALE / NOVELTY qualifiers that make an absence claim SCOPED — the shape
+# the readout measured at 6x. An absence claim WITHOUT one of these is a plain
+# negative and keeps today's route (V3 absence rubric); this branch owns the
+# qualified class only.
+_ABSENCE_SCOPE_QUALIFIERS: tuple[str, ...] = (
+    "new", "newly", "fresh", "additional", "further", "renewed",
+    "large-scale", "large scale", "largescale", "mass", "major",
+    "significant", "substantial", "sweeping", "widespread",
+    "tightened", "tighter", "tightening", "expanded", "expansion",
+    "escalated", "escalating", "escalation",
+    "sudden", "unprecedented", "systematic", "systemic", "coordinated",
+    "formal", "official", "confirmed", "credible", "overt", "direct",
+    "notable", "material", "serious", "concrete", "meaningful",
+)
+
+# Words that carry no topical signal in a title screen: function words, the
+# absence/scope vocabulary itself, and the reporting verbs every headline shares.
+_ABSENCE_SCREEN_STOPWORDS: frozenset[str] = frozenset(
+    """
+    none nothing neither nor without absent absence lack lacking
+    report reports reported reporting record records recorded observe observed
+    observable detect detected detectable identify identified indicate indicated
+    indication indications evidence evident sign signs signal signals source
+    sources data reporting statement statements announcement announcements
+    activity activities development developments event events item items
+    window period cycle month week day days today recent recently current
+    currently within during across among between about against toward towards
+    their there these those this that with from into over under than then
+    which while where when what whom whose have has had been being were was
+    are is not any all both each other others some more most such only just
+    also very much many few less least same still both either
+    country countries state states government governmental national international
+    public private official officially available reviewed collected monitored
+    analyzed analysed examined sampled ingested gathered searched corpus slice
+    target targets desk desks unit units finding findings claim claims
+    """.split()
+)
+
+
+async def load_absence_slice_titles(conn: Any, run_id: Any) -> list[str] | None:
+    """The retained INPUT SLICE's titles for one run, or ``None`` if unreadable.
+
+    ``None`` is the HONEST unavailable answer (no run_id, no trace row — pruned
+    by the retention sweep — or a read error); ``[]`` is a real empty slice.
+    Resolves both substrate conventions: a UNIT slice's rows are ``signals``, a
+    composition's are ``analyst_outputs``. Bounded by
+    :data:`_ABSENCE_SLICE_TITLE_CAP`. Never raises.
+    """
+    if conn is None or run_id is None:
+        return None
+    try:
+        row = await conn.fetchrow(
+            "SELECT input_row_refs FROM analyst_traces WHERE run_id = $1", run_id
+        )
+        if row is None:
+            return None
+        refs = list(row["input_row_refs"] or [])
+        if not refs:
+            return []
+        rows = await conn.fetch(
+            "SELECT COALESCE(payload->>'title', '') AS title "
+            "FROM signals WHERE id = ANY($1::uuid[]) "
+            "UNION ALL "
+            "SELECT COALESCE(title, '') AS title "
+            "FROM analyst_outputs WHERE id = ANY($1::uuid[]) "
+            "LIMIT $2",
+            refs,
+            _ABSENCE_SLICE_TITLE_CAP,
+        )
+    except Exception as exc:  # noqa: BLE001 — degrade-not-drop, never break verify
+        logger.warning("verify.absence_slice.read_failed run_id=%s err=%s", run_id, exc)
+        return None
+    return [str(r["title"] or "") for r in rows if str(r["title"] or "").strip()]
+
+
+def absence_scope_qualifier(claim: str) -> str | None:
+    """The SCALE / NOVELTY qualifier a scoped-absence claim carries, or ``None``.
+
+    B1 — deterministic, and gated on the SAME ``_is_absence_claim`` grammar the
+    floor exemption and the V3 absence route already share, so the three cannot
+    drift apart. A claim that is not an absence claim, or carries no qualifier,
+    returns ``None`` and keeps today's route.
+    """
+    stripped = claim.strip().lstrip("#-*> ").strip()
+    low = re.sub(r"[*_`]+", "", stripped).strip().lower()
+    if not _is_absence_claim(low):
+        return None
+    for qual in _ABSENCE_SCOPE_QUALIFIERS:
+        if re.search(rf"(?<![\w-]){re.escape(qual)}(?![\w-])", low):
+            return qual
+    return None
+
+
+def _absence_content_terms(claim: str, *, target_id: str | None) -> set[str]:
+    """The topical terms a slice-title screen should look for (stage 1).
+
+    Everything that carries no discriminating signal is dropped: function words,
+    the absence / scope vocabulary, the collection-scope lexicon, and the DESK'S
+    OWN country tokens (every title in a country slice names the country, so they
+    collide with everything). Terms are singular-stemmed so "sanctions" screens
+    a "Sanctioned …" headline — the exact live collision class.
+    """
+    stripped = claim.strip().lstrip("#-*> ").strip()
+    low = re.sub(r"[*_`]+", " ", stripped).lower()
+    low = _REF_MARKER_RE.sub(" ", _CLAIM_MARKER_RE.sub(" ", low))
+    desk_tokens: set[str] = set()
+    slug = _country_desk_slug(target_id)
+    if slug:
+        for name in _TARGET_SLUG_TO_COUNTRY.get(slug, ()):  # type: ignore[arg-type]
+            desk_tokens.update(re.findall(r"[a-z]{3,}", name.lower()))
+    drop = (
+        _ABSENCE_SCREEN_STOPWORDS
+        | set(_ABSENCE_SCOPE_QUALIFIERS)
+        | desk_tokens
+        | {m.strip() for m in _COLLECTION_SCOPE_MARKERS}
+    )
+    terms: set[str] = set()
+    for token in re.findall(r"[a-z][a-z\-]{3,}", low):
+        token = token.strip("-")
+        if len(token) < 4 or token in drop:
+            continue
+        stem = token[:-1] if len(token) > 4 and token.endswith("s") else token
+        if stem in drop:
+            continue
+        terms.add(stem)
+    return terms
+
+
+def _absence_slice_candidates(
+    terms: set[str], titles: list[str]
+) -> tuple[list[str], bool]:
+    """``(candidate titles, discriminated?)`` — the stage-1 screen.
+
+    A term present in MOST of the slice discriminates nothing: on a country desk
+    every title names the country, so "haiti" collides with everything while
+    carrying no signal. Such UBIQUITOUS terms are dropped from the screen
+    (data-driven, so it works for every desk, not only the ones any gazetteer
+    happens to list).
+
+    ``discriminated`` is False when the filter left NOTHING to screen with — the
+    claim's whole vocabulary saturates the slice. That is NOT a clean screen, so
+    the caller must never read it as a verified absence; every title matching any
+    ORIGINAL term becomes a candidate and the decision goes to stage 2.
+    """
+    if not terms or not titles:
+        return [], bool(terms)
+    lowered = [t.lower() for t in titles]
+    n = len(lowered)
+
+    def _df(term: str) -> int:
+        return sum(1 for t in lowered if term in t)
+
+    discriminating = (
+        {t for t in terms if _df(t) < _ABSENCE_SLICE_UBIQUITY * n}
+        if n >= 2
+        else set(terms)
+    )
+    screening = discriminating or terms
+    out: list[str] = []
+    for title, low in zip(titles, lowered):
+        if any(t in low for t in screening):
+            out.append(title)
+            if len(out) >= _ABSENCE_SLICE_CANDIDATE_CAP:
+                break
+    return out, bool(discriminating)
+
+
+_ABSENCE_SLICE_JUDGE_SYSTEM = (
+    "You are checking SCOPED NEGATIVE claims against the analyst's ACTUAL INPUT "
+    "SLICE. Each claim asserts that something of a particular KIND or SCALE (new, "
+    "large-scale, mass, tightened, ...) did NOT occur. You are given the TITLES of "
+    "the slice rows that share vocabulary with the claim. For each claim decide "
+    "EXACTLY ONE verdict:\n"
+    "- supported: NO listed title reports the thing the claim says is absent. "
+    "Sharing a topic or a word is NOT a violation — a title about sanctions does "
+    "not violate 'no NEW sanctions', and background, analysis, opinion or "
+    "historical coverage never violates a claim about the current window.\n"
+    "- contradicted: a listed title plainly REPORTS the very thing, at the very "
+    "scale, the claim says did not happen.\n"
+    "- unsupported: the titles are too thin to tell either way.\n"
+    "Be conservative: when in doubt answer supported. A title is only a violation "
+    "if a reader of that headline alone would say the claim is false.\n"
+    'Output strict JSON only: {"verdicts": ["supported"|"contradicted"|'
+    '"unsupported", ...]} with one verdict per claim, in order. Alongside '
+    '"verdicts", return "quotes": a list of the SAME length, one entry per claim; '
+    "for a \"contradicted\" verdict the entry MUST be the violating title copied "
+    'VERBATIM from the list, and for every other verdict "". Output only the JSON '
+    "object."
+)
+
+
+async def _fold_absence_slice(
+    report: FaithfulnessReport,
+    *,
+    body: str,
+    judge_llm: Any | None,
+    slice_conn: Any | None,
+    run_id: Any | None,
+    target_id: str | None,
+) -> FaithfulnessReport:
+    """Fold the V-B slice-scoped verdicts for SCOPED-ABSENCE claims (see above).
+
+    A finding with no scope-qualified absence claim returns the report UNCHANGED
+    (byte-identical) and never touches the DB — the DB read happens only once a
+    candidate claim exists.
+    """
+    # NOT WIRED (no slice_conn / run_id) is a NO-OP, not an unavailable slice:
+    # every pre-V-B caller lands here and must be byte-identical, counter map
+    # included. ``absence_slice_unavailable`` means the branch RAN and the slice
+    # could not be read.
+    if not body or slice_conn is None or run_id is None:
+        return report
+    candidates_by_claim: list[tuple[str, str]] = []
+    # The claims currently flagged by the W31 phrasing backstop — orthogonal
+    # defect, never cleared by a content check (see the block comment).
+    scope_flagged = {
+        cv.text.strip()
+        for cv in report.claim_verdicts
+        if cv.reason == _UNSCOPED_ABSENCE
+    }
+    for claim in _segment_claims(body):
+        if not _is_judgeable_claim(claim):
+            continue
+        qual = absence_scope_qualifier(claim)
+        if qual is None:
+            continue
+        candidates_by_claim.append((claim, qual))
+    if not candidates_by_claim:
+        return report
+
+    skipped = [c for c, _q in candidates_by_claim if c.strip() in scope_flagged]
+    scoped = [(c, q) for c, q in candidates_by_claim if c.strip() not in scope_flagged]
+    for _ in skipped:
+        report.bump("absence_slice_scope_flagged")
+    if not scoped:
+        return report
+
+    titles = await load_absence_slice_titles(slice_conn, run_id)
+    if titles is None:
+        report.bump("absence_slice_unavailable", len(scoped))
+        logger.info(
+            "verify.absence_slice.unavailable run_id=%s claims=%d "
+            "— scoped negatives keep today's verdict", run_id, len(scoped),
+        )
+        return report
+
+    overrides: list[_ClaimOverride] = []
+    stage2: list[tuple[str, list[str]]] = []
+    for claim, qual in scoped:
+        terms = _absence_content_terms(claim, target_id=target_id)
+        if len(terms) < _ABSENCE_SLICE_MIN_TERMS:
+            report.bump("absence_slice_unresolved")
+            continue
+        hits, discriminated = _absence_slice_candidates(terms, titles)
+        if not hits and discriminated:
+            overrides.append(
+                _ClaimOverride(
+                    text=claim,
+                    supported=True,
+                    counter="absence_slice_verified",
+                    detail=(
+                        f"scoped negative ('{qual}') verified against the "
+                        f"{len(titles)}-row input slice: no row is topically "
+                        "about the thing said to be absent"
+                    ),
+                )
+            )
+            continue
+        if not hits:
+            # Unscreenable (the claim's whole vocabulary saturates the slice) —
+            # never read as verified; there is simply nothing to show stage 2.
+            report.bump("absence_slice_unresolved")
+            continue
+        report.bump("absence_slice_candidates")
+        stage2.append((claim, hits))
+
+    if stage2 and judge_llm is not None and _llm_judge_enabled():
+        overrides.extend(await _absence_slice_stage2(report, stage2, judge_llm))
+    elif stage2:
+        report.bump("absence_slice_unresolved", len(stage2))
+
+    return _apply_claim_overrides(report, overrides)
+
+
+async def _absence_slice_stage2(
+    report: FaithfulnessReport,
+    stage2: list[tuple[str, list[str]]],
+    judge_llm: Any,
+) -> list[_ClaimOverride]:
+    """ONE bounded judge call over the term-colliding titles (see the block above).
+
+    Returns the overrides it could decide. Any failure — transport error, empty
+    or malformed response, a "contradicted" whose named title does not resolve
+    against the candidate set — decides NOTHING and leaves today's verdict, so a
+    stage-2 miss can never manufacture either a pass or a hard fail.
+    """
+    claims = [c for c, _ in stage2]
+    shown: list[str] = []
+    for _c, hits in stage2:
+        for title in hits:
+            if title not in shown:
+                shown.append(title)
+    shown = shown[:_ABSENCE_SLICE_CANDIDATE_CAP]
+    prompt = (
+        "INPUT-SLICE TITLES (the rows the analyst actually read that share "
+        "vocabulary with the claims below):\n"
+        + "\n".join(f"- {t}" for t in shown)
+        + "\n\nSCOPED NEGATIVE CLAIMS:\n"
+        + "\n".join(f"{i}. {c}" for i, c in enumerate(claims, start=1))
+    )
+    try:
+        verdicts = await _judge_claim_partition(
+            judge_llm,
+            claims=claims,
+            evidence_prompt=prompt,
+            system=_ABSENCE_SLICE_JUDGE_SYSTEM,
+        )
+    except Exception as exc:  # noqa: BLE001 — never break the verify pass
+        logger.warning("verify.absence_slice.stage2_failed err=%s", exc)
+        report.bump("absence_slice_unresolved", len(claims))
+        return []
+    if not verdicts:
+        report.bump("absence_slice_unresolved", len(claims))
+        return []
+
+    shown_norm = {_normalize_quote_text(t): t for t in shown}
+    out: list[_ClaimOverride] = []
+    for claim, (verdict, quote) in zip(claims, verdicts):
+        if verdict == "supported":
+            out.append(
+                _ClaimOverride(
+                    text=claim,
+                    supported=True,
+                    counter="absence_slice_verified",
+                    detail=(
+                        "scoped negative checked against the colliding input-slice "
+                        "titles: none reports the thing said to be absent"
+                    ),
+                )
+            )
+            continue
+        # A violation must NAME the violating title, resolved against the set we
+        # showed — the same earned-severity rule V-D applies to evidence quotes.
+        violating = shown_norm.get(_normalize_quote_text(quote))
+        if verdict == "contradicted" and violating:
+            out.append(
+                _ClaimOverride(
+                    text=claim,
+                    supported=False,
+                    counter=_ABSENCE_SLICE_CONTRADICTED,
+                    reason=_ABSENCE_SLICE_CONTRADICTED,
+                    detail=f"violated by an input-slice row: {violating[:200]}",
+                )
+            )
+            continue
+        report.bump("absence_slice_unresolved")
+    return out
+
+
 async def verify_finding_faithfulness(
     *,
     body: str,
@@ -3525,6 +4762,8 @@ async def verify_finding_faithfulness(
     target_id: str | None = None,
     judge_prompt_profile: str | None = None,
     facts_conn: Any | None = None,
+    slice_conn: Any | None = None,
+    run_id: Any | None = None,
 ) -> FaithfulnessReport:
     """MANDATORY faithfulness verify over ONE finding's cited prose.
 
@@ -3584,8 +4823,27 @@ async def verify_finding_faithfulness(
         is probed against the CURRENT facts-table officeholder and a mismatch
         FLAGS (demotes, never auto-corrects — the seed facts can themselves be
         stale); a facts read failure degrades to no flag.
+    slice_conn / run_id:
+        OPTIONAL (V-B) — a live DB connection + this run's id, which together let
+        the pass read the RETAINED INPUT SLICE
+        (``analyst_traces.input_row_refs``) and judge SCOPED-ABSENCE claims
+        against their actual scope instead of the citation subset. Either one
+        ``None`` → the branch is a no-op (byte-identical for every existing
+        caller); an unreadable slice degrades to today's behavior, counted
+        ``absence_slice_unavailable``, never a fabricated pass.
     """
     floor = _deterministic_floor(body, citations, finding_confidence)
+    # V-F: record the NON-PROPOSITIONAL spans the splitter dropped (a bare
+    # ``(not_observed)`` status token). Counted, never graded — the drop is what
+    # keeps a non-claim out of the verdict ledger; the counter is what makes the
+    # class visible if a producer starts emitting them again.
+    _dropped = _segment_claims_with_drops(body)[1]
+    if _dropped:
+        floor.bump("claims_dropped_nonpropositional", len(_dropped))
+        logger.info(
+            "verify.claims.dropped_nonpropositional n=%d sample=%r",
+            len(_dropped), _dropped[0][:120],
+        )
     floor = _fold_indicators(floor, indicators)
     # M13/M15: cheap lexical world-knowledge + target guards (flag, never delete).
     floor = _fold_world_knowledge_guards(
@@ -3604,12 +4862,28 @@ async def verify_finding_faithfulness(
             floor,
             await stale_leader_vs_facts_spans(facts_conn, f"{title}\n{body}"),
         )
-    return await _maybe_llm_judge(
+    report = await _maybe_llm_judge(
         floor,
         body=body,
         citations=citations,
         judge_llm=judge_llm,
         judge_prompt_profile=judge_prompt_profile,
+    )
+    # V-C: metadata claims are decided by LOOKUP against the columns the
+    # citations captured — AFTER the judge, because the judge structurally
+    # cannot grade them (their truthmaker is not in any evidence text) and this
+    # check is the authority on them, on BOTH grader paths.
+    report = _fold_metadata_claims(report, body=body, citations=citations)
+    # V-B: SCOPED-ABSENCE claims are about the WHOLE input slice, which the judge
+    # never saw — re-decide them against the retained slice. No-op without a
+    # slice_conn/run_id, and never fabricates a pass from a missing slice.
+    return await _fold_absence_slice(
+        report,
+        body=body,
+        judge_llm=judge_llm,
+        slice_conn=slice_conn,
+        run_id=run_id,
+        target_id=target_id,
     )
 
 
@@ -3763,6 +5037,17 @@ def build_faithfulness_critique_payload(
                 "judge_route": judge_route[:32] or None,
                 "claim_verdicts": claim_verdicts,
                 "claim_verdicts_truncated": claim_verdicts_truncated,
+                # 2026-07-31 structural-fix RECEIPTS: the sparse counter map
+                # (a counter appears only when it fired). Additive JSONB the
+                # findings API projects wholesale — every fix in the train is
+                # measurable from the critique row alone, with no log scrape.
+                "counters": dict(report.counters),
+                # The population SPLIT key (see JUDGE_PIPELINE_VERSION): every
+                # consumer of faithfulness history partitions on this, so
+                # critiques graded under different verify pipelines are never
+                # pooled and the train's upward shift reads as the MEASUREMENT
+                # CORRECTION it is, not as a quality movement.
+                "judge_pipeline_version": JUDGE_PIPELINE_VERSION,
             }
         },
     }

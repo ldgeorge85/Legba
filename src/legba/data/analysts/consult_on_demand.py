@@ -38,14 +38,19 @@ Dispatch shape (for the integration pass):
 ReAct loop (max :data:`MAX_TOOL_ROUNDS`=6 rounds)::
 
     PLAN  → render system prompt + tool whitelist + the operator's question
-    ROUND ← LLM emits either {"final": true, ...} OR
-            {"tool": "<name>", "args": {...}}
+    ROUND ← LLM emits either {"tool": "<name>", "args": {...}} (strict JSON)
+            OR the FINAL reply: the :data:`FINAL_SENTINEL` line, a short
+            header block, then the answer as raw markdown — NOT JSON.
     ACT   → if a tool was requested, dispatch via the ToolDispatcher; the
             tool's JSON result is appended to the conversation as a
             "tool" role message.
     LOOP  ← back to ROUND, max MAX_TOOL_ROUNDS iterations.  After the cap
             we force a final synthesis turn (no tools available) so the
             operator always gets a structured answer.
+
+The two-shape split is deliberate: mid-loop tool calls are machine-to-machine
+and stay strict JSON, while the FINAL answer is prose for a human and is not
+wrapped in anything.  See :func:`_parse_sentinel_final` for why.
 
 The tool whitelist is small on purpose — the legacy ConsultPanel exposed
 ~22 tools (see ``ui/consult.py:CONSULT_TOOLS``).  For the kind's first
@@ -150,9 +155,14 @@ def _default_max_tokens() -> int:
     block); 4096 made a broad forced-final's large generation slow enough to hit
     the provider timeout → ``network error`` → actor retry storm → 504. 2048
     (~8k chars) lets a thorough answer through while staying inside the provider
-    window, and `_unwrap_double_envelope` still recovers any over-cap truncation
-    as clean markdown. Operators can raise/lower it live (env + recreate, no
-    rebuild) without code changes.
+    window. Operators can raise/lower it live (env + recreate, no rebuild)
+    without code changes.
+
+    THE CAP STAYS, and it is no longer a parse hazard: under the plain-markdown
+    FINAL contract (:func:`_parse_sentinel_final`) an over-cap answer degrades
+    to a complete-looking-but-cut markdown answer the operator can read, rather
+    than an unclosed JSON envelope that fails to parse and re-asks for the whole
+    answer under the same cap.
     """
     raw = os.getenv("LEGBA_CONSULT_MAX_TOKENS", "").strip()
     if raw:
@@ -512,19 +522,30 @@ Finished intelligence — the platform's OWN analysis (analysis-derived; consult
   - list_targets() — the monitored targets + their ids (e.g. country_g20_ir); call this to resolve a place/topic to a valid target_id before query_hypotheses / compare_targets / list_findings.
   - list_sources([active_only], [silent_only]) — ingest sources + freshness; use to tell "no coverage on X" apart from "a quiet feed".
 
-OUTPUT CONTRACT — EVERY reply is EXACTLY ONE strict-JSON object and NOTHING else: no text before or after it, no markdown code fences, no comments, no trailing commas; all keys and string values in double quotes; the first character is { and the last is }. The object MUST be one of the three shapes below (a single tool call, a batch of tool calls, or the final answer). Any character outside that single JSON object breaks the parser and wastes a round.
+OUTPUT CONTRACT — there are TWO reply shapes, and which round you are in decides which one you use:
+  * A TOOL round (you want more evidence first) is EXACTLY ONE strict-JSON object and NOTHING else: no text before or after it, no markdown code fences, no comments, no trailing commas; all keys and string values in double quotes; the first character is { and the last is }. Any character outside that single JSON object breaks the parser and wastes a round.
+  * The FINAL round (you are answering) is NOT JSON. It is the sentinel line <<<FINAL>>>, then a short header block, then your answer written straight out as markdown. Never wrap the answer in a JSON object, never escape it as a JSON string, never put it in ``` fences. This clause OVERRIDES the preamble's output-discipline rule for the final reply only — every other reply is strict JSON as that rule requires.
 
 Loop protocol:
   - To call ONE tool, reply with strict JSON: {"tool": "<name>", "args": {...}}
   - To call SEVERAL INDEPENDENT tools in the SAME round (they run concurrently and cost ONE round, not one per tool), reply with strict JSON: {"tools": [{"tool": "<name>", "args": {...}}, {"tool": "<name>", "args": {...}}]} — up to 5. Batch ONLY tools that do NOT depend on each other's output; a call that needs a prior call's result (e.g. compare_targets after list_targets resolves the ids) must wait for the next round.
-  - To finish, reply with strict JSON:
-    {"final": true, "answer": "...", "uncertainty": 0.0-1.0, "cited_refs": ["<uuid>", ...], "unanswered_aspects": ["...", ...]}
+  - To finish, reply in EXACTLY this shape:
+
+    <<<FINAL>>>
+    uncertainty: 0.35
+    cited_refs: 792fd4d7-ff16-4a34-80bf-f1af1a58c14c, d6b35902-1b3f-410f-8c2f-009275454a35
+    unanswered_aspects: what the substrate could not tell you; another genuine gap
+
+    ## Bottom line
+    ...the rest of your answer, as ordinary GitHub-flavored markdown...
+
+    <<<FINAL>>> is the FIRST line. The three header lines follow, one per line, in any order; drop a header only when it is genuinely empty. cited_refs is a comma-separated list of bare UUIDs and unanswered_aspects is a semicolon-separated list of phrases — plain text, no brackets, no quotes, no JSON. A blank line ends the header block and EVERYTHING after it is your answer, written directly with no quoting and no escaping.
 
 Strategy — SURVEY THEN DRILL:
   - For a BROAD / world-state / open-ended question ("how's the world looking", "what's going on", anything not about a single named entity), your FIRST round MUST survey the platform's own active picture: batch list_situations (NO filters, limit 20-30 — it ranks the live frames by intensity_score and event_count) WITH list_findings, and add query_predictions when forecasts are relevant. An answer to a broad question that never called list_situations is INCOMPLETE — you cannot describe "the world" without first reading the active situation frames.
   - For a NARROW question about one place/topic, go straight to the relevant reader; resolve the place to a target_id with list_targets first if you need one for list_findings / query_hypotheses / compare_targets.
   - In BOTH cases the platform's OWN finished intelligence — list_findings / list_situations (and query_predictions) — comes FIRST; build on it, and use raw search_signals / vector_search to survey broadly, verify, update, or fill gaps, not to re-derive from scratch. THEN drill into the specific entities, facts, or time windows. Prefer two or three cheap wide calls (batched into one round) over one narrow guess. Only finish once you have gathered enough or exhausted the useful calls.
-Answer quality: the reply ENVELOPE is strict JSON, but the `answer` field's VALUE must be plain GitHub-flavored MARKDOWN prose written for a human reader — headings (##), **bold**, bullet lists, `---` rules as needed. The `answer` value must NEVER itself be a JSON object, a quoted JSON string, or a nested {"final": ...} envelope, and must not be wrapped in ``` fences. WRONG: "answer": "{\\"final\\": true, \\"answer\\": \\"...\\"}". RIGHT: "answer": "## Bottom line\\n\\nThe situation is …". LEAD with the bottom-line judgment, then support it with cited substrate (`cited_refs` = the UUIDs you actually used). Set `uncertainty` as 1 minus your calibrated confidence in the answer (high — >= 0.7 — when the substrate lacks the material), and list the parts you could not address in `unanswered_aspects`. Do not invent UUIDs or facts the tools did not return."""
+Answer quality: the answer under the header block is plain GitHub-flavored MARKDOWN prose written for a human reader — headings (##), **bold**, bullet lists, `---` rules as needed. LEAD with the bottom-line judgment, then support it with cited substrate (`cited_refs` = the UUIDs you actually used). Set `uncertainty` as 1 minus your calibrated confidence in the answer (high — >= 0.7 — when the substrate lacks the material), and list the parts you could not address in `unanswered_aspects`. Do not invent UUIDs or facts the tools did not return. Because the answer is NOT inside a JSON string there is no escaping to get wrong and no envelope that has to close — spend the room on substance: give the operator the analysis the question deserves rather than a shortened one."""
 )
 
 
@@ -602,6 +623,180 @@ def _extract_json(raw: str) -> dict[str, Any] | None:
     return parsed
 
 
+# ---------------------------------------------------------------------------
+# The plain-markdown FINAL contract (§28.4 — kills the unparseable class)
+# ---------------------------------------------------------------------------
+
+
+#: First line of a FINAL reply. Deliberately not JSON — see
+#: :func:`_parse_sentinel_final` for the shape and the reason.
+FINAL_SENTINEL = "<<<FINAL>>>"
+
+#: The metadata lines a sentinel final may carry between the sentinel and the
+#: markdown body. Short and FIRST, so a cap-truncated answer loses the tail of
+#: the prose and never the metadata.
+_FINAL_HEADER_RE = re.compile(
+    r"^\s*(uncertainty|cited_refs|unanswered_aspects)\s*:\s*(.*)$",
+    re.IGNORECASE,
+)
+
+
+def _sentinel_lead(line: str) -> str | None:
+    """If ``line`` opens with the FINAL sentinel, return whatever trails it on
+    that line (usually ``""``); otherwise None.
+
+    Tolerant of decoration a model may wrap around it — backticks, bold stars,
+    a heading marker — because the sentinel is a routing token, not content.
+    """
+    stripped = line.strip().lstrip("#>*_` \t")
+    if not stripped.upper().startswith(FINAL_SENTINEL):
+        return None
+    return stripped[len(FINAL_SENTINEL):].lstrip(" \t:*`")
+
+
+def _parse_header_list(raw: str) -> list[str]:
+    """Split a header list value into its items.
+
+    Accepts the documented ``a, b`` / ``a; b`` forms AND a JSON array — a model
+    that just spent the whole loop emitting JSON will sometimes reach for
+    brackets out of habit, and that is not worth burning a round over.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            parsed = None
+        if isinstance(parsed, list):
+            return [str(x).strip() for x in parsed if str(x).strip()]
+    separator = ";" if ";" in text else ","
+    return [part.strip() for part in text.split(separator) if part.strip()]
+
+
+def _parse_sentinel_final(raw: str) -> dict[str, Any] | None:
+    r"""Parse the plain-markdown FINAL reply into the loop's final-payload shape.
+
+    THE CONTRACT (rendered verbatim in the system prompt's Loop protocol)::
+
+        <<<FINAL>>>
+        uncertainty: 0.35
+        cited_refs: <uuid>, <uuid>
+        unanswered_aspects: one gap; another gap
+
+        ## Bottom line
+        ...markdown...
+
+    WHY IT IS NOT JSON. The previous contract asked for one strict-JSON object
+    whose ``answer`` value was a multi-KB markdown document inside a JSON
+    string, under a 2048-token output cap. Real turn ``07a69948`` /
+    ``39b4d769`` is what that collides into: three consecutive rounds produced a
+    complete, well-cited answer that was cut mid-string, failed ``json.loads``,
+    and was thrown away — each recovery re-asking for the WHOLE answer under the
+    SAME cap, ratcheting the transcript (and the bill) 30k → 32k → 34k → 36k
+    tokens before the loop accepted a SHORTER, worse fourth answer. Every
+    quote, newline and backslash of ~3,000 chars of prose had to survive JSON
+    escaping AND the envelope had to close inside the cap.
+
+    With the wrapper gone there is no envelope to close. A cap-truncated final
+    now degrades to a complete-looking-but-cut markdown answer the operator can
+    read and the parser accepts, instead of a parse failure plus a retry
+    ratchet. The headers lead for the same reason: truncation eats the tail of
+    the prose, never the metadata.
+
+    Returns the SAME dict shape the JSON contract produced — so
+    :func:`_build_consult_response` and every downstream consumer are
+    unchanged — or None when this is not a sentinel final, in which case the
+    caller falls back to the legacy JSON shape.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return None
+    # A fence around the WHOLE reply is decoration; strip it before looking.
+    if text.startswith("```"):
+        fenced = text.splitlines()[1:]
+        while fenced and fenced[-1].strip().startswith("```"):
+            fenced.pop()
+        text = "\n".join(fenced).strip()
+
+    lines = text.splitlines()
+    idx = 0
+    while idx < len(lines) and not lines[idx].strip():
+        idx += 1
+    if idx >= len(lines):
+        return None
+    # The sentinel must LEAD. One buried in prose is not a final — it is more
+    # likely the model quoting the contract back at us mid-explanation.
+    trailing = _sentinel_lead(lines[idx])
+    if trailing is None:
+        return None
+    idx += 1
+
+    payload: dict[str, Any] = {"final": True}
+    body_lines: list[str] = [trailing] if trailing else []
+    if not body_lines:
+        # Header block: consecutive `key: value` lines, any order, all
+        # optional. The first line that is not one begins the answer.
+        while idx < len(lines):
+            match = _FINAL_HEADER_RE.match(lines[idx])
+            if match is None:
+                break
+            key = match.group(1).lower()
+            value = match.group(2)
+            if key == "uncertainty":
+                try:
+                    payload["uncertainty"] = float(value.strip())
+                except (TypeError, ValueError):
+                    pass  # _build_consult_response applies its own default
+            else:
+                payload[key] = _parse_header_list(value)
+            idx += 1
+
+    body = "\n".join([*body_lines, *lines[idx:]]).strip()
+    if not body:
+        # Sentinel with nothing under it is not a usable answer. Return None so
+        # the loop asks for a correction instead of storing an empty answer.
+        return None
+    payload["answer"] = body
+    return payload
+
+
+def _parse_round_reply(raw: str) -> dict[str, Any] | None:
+    """Parse one planner round into the loop's internal shape.
+
+    Accepts BOTH final contracts. The plain-markdown sentinel is current; the
+    ``{"final": true, "answer": ...}`` JSON envelope is legacy and still parses
+    for the transition — persisted sessions replayed through the loop, a
+    descriptor still carrying an older system prompt, and the deep_consult
+    analyze stage, which re-enters this loop. Tool rounds are unchanged and
+    always strict JSON.
+
+    The shapes cannot be confused: a sentinel reply is never valid JSON, and a
+    JSON reply never leads with the sentinel.
+    """
+    sentinel = _parse_sentinel_final(raw)
+    if sentinel is not None:
+        return sentinel
+    return _extract_json(raw)
+
+
+def _strip_leading_sentinel(text: str) -> str:
+    """Prose with a bare leading FINAL sentinel line removed.
+
+    Only reached on the terminal forced-final salvage, where the model wrote an
+    answer with no parseable header block at all.
+    """
+    stripped = (text or "").strip()
+    if not stripped:
+        return ""
+    head, _, rest = stripped.partition("\n")
+    trailing = _sentinel_lead(head)
+    if trailing is None:
+        return stripped
+    return "\n".join([trailing, rest]).strip() if trailing else rest.strip()
+
+
 # Short JSON string escapes we honor when salvaging a malformed nested envelope.
 _JSON_STR_ESCAPES = {
     '"': '"', "\\": "\\", "/": "/",
@@ -639,6 +834,14 @@ _NESTED_TAIL_KEYS = ("uncertainty", "cited_refs", "unanswered_aspects")
 
 def _unwrap_double_envelope(answer: str) -> str:
     """Recover a markdown answer the planner double-wrapped in a JSON envelope.
+
+    LEGACY / TRANSITION PATH. The current FINAL contract is plain markdown
+    behind a sentinel (:func:`_parse_sentinel_final`), which has no envelope to
+    double-wrap and no escaping to slip — so a sentinel final never needs this.
+    It stays for the JSON finals that still arrive: replayed sessions, an older
+    system prompt, and a model that reverts to the shape it spent the loop
+    emitting. It also still runs over a sentinel answer's body, harmlessly, in
+    case a model mixes the two.
 
     Some planner turns emit ``{"final": true, "answer": "<a NESTED
     {\"final\":...} JSON string>"}``. :func:`_extract_json` parses the OUTER
@@ -684,10 +887,12 @@ def _unwrap_double_envelope(answer: str) -> str:
         if close_m is not None:
             raw_body = body_region[: close_m.start()]
         else:
-            # No clean envelope tail — typically a forced-final envelope
-            # TRUNCATED by max_tokens mid-string. The `{"final":...,"answer":"`
-            # PREFIX is definitely not answer content, so lift the remainder
-            # (dropping a dangling partial escape) rather than render raw JSON.
+            # No clean envelope tail — a legacy JSON final TRUNCATED by
+            # max_tokens mid-string (the class the sentinel contract removes;
+            # this arm covers the finals that still arrive JSON-wrapped). The
+            # `{"final":...,"answer":"` PREFIX is definitely not answer
+            # content, so lift the remainder (dropping a dangling partial
+            # escape) rather than render raw JSON.
             raw_body = body_region.rstrip("\\")
     body = _unescape_json_str(raw_body).strip()
     # "Never eat content": if the lift would discard more than half of the body
@@ -1169,11 +1374,12 @@ def _build_consult_response(
             },
         )
 
-    # Repair the double-wrap: some planner turns nest a whole {"final":...}
-    # envelope INSIDE the answer string. Lift the inner prose so the UI renders
-    # clean markdown instead of a raw JSON block (degrades to the original on
-    # any doubt). Covers BOTH the normal final and the forced-final path — both
-    # funnel through here.
+    # Repair the double-wrap (LEGACY JSON finals): some planner turns nest a
+    # whole {"final":...} envelope INSIDE the answer string. Lift the inner
+    # prose so the UI renders clean markdown instead of a raw JSON block
+    # (degrades to the original on any doubt). A sentinel final's answer is
+    # already markdown and passes through untouched; this covers the normal
+    # final, the forced-final, and replayed sessions — all funnel through here.
     answer = _unwrap_double_envelope(str(final_payload.get("answer") or ""))[:65000]
     raw_uncertainty = final_payload.get("uncertainty", 0.5)
     try:
@@ -1325,6 +1531,14 @@ class ConsultOnDemandDeps:
     # _default_wall_budget_seconds(). Caps over-drilling so broad questions
     # return before the blocking endpoint's invoke timeout instead of 504-ing.
     wall_budget_seconds: float = field(default_factory=_default_wall_budget_seconds)
+    # DEAD KNOB on the deployed plane — comment truth, not aspiration. The
+    # ACTIVATE-time primary is `llm.anthropic.opus_4_7`, whose live model_name
+    # is claude-opus-4-8, and Anthropic deprecated `temperature` on that line:
+    # the handler matches TEMPERATURE_DEPRECATED_PREFIXES and drops it before
+    # the wire (it now says so once per session in the runtime log). This value
+    # therefore only takes effect on a plane that still accepts the parameter —
+    # today that is the `"core"` picker override (llm.primary.openai_compat).
+    # Do not tune consult determinism here expecting it to reach Opus.
     temperature: float = 0.2
     system_prompt: str = _SYSTEM_PROMPT
     max_rounds: int = MAX_TOOL_ROUNDS
@@ -1526,7 +1740,7 @@ async def run_method(
             "tokens": usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0),
         })
 
-        parsed = _extract_json(content)
+        parsed = _parse_round_reply(content)
         if not parsed:
             # Planner produced unparseable output — feed the parse-error
             # back so it can recover.  Cheaper than aborting.
@@ -1544,11 +1758,15 @@ async def run_method(
                 {
                     "role": "user",
                     "content": (
-                        "Your reply was not valid JSON. Respond with ONLY a "
-                        "strict-JSON object that is either a tool call "
-                        '({"tool": ..., "args": ...}) or a final answer '
-                        '({"final": true, "answer": ..., "uncertainty": ..., '
-                        '"cited_refs": [...], "unanswered_aspects": [...]}).'
+                        "Your reply matched neither reply shape. To CALL "
+                        "TOOLS, respond with ONLY a strict-JSON object "
+                        '({"tool": ..., "args": ...} or {"tools": [...]}). '
+                        "To ANSWER, do not use JSON at all — reply with the "
+                        f"line {FINAL_SENTINEL}, then the uncertainty / "
+                        "cited_refs / unanswered_aspects header lines, then "
+                        "your answer as plain markdown. If your last reply "
+                        "WAS the answer, re-send it in that form: the prose "
+                        "does not need to be shortened or escaped."
                     ),
                 },
             ]
@@ -1581,10 +1799,12 @@ async def run_method(
                 {
                     "role": "user",
                     "content": (
-                        "Your JSON had neither `tool`/`tools` nor `final`. Emit "
-                        'either {"tool": ..., "args": ...}, '
-                        '{"tools": [{"tool": ..., "args": ...}, ...]}, or '
-                        '{"final": true, ...}.'
+                        "Your JSON had neither `tool` nor `tools`. To call "
+                        'tools emit {"tool": ..., "args": ...} or '
+                        '{"tools": [{"tool": ..., "args": ...}, ...]}. To '
+                        f"answer, emit the {FINAL_SENTINEL} line + header "
+                        "lines + markdown instead — the final answer is NOT "
+                        "JSON."
                     ),
                 },
             ]
@@ -1676,8 +1896,10 @@ async def run_method(
         force_system = (
             deps.system_prompt
             + "\n\nYou have reached the tool-round cap. You MUST now produce "
-            'the final JSON ({"final": true, ...}) using only what the tool '
-            "calls already returned. Do not request more tools."
+            f"the FINAL reply — the {FINAL_SENTINEL} line, its header lines, "
+            "then your answer as markdown — using only what the tool calls "
+            "already returned. Do not request more tools, and do not wrap the "
+            "answer in JSON."
         )
         try:
             content, usage = await _reason_via_llm(
@@ -1687,7 +1909,8 @@ async def run_method(
                     {
                         "role": "user",
                         "content": (
-                            "Round cap reached. Emit the final JSON now."
+                            "Round cap reached. Emit the final answer now, in "
+                            f"the {FINAL_SENTINEL} form."
                         ),
                     },
                 ],
@@ -1703,16 +1926,21 @@ async def run_method(
                 "kind": "forced_final",
                 "tokens": usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0),
             })
-            final_payload = _extract_json(content)
-            if final_payload is None and (content or "").strip():
-                # Forced-final is the terminal turn (tools withheld). If the model
-                # wrote a prose answer instead of the JSON wrapper, use it rather
-                # than discarding a real answer as "(no answer produced)".
-                final_payload = {
-                    "final": True,
-                    "answer": content.strip(),
-                    "uncertainty": 0.6,
-                }
+            final_payload = _parse_round_reply(content)
+            if final_payload is None:
+                # Forced-final is the terminal turn (tools withheld). If the
+                # model wrote a bare prose answer — no sentinel header block and
+                # no JSON wrapper — use it rather than discarding a real answer
+                # as "(no answer produced)". Under the markdown contract that
+                # prose IS the answer minus its metadata, so accepting it costs
+                # only the metadata (a stray leading sentinel is dropped).
+                salvaged = _strip_leading_sentinel(content)
+                if salvaged:
+                    final_payload = {
+                        "final": True,
+                        "answer": salvaged,
+                        "uncertainty": 0.6,
+                    }
         except Exception:
             await _record({"phase": "reason", "kind": "forced_final_error"})
             # Re-raise — let the runtime classify (transient vs hard).
@@ -1805,6 +2033,8 @@ class ConsultOnDemandRunner:
         system_prompt: str | None = None,
         max_rounds: int = MAX_TOOL_ROUNDS,
     ) -> None:
+        # `temperature` reaches the wire only on a plane that still accepts it
+        # — see the note on ConsultOnDemandDeps.temperature.
         self._deps = ConsultOnDemandDeps(
             llm=llm,
             substrate=substrate,
@@ -1846,6 +2076,7 @@ __all__ = [
     "AnalystMethodResult",
     "ConsultOnDemandDeps",
     "ConsultOnDemandRunner",
+    "FINAL_SENTINEL",
     "HANDLER_VERSION",
     "KIND_NAME",
     "LLMHandlerLike",
