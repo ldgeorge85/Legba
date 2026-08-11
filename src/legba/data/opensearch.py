@@ -350,6 +350,22 @@ def signal_to_doc(row: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _delete_status(err: Any) -> int | None:
+    """HTTP status out of one ``async_bulk`` delete-error entry, or ``None``.
+
+    The helper shape is ``{"delete": {"status": 404, ...}}``; anything else
+    (a string, a different op) reads as "not a 404" so it stays in the error
+    count rather than being silently forgiven.
+    """
+    if not isinstance(err, Mapping):
+        return None
+    inner = err.get("delete")
+    if not isinstance(inner, Mapping):
+        return None
+    status = inner.get("status")
+    return status if isinstance(status, int) else None
+
+
 class OpenSearchStore:
     """Async wrapper around ``AsyncOpenSearch`` for the signal corpus index.
 
@@ -359,6 +375,10 @@ class OpenSearchStore:
         create on 404).
       * ``bulk_index(index, docs)`` — bulk upsert; each doc's ``_id`` = the signal
         id so a re-index overwrites in place. Returns the success count.
+      * ``bulk_delete(index, doc_ids)`` — bulk delete by ``_id``; an already-absent
+        doc counts as a success. The DELETE-EXCEPTION, drained by the
+        ``corpus_retention`` sweep off the ``corpus_tombstones`` queue (0175) —
+        see the method docstring for why a derived projection is not substrate.
       * ``search(index, query, filters, size)`` — BM25 multi_match over the text
         fields + keyword term filters; returns scored rows.
       * ``get(index, doc_id)`` — the ``_source`` of one doc, or ``None``.
@@ -461,6 +481,49 @@ class OpenSearchStore:
                 str(errors[0])[:300],
             )
         return int(success)
+
+    async def bulk_delete(self, index: str, doc_ids: Iterable[str]) -> int:
+        """Bulk-delete ``doc_ids`` from ``index``. Returns the number deleted.
+
+        THE DELETE-EXCEPTION. This platform does not hard-delete substrate: facts
+        are superseded, journal rows are soft-closed, entity folds are reversible.
+        This method is an explicit, bounded exception for the same reason
+        :meth:`legba.data.qdrant.QdrantStore.delete_doc_points` is one — a corpus
+        doc is not substrate, it is a DERIVED PROJECTION of a ``signals`` row
+        (``_id`` IS that row's uuid). When the row is gone the projection is not
+        evidence of anything; it is a search hit pointing at nothing, and
+        ``read_document`` will serve it verbatim because that path does no
+        Postgres existence check. Keeping it is the destructive option.
+
+        Deleting a doc that is ALREADY absent is a success, not an error: the
+        drain is idempotent, and a 404 on delete means the desired end state
+        holds. Those are filtered out of the error count rather than retried
+        forever.
+
+        A transport/connection failure RAISES (the caller leaves the batch
+        un-stamped → retried next tick); per-doc failures are logged, counted as
+        non-successes, and never re-raised, so one poison id cannot wedge a batch.
+        """
+        actions = [
+            {"_op_type": "delete", "_index": index, "_id": str(d)} for d in doc_ids
+        ]
+        if not actions:
+            return 0
+        success, errors = await async_bulk(
+            self.client, actions, raise_on_error=False, stats_only=False
+        )
+        # A 404 means the doc is already gone — that IS the outcome we wanted.
+        real_errors = [e for e in (errors or []) if _delete_status(e) != 404]
+        already_absent = len(errors or []) - len(real_errors)
+        if real_errors:
+            logger.warning(
+                "opensearch.bulk_delete index=%s deleted=%d errors=%d first_err=%s",
+                index,
+                success,
+                len(real_errors),
+                str(real_errors[0])[:300],
+            )
+        return int(success) + already_absent
 
     async def search(
         self,

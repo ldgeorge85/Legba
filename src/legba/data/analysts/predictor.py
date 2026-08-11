@@ -47,6 +47,7 @@ import logging
 import math
 from collections import defaultdict
 from dataclasses import dataclass
+from functools import lru_cache
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Mapping
 
@@ -59,34 +60,41 @@ from ...runtime.analyst_method import AnalystMethodResult, LLMHandlerLike
 logger = logging.getLogger(__name__)
 
 
+@lru_cache(maxsize=1)
 def _statsforecast_available() -> bool:
-    """Startup smoke-check: can AutoARIMA actually be imported?
+    """FIRST-FORECAST smoke-check: can AutoARIMA actually be imported?
 
     DQ-H1: a runtime-image slimming step deleted ``numpy/testing`` (a PUBLIC
     numpy module statsforecast imports at import time), so
     ``from statsforecast.models import AutoARIMA`` raised ImportError and EVERY
     forecast silently downgraded to naive_mean — a non-forecaster behind green
-    status. We probe ONCE at module import and log LOUD if it's broken, so the
-    degradation is visible in the boot log instead of hiding behind per-run
-    WARNINGs nobody reads.
+    status. We probe ONCE and log LOUD if it's broken, so the degradation is
+    visible instead of hiding behind per-run WARNINGs nobody reads.
+
+    2026-08-02 — the probe was at MODULE IMPORT, which made it scream in the
+    wrong process. The registry image does not ship statsforecast and never
+    forecasts (verified live: `import statsforecast` → ModuleNotFoundError in
+    legba-legba-registry-1, PRESENT in runtime + worker), yet it imports this
+    module for kind registration — so every registry boot logged the DQ-H1
+    ERROR as routine noise. That is worse than no guard: a REAL runtime
+    regression becomes indistinguishable from the registry's daily false alarm.
+
+    ``lru_cache`` keeps the once-per-process semantics; moving the call to the
+    forecast path means only a process that can actually forecast ever probes,
+    and the loud failure is fully intact exactly where it means something.
     """
     try:
         from statsforecast.models import AutoARIMA  # noqa: F401
-        return True
     except Exception:  # noqa: BLE001 — any import failure means no real forecaster
+        logger.error(
+            "predictor.statsforecast.UNAVAILABLE — AutoARIMA import FAILED; ALL "
+            "forecasts will silently fall back to naive_mean. Most likely cause: "
+            "numpy.testing missing from the image (a slimming step deleted it). "
+            "Fix the image, do not ship a non-forecaster. (DQ-H1)"
+        )
         return False
-
-
-_STATSFORECAST_OK = _statsforecast_available()
-if _STATSFORECAST_OK:
     logger.info("predictor.statsforecast.ok AutoARIMA import succeeded")
-else:
-    logger.error(
-        "predictor.statsforecast.UNAVAILABLE — AutoARIMA import FAILED; ALL "
-        "forecasts will silently fall back to naive_mean. Most likely cause: "
-        "numpy.testing missing from the image (a slimming step deleted it). "
-        "Fix the image, do not ship a non-forecaster. (DQ-H1)"
-    )
+    return True
 
 
 KIND_NAME = "predictor"
@@ -431,19 +439,13 @@ def _forecast_arima(
 
     Defensive: any statsforecast/numerical error falls back to ``_forecast_naive``.
     """
-    # Lazy import so test envs without numpy-stack pain still import this module
-    # (statsforecast is a hard dependency, but lazy-imports keep startup light).
-    try:
-        from statsforecast.models import AutoARIMA
-    except ImportError as exc:  # pragma: no cover - dep is pinned
-        # LOUD: a pinned base dep failing to import means we are silently
-        # shipping a non-forecaster (every forecast → naive_mean). DQ-H1.
-        logger.error(
-            "predictor.forecast.statsforecast_missing err=%s — forecasts are "
-            "downgrading to naive_mean; this is a broken image, not a no-op",
-            exc,
-        )
+    # THE probe site (DQ-H1). Memoized, so the loud ERROR lands once per
+    # process — and only in a process that actually reaches a forecast, which
+    # is what makes it mean something. Lazy import also keeps startup light for
+    # test envs without the numpy stack.
+    if not _statsforecast_available():
         return _forecast_naive(series, horizon_days, ci_level)
+    from statsforecast.models import AutoARIMA
 
     try:
         # Weekly seasonality is the natural human-scale period for "events

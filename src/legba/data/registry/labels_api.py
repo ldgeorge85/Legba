@@ -34,6 +34,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from .. import correctness_axis
 from .api import RegistryAPIDeps, require_bearer
 
 DEFAULT_LIMIT = 100
@@ -91,7 +92,14 @@ class UnitEvalScore(BaseModel):
     ``unresolvable`` excluded from both numerator and denominator). It is read
     LIVE per request, so ``n_operator_scored`` grows the moment a label lands —
     never gated on a scorer cadence — and it is SEGREGATED from the
-    deterministic source-overlap ``correctness_vs_reference``, never pooled."""
+    deterministic source-overlap ``correctness_vs_reference``, never pooled.
+
+    M-1 (2026-08-03): the weighting is no longer hand-rolled in the SQL here —
+    it comes from :mod:`legba.data.correctness_axis`, the ONE definition the
+    scorer, the scorecard, the v3 route and the GEPA gate all share. The same
+    module supplies the tiny-n fields: with n=1 for most units a bare mean is
+    not a measurement, so ``operator_sufficient`` and ``operator_mix`` travel
+    with the number, always."""
 
     unit: str
     faithfulness: float | None = None
@@ -103,6 +111,10 @@ class UnitEvalScore(BaseModel):
     correctness_operator: float | None = None
     n_operator_labels: int = 0
     n_operator_scored: int = 0
+    # M-1 tiny-n honesty — the number is never bare.
+    operator_sufficient: bool = False
+    operator_mix: dict[str, int] = Field(default_factory=dict)
+    operator_status: str | None = None
     badge: str
 
 
@@ -199,7 +211,12 @@ def _compose_badge(
     ``operator 0.75 (n=6)`` segment — n counting the SCORED verdicts (the
     unresolvable ones excluded, never silently: all-unresolvable reads
     ``operator unresolved (3 labels)``). No verdicts → no segment (absence is
-    absent, not zero)."""
+    absent, not zero).
+
+    M-1 tiny-n: below :data:`correctness_axis.MIN_UNIT_LABELS` scored verdicts
+    the segment is marked ``indicative`` — the number still shows (it is the
+    only judge-independent signal there is), but a reader can never mistake a
+    single verdict for a measured rate."""
     parts = ["verified"]
     if faithfulness is not None:
         parts.append(f"faithfulness {faithfulness:.2f}")
@@ -208,7 +225,14 @@ def _compose_badge(
     else:
         parts.append(f"unmeasured ({n_labeled} labels)")
     if operator_correctness is not None and n_operator_scored > 0:
-        parts.append(f"operator {operator_correctness:.2f} (n={n_operator_scored})")
+        indicative = (
+            "" if n_operator_scored >= correctness_axis.MIN_UNIT_LABELS
+            else ", indicative"
+        )
+        parts.append(
+            f"operator {operator_correctness:.2f} "
+            f"(n={n_operator_scored}{indicative})"
+        )
     elif n_operator_labels > 0:
         parts.append(f"operator unresolved ({n_operator_labels} labels)")
     return " | ".join(parts)
@@ -313,32 +337,17 @@ def build_labels_router(deps: RegistryAPIDeps) -> APIRouter:
             # P2-5 — live operator-verdict aggregate. Defensive: before
             # migration 0096 lands the table is absent; that degrades to an
             # empty overlay, never a broken scoreboard.
+            #
+            # M-1: the WEIGHTING used to be hand-rolled in this SQL (a CASE
+            # ladder) while `labels_api`'s own docstring stated it in prose and
+            # the scorer never applied it at all — three statements of one rule,
+            # one edit away from disagreeing. The read is now raw rows; the
+            # arithmetic and the tiny-n rules come from `correctness_axis`.
             try:
-                op_rows = await conn.fetch(
-                    """
-                    SELECT unit_analyst_id,
-                           COUNT(*)::int AS n_total,
-                           COUNT(*) FILTER (WHERE label <> 'unresolvable')::int
-                               AS n_scored,
-                           AVG(CASE label
-                                 WHEN 'correct' THEN 1.0
-                                 WHEN 'partially_correct' THEN 0.5
-                                 WHEN 'incorrect' THEN 0.0
-                               END)::float8 AS operator_correctness
-                      FROM correctness_labels
-                     GROUP BY unit_analyst_id
-                    """
-                )
+                op_rows = await conn.fetch(correctness_axis.UNIT_LABELS_SQL)
             except Exception:  # noqa: BLE001 — additive overlay, never breaks the read
                 op_rows = []
-        operator_by_unit: dict[str, dict[str, object]] = {
-            r["unit_analyst_id"]: {
-                "n_total": int(r["n_total"] or 0),
-                "n_scored": int(r["n_scored"] or 0),
-                "correctness": _as_float(r["operator_correctness"]),
-            }
-            for r in op_rows
-        }
+        operator_by_unit, _operator_fleet = correctness_axis.score_by_unit(op_rows)
 
         units_map: dict[str, Any] = {}
         scored_at = None
@@ -366,14 +375,14 @@ def build_labels_router(deps: RegistryAPIDeps) -> APIRouter:
                 continue
             rec = units_map.get(unit_id)
             rec = rec if isinstance(rec, dict) else {}
-            op = operator_by_unit.get(unit_id) or {}
+            op = operator_by_unit.get(unit_id) or correctness_axis.score(())
+            axis = correctness_axis.as_payload(op)
             faith = _as_float(rec.get("faithfulness"))
             corr = _as_float(rec.get("correctness_vs_reference"))
             n_labeled = int(rec.get("n_labeled") or 0)
-            op_corr = op.get("correctness")
-            op_corr = op_corr if isinstance(op_corr, float) else None
-            n_op_total = int(op.get("n_total") or 0)
-            n_op_scored = int(op.get("n_scored") or 0)
+            op_corr = axis["correctness_operator"]
+            n_op_total = axis["n_operator_labels"]
+            n_op_scored = axis["n_operator_scored"]
             out.append(
                 UnitEvalScore(
                     unit=str(rec.get("unit", unit_id)),
@@ -385,6 +394,9 @@ def build_labels_router(deps: RegistryAPIDeps) -> APIRouter:
                     correctness_operator=op_corr,
                     n_operator_labels=n_op_total,
                     n_operator_scored=n_op_scored,
+                    operator_sufficient=axis["operator_sufficient"],
+                    operator_mix=axis["operator_mix"],
+                    operator_status=axis["operator_status"],
                     badge=_compose_badge(
                         faith,
                         corr,

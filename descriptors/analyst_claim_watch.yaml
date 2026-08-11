@@ -11,10 +11,18 @@
 #     the contributing planes {vector, entity, geo}, the fused weight,
 #     provenance_class='live' and the matcher version. UNIQUE (src, dst, kind)
 #     + ON CONFLICT DO NOTHING = idempotent re-runs.
-#   * review_flags (migration 0107) — ONLY for matched questions that trace to
+#   * review_flags (migration 0107) — for matched questions that trace to
 #     LIVE (non-superseded) products via a FORWARD walk over
 #     output_consumption (migration 0106); one OPEN flag per (consumer,
 #     question) pair (the partial unique index is the writer idempotency).
+#     With method.options.question_flags: "on" (F5, ships OFF in code — the
+#     X-1 byte-identical contract; armed by the same descriptor PUT that arms
+#     the bearing gate), a matched question the walk finds NO consumer for
+#     writes ONE open SELF-flag instead (output_id = founded_on_id = the
+#     hypothesis id, reason new_evidence_bears_on_unconsumed_question). K-4 R4
+#     §9 F5 measured why: output_consumption held 0 rows for ALL 112 watched
+#     questions, so the consumer-only walk had left review_flags empty
+#     all-time and bearing_edges was the watcher's only artifact.
 #
 # Matching planes, fused as
 #   (0.50*vector + entity_component(n) + 0.10*geo) * age_factor

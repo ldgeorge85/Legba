@@ -572,3 +572,76 @@ def test_analyst_kind_registry_isolated_instance():
     assert not fresh.is_valid("custom_x")
     fresh.register("custom_x")
     assert fresh.is_valid("custom_x")
+
+
+# ---------------------------------------------------------------------------
+# The dead-options warner must never raise out of a dep-light environment.
+# Live incident 2026-08-04: the registry image lacks pycountry; the catalog
+# import chain (deterministic_handlers -> entity_resolution -> geocode) made
+# /typed 500 for every options-bearing deterministic analyst, silencing
+# claim_watch and signal_embedder for 14h. Warn-only means warn-only.
+# ---------------------------------------------------------------------------
+
+def test_env_limited_dep_classifies_third_party_vs_legba():
+    from legba.data.schemas.analyst import _env_limited_dep
+
+    third = ModuleNotFoundError("No module named 'pycountry'", name="pycountry")
+    assert _env_limited_dep(third) == "pycountry"
+    ours = ModuleNotFoundError(
+        "No module named 'legba.data.analysts.handler_options'",
+        name="legba.data.analysts.handler_options",
+    )
+    assert _env_limited_dep(ours) is None
+
+
+def test_warn_on_dead_options_skips_when_catalog_unimportable(monkeypatch):
+    import legba.data.schemas.analyst as analyst_mod
+
+    monkeypatch.setattr(analyst_mod, "_load_options_catalog", lambda: None)
+    desc = analyst_mod.AnalystDescriptor(
+        identity=AnalystIdentity(
+            id="claim_watch",
+            name="Claim watch",
+            schema_uri="legba/analyst/2.0.0",
+            version="a" * 32,
+            kind=AnalystKind.DETERMINISTIC,
+            type_signature=TypeSignature(
+                input_type="legba.x.In", output_type="legba.x.Out",
+            ),
+            owner="lewis@local",
+        ),
+        subscription=SubscriptionBlock(),
+        method=MethodBlock(
+            kind="deterministic",
+            impl="legba.data.analysts.deterministic",
+            sub_handler="claim_watch",
+            options={"contention_liveness_days": 14},
+        ),
+        cadence=CadenceBlock(),
+    )
+    # Must validate cleanly — the options check degrades to a log line.
+    assert desc.identity.id == "claim_watch"
+
+
+def test_load_options_catalog_reraises_on_missing_legba_module(monkeypatch):
+    import builtins
+    import legba.data.schemas.analyst as analyst_mod
+
+    real_import = builtins.__import__
+
+    def poisoned(name, *a, **k):
+        if "handler_options" in name:
+            raise ModuleNotFoundError(
+                "No module named 'legba.data.analysts.handler_options'",
+                name="legba.data.analysts.handler_options",
+            )
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", poisoned)
+    monkeypatch.delitem(
+        __import__("sys").modules, "legba.data.analysts.handler_options",
+        raising=False,
+    )
+    import pytest
+    with pytest.raises(ModuleNotFoundError):
+        analyst_mod._load_options_catalog()

@@ -40,6 +40,7 @@ from legba.data.analysts.inline_target import (
     PROMPT_MODULE_PATH,
     SCHEMA_VERSION,
     _MAX_SNIPPET_CHARS,
+    _MAX_TITLE_CHARS,
     _build_citation_index,
     _coerce_finding,
     _extract_citations,
@@ -389,12 +390,23 @@ def test_coerce_finding_malformed_json():
     assert finding.confidence == 0.3
 
 
-def test_coerce_finding_whitespace_only_falls_back_to_placeholder():
-    """D27: only when the LLM produced no usable line at all does the static
-    fallback title surface."""
-    finding = _coerce_finding("   \n  \n", fallback_title="Default Title")
-    assert finding.title == "Default Title"
-    assert "unstructured" in finding.tags
+def test_coerce_finding_whitespace_only_now_fails_loud():
+    """INVERTED by V-N1 — this used to assert the placeholder-title fallback.
+
+    D27's rule was "only when the LLM produced no usable line at all does the
+    static fallback title surface", and that is precisely the row V-N1 refuses
+    to write. An empty completion produced live finding ``dd916255``, which
+    carried an empty body and scored faithfulness **1.00 on ZERO claims** — a
+    perfect grade for saying nothing, and the most misleading row this path can
+    emit, because every layer above reads it as a clean verified finding.
+
+    Degrade-not-fabricate cuts the other way here: there is nothing to degrade
+    TO. The run now fails loud and the runtime DLQs it, where a human sees it.
+    """
+    from legba.data.analysts.output_contract import OutputContractError
+
+    with pytest.raises(OutputContractError):
+        _coerce_finding("   \n  \n", fallback_title="Default Title")
 
 
 def test_coerce_finding_trailing_text():
@@ -440,6 +452,27 @@ def test_title_from_text_first_usable_line_and_skips_braces():
     text = "{\n  Brazil fiscal outlook deteriorates\n}"
     assert _title_from_text(text, fallback_title="ph") == (
         "Brazil fiscal outlook deteriorates"
+    )
+
+
+def test_title_from_text_skips_the_as_of_voice_header():
+    """The voice contract opens every body with '*As of <date>; slice covers
+    …*'. It is a temporal stamp, not a headline — 2.7% of findings were titled
+    with their own As-of line before this skip (task #18, 2026-08-10)."""
+    text = (
+        "*As of 2026-08-10; slice covers the trailing 72h to that date; "
+        "23 signals.*\n\n"
+        "**BLUF:** Chad's fuel corridor remains blocked at the Douala border.\n"
+    )
+    assert _title_from_text(text, fallback_title="ph") == (
+        "Chad's fuel corridor remains blocked at the Douala border."
+    )
+
+
+def test_title_from_text_as_of_only_body_still_falls_back():
+    text = "*As of 10 August 2026; composed from 6 region reads.*\n"
+    assert _title_from_text(text, fallback_title="Assessment for x") == (
+        "Assessment for x"
     )
 
 
@@ -1641,6 +1674,100 @@ def test_normalize_citation_markers_leaves_non_citation_glyphs_intact():
     assert "【emergency powers】" in _normalize_citation_markers(raw)
 
 
+def test_normalize_rewrites_uncitable_annotations_to_the_canonical_marker():
+    """R-tail: the digit rule left ``【none】`` alone, so it survived into
+    published prose AND was invisible to the floor's ``[no citation]`` exemption
+    — the model gets demoted for honestly flagging an un-citable clause.
+    Measured live: 218 findings carry a non-digit lenticular bracket, led by
+    `assessed` (36), `assessment` (25), `not_observed` (25), `none` (23)."""
+    raw = (
+        "Trend holds 【none】. Structural read 【assessed】. "
+        "Nothing in window 【not_observed】. Framing 【system_assessed】."
+    )
+    out = _normalize_citation_markers(raw)
+    assert "【" not in out
+    assert out.count("[no citation]") == 4
+    assert _normalize_citation_markers(out) == out
+
+
+def test_normalize_rewrites_variant_composition_ref_markers():
+    """The composition marker ``[[ref:N]]`` drifts into the same brackets
+    (~100 live occurrences as ``【ref:2】`` / ``【[ref:1]】``). Unrewritten it is
+    invisible to the ref parser, so a correctly-cited COMPOSED claim grades as
+    uncited — the original bug, one altitude up."""
+    raw = "Regional read 【ref:2】 and 【[ref:11]】 and ［ ref: 3 ］."
+    assert _normalize_citation_markers(raw) == (
+        "Regional read [[ref:2]] and [[ref:11]] and [[ref:3]]."
+    )
+
+
+def test_normalize_rewrites_the_bare_parenthesis_ref_form():
+    """V-I3 / the round-4 panel's S2. `country_composition`/cn wrote
+    "Unremarkable reads: economic_coercion (ref:2), energy_security (ref:6),
+    leadership_transition (ref:7)". All three references check out against their
+    own titles; the claim carried ``markers=[]`` and was graded
+    `judge_unsupported`. Same failure mode as the full-width class, different
+    punctuation: a fully cited claim read as markerless."""
+    raw = (
+        "Unremarkable reads: economic_coercion (ref:2), energy_security (ref:6), "
+        "leadership_transition (ref: 7)."
+    )
+    assert _normalize_citation_markers(raw) == (
+        "Unremarkable reads: economic_coercion [[ref:2]], energy_security "
+        "[[ref:6]], leadership_transition [[ref:7]]."
+    )
+    # A parenthesized YEAR, and an ordinary word in parentheses, stay put.
+    assert _normalize_citation_markers("(2023) and (refuse)") == "(2023) and (refuse)"
+
+
+def test_normalize_fans_out_the_compound_ref_marker():
+    """V-I3 / the 08-04 panel's §6.2, named there and unshipped: ``[[ref:2,6]]``
+    is one marker naming two sub-claims, and the ref parser resolves it to
+    NEITHER. Fanned out to one marker each, which is what the composition path
+    means by the comma."""
+    assert _normalize_citation_markers("rests on [[ref:2,6]] and [[ref:3, 7]]") == (
+        "rests on [[ref:2]][[ref:6]] and [[ref:3]][[ref:7]]"
+    )
+
+
+def test_normalize_rewrites_the_dagger_line_range_citation():
+    """V-I3 / the round-4 panel's §6.8. The Brazil `military_posture` body
+    carries ``【2†L1-L2】【5†L1-L2】【8†L1-L3】`` where ``[2][5][8]`` belongs; the
+    bare-integer rule skips it (the bracket holds a dagger and a line range) and
+    the sentence graded markerless. The dagger is required, so CJK prose using
+    the same glyphs is still left alone."""
+    out = _normalize_citation_markers("Body 【2†L1-L2】【5†L1-L2】【8†L1-L3】 here.")
+    assert out == "Body [2][5][8] here."
+    assert _normalize_citation_markers(out) == out
+    assert "【emergency powers】" in _normalize_citation_markers("【emergency powers】")
+
+
+def test_normalize_rewrites_range_citations_in_variant_brackets():
+    """93 live findings carry ``【1-120】``. The bare-integer rule skipped them,
+    so the range parser never saw them and a survey clause citing the whole
+    corpus floored as uncited. Dash class is wide (ASCII / en dash /
+    non-breaking hyphen all occur live); output is always ASCII."""
+    assert _normalize_citation_markers("survey 【1-120】") == "survey [1-120]"
+    assert _normalize_citation_markers("survey 【1‑92】") == "survey [1-92]"
+    assert _normalize_citation_markers("survey ［10–18］") == "survey [10-18]"
+
+
+def test_normalize_annotation_allowlist_is_not_a_catch_all():
+    """The rewrite is an explicit allowlist, not "any non-digit content" — CJK
+    prose and unrecognised annotations keep their glyphs, because silently
+    rewriting arbitrary bracketed text into a floor EXEMPTION would hand the
+    model a way to opt out of citing anything."""
+    raw = "The directive 【emergency powers】 was issued 【一九四九】 [4]."
+    assert _normalize_citation_markers(raw) == raw
+
+
+def test_normalize_annotation_separator_and_case_insensitive():
+    """The live corpus spells the same token with spaces, underscores and
+    hyphens interchangeably ("assessed situation" / "assessed_situation")."""
+    for token in ("NOT_OBSERVED", "not observed", "Not-Observed"):
+        assert _normalize_citation_markers(f"x 【{token}】") == "x [no citation]"
+
+
 @pytest.mark.asyncio
 async def test_run_method_persists_citations_in_finding_data():
     """ACCEPTANCE: over a FIXTURE synthesized response whose prose carries [1]
@@ -2261,6 +2388,95 @@ def test_gdelt_citation_snippet_matches_the_rendered_prose():
     assert "'GLOBALEVENTID'" not in (index[1]["source_text"] or "")
 
 
+# --- R9: CAMEO code labels must not read as English ------------------------
+#
+# The review's example: "the Acting Attorney General reduced relations in New
+# York" — fluent narrative synthesized from a GDELT title whose words are CAMEO
+# taxonomy labels ("reduce relations" is root 16) and actor codes, not a report
+# of anything. _gdelt_prose already caveats the BODY; these pin the caveat onto
+# the TITLE, which is where the misreading starts and which the archived-body
+# precedence path leaves entirely unmarked.
+
+
+def test_cameo_title_is_marked_as_a_code_label():
+    row = {
+        "id": uuid4(), "title": "PRESIDENT <-> IRAN: fight in Iran",
+        "source_url": "https://example.test/x", "data": _gdelt_payload(),
+    }
+    rendered = _render_signal(1, row)
+    assert "[CAMEO event code]" in rendered.splitlines()[0], (
+        f"GDELT title rendered unmarked: {rendered.splitlines()[0]!r}"
+    )
+
+
+def test_cameo_mark_survives_the_archived_body_path():
+    """The 28% case that defeated the body-level caveat: a GDELT row carrying a
+    real archived article renders `kind == "archived"`, so `_gdelt_prose` (and
+    its "structured event record" disclaimer) never runs — but the synthesized
+    CAMEO title is still on the line above it and still needs marking."""
+    row = {
+        "id": uuid4(), "title": "PRESIDENT <-> IRAN: fight in Iran",
+        "data": _gdelt_payload(archived_text="Iranian forces struck two tankers."),
+    }
+    assert _signal_body(row).kind == "archived"
+    assert "[CAMEO event code]" in _render_signal(1, row).splitlines()[0]
+
+
+def test_non_cameo_rows_are_never_marked():
+    """A real headline must not be labelled a machine coding — mislabeling real
+    reporting as taxonomy would suppress evidence the analyst should use."""
+    row = {
+        "id": uuid4(),
+        "title": "Oil price rises after Iran says it stops ships in Hormuz",
+        "source_url": "https://example.test/x",
+        "data": {"summary": "Brent rose 3%."},
+    }
+    assert "CAMEO" not in _render_signal(1, row)
+
+
+def test_cameo_mark_is_not_truncated_away_by_a_long_title():
+    """The tag is appended AFTER the title truncation, so a title at the cap
+    cannot silently eat its own marker."""
+    row = {
+        "id": uuid4(),
+        "data": _gdelt_payload(title="X" * (_MAX_TITLE_CHARS + 200)),
+    }
+    assert _render_signal(1, row).splitlines()[0].endswith("[CAMEO event code]")
+
+
+def test_legend_appears_only_when_the_slice_carries_a_coded_row():
+    """The legend explains the per-row tag once instead of paying for the
+    explanation on every line — and costs nothing on a slice with no GDELT."""
+    cameo = {"id": uuid4(), "data": _gdelt_payload()}
+    plain = {
+        "id": uuid4(), "title": "Oil price rises after Iran stops ships",
+        "data": {"summary": "Brent rose 3%."},
+    }
+    with_cameo = _render_user_prompt([cameo, plain], "country_watch_ir")
+    without = _render_user_prompt([plain], "country_watch_ir")
+    assert "CAMEO taxonomy labels" in with_cameo
+    assert "CAMEO" not in without
+
+
+def test_plain_slice_prompt_carries_no_legend():
+    """The legend must be additive: a slice with no coded rows renders none of
+    it. (Rewritten at the r-smalls x v-voice merge: byte-identity with the
+    pre-R9 header is no longer the contract — Phase-V's run-date/window lines
+    changed the header for EVERY slice, pinned by test_voice_contract. The R9
+    property that survives is legend-absence on plain slices.)"""
+    plain = {
+        "id": uuid4(), "title": "Oil price rises after Iran stops ships",
+        "produced_at": "2026-07-31T16:27:00+00:00",
+        "source_url": "https://example.test/x",
+        "data": {"summary": "Brent rose 3%."},
+    }
+    rendered = _render_user_prompt([plain], "country_watch_ir")
+    assert rendered.startswith("Target: country_watch_ir\n")
+    assert "Run date (as-of): " in rendered
+    assert "CAMEO" not in rendered
+    assert "\n\n[1] " in rendered
+
+
 # --- clean 2: dead citations ----------------------------------------------
 
 
@@ -2487,3 +2703,26 @@ async def test_run_method_orient_step_carries_the_render_receipt():
     assert orient["gdelt_prosed"] == 1
     assert orient["dropped_dead_rows"] == 0
     assert orient["full_body_rows"] == 1
+
+
+def test_judge_source_text_prefers_archived_text():
+    """R1-0: the judge grounds on the archived full article when we hold one —
+    before this, the analyst read the article while the judge got the teaser
+    (mean 545 chars vs mean 3,566 held, on 6,512 measured citations)."""
+    from legba.data.analysts.inline_target import _citation_entry
+
+    fields = {
+        "archived_text": "FULL ARTICLE " * 50,
+        "raw_body": "short teaser",
+        "text": "even shorter",
+    }
+    entry = _citation_entry(
+        signal_id=str(uuid4()), title="t", source="s", fields=fields,
+    )
+    assert entry["source_text"].startswith("FULL ARTICLE")
+    # Without the archive the chain is unchanged.
+    entry2 = _citation_entry(
+        signal_id=str(uuid4()), title="t", source="s",
+        fields={"raw_body": "short teaser"},
+    )
+    assert entry2["source_text"].startswith("short teaser")

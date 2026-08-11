@@ -1483,3 +1483,111 @@ class _FakePool:
 
     def acquire(self):  # pragma: no cover - not used in these unit tests
         raise AssertionError("DB not expected in this unit test")
+
+
+# ---------------------------------------------------------------------------
+# _fact_graph: the AGE write path keys vertices on the entity UUID (K-G3)
+# ---------------------------------------------------------------------------
+
+
+class _CypherCapture:
+    """A PostgresStore double that records the cypher it is handed."""
+
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    async def cypher(self, query: str, *, cols: str, graph_name: str) -> list[Any]:
+        self.queries.append(query)
+        return []
+
+
+async def test_fact_edge_merges_on_the_entity_uuid_not_the_name():
+    """The write path must speak the SAME key every reader filters on.
+
+    Until 2026-08-03 this writer MERGEd ``{name: 'Iran'}`` while graph_paths,
+    graph_mining and structural_balance all filtered ``WHERE a.id = …`` — so a
+    vertex written here was unreachable by every query in the tree (graph-debate
+    defect #13).
+    """
+    from legba.data.filters._fact_graph import upsert_fact_edge
+
+    store = _CypherCapture()
+    ok = await upsert_fact_edge(
+        store,
+        subject="Iran",
+        subject_id="11111111-1111-4111-8111-111111111111",
+        subject_class="country",
+        predicate="member of",
+        value="OPEC",
+        value_id="22222222-2222-4222-8222-222222222222",
+        value_class="organization",
+        fact_id="33333333-3333-4333-8333-333333333333",
+    )
+    assert ok is True
+    (query,) = store.queries
+    # Identity is the uuid...
+    assert "MERGE (a:Country {id: '11111111-1111-4111-8111-111111111111'})" in query
+    assert "MERGE (b:Organization {id: '22222222-2222-4222-8222-222222222222'})" in query
+    # ...and the name rides as a property, never as a merge key.
+    assert "{name: 'Iran'}" not in query
+    assert "{name: 'OPEC'}" not in query
+    assert "SET a.name = 'Iran'" in query
+    assert "SET b.name = 'OPEC'" in query
+
+
+@pytest.mark.parametrize(
+    "subject_id,value_id",
+    [
+        (None, "22222222-2222-4222-8222-222222222222"),
+        ("11111111-1111-4111-8111-111111111111", None),
+        (None, None),
+        ("", ""),
+    ],
+)
+async def test_fact_edge_refuses_to_write_an_unresolved_endpoint(subject_id, value_id):
+    """No uuid, no vertex. A name-keyed vertex is landfill, not a partial answer."""
+    from legba.data.filters._fact_graph import upsert_fact_edge
+
+    store = _CypherCapture()
+    ok = await upsert_fact_edge(
+        store,
+        subject="Iran",
+        subject_id=subject_id,
+        subject_class="country",
+        predicate="member of",
+        value="OPEC",
+        value_id=value_id,
+        value_class="organization",
+        fact_id="33333333-3333-4333-8333-333333333333",
+    )
+    assert ok is False
+    assert store.queries == [], "an unresolved endpoint must emit NO cypher at all"
+
+
+class _ResolveConn:
+    def __init__(self, row):
+        self._row = row
+        self.sql = ""
+        self.args: tuple[Any, ...] = ()
+
+    async def fetchrow(self, sql, *args):
+        self.sql, self.args = sql, args
+        return self._row
+
+
+async def test_resolve_vertex_id_never_keys_on_a_tombstone():
+    from legba.data.filters._fact_graph import resolve_vertex_id
+
+    conn = _ResolveConn({"id": "44444444-4444-4444-8444-444444444444"})
+    got = await resolve_vertex_id(conn, "Iran", "country")
+    assert got == "44444444-4444-4444-8444-444444444444"
+    # Merged losers are excluded: keying a vertex on a tombstone would recreate
+    # the repoint debt uuid identity exists to remove.
+    assert "merged_into IS NULL" in conn.sql
+    assert conn.args == ("Iran", "country")
+
+
+async def test_resolve_vertex_id_returns_none_when_the_entity_does_not_exist():
+    from legba.data.filters._fact_graph import resolve_vertex_id
+
+    assert await resolve_vertex_id(_ResolveConn(None), "Nowhere", "country") is None

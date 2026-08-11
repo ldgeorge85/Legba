@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from typing import Any
 from uuid import UUID, uuid4
@@ -295,10 +296,41 @@ def test_diff_route_does_not_import_dspy():
     Guards the L-176 invariant: dspy lives only in the opt-in GEPA worker. The
     diff route reads the parent snapshot from substrate, so importing the v3
     API module (and exercising its route table) must not drag dspy in.
-    """
-    import legba.data.registry.v3_api  # noqa: F401  (import is the assertion)
 
-    assert "dspy" not in sys.modules, (
+    RUN IN A SUBPROCESS, deliberately. Asserting on the CURRENT process's
+    ``sys.modules`` measured the whole session's import history, not this
+    module's imports: any earlier test that touched ``legba.prompts`` left
+    dspy resident and failed this one, while in file order it passed. That
+    made it an ORDER-DEPENDENT test — worthless as a guard (in a dspy-free
+    image it can never fail; in a dspy-bearing one it fails for reasons that
+    have nothing to do with the route) and an entry on the nightly's
+    known-failure allowlist. A fresh interpreter measures exactly the claim:
+    importing this module, and nothing else, must not pull dspy in.
+    """
+    probe = (
+        "import sys\n"
+        "import legba.data.registry.v3_api  # noqa: F401\n"
+        "sys.exit(3 if 'dspy' in sys.modules else 0)\n"
+    )
+    # Hand the child THIS interpreter's resolved sys.path so it imports the
+    # same tree under test — inheriting PYTHONPATH alone is not enough when
+    # the parent's path came from anywhere else (editable install, conftest
+    # insert, `-p` plugin bootstrap).
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
+    proc = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+        check=False,
+    )
+    assert proc.returncode != 3, (
         "dspy was imported by the registry v3 API module — the diff route must "
         "stay dspy-free (snapshot-based), per the litellm/dspy production ban."
+    )
+    assert proc.returncode == 0, (
+        "the dspy-freedom probe could not even import "
+        f"legba.data.registry.v3_api (rc={proc.returncode}):\n{proc.stderr}"
     )

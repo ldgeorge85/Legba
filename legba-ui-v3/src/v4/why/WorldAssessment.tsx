@@ -1,51 +1,43 @@
 /**
- * WorldAssessment — the reading surface for a composition (v4 / The Why).
+ * WorldAssessment — the `world_assessor` reading surface (v4 / The Why).
  *
- * WORLD mode (no selection): the `world_assessor` one-pager — the composed,
- * verified world view — as a calm centered reading column.
+ * This panel is PURELY the world read. It always queries
+ * `analyst_id=world_assessor`; nothing about the current selection changes what
+ * it fetches. It used to switch to the selected desk's `country_composition`
+ * whenever a target was selected, which — since a desk is selected nearly
+ * always — meant the tab named "World Assessment" effectively never showed the
+ * world. That desk arm is gone: per-desk detail is the Inspector's job, and
+ * this surface answers exactly one question, always the same one.
  *
- * DESK mode (a country selected): the desk INTELLIGENCE CARD (S7-T3) — reads
- * top-to-bottom as a finished product: banded score + delta → BLUF → the
- * verified composition (expanded) → the per-desk bounded UNIT cards → related →
- * history (older/superseded runs collapsed).
- *
- * Both render markdown + citations through the shared reading kit (`CitedProse`
- * inside `CitedAssessment`, one verification dialect via `VerdictBadge`), and
- * both offer a client-side Download (.md / print→PDF).
+ * Presentation mirrors the Journal panel (`panels/system/Journal.tsx`): the
+ * LATEST run rendered in full at the top with its produced_at stated plainly
+ * ("World read — 2026-08-04 12:00Z"), and prior runs beneath as a collapsed,
+ * browsable history — click one to swap it into the main reading column, with
+ * a one-click return to the latest. Markdown + citations render through the
+ * shared reading kit (`CitedProse` inside `CitedAssessment`, one verification
+ * dialect via `VerdictBadge`), and every run offers a client-side Download
+ * (.md / print→PDF).
  */
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { formatDistanceToNow } from 'date-fns'
 import { Globe, Download, Printer } from 'lucide-react'
 import { apiGet } from '@/lib/api'
-import { selectRow, useSelection } from '@/state/selection'
+import { selectRow } from '@/state/selection'
 import type { WorldAssessment as WorldAssessmentT } from '@/v4/why/types'
-import { CountryUnitsAssessment } from '@/v4/why/CountryUnitsAssessment'
 import CitedAssessment from '@/components/inspector/CitedAssessment'
-import { InfoTip } from '@/components/InfoTip'
 import { extractCitations, type Citation } from '@/lib/citationsModel'
-import { stripCitationMarkers, stripMarkdown, unwrapEnvelope } from '@/lib/proseText'
 import { downloadReportMarkdown, printReportPdf, type ReportDoc } from '@/lib/reportDownload'
-
-// U-5 — the desk card's own honest-absence / delta tokens, explained in place
-// (this card had NO explainer at all before — not even the Inspector's `?`).
-const UNBANDED_EXPLAIN =
-  'No severity/confidence band has been computed for this desk yet — an ' +
-  'honest absence (nothing to show), not an error.'
-const CONF_EXPLAIN =
-  "This desk's composition confidence — the same likelihood-style probability " +
-  "VerdictBadge's L chip reports, rolled up for the whole desk read."
-const CONF_DELTA_EXPLAIN =
-  "How much this desk's composition confidence moved since its previous run " +
-  '(▲ up / ▼ down) — a trend signal, not a new measurement.'
 
 // Re-export the shared markdown map from its own module so existing importers of
 // `MD_COMPONENTS` from this path keep working (it moved to break an import cycle).
 export { MD_COMPONENTS } from '@/lib/markdownComponents'
 
 const ASSESSOR_ID = 'world_assessor'
-// P3 — the per-country VERIFIED composition (the product for a selected country).
-const COUNTRY_COMPOSITION_ID = 'country_composition'
+
+/** How many runs to pull: the current read plus enough supersedes to make the
+ *  history list worth browsing (the world read is a 12:00Z daily cadence). */
+const RUN_LIMIT = 12
 
 /** Minimal view of a `/findings` row — only the fields we project from. */
 interface FindingRow {
@@ -130,18 +122,6 @@ function projectAssessment(row: FindingRow): ProjectedAssessment {
   }
 }
 
-/** The one-line BLUF: the first sentence of the body, markdown + citation
- *  markers stripped. Honest empty when the body has none. */
-function extractBluf(md: string): string {
-  const plain = stripCitationMarkers(stripMarkdown(unwrapEnvelope(md ?? '')))
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!plain) return ''
-  const m = plain.match(/^.*?[.!?](\s|$)/)
-  const first = (m ? m[0] : plain).trim()
-  return first.length > 260 ? `${first.slice(0, 260)}…` : first
-}
-
 /** Build the `.md` / print `.pdf` ReportDoc from an assessment. */
 function toReportDoc(a: ProjectedAssessment, scope: string): ReportDoc {
   return {
@@ -152,16 +132,6 @@ function toReportDoc(a: ProjectedAssessment, scope: string): ReportDoc {
     scope,
     citations: a.citations,
   }
-}
-
-/** Severity → a muted banded headline (never the loud severity ramp itself). */
-const SEVERITY_BAND: Record<string, { label: string; tone: string }> = {
-  critical: { label: 'Critical', tone: 'border-red-800 bg-red-950/50 text-red-200' },
-  high: { label: 'High', tone: 'border-rose-800 bg-rose-950/40 text-rose-200' },
-  elevated: { label: 'Elevated', tone: 'border-orange-800 bg-orange-950/40 text-orange-200' },
-  moderate: { label: 'Moderate', tone: 'border-amber-800 bg-amber-950/40 text-amber-200' },
-  medium: { label: 'Moderate', tone: 'border-amber-800 bg-amber-950/40 text-amber-200' },
-  low: { label: 'Low', tone: 'border-emerald-800 bg-emerald-950/40 text-emerald-200' },
 }
 
 /** The Download .md / print→PDF affordance for the current report. */
@@ -194,6 +164,78 @@ function DownloadControls({ doc }: { doc: ReportDoc }) {
   )
 }
 
+/** `2026-08-04 12:00Z` — the cadence stamp, in UTC, so the header names the run
+ *  the operator can go look up rather than a local-time paraphrase of it. */
+function formatUtcStamp(ms: number): string {
+  const d = new Date(ms)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return (
+    `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
+    `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}Z`
+  )
+}
+
+/**
+ * Prior world reads, collapsed — the Journal's browsable-history idea in the
+ * shape of a reading column: the runs this one superseded, each a click away
+ * from swapping into the main view above.
+ */
+function RunHistory({
+  runs,
+  activeId,
+  onSelect,
+}: {
+  runs: ProjectedAssessment[]
+  activeId: string
+  onSelect: (id: string) => void
+}) {
+  if (runs.length === 0) return null
+  return (
+    <section className="mt-8 border-t border-line pt-5" data-testid="world-assessment-history">
+      <details>
+        <summary className="cursor-pointer text-label uppercase tracking-wider text-ink-3">
+          Prior world reads · {runs.length} superseded run{runs.length === 1 ? '' : 's'}
+        </summary>
+        <ul className="mt-2 space-y-1">
+          {runs.map((run) => {
+            const active = run.id === activeId
+            return (
+              <li key={run.id}>
+                <button
+                  type="button"
+                  onClick={() => onSelect(run.id)}
+                  aria-current={active ? 'true' : undefined}
+                  className={`flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left text-xs ${
+                    active
+                      ? 'bg-surf-3 text-ink-1'
+                      : 'text-ink-2 hover:bg-surf-1 hover:text-ink-1'
+                  }`}
+                  data-testid="world-assessment-history-row"
+                  title="Read this run in the column above"
+                >
+                  {run.severity && (
+                    <span
+                      className="inline-block h-2 w-2 shrink-0 rounded-full"
+                      style={{ background: SEVERITY_HEX[run.severity] ?? '#8892a0' }}
+                      aria-hidden
+                    />
+                  )}
+                  <span className="truncate">{run.title}</span>
+                  {Number.isFinite(run.producedAt) && (
+                    <span className="ml-auto shrink-0 font-mono text-ink-3">
+                      {formatUtcStamp(run.producedAt)}
+                    </span>
+                  )}
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      </details>
+    </section>
+  )
+}
+
 function LoadingSkeleton() {
   return (
     <div className="mx-auto w-full max-w-3xl animate-pulse px-6 py-8" data-testid="world-assessment-loading">
@@ -209,239 +251,46 @@ function LoadingSkeleton() {
   )
 }
 
-function EmptyState({ targetId }: { targetId?: string | null }) {
+function EmptyState() {
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-8" data-testid="world-assessment-empty">
       <div className="flex flex-col items-center gap-3 rounded-lg border border-line bg-surface-100 px-6 py-10 text-center">
         <Globe className="h-7 w-7 text-ink-3" aria-hidden />
-        <div className="text-sm font-medium text-ink-2">
-          {targetId ? `No assessment yet for ${targetId}` : 'No world assessment yet'}
-        </div>
+        <div className="text-sm font-medium text-ink-2">No world assessment yet</div>
         <div className="max-w-md text-xs leading-relaxed text-ink-3">
-          The{' '}
-          <span className="font-mono text-ink-2">
-            {targetId ? 'country_composition' : 'world_assessor'}
-          </span>{' '}
-          synthesizes one every ~6h.
+          The <span className="font-mono text-ink-2">world_assessor</span> synthesizes one on its
+          daily cadence.
         </div>
       </div>
     </div>
   )
 }
 
-/**
- * DESK INTELLIGENCE CARD — the product read for a selected country. Banded score
- * + delta → BLUF → composition (expanded) → unit cards → related → history.
- */
-function DeskIntelligenceCard({
-  targetId,
-  current,
-  history,
-  isLoading,
-}: {
-  targetId: string
-  current: ProjectedAssessment | null
-  history: ProjectedAssessment[]
-  isLoading: boolean
-}) {
-  const scope = `${targetId} · desk intelligence card`
-  const band = current?.severity ? SEVERITY_BAND[current.severity] : undefined
-  // Confidence delta vs the previous composition run (honest — omitted when
-  // there is no prior run or either run lacks a confidence).
-  const prev = history[0] ?? null
-  const delta =
-    current?.confidence != null && prev?.confidence != null
-      ? current.confidence - prev.confidence
-      : null
-  const bluf = current ? extractBluf(current.summary) : ''
-
-  return (
-    <div className="mx-auto w-full max-w-3xl px-6 py-8" data-testid="desk-intelligence-card">
-      {/* 1 · Banded headline + score + delta */}
-      <header className="border-b border-line pb-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-label uppercase tracking-wider text-ink-3">{scope}</div>
-            <h1 className="mt-1 truncate text-xl font-semibold text-ink-1">
-              {current?.title ?? targetId}
-            </h1>
-          </div>
-          {current && <DownloadControls doc={toReportDoc(current, scope)} />}
-        </div>
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs" data-testid="desk-band">
-          {band ? (
-            <span className={`rounded border px-2 py-0.5 font-medium ${band.tone}`}>{band.label}</span>
-          ) : (
-            <InfoTip
-              text={UNBANDED_EXPLAIN}
-              className="rounded border border-line bg-surf-3 px-2 py-0.5 text-ink-2"
-              testId="desk-unbanded"
-            >
-              unbanded
-            </InfoTip>
-          )}
-          {current?.confidence != null && (
-            <InfoTip
-              text={`${CONF_EXPLAIN} This read: ${(current.confidence * 100).toFixed(0)}%.`}
-              className="font-mono text-ink-2"
-              testId="desk-confidence"
-            >
-              conf {(current.confidence * 100).toFixed(0)}%
-            </InfoTip>
-          )}
-          {delta != null && Math.abs(delta) >= 0.005 && (
-            <InfoTip
-              text={CONF_DELTA_EXPLAIN}
-              className={`font-mono ${delta > 0 ? 'text-emerald-400' : 'text-rose-400'}`}
-              testId="desk-delta"
-            >
-              {delta > 0 ? '▲' : '▼'} {Math.abs(delta * 100).toFixed(0)}%
-            </InfoTip>
-          )}
-          {current && Number.isFinite(current.producedAt) && (
-            <span className="text-ink-3">as of {formatDistanceToNow(current.producedAt)} ago</span>
-          )}
-          {current && (
-            <button
-              type="button"
-              onClick={() => selectRow('finding', current.id, current.title, { origin: 'desk-card' })}
-              className="ml-auto shrink-0 rounded border border-line px-2 py-0.5 text-ink-2 hover:border-line-strong hover:text-ink-1"
-              data-testid="desk-trace"
-              title="Trace this composition's provenance / inputs in The Why"
-            >
-              Trace the flow →
-            </button>
-          )}
-        </div>
-      </header>
-
-      {/* 2 · BLUF */}
-      {bluf && (
-        <div className="mt-4 rounded-lg border border-line bg-surf-1 p-3" data-testid="desk-bluf">
-          <div className="text-label uppercase tracking-wider text-ink-3">BLUF</div>
-          <p className="mt-1 text-sm leading-relaxed text-ink-1">{bluf}</p>
-        </div>
-      )}
-
-      {/* 3 · Composition (expanded) — the verified synthesis, the headline product. */}
-      <section className="mt-6" data-testid="desk-composition">
-        <div className="mb-2 text-label uppercase tracking-wider text-ink-3">
-          Verified composition · country_composition
-        </div>
-        {current ? (
-          current.summary.trim() !== '' ? (
-            <CitedAssessment
-              text={current.summary}
-              citations={current.citations}
-              verification={current.verification}
-              confidence={current.confidence}
-              analystId={COUNTRY_COMPOSITION_ID}
-            />
-          ) : (
-            <p className="text-sm text-ink-3">This synthesis was published without a written summary.</p>
-          )
-        ) : (
-          <p className="text-sm text-ink-3" data-testid="desk-composition-pending">
-            {isLoading ? 'Loading the composition…' : `No verified composition for ${targetId} yet.`}
-          </p>
-        )}
-      </section>
-
-      {/* 4 · The per-desk bounded UNIT cards. */}
-      <section className="mt-8 border-t border-line pt-5" data-testid="desk-units">
-        <CountryUnitsAssessment targetId={targetId} />
-      </section>
-
-      {/* 5 · Related — the evidence breadth backing this composition. */}
-      {current && current.citations.length > 0 && (
-        <section className="mt-8 border-t border-line pt-5" data-testid="desk-related">
-          <div className="text-label uppercase tracking-wider text-ink-3">Related</div>
-          <div className="mt-1 text-xs text-ink-2">
-            This read rests on{' '}
-            <span className="text-ink-1">{current.citations.length}</span> verified sub-claim
-            {current.citations.length === 1 ? '' : 's'} — hover a{' '}
-            <span className="font-mono text-accent-info">[[ref:N]]</span> chip above to inspect each,
-            or trace the full flow.
-          </div>
-        </section>
-      )}
-
-      {/* 6 · History — older / superseded composition runs, collapsed. */}
-      {history.length > 0 && (
-        <section className="mt-8 border-t border-line pt-5" data-testid="desk-history">
-          <details>
-            <summary className="cursor-pointer text-label uppercase tracking-wider text-ink-3">
-              History · {history.length} superseded run{history.length === 1 ? '' : 's'}
-            </summary>
-            <ul className="mt-2 space-y-1">
-              {history.map((h) => (
-                <li key={h.id}>
-                  <button
-                    type="button"
-                    onClick={() => selectRow('finding', h.id, h.title, { origin: 'desk-history' })}
-                    className="flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left text-xs text-ink-2 hover:bg-surf-1 hover:text-ink-1"
-                    data-testid="desk-history-row"
-                  >
-                    {h.severity && (
-                      <span
-                        className="inline-block h-2 w-2 shrink-0 rounded-full"
-                        style={{ background: SEVERITY_HEX[h.severity] ?? '#8892a0' }}
-                        aria-hidden
-                      />
-                    )}
-                    <span className="truncate">{h.title}</span>
-                    {Number.isFinite(h.producedAt) && (
-                      <span className="ml-auto shrink-0 text-ink-3">
-                        {formatDistanceToNow(h.producedAt)} ago
-                      </span>
-                    )}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </details>
-        </section>
-      )}
-    </div>
-  )
-}
-
 export default function WorldAssessment() {
-  const selection = useSelection((s) => s.selection)
-  const targetId = selection?.kind === 'target' ? selection.id : null
-  const assessorId = targetId ? COUNTRY_COMPOSITION_ID : ASSESSOR_ID
-  const queryUrl = targetId
-    ? `/findings?analyst_id=${COUNTRY_COMPOSITION_ID}&target_id=${encodeURIComponent(targetId)}&limit=5`
-    : `/findings?analyst_id=${ASSESSOR_ID}&limit=5`
+  // Which run is in the reading column. `null` means "whatever is latest", so a
+  // refetch always carries the operator forward onto the current world read;
+  // picking a run out of the history pins it until they come back.
+  const [pinnedRunId, setPinnedRunId] = useState<string | null>(null)
 
   const { data, isLoading, error } = useQuery<FindingsResponse>({
-    queryKey: targetId ? ['assessment-findings', 'country', targetId] : ['world-assessment-findings'],
+    queryKey: ['world-assessment-findings'],
     refetchInterval: 5 * 60_000,
-    queryFn: () => apiGet<FindingsResponse>(queryUrl),
+    queryFn: () =>
+      apiGet<FindingsResponse>(`/findings?analyst_id=${ASSESSOR_ID}&limit=${RUN_LIMIT}`),
   })
 
-  // Newest-first list of this assessor's runs → current + collapsed history.
+  // Newest-first list of world_assessor runs → the current read + its history.
   const runs = useMemo<ProjectedAssessment[]>(() => {
-    const rows = (data?.data ?? []).filter((r) => r.analyst_id === assessorId)
+    const rows = (data?.data ?? []).filter((r) => r.analyst_id === ASSESSOR_ID)
     rows.sort((a, b) => Date.parse(b.produced_at) - Date.parse(a.produced_at))
     return rows.map(projectAssessment)
-  }, [data, assessorId])
+  }, [data])
 
-  const assessment = runs[0] ?? null
+  const latest = runs[0] ?? null
   const history = runs.slice(1)
-
-  // DESK mode — the Intelligence Card (units carry their own loading, so it
-  // renders independent of the composition query state).
-  if (targetId) {
-    return (
-      <DeskIntelligenceCard
-        targetId={targetId}
-        current={assessment}
-        history={history}
-        isLoading={isLoading}
-      />
-    )
-  }
+  // A pinned run that has aged out of the fetched window falls back to the
+  // latest rather than blanking the column.
+  const active = (pinnedRunId ? runs.find((r) => r.id === pinnedRunId) : null) ?? latest
 
   if (isLoading) return <LoadingSkeleton />
 
@@ -455,28 +304,46 @@ export default function WorldAssessment() {
     )
   }
 
-  if (!assessment) return <EmptyState targetId={targetId} />
+  if (!active) return <EmptyState />
 
-  const hasTime = Number.isFinite(assessment.producedAt)
+  const isLatest = active.id === latest?.id
+  const hasTime = Number.isFinite(active.producedAt)
   const scope = 'world_assessor · composed, verified world view'
 
   return (
     <article className="mx-auto w-full max-w-3xl px-6 py-8" data-testid="world-assessment">
       <header className="mb-5 border-b border-line pb-4">
-        <div className="text-label uppercase tracking-wider text-ink-3" data-testid="world-assessment-scope">
-          world_assessor finding · one producer
+        {/* The run, named plainly and in UTC — the panel always says which read
+            is on screen, and it is always a WORLD read. */}
+        <div
+          className="flex flex-wrap items-center gap-2 text-label uppercase tracking-wider text-ink-3"
+          data-testid="world-assessment-scope"
+        >
+          <span data-testid="world-assessment-stamp">
+            World read — {hasTime ? formatUtcStamp(active.producedAt) : 'time unknown'}
+          </span>
+          {!isLatest && (
+            <span
+              className="rounded border border-amber-800/60 bg-amber-950/30 px-1.5 py-0.5 normal-case tracking-normal text-amber-200"
+              data-testid="world-assessment-superseded"
+            >
+              superseded run
+            </span>
+          )}
         </div>
         <div className="mt-1 text-xs leading-relaxed text-ink-3" data-testid="world-assessment-framing">
-          The composed, verified world view, synthesized over the per-country
-          compositions &mdash; live now.
+          The composed, verified world view from{' '}
+          <span className="font-mono text-ink-2">world_assessor</span>, synthesized over the
+          per-country compositions. One producer, and always the world &mdash; per-desk detail
+          lives in the Inspector.
         </div>
         <div className="mt-1 flex items-start justify-between gap-3">
-          <h1 className="text-xl font-semibold text-ink-1">{assessment.title}</h1>
+          <h1 className="text-xl font-semibold text-ink-1">{active.title}</h1>
           <div className="flex shrink-0 items-center gap-1">
-            <DownloadControls doc={toReportDoc(assessment, scope)} />
+            <DownloadControls doc={toReportDoc(active, scope)} />
             <button
               type="button"
-              onClick={() => selectRow('finding', assessment.id, assessment.title, { origin: 'assessment' })}
+              onClick={() => selectRow('finding', active.id, active.title, { origin: 'assessment' })}
               className="rounded border border-line px-2 py-1 text-xs font-medium text-ink-2 hover:border-line-strong hover:text-ink-1"
               data-testid="world-assessment-trace"
               title="Trace this assessment's provenance / inputs in The Why"
@@ -488,19 +355,30 @@ export default function WorldAssessment() {
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-ink-3">
           {hasTime && (
             <span data-testid="world-assessment-asof">
-              as of {formatDistanceToNow(assessment.producedAt)} ago
+              as of {formatDistanceToNow(active.producedAt)} ago
             </span>
+          )}
+          {!isLatest && (
+            <button
+              type="button"
+              onClick={() => setPinnedRunId(null)}
+              className="rounded border border-line px-2 py-0.5 text-ink-2 hover:border-line-strong hover:text-ink-1"
+              data-testid="world-assessment-back-to-latest"
+              title="Return to the current world read"
+            >
+              ← Back to the latest read
+            </button>
           )}
         </div>
       </header>
 
-      {assessment.summary.trim() !== '' ? (
+      {active.summary.trim() !== '' ? (
         <div className="text-sm text-ink-2" data-testid="world-assessment-body">
           <CitedAssessment
-            text={assessment.summary}
-            citations={assessment.citations}
-            verification={assessment.verification}
-            confidence={assessment.confidence}
+            text={active.summary}
+            citations={active.citations}
+            verification={active.verification}
+            confidence={active.confidence}
             analystId={ASSESSOR_ID}
           />
         </div>
@@ -509,6 +387,9 @@ export default function WorldAssessment() {
           This assessment was published without a written summary.
         </p>
       )}
+
+      {/* Prior runs — collapsed, browsable, swap into the column above. */}
+      <RunHistory runs={history} activeId={active.id} onSelect={setPinnedRunId} />
     </article>
   )
 }
@@ -521,7 +402,10 @@ export function CompactWorldAssessment() {
   const { data, isLoading } = useQuery<FindingsResponse>({
     queryKey: ['world-assessment-findings'],
     refetchInterval: 5 * 60_000,
-    queryFn: () => apiGet<FindingsResponse>('/findings?analyst_id=world_assessor&limit=5'),
+    // Same key AND same request as the full one-pager — a differing `limit`
+    // behind a shared cache key would make the two disagree about the window.
+    queryFn: () =>
+      apiGet<FindingsResponse>(`/findings?analyst_id=${ASSESSOR_ID}&limit=${RUN_LIMIT}`),
   })
   const assessment = useMemo<WorldAssessmentT | null>(() => {
     const rows = data?.data ?? []

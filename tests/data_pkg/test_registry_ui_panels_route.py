@@ -247,13 +247,29 @@ async def test_list_ui_panels_filters_by_mode(api_app, client):
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_list_ui_panels_normalizes_mode_aliases(api_app, client):
-    """Querying with `?mode=above-ai` normalizes to `above_ai` (no rows,
-    but a 200 not a 400)."""
-    r = await client.get(
+    """Querying with `?mode=above-ai` normalizes to `above_ai`: a 200, not a
+    400, returning exactly what the canonical spelling returns.
+
+    This used to assert ``r.json() == []`` — true only while no other test in
+    the suite had registered an `above_ai` panel, which made it a statement
+    about the SHARED registry rather than about normalization. Under
+    `--randomly-seed` a sibling's panel landed first and it failed on correct
+    behaviour. Comparing the two spellings is both order-proof and STRICTLY
+    STRONGER: an empty list is what a `mode` that silently matched nothing
+    would also return, so the old assertion passed just as happily if the
+    alias had normalized to garbage.
+    """
+    r_alias = await client.get(
         "/api/v1/registry/ui_panels", params={"mode": "above-ai"},
     )
-    assert r.status_code == 200
-    assert r.json() == []
+    r_canon = await client.get(
+        "/api/v1/registry/ui_panels", params={"mode": "above_ai"},
+    )
+    assert r_alias.status_code == 200, "a known alias must not be rejected"
+    assert r_canon.status_code == 200
+    assert [p["descriptor_id"] for p in r_alias.json()] == [
+        p["descriptor_id"] for p in r_canon.json()
+    ], "the alias must resolve to the same panel set as the canonical mode"
 
 
 @pytest.mark.integration

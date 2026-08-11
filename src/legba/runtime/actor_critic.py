@@ -410,7 +410,17 @@ async def verify_inline_target_finding(
     # ``[N]`` + citations-bridge form and graded by the SAME floor + judge;
     # ``perspective`` claims never enter the document (§10 flag-never-strip —
     # the entry itself is NEVER mutated; the verdict is a side critique row).
-    is_composition = kind in ("meta_findings_synthesizer", "cross_analyst_correlator")
+    # CONTINUITY P2 — ``situation_tracker`` rides the COMPOSITION branch, not a
+    # branch of its own, because its bridge IS the composition bridge: it cites
+    # verified ``analyst_outputs`` sub-claims by ``[[ref:N]]`` ordinal with
+    # ``ref_kind='finding'``, and the T7 hedge-laundering / shared-lineage cap
+    # applies for the same reason it does to a compose — a trajectory read is a
+    # second-order claim over first-order findings, and its confidence must not
+    # exceed the ceiling of the rows it rests on. A cycle with nothing to say
+    # emits no citations key and no-ops here, same as an honest-empty compose.
+    is_composition = kind in (
+        "meta_findings_synthesizer", "cross_analyst_correlator", "situation_tracker",
+    )
     is_journal = kind == "journal_assessor"
     if kind == "inline_target":
         pass
@@ -468,6 +478,13 @@ async def verify_inline_target_finding(
             # counted absence_slice_unavailable — never a fabricated pass.
             slice_conn=conn,
             run_id=run_id,
+            # R2/R3: the producer's own DETERMINISTIC verdicts about its input set
+            # — the salience lead check and the detected input contradictions. Both
+            # were computed at compose time and stamped here; until now nothing
+            # read them. Passing the block is what turns two advisories into two
+            # counted soft verify failures. ``None`` for every non-composition
+            # kind → the fold is inert.
+            eval_block=data.get("eval") if isinstance(data, Mapping) else None,
         )
     except Exception as exc:  # pragma: no cover — verify must never break a run
         logger.warning(

@@ -26,10 +26,12 @@ and everything auditable hop-by-hop back to the original item.
  feeds ──► signals ──► facts / entities / situations      (the knowledge substrate)
                           │
                           ▼
-              8 bounded reasoning units                    (one narrow question each,
+              9 bounded reasoning units                    (one narrow question each,
    leadership · energy · escalation · narrative ·          per country desk — except
    internal-stability · military-posture · economic-coercion  proliferation, narrow:
-   · proliferation                                          8 nuclear-relevant desks)
+   · proliferation · disruption-status                      8 nuclear-relevant desks;
+                                                            disruption-status, narrow:
+                                                            thematic supply-chain desks)
                           │  cited [N] → grounding-verified
                           ▼
    country ──► region ──► world composition                (synthesis over GROUNDING-
@@ -46,7 +48,27 @@ claim actually follows from what it cites** (an LLM judge plus a deterministic
 citation check), and a hash-chained receipt trail connects every output back to
 source. The whole chain — source item, citation, verify verdict, composed
 conclusion — is preserved and replayable after the fact. You run it yourself
-(AGPL, self-hosted, no SaaS dependencies), so you can inspect all of it.
+(AGPL, self-hosted), so you can inspect all of it.
+
+**What "self-hosted" does and doesn't mean.** The *analysis core* is genuinely
+self-hosted and $0-per-run: every scheduled analyst — the bounded units, the
+composition tower, the deterministic sidecars — generates on a local
+OpenAI-compatible vLLM plane, with local embeddings, Postgres, Qdrant,
+OpenSearch, NATS and SearxNG alongside it. No scheduled analytic work bills a
+third party. Two hosted endpoints *are* in the loop today and it would be
+dishonest to call the deployment SaaS-free: the cross-family **verify judge**
+runs on a hosted Gemma endpoint (Cerebras), and the operator-invoked
+**`consult` / `deep_consult`** analysts run on Anthropic — those two are the
+only sanctioned Anthropic users, enforced in the deps builder rather than by
+convention. Both are single config lines (`LEGBA_JUDGE_STACK_REF` and the
+`deep_consult` descriptor's `llm.primary.raw`) and both can be pointed back at
+the local plane, at the cost of returning the judge to same-model grading.
+Several optional source handlers (Firecrawl, MediaCloud, Telegram, Discord)
+and any proxy pool are likewise commercial and credential-gated — they are
+opt-in, not required, and the catalog runs without them. The generated
+[docs/RELEASE_STATE.md](docs/RELEASE_STATE.md) reports the *effective* judge
+route for a given deployment rather than the descriptor default, so this
+distinction stays checkable instead of asserted.
 
 **What "grounding-verified" means — and doesn't.** The verify pass measures
 *groundedness*: "does this claim follow from the evidence it cites?" — not "is
@@ -96,9 +118,11 @@ Sources own acquisition: a source polls (or receives a push), emits one
 canonical, target-agnostic **signal**, enriched once (language, geo, entities)
 and published once. A fan-out plane routes each signal to every subscribed
 **desk** by predicate — one BBC feed serves all 32 desks without
-re-fetching. Per desk, up to eight bounded **units** each answer one narrow
+re-fetching. Per country desk, up to eight of the nine bounded **units** each
+answer one narrow
 question — seven run on every desk; the eighth, `proliferation_watch`, only on
-the 8 nuclear-relevant desks — over a cited 72-hour slice plus accumulated
+the 8 nuclear-relevant desks; the ninth, `disruption_status`, runs on the
+thematic supply-chain desks instead — over a cited 72-hour slice plus accumulated
 context from the temporal knowledge
 substrate (facts and relationships with validity windows — so it integrates
 over weeks, not just today, and stale model priors get overridden). Unit
@@ -152,10 +176,12 @@ carries lineage (`derived_from`) plus a SHA-256 receipt chain, walkable via
 
 The analyst plane runs on a self-hosted **gpt-oss-120b** (vLLM, $0/token);
 consult uses **Claude Opus 4.8** (billed, sparingly); the faithfulness judge
-currently runs on the same core model (a documented, temporary limitation — a
-dedicated cross-family judge is planned). Enrichment: bge-m3 embeddings, NLLB
-translation, spaCy/GLiREL NER. All hosted out-of-process and resolved through
-the stack registry. Details: [docs/AI_MODELS.md](docs/AI_MODELS.md).
+runs **cross-family** on a hosted Gemma endpoint (Cerebras) via the
+repointable judge route — the shipped descriptor default is same-model, and
+one config line points it back at the local plane. Enrichment: bge-m3
+embeddings, NLLB translation, spaCy/GLiREL NER. All hosted out-of-process and
+resolved through the stack registry. Details:
+[docs/AI_MODELS.md](docs/AI_MODELS.md).
 
 ## Documentation
 

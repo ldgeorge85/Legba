@@ -45,7 +45,7 @@ SOURCE ─► canonical Signal ─► predicate fan-out ─► the (analyst,targ
 
                          … then the product spine, bottom-up, over VERIFIED claims:
 
-  8 bounded UNITS ─► per-country COMPOSITION ─► per-region COMPOSITION ─► world COMPOSITION ─► banded SCORECARD
+  9 bounded UNITS ─► per-country COMPOSITION ─► per-region COMPOSITION ─► world COMPOSITION ─► banded SCORECARD
    (inline_target,     (country_composition,       (region_composition,        (world_assessor,      (scorecard_producer,
     cite + verify       INNER JOIN on the           5 region frames; +          composes region      deterministic rules
     each finding)       verify critique)            thematic escalation_comp)   reads)                over verified claims)
@@ -109,7 +109,7 @@ plane (`ANALYSIS.md` §2) are not two systems — they are two ways the *same*
   reminder (`run_cadence`); on each tick it resolves the matched targets and
   fans them to worker actors. This is the floor — a quiet target still gets
   re-evaluated on schedule. (A `subscription.targets` block makes a run
-  per-target; its absence makes a single global META run — the eight units and
+  per-target; its absence makes a single global META run — the nine units and
   the per-country/per-region compositions fan out; `world_assessor` and
   `scorecard_producer` run globally.)
 - **Reactive door.** A matched signal (or a new upstream finding —
@@ -148,7 +148,7 @@ Bottom-up composition in which nothing rises to a higher altitude until it has
 been cited and verified at the lower one. Five layers, each reading only the
 verified output of the one below:
 
-1. **Eight bounded reasoning units** (`kind: inline_target`). Seven broad ones —
+1. **Nine bounded reasoning units** (`kind: inline_target`). Seven broad ones —
    `leadership_transition`, `energy_security`, `escalation`,
    `narrative_coordination`, `internal_stability`, `military_posture`,
    `economic_coercion` — each scoped across the 32 country desks by
@@ -203,11 +203,12 @@ mutated) — is scored in `[0,1]` by two layers
 (`data/provenance/verify.py`): a **deterministic citation-presence floor**
 (always on — a fact-asserting clause with no `[N]` marker, or whose marker
 resolves to no real signal id, is an unsupported span), and an **optional LLM
-judge** (flag-gated by `LEGBA_VERIFY_LLM_JUDGE`; currently the same core model
-that produced the finding, not cross-family — a deliberate, temporary choice
-that shares the producer's blind spots; when the flag is off or the judge is
-unreachable the result degrades to the floor and is labelled
-`judge-unavailable`, never a fabricated number). The verdict persists as a
+judge** (flag-gated by `LEGBA_VERIFY_LLM_JUDGE`; resolved through the judge
+route — descriptor default same-model, the reference deployment cross-family
+on a hosted Gemma judge via `LEGBA_JUDGE_STACK_REF`; when the flag is off or
+the judge is unreachable the result degrades to the floor, stamped
+`judge_status='deterministic'` and published PROVISIONAL under a ceiling,
+never a fabricated number). The verdict persists as a
 `critique`, and `effective_confidence = min(confidence, faithfulness_score)`
 is folded at read time — gating a visible low-confidence tier, never a hard
 delete. The composition INNER JOIN and the scorecard bands key on this fold.
@@ -313,9 +314,9 @@ mechanisms answers the forward question — "does anything change now?" —
 without ever letting a machine rewrite a settled claim:
 
 - **Open questions, watched.** `claim_watch` (deterministic MATCHING — the
-  optional post-match bearing gate is the only LLM in the leg and it ships
-  OFF; `state: draft` — built but **not yet part of the default live spine**;
-  see `SEAMS.md` #49) matches NEW signals against the standing `hypotheses`
+  optional post-match bearing gate + blocking confirm are the only LLM legs;
+  both default OFF in code and both are ON live on the reference deployment;
+  in-tree `state: draft`, activated live — see `SEAMS.md` #49) matches NEW signals against the standing `hypotheses`
   `status='open_question'` set on a fused vector+entity+geo plane, and
   side-writes `bearing_edges` ("this new evidence bears on that old question",
   migration 0107) plus `review_flags` (one open flag per consumer whose
@@ -414,9 +415,10 @@ claim below cites the producing `file:line`; the `OutputKind` enum has
 - **The analysis-spine roster is registered by descriptor** in
   `scripts/bringup_register_analysts.py` (the live set; `country_assessor` and
   `country_predictor` are commented out — RETIRED, see below). The spine
-  producers: the eight bounded UNITS `leadership_transition` / `energy_security` /
+  producers: the nine bounded UNITS `leadership_transition` / `energy_security` /
   `escalation` / `narrative_coordination` / `internal_stability` /
-  `military_posture` / `economic_coercion` / `proliferation_watch` (all `inline_target`, Flow 12), the
+  `military_posture` / `economic_coercion` / `proliferation_watch` /
+  `disruption_status` (all `inline_target`, Flow 12), the
   composition tower `country_composition` → `region_composition` (5 region frames)
   → `world_assessor` plus the thematic `escalation_composition` (all
   `meta_findings_synthesizer`, Flow 13), the deterministic I&W pair
@@ -720,7 +722,7 @@ emits output bindings, and may escalate.
     (SUCCESS / TRANSIENT_FAIL / BUDGET_THROTTLED / HARD_FAIL / NOOP).
 
 **Producer note:** this ONE cadence + fan-out rail carries every LIVE analyst — the
-eight bounded `inline_target` UNITS and the `meta_findings_synthesizer` composition
+nine bounded `inline_target` UNITS and the `meta_findings_synthesizer` composition
 tower (`country_composition` / `region_composition` / `world_assessor` / thematic
 `escalation_composition`; target-bound → per-country/per-region fan-out; target-less → one global run), plus the
 `deterministic` META producers (`scorecard_producer`, `unit_correctness_scorer`,
@@ -847,7 +849,7 @@ into the analyst's live system prompt.
 > **The LIVE registered optimizer is `unit_optimizer`, NOT the old monolith.** GEPA
 > returned as a BOUNDED experiment over ONE bounded unit (`leadership_transition`), with
 > `fitness_metric = faithfulness` measured by the SAME faithfulness judge
-> (currently the core `llm.primary.openai_compat` model, not cross-family) that gates the live unit findings (Flow 12). A candidate carries a
+> (whatever the judge route resolves — Flow 12) that gates the live unit findings. A candidate carries a
 > paired parent-vs-candidate faithfulness delta (live example: parent 0.34 → candidate
 > 0.29, delta **−0.05**), stays `promotion_gate=human_gated`, and can **NEVER** auto-promote
 > on a degenerate / insufficient-sample / judge-unavailable / non-positive delta — a
@@ -1335,7 +1337,7 @@ restates such background facts, so the model had no in-context correction
    pool) + a per-run `_hook` closure and install it on the `InlineTargetDeps.grounding_hook`
    field (`src/legba/runtime/analyst_deps_builder.py:367`, hook builder `:378-439`,
    `_build_inline_target` wiring `:368-374`). Off → `grounding_hook=None` → the run path
-   is byte-for-byte unchanged. **All eight bounded units opt in** (identical block, e.g.
+   is byte-for-byte unchanged. **All nine bounded units opt in** (identical block, e.g.
    `analyst_leadership_transition.yaml:48-52`): `scope: [target_geo, slice_entities]`,
    `sources: [substrate, situations, graph_structure]`, `max_facts: 30`. (The block was
    ported verbatim from the retired `country_assessor` monolith when the units took over
@@ -1414,7 +1416,7 @@ supersession gate. So the run integrates over accumulated substrate, not just to
   `src/legba/runtime/analyst_deps_builder.py:419-431`).
 - **Grounding only fires for `inline_target` analysts.** The hook lives on
   `InlineTargetDeps`; other LLM kinds (the `meta_findings_synthesizer` compositions,
-  consult, deep_consult) have no grounding wiring. The eight bounded units ARE
+  consult, deep_consult) have no grounding wiring. The nine bounded units ARE
   `kind: inline_target`, so they ground; `world_assessor` is now a
   `meta_findings_synthesizer` composition (Flow 13) and does NOT — it composes over
   already-grounded, already-verified country reads, so it inherits their ground truth
@@ -1573,11 +1575,12 @@ voice (Wave 5), gated on first building a critic actuator.
 
 ## 12. A bounded reasoning unit + the mandatory verify pass (LIVE)
 
-**One sentence:** each of the eight bounded UNITS — seven broad ones,
+**One sentence:** each of the nine bounded UNITS — seven broad ones,
 `leadership_transition`,
 `energy_security`, `escalation`, `narrative_coordination`, `internal_stability`,
 `military_posture`, `economic_coercion`, plus a narrower eighth,
-`proliferation_watch` — is an `inline_target`
+`proliferation_watch`, and a ninth off the country plane,
+`disruption_status` — is an `inline_target`
 DESCRIPTOR (no new Python kind) scoped by a COVERAGE TAG to every desk (the
 seven broad ones via
 `has_tag("g20") or has_tag("watch")`; `proliferation_watch` instead via
@@ -1649,15 +1652,17 @@ rest of the spine composes bottom-up.
      UNSUPPORTED span, and the score is the fraction of checkable claims that are
      supported (a planted fabrication with no citation is flagged unsupported);
    - an **optional LLM judge** (flag-gated by `LEGBA_VERIFY_LLM_JUDGE`, soft-fail) —
-     **currently the SAME core reasoning model** (`llm.primary.openai_compat`,
-     gpt-oss-120B) that wrote the finding, **NOT** cross-family — refines the per-claim
-     verdicts. This is a deliberate, temporary choice: the earlier cross-family 8B judge
-     ("legba-slm", `llm.verify.slm_8b`, Llama-3.1-8B) proved too weak (harsh + mis-aimed);
-     a dedicated reasoning judge is planned. KNOWN LIMITATION: same-model judging shares
-     blind spots, so the signal is weaker than an independent judge (the deterministic
-     floor + signed provenance chain still backstop it). When the flag is off or the judge
-     is unreachable the result degrades to the floor and is LABELLED `judge-unavailable` —
-     it NEVER fabricates a number (`verify.py:319-320`).
+     resolved through the judge route (`LEGBA_JUDGE_STACK_REF` env >
+     `method.llm.judge` > `.verify` > `.primary`): the shipped descriptor default is
+     the SAME core model that wrote the finding (same-model judging shares blind
+     spots — the deterministic floor + signed provenance chain backstop it), and the
+     reference deployment repoints every judge call CROSS-FAMILY at a hosted Gemma
+     judge. Every critique stamps `judge_llm_ref` + a `judge_pipeline_version` so
+     verdict populations never pool across judges or rule revisions. When the flag
+     is off or the judge is unreachable the result degrades to the floor
+     (`judge_status='deterministic'`, published PROVISIONAL under a ceiling) — it
+     NEVER fabricates a number; a body whose claims fail to segment publishes an
+     explicit `unassessable` state and no score.
 
 5. **Persist as a critique + fold effective_confidence.** The verdict is written as a
    `critique` row (`overall_score = min(faithfulness_score, confidence_ceiling)`,

@@ -88,6 +88,7 @@ const SystemWallMovers = lazy(() => import('@/panels/system/WallMovers'))
 const SystemSearch = lazy(() => import('@/panels/system/Search'))
 const SystemEntities = lazy(() => import('@/panels/system/Entities'))
 const SystemEntityGraph = lazy(() => import('@/panels/system/EntityGraph'))
+const SystemGraphWalk = lazy(() => import('@/panels/system/GraphWalk'))
 const SystemNotableStructure = lazy(() => import('@/panels/system/NotableStructure'))
 const SystemAlertCenter = lazy(() => import('@/panels/system/AlertCenter'))
 const SystemWatchlist = lazy(() => import('@/panels/system/Watchlist'))
@@ -350,6 +351,14 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     // registered pointing at the ORIGINAL component (HIDDEN_KINDS below).
     definition: def('system.entity_graph', 'system_entity_graph', 'operator', null, 'Entity Graph', false, ['personal'], 'Share2'),
     Component: SystemEntityGraph,
+  },
+  'system.graph_walk': {
+    // K-G4 — the graph WALK, and the one graph surface that is NOT folded into
+    // Entities: it is an interactive verb (anchor, expand, inspect an edge's
+    // evidence) rather than a rendered projection, and it reads the reified
+    // `entity_edges` store that no other panel touches.
+    definition: def('system.graph_walk', 'system_graph_walk', 'operator', null, 'Graph Walk', false, ['personal'], 'Network'),
+    Component: SystemGraphWalk,
   },
   'system.notable_structure': {
     // U-3 merge — folded into Entities' "Structure" tab (its actual content:

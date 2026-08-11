@@ -71,7 +71,33 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: apache/age:latest
+    # PINNED BY DIGEST (K-G3 / graph-debate JUDGE_SYNTHESIS §4.3 item 1, defect
+    # #15). This image carries the substrate that holds ALL of Legba's truth and
+    # it was riding a floating `:latest` tag — the largest uncompensated
+    # supply-chain risk in the stack, carried for 27 smoke-test fixtures.
+    #
+    # The digest below is the multi-arch index digest of `apache/age:latest` as
+    # verified on 2026-08-03 (`docker buildx imagetools inspect apache/age:latest`)
+    # AND the digest of the image the live container is running — they matched,
+    # so pinning changed nothing about what runs, it only stops the NEXT
+    # `docker compose pull` from silently swapping the engine underneath the
+    # data. Contents: PostgreSQL 18.1 + Apache AGE 1.7.0 (probe-verified).
+    #
+    # TO ROLL FORWARD: re-run the imagetools inspect, read the new digest,
+    # bump this line deliberately, and re-run scripts/age_probe/run_probe.sh
+    # so the engine's behaviour is re-measured before it reaches the substrate.
+    #
+    # DEPLOY NOTE — this line costs exactly ONE container recreate, once.
+    # Compose keys recreation on the service config hash, and the hash tracks
+    # the image STRING, not the image it resolves to. Measured 2026-08-03:
+    # before 795dc9f7abc7d3b2a67e78324b0db55d17ae7675b27edd38ca95b750cb382c1a,
+    # after  f62c77ed139ebd5e7a177e31b8298f9589e2dbdf3434083a871be929ff6b3944.
+    # So the next `docker compose up -d` restarts the substrate even though the
+    # bits are identical. `postgres_data` is a named volume, so no data moves —
+    # but every dependent service reconnects, so land it in a maintenance
+    # window (registry first, then runtime) rather than mid-train, or pass
+    # `--no-recreate` and let the pin take effect at the next planned restart.
+    image: apache/age@sha256:4241e2d8bb86a6b2ea44e9ad06c73856e12b209de295124603a599dd7feb70eb
     environment:
       POSTGRES_USER: legba
       POSTGRES_PASSWORD: legba
@@ -276,8 +302,14 @@ services:
     # recurrence stall). Give etcd time to checkpoint. NEVER partial-clear the
     # data dir — full-wipe only (RUNBOOK §0).
     stop_grace_period: 45s
-    # Infra tuning: container backstop (etcd-backed reminder store — small).
-    mem_limit: 512m
+    # Infra tuning: etcd mmaps its DB and the page cache is charged to this
+    # cgroup — the default 1M-revision retention pins the DB near 380MB, which
+    # put the old 512m limit at 91% (one growth step from an OOM kill of the
+    # whole reminder plane, 2026-08-02 engine review P6). 2g clears the cliff;
+    # the periodic 24h compaction window below caps revision history by TIME
+    # instead (~100k revisions at the observed ~1.15 rev/s). Reclaiming file
+    # size after a retention change still needs a one-off `etcdctl defrag`.
+    mem_limit: 2g
     depends_on:
       dapr-scheduler-init:
         condition: service_completed_successfully
@@ -289,6 +321,10 @@ services:
       - "/var/lib/dapr-scheduler-data"
       - "--etcd-client-port"
       - "2379"
+      - "--etcd-compaction-mode"
+      - "periodic"
+      - "--etcd-compaction-retention"
+      - "24h"
     ports:
       - "127.0.0.1:50006:50006"  # B-1: loopback-only
     volumes:

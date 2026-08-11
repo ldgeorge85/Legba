@@ -38,7 +38,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 from uuid import UUID
 
 import networkx as nx
@@ -323,7 +323,15 @@ def _proxy_chains(
     for u, v, d in g.edges(data=True):
         simple.add_edge(u, v)
         # Multi-edges between same pair: combine polarities multiplicatively.
-        sign = 1 if int(d.get("polarity", 0) or 0) >= 0 else -1
+        #
+        # W3-A: a NEUTRAL edge is 0, not +1. Collapsing 0 to +1 let an edge
+        # that asserts no alignment pass a sign product through unchanged, so a
+        # chain hopping via a neutral tie ("A located in X, X hostile to B")
+        # was reported with a confident sign it has not earned. Zero propagates
+        # instead — the same treatment structural_balance gives a triad with a
+        # neutral leg, which it calls `incomplete` rather than balanced.
+        pol = int(d.get("polarity", 0) or 0)
+        sign = 0 if pol == 0 else (1 if pol > 0 else -1)
         edge_polarity[(u, v)] = edge_polarity.get((u, v), 1) * sign
 
     # DETERMINISM FIX (#99): the old code early-broke after the first
@@ -720,35 +728,68 @@ def _is_person_only(ep_classes: set[str] | None) -> bool:
     return bool(ep_classes) and ep_classes.issubset({"person"})
 
 
-async def _augment_from_nexuses(deps: Any, g: "nx.MultiDiGraph") -> int:
-    """Add directed SIGNED edges from the OPEN ``nexuses`` rows (PIECE A).
+#: The families whose edges are a RELATIONSHIP for mining purposes.
+#: `cooccurrence` is excluded: two entities appearing in the same document is
+#: not a tie, and 8,635 of the 12,732 open nexus rows were exactly that — so
+#: brokerage centrality was largely measuring which nouns co-occur in the news.
+#: `reference` IS included here, unlike in `structural_balance`: for BROKERAGE
+#: an IGO membership is a genuine structural conduit ("who sits between these
+#: two blocs" legitimately runs through the UN), whereas for BALANCE the same
+#: edge is not evidence of alignment. Same table, different question.
+MINING_FAMILIES = ("relation", "reference", "structural")
+
+
+async def _augment_from_nexuses(
+    deps: Any, g: "nx.MultiDiGraph", families: Sequence[str] | None = None,
+) -> int:
+    """Add directed SIGNED edges from the OPEN ``entity_edges`` rows (PIECE A).
 
     A reified relationship with an ``intermediary`` is added as the two-hop
     proxy chain ``subject -> intermediary -> object`` (each hop carrying the
-    nexus polarity) so the proxy-chain sign-product mining sees the cut-out;
+    edge polarity) so the proxy-chain sign-product mining sees the cut-out;
     a direct relationship is added as ``subject -> object``. This is what makes
     proxy-chain detection run over the reifier's typed signed edges instead of
     the untyped co-occurrence graph (PIECE A light-up). Returns edges added;
     failures degrade to 0.
+
+    W3-A — CUT OVER TO ``entity_edges`` AND MADE FAMILY-AWARE
+    (:data:`MINING_FAMILIES`). Endpoints are named through the foreign keys, so
+    an alias and its keeper stop appearing as two nodes — which mattered here
+    more than anywhere else, because splitting one actor in two halves its
+    degree AND its betweenness, demoting exactly the broker the mining exists
+    to surface.
+
+    The #99 self-amplification guard survives the move: the reifier's own
+    inferred proxy chains carry ``source_type='inferred'`` on the edge row, so
+    the predicate is unchanged.
     """
     pool = getattr(deps, "pg_pool", None) if deps is not None else None
     if pool is None:
         return 0
+    fams = list(families) if families else list(MINING_FAMILIES)
     try:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT subject, intermediary, object, polarity, rel_type
-                  FROM nexuses
-                 WHERE valid_until IS NULL AND superseded_by IS NULL
+                SELECT sp.canonical_name AS subject,
+                       ip.canonical_name AS intermediary,
+                       dp.canonical_name AS object,
+                       e.polarity, e.edge_type AS rel_type
+                  FROM entity_edges e
+                  JOIN entity_profiles sp ON sp.id = e.src_id
+                  JOIN entity_profiles dp ON dp.id = e.dst_id
+                  LEFT JOIN entity_profiles ip ON ip.id = e.intermediary_id
+                 WHERE e.valid_until IS NULL AND e.superseded_by IS NULL
+                   AND e.edge_family = ANY($1::text[])
                    -- #99: NEVER re-discover from our own inferred reifications,
                    -- else proxy-chain mining amplifies inferred-on-inferred.
-                   AND COALESCE(source_type, '') <> 'inferred'
+                   AND COALESCE(e.source_type, '') <> 'inferred'
                  LIMIT 20000
-                """
+                """,
+                fams,
             )
     except Exception as exc:
-        logger.warning("graph_mining.nexus.pull_failed err=%s", exc)
+        logger.warning("graph_mining.edge.pull_failed err=%s", exc)
         return 0
     added = 0
     for r in rows:
@@ -768,46 +809,55 @@ async def _augment_from_nexuses(deps: Any, g: "nx.MultiDiGraph") -> int:
     return added
 
 
-async def _recent_hostile_edges(deps: Any) -> list[dict[str, Any]]:
-    """Pull OPEN negative-polarity nexuses with a recent ``valid_from`` (#99).
+async def _recent_hostile_edges(
+    deps: Any, families: Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Pull OPEN negative-polarity edges with a recent ``valid_from`` (#99).
 
     Feeds the ``new_hostile_edge`` interesting-item: a newly-asserted hostile
     relationship is high-signal (an alignment shift). Returns rows shaped
     ``{subject, object, polarity, rel_type, valid_from}`` ordered most-recent
     first. Best-effort — any failure (no pool, no valid_from column) yields
     ``[]`` so the interesting list simply omits this kind.
+
+    W3-A — CUT OVER TO ``entity_edges``. The endpoint CLASS lookups were
+    correlated subqueries matching ``lower(canonical_name)``, which returned the
+    class set of every profile sharing that name; they are foreign-key joins
+    now, so the M20 attribution guards vet the class of the entity the edge
+    actually names rather than a union over homonyms.
     """
     pool = getattr(deps, "pg_pool", None) if deps is not None else None
     if pool is None:
         return []
+    fams = list(families) if families else list(MINING_FAMILIES)
     try:
         async with pool.acquire() as conn:
-            # M20: also fetch the nexus confidence (feeds the per-edge quality
-            # score) + the DISTINCT entity_profiles class set for each endpoint
-            # (feeds the fragment / state->person attribution guards in
-            # _build_interesting). A NULL class array = the surface is absent from
-            # entity_profiles (benefit-of-the-doubt on vetting).
+            # M20: also fetch the edge confidence (feeds the per-edge quality
+            # score) + the entity_class of each endpoint (feeds the fragment /
+            # state->person attribution guards in _build_interesting). The class
+            # arrays stay ARRAYS so the downstream guards are untouched; they
+            # are now single-element by construction.
             rows = await conn.fetch(
                 """
-                SELECT n.subject, n.object, n.polarity, n.rel_type,
-                       n.valid_from, n.confidence,
-                       (SELECT array_agg(DISTINCT ep.entity_class)
-                          FROM entity_profiles ep
-                         WHERE lower(ep.canonical_name) = lower(n.subject))
-                         AS subject_classes,
-                       (SELECT array_agg(DISTINCT ep.entity_class)
-                          FROM entity_profiles ep
-                         WHERE lower(ep.canonical_name) = lower(n.object))
-                         AS object_classes
-                  FROM nexuses n
-                 WHERE n.valid_until IS NULL AND n.superseded_by IS NULL
-                   AND n.polarity < 0
-                   AND n.valid_from IS NOT NULL
+                SELECT sp.canonical_name AS subject,
+                       dp.canonical_name AS object,
+                       e.polarity, e.edge_type AS rel_type,
+                       e.valid_from, e.confidence,
+                       ARRAY[sp.entity_class] AS subject_classes,
+                       ARRAY[dp.entity_class] AS object_classes
+                  FROM entity_edges e
+                  JOIN entity_profiles sp ON sp.id = e.src_id
+                  JOIN entity_profiles dp ON dp.id = e.dst_id
+                 WHERE e.valid_until IS NULL AND e.superseded_by IS NULL
+                   AND e.polarity < 0
+                   AND e.valid_from IS NOT NULL
+                   AND e.edge_family = ANY($1::text[])
                    -- #99: exclude our own inferred reifications from re-discovery.
-                   AND COALESCE(n.source_type, '') <> 'inferred'
-                 ORDER BY n.valid_from DESC
+                   AND COALESCE(e.source_type, '') <> 'inferred'
+                 ORDER BY e.valid_from DESC
                  LIMIT 200
-                """
+                """,
+                fams,
             )
     except Exception as exc:
         logger.warning("graph_mining.recent_hostile.pull_failed err=%s", exc)
@@ -1191,10 +1241,16 @@ async def handle(
     warnings: list[str] = []
     g = _graph_from_inputs(inputs)
     augment_counters = {"edges_pulled": 0, "nodes_added": 0}
+    # W3-A: the mining SCOPE is declared, not implied — see MINING_FAMILIES.
+    raw_fams = options.get("edge_families")
+    fams = ([str(f).strip().lower() for f in raw_fams if str(f).strip()]
+            if isinstance(raw_fams, (list, tuple)) else list(MINING_FAMILIES))
+    fams = fams or list(MINING_FAMILIES)
     if deps is not None and bool(options.get("augment_from_nexuses", True)):
         # PIECE A: reified signed typed edges (incl. proxy chains via the
         # intermediary) are the primary signed-edge source for proxy mining.
-        augment_counters["nexus_edges"] = await _augment_from_nexuses(deps, g)
+        augment_counters["nexus_edges"] = await _augment_from_nexuses(
+            deps, g, fams)
     if deps is not None and bool(options.get("augment_from_age", True)):
         age_counters = await _augment_from_age(inputs, deps, g)
         augment_counters.update(age_counters)
@@ -1246,7 +1302,7 @@ async def handle(
     # leg needs nexus valid_from, pulled best-effort (omitted if unavailable).
     recent_hostile: list[dict[str, Any]] = []
     if deps is not None and bool(options.get("augment_from_nexuses", True)):
-        recent_hostile = await _recent_hostile_edges(deps)
+        recent_hostile = await _recent_hostile_edges(deps, fams)
     interesting = _build_interesting(
         communities=communities,
         centrality=centrality,
@@ -1278,6 +1334,11 @@ async def handle(
             "node_count": node_count,
             "edge_count": edge_count,
             "augment_counters": augment_counters,
+            # The SCOPE travels with the metric: a centrality ranking is
+            # meaningless without knowing which families it walked, and a
+            # consumer comparing runs across a scope change would otherwise
+            # read a definition change as a world change.
+            "edge_families": fams,
             "target_id": options.get("target_id"),
         },
     )

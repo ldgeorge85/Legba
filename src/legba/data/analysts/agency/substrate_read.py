@@ -82,6 +82,23 @@ SUBSTRATE_READ_TOOLS = (
 )
 
 
+def _families(args: Any) -> list[str] | None:
+    """Read an optional ``edge_family`` filter off an untyped tool-call arg.
+
+    W3-A: the graph walks became family-aware, so a caller can ask for the
+    co-mention cloud explicitly (``families: ["cooccurrence"]``) instead of
+    getting it by default. Anything that is not a list of strings degrades to
+    ``None`` (the port's asserting default) rather than raising — these args
+    arrive from LLM tool-use and a malformed one must not fail the turn. The
+    port validates the values; unknown families fall back there.
+    """
+    raw = args.get("families") or args.get("edge_families")
+    if not isinstance(raw, list):
+        return None
+    out = [str(x).strip() for x in raw if str(x).strip()]
+    return out or None
+
+
 async def _call_port(
     call: ToolCall, ctx: ToolContext, name: str
 ) -> ToolResult:
@@ -166,6 +183,7 @@ async def _call_port(
                 max_hops=int(args.get("max_hops", 3)),
                 polarity_product=int(pp) if pp is not None else None,
                 limit=int(args.get("limit", 30)),
+                families=_families(args),
             )
         elif name == "find_proxy_chains":
             pp = args.get("polarity_product")
@@ -175,6 +193,7 @@ async def _call_port(
                 max_hops=int(args.get("max_hops", 3)),
                 polarity_product=int(pp) if pp is not None else None,
                 limit=int(args.get("limit", 30)),
+                families=_families(args),
             )
         elif name == "query_brokers":
             raw_a = args.get("camp_a") or []
@@ -184,6 +203,7 @@ async def _call_port(
                 camp_b=[str(x) for x in raw_b] if isinstance(raw_b, list) else [],
                 max_hops=int(args.get("max_hops", 3)),
                 limit=int(args.get("limit", 50)),
+                families=_families(args),
             )
         elif name == "list_findings":
             out = await port.list_findings(

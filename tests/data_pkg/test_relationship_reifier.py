@@ -224,19 +224,50 @@ async def pg_pool(migrated_pg: PostgresConfig):
     await pool.close()
 
 
-async def _seed_proposed_edge(pool, *, src: str, tgt: str, conf: float = 0.6):
+async def _seed_proposed_edge(
+    pool, *, src: str, tgt: str, conf: float = 0.6, sources: int = 3,
+):
+    """Seed a candidate WITH backing evidence.
+
+    K-G2 put a qualification bar on selection: a candidate needs at least
+    ``MIN_INDEPENDENT_SOURCES`` independent publishers behind it and a weighted
+    score of at least ``RECOMMENDED_BAR`` before it earns a typing call. Three
+    distinct publishers scores 0.50 (multi_source 0.667×0.45 + diversity
+    1.0×0.20), comfortably clear of 0.42, with no salience or desk hit needed.
+
+    Seeding a bare edge with no ``derived_from`` lineage scores 0.0 and is
+    correctly invisible to the reifier — which is the whole point of the bar,
+    so the fixture carries real evidence rather than the bar being relaxed.
+    """
+    sig_ids = []
+    tag = uuid4().hex[:6]
     async with pool.acquire() as conn:
+        for i in range(sources):
+            sid = uuid4()
+            await conn.execute(
+                """
+                INSERT INTO signals (id, source_id, payload, content_hash,
+                                     fetched_at)
+                VALUES ($1, $2, $3::jsonb, $4, now())
+                """,
+                sid,
+                f"source.pub{tag}{i}.feed",
+                json.dumps({"title": f"{src} and {tgt}", "summary": ""}),
+                f"hash-{sid}",
+            )
+            sig_ids.append(sid)
         await conn.execute(
             """
             INSERT INTO proposed_edges
                 (source_entity, target_entity, relationship_type, confidence,
-                 evidence_text, status)
-            VALUES ($1, $2, 'co_occurs', $3, $4, 'pending')
+                 evidence_text, status, derived_from)
+            VALUES ($1, $2, 'co_occurs', $3, $4, 'pending', $5::uuid[])
             ON CONFLICT (lower(source_entity), lower(target_entity),
                          relationship_type)
-            DO UPDATE SET confidence = EXCLUDED.confidence
+            DO UPDATE SET confidence = EXCLUDED.confidence,
+                          derived_from = EXCLUDED.derived_from
             """,
-            src, tgt, conf, f"{src} and {tgt} appear together",
+            src, tgt, conf, f"{src} and {tgt} appear together", sig_ids,
         )
 
 
@@ -248,7 +279,14 @@ async def _seed_proposed_edge(pool, *, src: str, tgt: str, conf: float = 0.6):
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_reifier_types_and_writes_nexus(pg_pool):
-    await _seed_proposed_edge(pg_pool, src="IranUNIQ", tgt="IsraelUNIQ", conf=0.7)
+    # FIVE independent publishers, not the fixture default of three: the window
+    # is now RANKED by qualification score, and the shared session DB carries
+    # other tests' 3-source rows (score 0.50). Five sources scores 0.65
+    # (multi_source saturates at 4), which puts this pair at the head of the
+    # window regardless of what else is pending.
+    await _seed_proposed_edge(
+        pg_pool, src="IranUNIQ", tgt="IsraelUNIQ", conf=0.7, sources=5
+    )
     # _coerce_typing's SELECT-or-null intermediary hardening (#99 proxy-chain,
     # see test_coerce_typing_intermediary_select_or_null) only keeps an
     # LLM-returned intermediary if it was OFFERED as a candidate by
@@ -339,8 +377,14 @@ async def test_reifier_degrades_not_drops_on_llm_failure(pg_pool):
 
 
 def _ctx() -> AnalystContext:
+    # W3-A: `relationship_reifier`, NOT `seed.reifier`. `edge_family_for()` maps
+    # the `seed.` prefix to the `reference` tier — the imported lattice — and
+    # `structural_balance` excludes that tier from the balance ratio by design
+    # (86% of the open signed edge set is imported Wikidata IGO membership at
+    # +1). These rows are the reifier's OWN derived edges, so misnaming the
+    # producer filed them as an import and the consumer correctly ignored them.
     return AnalystContext(
-        analyst_id="seed.reifier",
+        analyst_id="relationship_reifier",
         analyst_version="v1",
         run_id=uuid4(),
         target_id=None,
@@ -351,6 +395,21 @@ def _ctx() -> AnalystContext:
 async def _seed_nexus(pool, *, subject, object_, polarity, rel_type,
                       intermediary=None, created_days_ago=0):
     async with pool.acquire() as conn:
+        # W3-A: `graph_mining` / `structural_balance` read `entity_edges`, and
+        # the dual-write PARKS a nexus whose endpoint name resolves to no
+        # entity rather than guessing one. So the endpoints have to exist as
+        # profiles for the edge to land — which is the id-keyed store's whole
+        # contract, not a test artifact.
+        for name in (subject, object_, intermediary):
+            if not name:
+                continue
+            await conn.execute(
+                """INSERT INTO entity_profiles
+                     (canonical_name, entity_class, entity_type, data)
+                   SELECT $1, 'organization', 'organization', '{}'::jsonb
+                    WHERE NOT EXISTS (SELECT 1 FROM entity_profiles
+                                       WHERE lower(canonical_name)=lower($1))""",
+                name)
         out, _ = await write_nexus(
             conn,
             analyst_ctx=_ctx(),

@@ -79,9 +79,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import asyncpg  # noqa: E402
 
-from legba.data.analysts.deterministic_handlers._entity_canon import (  # noqa: E402
-    canonicalize_entity,
-)
+from legba.data._entity_canon import canonicalize_entity  # noqa: E402
 
 # Same content-addressing namespace the live resolver uses, so a marker written
 # by the backfill and by the resolver for the same surface form is identical.

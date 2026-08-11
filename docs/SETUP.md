@@ -53,10 +53,12 @@ manual path and stop at the working set you will sit at 3 feeds** (this is exact
 why reviews correctly say "only 3 RSS feeds" of an under-bootstrapped instance).
 On the manual path, do not skip §8.
 
-For reference, the live production instance reaches **~53 distinct
-signal-producing sources** (the 46 catalog sources plus the shared and
-state-media feeds and the seed/baseline adapters). That is the "full scope"
-number you are aiming for.
+For reference, running §7 + §8 + the seed/baseline adapters reaches **~50
+distinct signal-producing sources**; the reference instance has grown well past
+100 by additionally activating the operator-paced breadth batches
+(`DATA_SOURCES.md` §2.5–§2.7 — the generated count is in
+[RELEASE_STATE.md](RELEASE_STATE.md)). Dozens, not 3, is the "full scope"
+shape you are aiming for.
 
 This is the canonical, self-hostable demo set — G20 world-news plus hazard feeds.
 It is an exemplar, not a closed list: the same pipeline applies to any domain
@@ -214,11 +216,13 @@ This registers the **3 shared sources** (`source.bbc.world` /
 inert feeder), and the action packs
 (`media_processing` / `incident_response` / `discovery`).
 
-> **The live analysis producers are NOT in that bundle.** The eight bounded
-> reasoning units — seven broad ones (`leadership_transition` / `energy_security` / `escalation` /
+> **The live analysis producers are NOT in that bundle.** The eight geopolitics
+> bounded reasoning units — seven broad ones (`leadership_transition` / `energy_security` / `escalation` /
 > `narrative_coordination` / `internal_stability` / `military_posture` /
 > `economic_coercion`) fanned across the g20/watch desks, plus `proliferation_watch`
-> (narrow: tag-scoped to the ~8 nuclear-relevant desks) — and the composition tower (`country_composition` →
+> (narrow: tag-scoped to the ~8 nuclear-relevant desks; the ninth unit,
+> `disruption_status`, ships with the supply-chain pack registrar
+> `scripts/bringup_register_supply_chain_pack.py`) — and the composition tower (`country_composition` →
 > `region_composition` → `world_assessor`, plus the cross-desk thematic
 > `escalation_composition`, and the deterministic I&W meta-analysts
 > `indicator_tracker` / `collection_gap`) are registered by
@@ -367,9 +371,10 @@ SQL
 ```
 
 **Verify you reached full scope** — `distinct_sources` must be **dozens, not 3**.
-A current-scope instance reaches **~53 distinct signal-producing sources** once
-the §7 sources + §8 catalog + the seed/baseline adapters are active. If you see
-only 3, you skipped §8 — go back and register the catalog.
+An instance reaches **~50 distinct signal-producing sources** once the §7
+sources + §8 catalog + the seed/baseline adapters are active (more as breadth
+batches are activated). If you see only 3, you skipped §8 — go back and
+register the catalog.
 
 Enriched signals (`language IS NOT NULL`) confirm the `nlp_client` built; findings
 in `analyst_outputs` (with `derived_from` provenance) confirm the fan-out →

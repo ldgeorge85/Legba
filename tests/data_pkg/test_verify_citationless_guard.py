@@ -129,3 +129,91 @@ async def test_guard_logs_and_persists(monkeypatch, caplog) -> None:
     payload = build_faithfulness_critique_payload(report, analyzed_output_id=uuid4())
     counters: dict[str, Any] = payload["data"]["verification"]["counters"]
     assert counters["citationless_graded"] == 1
+
+
+# ---------------------------------------------------------------------------
+# W3 (2026-08-02) — the shape split, and the mechanism it exists to pin.
+#
+# The 08-02 readout called this guard "under-firing ~12x" for economic_coercion /
+# energy_security / proliferation_watch, on the strength of a DB projection
+# showing 2,752 rows with a bare-ordinal ``data.evidence`` array and zero
+# ``data.citations``. Traced read-only against the live substrate, that is a
+# PROJECTION ARTIFACT: ``analyst_outputs.data`` stores the WHOLE serialized
+# FindingPayload, so a finding's own ``data['citations']`` sits one level down at
+# ``data->'data'->'citations'`` — populated on 94% of those rows — while
+# ``FindingPayload.evidence`` is the separate top-level evidence-IDENTIFIER
+# field the verify path never reads. Citations resolve normally, and the guard's
+# 8.3% firing rate matches the real 6.6% no-resolvable-citation rate.
+#
+# These tests pin BOTH halves of that finding so it cannot be re-litigated from a
+# JSONB path: the shape those producers actually emit resolves, and the guard
+# now names WHICH citationless shape it saw.
+# ---------------------------------------------------------------------------
+
+
+async def test_the_bare_ordinal_evidence_shape_still_resolves_its_citations(
+    monkeypatch,
+) -> None:
+    """The economic_coercion / energy_security / proliferation_watch payload:
+    bare-ordinal ``evidence`` identifiers AND a populated ``data['citations']``.
+    The evidence field is not a citation shape and is not one the resolver should
+    ever learn — the citations it ships alongside are the real bridge."""
+    monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
+    # What the producer emits: FindingPayload.evidence = ["1", "2", "3"] and
+    # FindingPayload.data["citations"] = the real marker -> signal bridge.
+    payload_evidence = ["1", "2", "3"]
+    citations = [
+        {"marker": f"[{n}]", "signal_id": str(uuid4()), "title": f"cited row {n}"}
+        for n in (1, 2, 3)
+    ]
+    assert payload_evidence  # the field exists; the verify path is handed the OTHER one
+    report = await verify_finding_faithfulness(
+        body="Alpha struck Bravo base on Monday [1].\nCharlie seized the port [2].\n",
+        citations=citations,
+        judge_llm=_StubJudge(_ALL_SUPPORTED),
+    )
+    assert "citationless_graded" not in report.counters
+
+
+async def test_the_guard_names_which_citationless_shape_it_saw(monkeypatch) -> None:
+    """``citations_absent`` (the producer emitted none) and
+    ``citations_unresolvable`` (a bridge ran and produced no usable ids) are
+    different defects with different owners — the pooled counter cannot tell
+    them apart, which is how a projection artifact passed for a producer bug."""
+    monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
+    absent = await verify_finding_faithfulness(
+        body=_BODY, citations=None, judge_llm=_StubJudge(_ALL_SUPPORTED)
+    )
+    assert absent.counters["citations_absent"] == 1
+    assert "citations_unresolvable" not in absent.counters
+
+    empty = await verify_finding_faithfulness(
+        body=_BODY, citations=[], judge_llm=_StubJudge(_ALL_SUPPORTED)
+    )
+    assert empty.counters["citations_absent"] == 1
+
+    unresolvable = await verify_finding_faithfulness(
+        body=_BODY,
+        citations=[{"marker": "[1]", "title": "(unresolved substrate ref)"}],
+        judge_llm=_StubJudge(_ALL_SUPPORTED),
+    )
+    assert unresolvable.counters["citations_unresolvable"] == 1
+    assert "citations_absent" not in unresolvable.counters
+    # The pooled contract counter still fires for every shape.
+    for report in (absent, empty, unresolvable):
+        assert report.counters["citationless_graded"] == 1
+
+
+async def test_the_shape_and_convention_reach_the_log_line(monkeypatch, caplog) -> None:
+    monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
+    with caplog.at_level(logging.WARNING, logger="legba.data.provenance.verify"):
+        await verify_finding_faithfulness(
+            body=_BODY,
+            citations=[{"marker": "[[ref:x]]", "ref_kind": "finding"}],
+            judge_llm=_StubJudge(_ALL_SUPPORTED),
+        )
+    line = next(
+        r.getMessage() for r in caplog.records if "citationless" in r.getMessage()
+    )
+    assert "shape=citations_unresolvable" in line
+    assert "convention=subclaim" in line

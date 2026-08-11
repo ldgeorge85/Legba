@@ -313,7 +313,12 @@ async def test_scoreboard_operator_n_grows_as_labels_land(gs):
     assert row["n_operator_labels"] == 1
     assert row["n_operator_scored"] == 1
     assert row["correctness_operator"] == 1.0
-    assert "operator 1.00 (n=1)" in row["badge"]
+    # M-1 tiny-n: a single verdict is shown WITH its n and marked indicative —
+    # never withheld, and never renderable as a measured rate.
+    assert "operator 1.00 (n=1, indicative)" in row["badge"]
+    assert row["operator_sufficient"] is False
+    assert row["operator_mix"]["correct"] == 1
+    assert "indicative" in (row["operator_status"] or "")
     # The deterministic reference leg stays honestly unmeasured — segregated.
     assert row["correctness_vs_reference"] is None
     assert "unmeasured" in row["badge"]
@@ -326,7 +331,8 @@ async def test_scoreboard_operator_n_grows_as_labels_land(gs):
     row = await unit_row()
     assert row["n_operator_scored"] == 2
     assert row["correctness_operator"] == 0.5
-    assert "operator 0.50 (n=2)" in row["badge"]
+    assert "operator 0.50 (n=2, indicative)" in row["badge"]
+    assert row["operator_mix"]["incorrect"] == 1
 
     # + unresolvable → counted as a label, EXCLUDED from the score + its n.
     await client.post(
@@ -337,7 +343,9 @@ async def test_scoreboard_operator_n_grows_as_labels_land(gs):
     assert row["n_operator_labels"] == 3
     assert row["n_operator_scored"] == 2
     assert row["correctness_operator"] == 0.5
-    assert "operator 0.50 (n=2)" in row["badge"]
+    assert "operator 0.50 (n=2, indicative)" in row["badge"]
+    # The excluded verdict is REPORTED in the mix, never silently dropped.
+    assert row["operator_mix"]["unresolvable"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -346,10 +354,27 @@ async def test_scoreboard_operator_n_grows_as_labels_land(gs):
 
 
 def test_badge_operator_segment_appends_after_reference():
+    """M-1 — the operator segment carries its own n and, below the axis floor,
+    says so. The gold set does not scale by construction, so 'n=6' without a
+    qualifier would invite exactly the reading the floor exists to prevent."""
+    from legba.data import correctness_axis
+
     badge = _compose_badge(0.9, 0.78, 12, operator_correctness=0.75, n_operator_scored=6, n_operator_labels=7)
     assert badge == (
-        "verified | faithfulness 0.90 | correctness 0.78 (n=12) | operator 0.75 (n=6)"
+        "verified | faithfulness 0.90 | correctness 0.78 (n=12) "
+        "| operator 0.75 (n=6, indicative)"
     )
+    # At or above the floor the qualifier drops — the reading has earned it.
+    at_floor = _compose_badge(
+        0.9, 0.78, 12,
+        operator_correctness=0.62,
+        n_operator_scored=correctness_axis.MIN_UNIT_LABELS,
+        n_operator_labels=correctness_axis.MIN_UNIT_LABELS,
+    )
+    assert at_floor.endswith(
+        f"operator 0.62 (n={correctness_axis.MIN_UNIT_LABELS})"
+    )
+    assert "indicative" not in at_floor
 
 
 def test_badge_all_unresolvable_is_said_not_scored():

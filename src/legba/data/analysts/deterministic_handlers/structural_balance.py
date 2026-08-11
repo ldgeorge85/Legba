@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import logging
 from itertools import combinations
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import networkx as nx
 
@@ -395,34 +395,69 @@ async def _augment_from_age(
     return extras
 
 
-async def _augment_from_nexuses(deps: Any) -> list[dict[str, Any]]:
-    """Pull OPEN signed nexus rows (PIECE A) as canonical signed-edge inputs.
+#: The families whose polarity is EVIDENCE OF ALIGNMENT, and therefore the only
+#: ones a balance ratio may count. This is the narrowest default in the system
+#: and 0143's header is why:
+#:
+#:   86 % of the open SIGNED edge set is imported Wikidata country->IGO
+#:   membership at polarity +1.
+#:
+#: Counting that lattice made `balance_ratio` overwhelmingly a statement about
+#: which countries co-belong to the UN, Interpol and the OPCW — three +1 legs
+#: form a "balanced" triad — rather than about world-state alignment. `reference`
+#: is TRUE and STATIC; it is simply not a claim that two actors are aligned.
+#: `cooccurrence` is not a claim at all. Both are excluded.
+BALANCE_FAMILIES = ("relation", "structural")
+
+
+async def _augment_from_nexuses(
+    deps: Any, families: Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Pull OPEN signed edges as canonical signed-edge inputs.
 
     The ``relationship_reifier`` writes first-class, typed, SIGNED relationships
-    to the ``nexuses`` table. Those are exactly the signed edges this handler
-    needs — feeding them in directly (with explicit ``polarity``) is what makes
-    the signed-triad balance run over real signed data instead of the untyped
-    ``CoOccursWith`` edges the live AGE graph mostly carries (PIECE A light-up).
+    which the dual-write mirrors into ``entity_edges``. Those are exactly the
+    signed edges this handler needs — feeding them in directly (with explicit
+    ``polarity``) is what makes the signed-triad balance run over real signed
+    data instead of the untyped ``CoOccursWith`` edges the live AGE graph mostly
+    carries (PIECE A light-up).
 
-    Only non-neutral (``polarity <> 0``) open nexuses are pulled — neutral ones
+    Only non-neutral (``polarity <> 0``) open edges are pulled — neutral ones
     are excluded from the balance ratio anyway. Failures degrade to ``[]``.
+
+    W3-A — CUT OVER TO ``entity_edges`` AND MADE FAMILY-AWARE. The family
+    filter is the load-bearing change, not the table: this handler previously
+    had NO provenance predicate at all (it did not even SELECT ``source_type``),
+    so it could not tell an imported lattice edge from a derived one. See
+    :data:`BALANCE_FAMILIES`.
+
+    Endpoints are named by joining ``entity_profiles`` on the foreign keys, so
+    two surfaces of one actor can no longer appear as two nodes of a triad —
+    which would have made a triangle out of a line.
     """
     pool = getattr(deps, "pg_pool", None) if deps is not None else None
     if pool is None:
         return []
+    fams = list(families) if families else list(BALANCE_FAMILIES)
     try:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT subject, object, polarity, rel_type
-                  FROM nexuses
-                 WHERE valid_until IS NULL AND superseded_by IS NULL
-                   AND polarity <> 0
+                SELECT sp.canonical_name AS subject,
+                       dp.canonical_name AS object,
+                       e.polarity, e.edge_type AS rel_type
+                  FROM entity_edges e
+                  JOIN entity_profiles sp ON sp.id = e.src_id
+                  JOIN entity_profiles dp ON dp.id = e.dst_id
+                 WHERE e.valid_until IS NULL AND e.superseded_by IS NULL
+                   AND e.polarity <> 0
+                   AND e.edge_family = ANY($1::text[])
                  LIMIT 20000
-                """
+                """,
+                fams,
             )
     except Exception as exc:
-        logger.warning("structural_balance.nexus.pull_failed err=%s", exc)
+        logger.warning("structural_balance.edge.pull_failed err=%s", exc)
         return []
     out: list[dict[str, Any]] = []
     for r in rows:
@@ -517,9 +552,17 @@ async def handle(
     """Sub-handler entry point — see module docstring."""
     warnings: list[str] = []
     rows = list(inputs)
+    # W3-A: the scope of the ratio is now DECLARED, not implied. An operator can
+    # widen it, but the default excludes the imported lattice — see
+    # BALANCE_FAMILIES for why that is the single most consequential setting in
+    # this handler.
+    raw_fams = options.get("edge_families")
+    fams = ([str(f).strip().lower() for f in raw_fams if str(f).strip()]
+            if isinstance(raw_fams, (list, tuple)) else list(BALANCE_FAMILIES))
+    fams = fams or list(BALANCE_FAMILIES)
     if deps is not None and bool(options.get("augment_from_nexuses", True)):
-        # PIECE A: the signed typed nexuses are the primary signed-edge source.
-        rows.extend(await _augment_from_nexuses(deps))
+        # PIECE A: the signed typed edges are the primary signed-edge source.
+        rows.extend(await _augment_from_nexuses(deps, fams))
     if deps is not None and bool(options.get("augment_from_age", True)):
         rows.extend(await _augment_from_age(deps, inputs))
 
@@ -554,6 +597,11 @@ async def handle(
             "interesting": interesting,
             "node_count": node_count,
             "edge_count": edge_count,
+            # The SCOPE of the ratio travels with it. A balance_ratio is
+            # meaningless without knowing which families it counted, and a
+            # consumer comparing two runs across a scope change would otherwise
+            # read a definition change as a world change.
+            "edge_families": fams,
             "target_id": options.get("target_id"),
         },
     )

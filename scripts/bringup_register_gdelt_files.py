@@ -26,24 +26,21 @@ Env:
 """
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
-import httpx
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _token import resolve_token  # noqa: E402
-import yaml  # noqa: E402
-
-
-BASE = os.environ.get(
-    "LEGBA_REGISTRY_URL",
-    "http://127.0.0.1:8090/api/v1/registry",
+from _bringup_http import (  # noqa: E402
+    exists_head,
+    load_yaml,
+    registry_base,
+    registry_client,
 )
-TOKEN = resolve_token()
+from _token import resolve_token  # noqa: E402
 
-DESCRIPTORS_DIR = Path(__file__).resolve().parent.parent / "descriptors"
+
+BASE = registry_base()
+TOKEN = resolve_token()
 
 # (family, file, descriptor_id)
 TO_REGISTER = [
@@ -55,53 +52,22 @@ TO_REGISTER = [
 ]
 
 
-def _client() -> httpx.Client:
-    return httpx.Client(
-        base_url=BASE,
-        headers={"Authorization": f"Bearer {TOKEN}"},
-        timeout=30,
-    )
-
-
-def _load_yaml(name: str) -> dict:
-    with open(DESCRIPTORS_DIR / name) as f:
-        body = yaml.safe_load(f)
-    # YAML carries a placeholder for the version; registry stamps the real
-    # content hash, but pydantic-strict still wants a hex string in the
-    # [a-f0-9]{16,64} shape until then.
-    identity = body.setdefault("identity", {})
-    identity["version"] = "0" * 16
-    return body
-
-
-def _exists_head(client: httpx.Client, family: str, descriptor_id: str) -> bool:
-    r = client.get(f"/descriptors/{family}/{descriptor_id}")
-    if r.status_code == 200:
-        return True
-    if r.status_code == 404:
-        return False
-    raise RuntimeError(
-        f"GET head failed for {family}/{descriptor_id}: "
-        f"{r.status_code} {r.text[:200]}"
-    )
-
-
 def main() -> int:
-    with _client() as client:
+    with registry_client(BASE, TOKEN) as client:
         registered: list[tuple[str, str, str]] = []
         skipped: list[tuple[str, str]] = []
         failures: list[str] = []
 
         for family, fname, desc_id in TO_REGISTER:
             try:
-                if _exists_head(client, family, desc_id):
+                if exists_head(client, family, desc_id):
                     skipped.append((family, desc_id))
                     continue
             except Exception as exc:
                 failures.append(f"{family}/{desc_id}: pre-check {exc}")
                 continue
 
-            body = _load_yaml(fname)
+            body = load_yaml(fname)
             r = client.post(f"/descriptors/{family}", json=body)
             if r.status_code not in (200, 201):
                 failures.append(

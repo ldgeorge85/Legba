@@ -47,6 +47,11 @@ import hashlib
 import logging
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
+# CW-7: the backstop content_hash must be keyed the SAME way the dedupe tiers
+# key, or the fallback silently disagrees with the thing it is a fallback for.
+# The helpers live at legba.data level rather than under filters/ precisely
+# so this import cannot close a sources->filters->sources cycle.
+from .._url_canon import canonical_url, normalize_wire_title
 from ._contract import Signal, SourceContext
 
 logger = logging.getLogger(__name__)
@@ -171,8 +176,19 @@ def _enrich_structured(signal: Signal, ctx: SourceContext) -> None:
 
     # content_hash: a source SHOULD set this; backstop so dedup (P-09) always
     # has a key (hash of canonical_url + a stable payload projection).
+    #
+    # CW-7: the URL side is CANONICALISED and the title side has its agency
+    # wire-revision marker stripped, so this backstop key agrees with the
+    # tier-1/tier-2 keys instead of quietly disagreeing with both. Before, a
+    # re-sent "(LEAD) Foo" and "Foo" from the same URL hashed differently and
+    # the ingest dedupe never fired on the pair — the exact variant class K-4
+    # R3 found double-counting the stream.
     if not signal.content_hash:
-        basis = (signal.canonical_url or "") + "\x1f" + str(signal.payload.get("title") or "")
+        basis = (
+            canonical_url(signal.canonical_url or "")
+            + "\x1f"
+            + normalize_wire_title(str(signal.payload.get("title") or ""))
+        )
         signal.content_hash = hashlib.sha256(basis.encode("utf-8")).hexdigest()
 
 

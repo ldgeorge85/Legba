@@ -191,9 +191,15 @@ def test_quote_rule_is_one_shared_constant() -> None:
 
 def test_judge_profile_versions_bumped_for_the_prompt_change() -> None:
     """A prompt change is a VISIBLE per-kind version bump (the versioned-profile
-    contract), so calibration history splits cleanly on it."""
-    assert V._JUDGE_PROFILES[V.CLAIM_KIND_CITATION_SUPPORT].version == "citsupp.v4"
-    assert V._JUDGE_PROFILES[V.CLAIM_KIND_ABSENCE].version == "absence.v2"
+    contract), so calibration history splits cleanly on it.
+
+    Bumped again by V-H1 (2026-08-04): the rubrics are unchanged, the EVIDENCE is
+    not — every unit citation now renders an ``OUTLET:`` line, and both prompted
+    kinds carry it. The pin lives in
+    test_judge_profile_resolution_pinned.py::_EXPECTED_PROFILES; this asserts the
+    versions MOVED with the quote rule the module tests, not their values."""
+    assert V._JUDGE_PROFILES[V.CLAIM_KIND_CITATION_SUPPORT].version == "citsupp.v5"
+    assert V._JUDGE_PROFILES[V.CLAIM_KIND_ABSENCE].version == "absence.v3"
 
 
 # ---------------------------------------------------------------------------

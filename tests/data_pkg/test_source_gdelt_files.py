@@ -426,6 +426,13 @@ def test_row_to_signal_shape() -> None:
     assert sig.payload["goldstein_scale"] == -6.0
     assert sig.payload["num_mentions"] == 25
     assert sig.payload["export_file_url"] == _EXPORT_URL
+    # B-6: the payload keeps the RAW FIPS value under its ``_fips`` key; the
+    # indexed, desk-routing ``geo`` column carries the TRANSLATED ISO code. Iran
+    # is a case where FIPS and ISO happen to agree ('IR' → 'IR'), which is
+    # precisely why this assertion passed for months while the codes that do NOT
+    # agree were misrouting — see test_fips_iso_crosswalk.py for the pairs that
+    # do the damage.
+    assert sig.payload["geo"]["country_code_fips"] == "IR"
     assert sig.geo == ["IR"]
     assert sig.content_hash  # non-empty
     assert sig.raw_provenance["kind"] == "gdelt_files"
@@ -838,3 +845,62 @@ async def test_gdelt_files_cursor_read_survives_codec_decoded_scalar() -> None:
     # Cursor is unchanged — the index still points at the file we're already
     # past, so nothing new was walked.
     assert await store.get("gdelt_files_last_export_ts") == "2026-07-24T09:45:00+00:00"
+
+
+# ---------------------------------------------------------------------------
+# Predecessor retirement (2026-08-02, migration 0121)
+#
+# This handler exists to REPLACE source.gdelt.doc_api, but the old descriptor
+# stayed `state='active'` and kept polling for weeks at an 84.3% HTTP-429 error
+# rate — an un-retired legacy row, not a dual-source decision. Both paths share
+# GDELT's PER-IP rate limit, so the dead one was spending the live one's
+# headroom. These pin the disposal so it cannot quietly come back.
+# ---------------------------------------------------------------------------
+
+
+def _repo_root():
+    import pathlib
+
+    return pathlib.Path(__file__).resolve().parents[2]
+
+
+def test_doc_api_descriptor_declares_retired():
+    """The DECLARED state matters as much as the DB row: bringup/registration
+    reads the yaml, so leaving it `active` would resurrect the poller on the
+    next register even after migration 0121 flipped the live row."""
+    import yaml
+
+    body = yaml.safe_load(
+        (_repo_root() / "descriptors" / "source_gdelt_doc_api.yaml").read_text()
+    )
+    assert body["identity"]["id"] == "source.gdelt.doc_api"
+    assert body["identity"]["state"] == "retired"
+
+
+def test_successor_descriptor_is_not_retired():
+    """Guard against retiring the wrong half of the swap."""
+    import yaml
+
+    body = yaml.safe_load(
+        (_repo_root() / "descriptors" / "source_gdelt_files.yaml").read_text()
+    )
+    assert body["identity"]["id"] == "source.gdelt.files"
+    assert body["identity"]["state"] != "retired"
+
+
+def test_migration_0121_retires_by_state_not_delete():
+    """RETIRE, not DELETE — doc_api has real ingested history (signals, poll
+    outcomes, a source-quality track record) that must stay joinable. The
+    opposite call from 0053, which deleted rows that had orphaned nothing."""
+    sql = (
+        _repo_root() / "src" / "legba" / "data" / "migrations"
+        / "0121_retire_gdelt_doc_api.sql"
+    ).read_text()
+    assert "DELETE" not in sql.upper().split("--")[0] or "DELETE FROM" not in sql.upper()
+    assert "state = 'retired'" in sql
+    assert "source.gdelt.doc_api" in sql
+    # Head row only, and idempotent on a second run.
+    assert "is_head" in sql
+    assert "state <> 'retired'" in sql
+    # It must never touch the successor.
+    assert "source.gdelt.files" not in sql.split("UPDATE")[-1]

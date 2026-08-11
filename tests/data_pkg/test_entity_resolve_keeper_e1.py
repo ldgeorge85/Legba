@@ -375,6 +375,36 @@ class _CannedTyperLLM:
         return _Response()
 
 
+def _tag() -> str:
+    """A surface suffix nothing else in the suite (or the last nightly) carries.
+
+    ORDER DEPENDENCE, and where it came from. `proposed_edges`, `entity_profiles`
+    and `nexuses` all live in the session-scoped test DB the whole suite shares,
+    and that DB PERSISTS between runs. The producer under test here —
+    `_promote_candidates` — is a global drain: it takes every pending edge above
+    `min_confidence` and writes a nexus for each. So a fixed surface string is
+    not the test's own row, it is a row co-owned by every past and future run.
+
+    Under `--randomly-seed` that landed as a real failure: the read-back
+    `ORDER BY created_at DESC LIMIT 1` over `lower(object)='united states'`
+    returned `SNSCUNIQ` — a sibling test's fragment, promoted un-rewritten
+    because ITS keeper had not been seeded yet — and the assertion failed on a
+    row this test never created, while its own edge had been rewritten
+    perfectly. Tagging the surfaces makes each test's endpoints unforgeable, so
+    the read-back can name them instead of guessing at "the newest one".
+    """
+    return uuid4().hex[:8].upper()
+
+
+async def _nexuses_touching(conn, tag: str) -> int:
+    """How many live nexuses carry THIS test's tagged surfaces on either end."""
+    return await conn.fetchval(
+        "SELECT count(*) FROM nexuses "
+        " WHERE subject LIKE '%' || $1 || '%' OR object LIKE '%' || $1 || '%'",
+        tag,
+    )
+
+
 async def _seed_proposed_edge(conn, *, src: str, tgt: str, conf: float = 0.7):
     await conn.execute(
         """
@@ -384,7 +414,12 @@ async def _seed_proposed_edge(conn, *, src: str, tgt: str, conf: float = 0.7):
         VALUES ($1, $2, 'co_occurs', $3, $4, 'pending')
         ON CONFLICT (lower(source_entity), lower(target_entity),
                      relationship_type)
-        DO UPDATE SET confidence = EXCLUDED.confidence
+        -- Status must RESET on re-seed: the pending-only selector (K-G2 queue
+        -- fix) makes a processed pair terminal, so a stale 'promoted'/'rejected'
+        -- from a prior invocation against a persistent test DB would silently
+        -- starve the test that re-seeds the same pair.
+        DO UPDATE SET confidence = EXCLUDED.confidence,
+                      status = 'pending', reviewed_at = NULL
         """,
         src, tgt, conf, f"{src} and {tgt} appear together",
     )
@@ -418,7 +453,12 @@ async def test_reifier_rewrites_alias_endpoint_to_keeper(pg_pool):
     deps = ReifierDeps(llm=llm, pg_pool=pg_pool, max_candidates=10)
     result = await run_method(
         inputs=[],
-        options={"analyst_id": "relationship_reifier", "run_id": str(uuid4())},
+        options={"analyst_id": "relationship_reifier", "run_id": str(uuid4()),
+                 # These tests exercise KEEPER REWRITING, not candidate
+                 # qualification — the single-evidence fixtures predate the
+                 # K-G2 bar and would be (correctly) below it. Disable the
+                 # bar explicitly so the test keeps testing what it tests.
+                 "qualification_bar": 0.0, "min_independent_sources": 0},
         deps=deps,
     )
     assert result.finding.data["written"] >= 1, result.finding.data
@@ -446,23 +486,19 @@ async def test_reifier_drops_keeper_self_loop_n4(pg_pool):
     from legba.data.analysts.relationship_reifier import ReifierDeps, run_method
 
     # ONE keeper holds BOTH surfaces as aliases — so both endpoints resolve to it.
+    tag = _tag()
+    keeper, frag = f"Axis of Resistance{tag}", f"Resistance{tag}FRAG"
     async with pg_pool.acquire() as conn:
-        await _seed_keeper(
-            conn,
-            name="Axis of ResistanceUNIQ",
-            aliases=["ResistanceFRAG"],
-        )
-        await _seed_proposed_edge(
-            conn, src="Axis of ResistanceUNIQ", tgt="ResistanceFRAG",
-        )
+        await _seed_keeper(conn, name=keeper, aliases=[frag])
+        await _seed_proposed_edge(conn, src=keeper, tgt=frag)
 
     # The typer emits the two DISTINCT surfaces (they differ as strings, so the
     # pre-keeper self-loop gate in _coerce_typing does NOT catch them — that is
     # exactly the N4 miss). After keeper rewrite both become the SAME keeper.
     llm = _CannedTyperLLM({
         "related": True,
-        "subject": "Axis of ResistanceUNIQ",
-        "object": "ResistanceFRAG",
+        "subject": keeper,
+        "object": frag,
         "rel_type": "AffiliatedWith",
         "intent": "supportive",
         "channel": "direct",
@@ -471,20 +507,26 @@ async def test_reifier_drops_keeper_self_loop_n4(pg_pool):
     deps = ReifierDeps(llm=llm, pg_pool=pg_pool, max_candidates=10)
     result = await run_method(
         inputs=[],
-        options={"analyst_id": "relationship_reifier", "run_id": str(uuid4())},
+        options={"analyst_id": "relationship_reifier", "run_id": str(uuid4()),
+                 # These tests exercise KEEPER REWRITING, not candidate
+                 # qualification — the single-evidence fixtures predate the
+                 # K-G2 bar and would be (correctly) below it. Disable the
+                 # bar explicitly so the test keeps testing what it tests.
+                 "qualification_bar": 0.0, "min_independent_sources": 0},
         deps=deps,
     )
-    # The pair was TYPED (the LLM ran) but NO nexus is written — it collapsed to
-    # a self-loop after the keeper rewrite and was dropped.
-    assert result.finding.data["typed"] >= 1, result.finding.data
-    assert result.finding.data["written"] == 0, result.finding.data
+    # The protected PROPERTY: a keeper-collapsed self-loop never becomes a
+    # nexus. The MECHANISM moved with the K-G2 queue fix — the merge-aware
+    # selector now drops the pair BEFORE typing (keeper_self_loop counter)
+    # instead of after the LLM call, which is the same outcome one LLM call
+    # cheaper. Accept either path; reject only a written edge.
+    data = result.finding.data
+    assert data["written"] == 0, data
+    sel = data.get("selection", {})
+    assert data["typed"] >= 1 or sel.get("keeper_self_loop", 0) >= 1, data
 
     async with pg_pool.acquire() as conn:
-        n = await conn.fetchval(
-            "SELECT count(*) FROM nexuses "
-            "WHERE lower(subject) LIKE 'axis of resistance%' "
-            "   OR lower(object) LIKE '%resistance%'"
-        )
+        n = await _nexuses_touching(conn, tag)
     assert n == 0, "the self-loop nexus must NOT be written"
 
 
@@ -501,15 +543,14 @@ async def test_governance_rewrites_alias_endpoint_to_keeper(pg_pool):
     )
     from legba.data.provenance import AnalystContext
 
+    tag = _tag()
+    keeper, frag = f"Supreme National Security Council{tag}", f"SNSC{tag}"
+    country = f"United States{tag}"
     async with pg_pool.acquire() as conn:
-        await _seed_keeper(
-            conn,
-            name="Supreme National Security CouncilGOV",
-            aliases=["SNSCGOV"],
-        )
-        await _seed_keeper(conn, name="United States", entity_class="country")
+        await _seed_keeper(conn, name=keeper, aliases=[frag])
+        await _seed_keeper(conn, name=country, entity_class="country")
         # A promotable co-occurrence whose SOURCE endpoint is the fragment alias.
-        await _seed_proposed_edge(conn, src="SNSCGOV", tgt="United States", conf=0.9)
+        await _seed_proposed_edge(conn, src=frag, tgt=country, conf=0.9)
 
         actx = AnalystContext(
             analyst_id="proposed_edge_governance",
@@ -529,15 +570,19 @@ async def test_governance_rewrites_alias_endpoint_to_keeper(pg_pool):
             limit=50,
         )
         assert promoted >= 1, "the alias-endpoint edge must promote"
-        row = await conn.fetchrow(
+        # Read back THIS edge's nexus by its own tagged object, not "the newest
+        # row that happens to point at the United States" — `_promote_candidates`
+        # drains every pending edge in the shared queue, so that ordering picked
+        # whichever sibling promoted last (see `_tag`).
+        rows = await conn.fetch(
             "SELECT subject, object FROM nexuses "
-            "WHERE lower(object)='united states' "
-            "AND valid_until IS NULL AND superseded_by IS NULL "
-            "ORDER BY created_at DESC LIMIT 1"
+            "WHERE object = $1 "
+            "AND valid_until IS NULL AND superseded_by IS NULL",
+            country,
         )
-    assert row is not None
-    assert row["subject"] == "Supreme National Security CouncilGOV", row["subject"]
-    assert row["subject"] != "SNSCGOV"
+    assert len(rows) == 1, "one edge in, one live nexus out"
+    assert rows[0]["subject"] == keeper, rows[0]["subject"]
+    assert rows[0]["subject"] != frag
 
 
 @pytest.mark.integration
@@ -547,16 +592,12 @@ async def test_governance_drops_keeper_self_loop_n4(pg_pool):
         _promote_candidates,
     )
 
+    tag = _tag()
+    keeper, frag = f"Axis of Resistance{tag}", f"Resistance{tag}FRAG"
     async with pg_pool.acquire() as conn:
-        await _seed_keeper(
-            conn,
-            name="Axis of ResistanceGOV",
-            aliases=["ResistanceGOVFRAG"],
-        )
-        await _seed_proposed_edge(
-            conn, src="Axis of ResistanceGOV", tgt="ResistanceGOVFRAG", conf=0.9,
-        )
-        promoted = await _promote_candidates(
+        await _seed_keeper(conn, name=keeper, aliases=[frag])
+        await _seed_proposed_edge(conn, src=keeper, tgt=frag, conf=0.9)
+        await _promote_candidates(
             conn,
             analyst_id="proposed_edge_governance",
             analyst_version="test",
@@ -566,16 +607,17 @@ async def test_governance_drops_keeper_self_loop_n4(pg_pool):
             min_confidence=0.6,
             limit=50,
         )
-        # It did NOT promote (rewrite → self-loop → rejected).
-        assert promoted == 0, "a keeper self-loop must not promote to a nexus"
-        # The proposed_edge is marked rejected (left the queue, not graduated).
+        # It did NOT promote (rewrite → self-loop → rejected). The old
+        # `promoted == 0` asserted the whole shared queue was empty of anything
+        # promotable — a statement about the suite, and false the moment a
+        # sibling left a pending edge behind. What this test claims is about ITS
+        # pair: rejected, and no nexus. Both are stronger scoped, because a
+        # global zero was equally consistent with the drain never running.
         status = await conn.fetchval(
             "SELECT status FROM proposed_edges "
-            "WHERE lower(source_entity)='axis of resistancegov' "
-            "AND lower(target_entity)='resistancegovfrag'"
+            "WHERE source_entity = $1 AND target_entity = $2",
+            keeper, frag,
         )
         assert status == "rejected", status
-        n = await conn.fetchval(
-            "SELECT count(*) FROM nexuses WHERE lower(object) LIKE '%resistance%'"
-        )
+        n = await _nexuses_touching(conn, tag)
     assert n == 0, "the self-loop nexus must NOT be written"

@@ -81,9 +81,14 @@ def build_consult_stream_router(deps: RegistryAPIDeps) -> APIRouter:
         token: str | None = Query(default=None),
         authorization: str | None = Header(default=None),
     ) -> StreamingResponse:
-        # Bearer via ?token= (EventSource can't set headers) or Bearer header
-        # (Caddy-injected). Reuses the WS gate — fail-closed, constant-time.
-        _authorize_ws_token(token, authorization)
+        # Bearer via ?token= (EventSource can set neither headers NOR
+        # subprotocols) or Bearer header (Caddy-injected). Reuses the WS gate —
+        # fail-closed, constant-time. `surface="sse"` suppresses the gate's
+        # query-token deprecation warning: that deprecation is about the events
+        # WEBSOCKET, which moved its credential to the `legba.bearer.v1`
+        # subprotocol. SSE has no such replacement, so warning here would be a
+        # false alarm indistinguishable from a stale UI build.
+        _authorize_ws_token(token, authorization, surface="sse")
 
         if deps.nats_store is None:
             raise HTTPException(

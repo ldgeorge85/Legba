@@ -383,9 +383,13 @@ This is the highest-value practice in the document and the one nothing automates
    out-of-plane labeling round put pooled pairwise precision at **0.279** against
    a pre-declared ≥0.85 bar; a second round after three measured tuning levers,
    at volume, came out **lower**. The dependent feature — an automatic
-   question-closer — **remains unbuilt**, the edges stay trace-only, and the
-   published debt figure carries `match_verified: false` on the wire. The
-   measurement was worth more than the feature would have been.
+   question-closer — **remained unbuilt**, the edges stayed trace-only, and the
+   published debt figure carries `match_verified: false` on the wire. Two
+   further measured lever-trains later, round 4 cleared the bar (0.908 on the
+   live gated stream) — and the closer is *still* unbuilt, because meeting the
+   gate earns the *decision*, not the feature: arming a write-back loop is an
+   operator call. The measurements were worth more than the feature would have
+   been.
 
 Also worth internalizing: **faithfulness cannot see a faithful-but-wrong claim.**
 Verification checks a claim against its cited evidence, not against the world.

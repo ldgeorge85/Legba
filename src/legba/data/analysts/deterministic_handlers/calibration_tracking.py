@@ -57,6 +57,7 @@ from typing import Any, Mapping
 import numpy as np
 
 from ...provenance.models import FindingPayload
+from ...provenance.verify import JUDGE_PIPELINE_VERSION
 from ...retrieval_origin import (
     WEB_EVIDENCE_RESOLUTION,
     is_web_evidence_resolution,
@@ -85,6 +86,37 @@ _MIN_EXOGENOUS_FOR_BRIER = 5
 # The horizon-end prediction resolver's provenance label — EXOGENOUS (forecast
 # CI vs the actual realized event rate).
 _FORECAST_RESOLVER_SOURCE = "forecast_vs_actual"
+
+# M-2 — WHY THIS PLANE IS NOT SPLIT BY `judge_pipeline_version`, stated in the
+# payload so nobody "fixes" it the wrong way later.
+#
+# The 2026-08-02 engine review's finding was that the split key had writers and
+# no readers, and named this plane among the aggregates that "pool across the
+# judge swap". Half right. Band calibration and the faithfulness means genuinely
+# do pool a judge-produced quantity and are now split (M-2). This plane does not
+# produce one: it scores `claimed_confidence` (written by the analyst at claim
+# time) against `resolved_outcome` (stamped exogenously by subsequent facts or
+# an operator label). Neither number comes from the faithfulness judge, and the
+# rows it reads — `analyst_outputs kind='prediction'` and `hypotheses` — carry no
+# `judge_pipeline_version` at all (verified live 2026-08-03: 0 stamped rows
+# outside `kind='critique'`).
+#
+# Filtering an already-thin exogenous sample on a stamp those rows do not carry
+# would zero it out on a false premise. There IS one real coupling, and it is a
+# SELECTION effect rather than a measurement one: the verify gate decides which
+# claims exist to be resolved, so changing the judge changes the population's
+# composition even though it never touches either scored quantity. That is worth
+# knowing and not worth pretending to correct for — so it is reported, named,
+# and left uncorrected.
+_JUDGE_POPULATION_NOTE = (
+    "This plane is NOT split by judge_pipeline_version, deliberately. It scores "
+    "analyst-claimed confidence against EXOGENOUS resolved outcomes; neither "
+    "quantity is produced by the faithfulness judge, and prediction/hypothesis "
+    "rows carry no pipeline stamp. The one real coupling is a SELECTION effect "
+    "— the verify gate decides which claims exist to resolve — which is "
+    "reported here and never silently 'corrected' by filtering a sample on a "
+    "stamp it does not carry."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -860,6 +892,11 @@ def _build_finding(
         f"brier_forecast_acute={forecast_acute.get('brier_forecast_acute')}\n"
         f"brier_climatology={forecast_acute.get('brier_climatology')}\n"
         f"brier_skill_score={forecast_acute.get('brier_skill_score')}\n"
+        # M-2 — say in the readable body which population this is, and that the
+        # absence of a pipeline split here is a decision, not an oversight.
+        f"judge_pipeline_population=not_split "
+        f"(current={JUDGE_PIPELINE_VERSION}; scored quantities are not "
+        f"judge-produced; verify-gate selection effect acknowledged)\n"
     )
     tags = ["deterministic", "calibration_tracking"]
     if drift_alert:
@@ -928,6 +965,17 @@ def _build_finding(
             # self-consistency (status_transition) vs exogenous reality.
             "resolution_sources": resolution_sources,
             "self_consistency_only": self_consistency_only,
+            # M-2 — the judge-population boundary, stated rather than assumed.
+            # A reader auditing "which aggregates split on the stamp?" finds an
+            # explicit, reasoned NO here instead of an absence they must guess
+            # about (see `_JUDGE_POPULATION_NOTE`).
+            "judge_pipeline_population": {
+                "split_by_judge_pipeline_version": False,
+                "current_judge_pipeline_version": JUDGE_PIPELINE_VERSION,
+                "scored_quantities_are_judge_produced": False,
+                "verify_gate_selection_effect": True,
+                "note": _JUDGE_POPULATION_NOTE,
+            },
             # R1-T1.3 (#92) — the acute-binary forecast pilot, in its OWN keys.
             # `brier_forecast_acute` is NEVER pooled into the headline `brier`;
             # it is the only number the project may quote as "forecast" skill,

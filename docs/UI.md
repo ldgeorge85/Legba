@@ -772,6 +772,24 @@ analyst (`entity_profiles` / `signal_entity_links` / `proposed_edges`).
   edges, sign-imbalanced triads, proxy chains, each with rationale + score.
   Selection-aware — a selected country/entity scopes and prioritises matching
   items.
+- **Graph Walk** (`system.graph_walk`, K-G4) — the interactive walk over the
+  *reified* `entity_edges` store, and the only graph surface that is a verb
+  rather than a rendered projection. Anchor on an actor (`GET /graph/ego`),
+  click a neighbour to take one more indexed hop, click an edge for its
+  evidence (`GET /graph/edge/{id}` — snippet, resolved source signals,
+  observed count, provenance). There is no depth control by design: every hop
+  is a fresh anchored 1-hop ego, so depth is bounded by attention rather than
+  by a query cap (`docs/AGE_PROBE_REPORT.md` §5.2).
+
+  The three edge families are drawn as three different *kinds* of line, not
+  three colours of the same line — `relation` solid and coloured by polarity
+  (the only family whose sign means anything), `reference` dashed,
+  `cooccurrence` faint dotted and never labelled. `cooccurrence` is off by
+  default because it is 8,722 of the graph's 12,566 edges; the disclosure
+  strip always states how many edges the current view is withholding, plus
+  the anchor's open degree and any limit truncation, so a filtered view is
+  never mistaken for the whole neighbourhood. Distinct from **Entity Graph**
+  above, which renders the older `proposed_edges` projection.
 
 ### Registries (guided authoring)
 
@@ -834,7 +852,7 @@ The evaluation and operations surfaces (mostly `personal`-only).
   The self-optimizer returns as a **scoped, measured** experiment: the live
   `unit_optimizer` runs over ONE bounded unit (`leadership_transition`), and each
   candidate carries a **real before/after paired faithfulness delta** measured on
-  the same faithfulness verify judge (currently the core model, not cross-family; a recent live run: parent 0.34 → candidate 0.29,
+  the same faithfulness verify judge (whatever the judge route resolves; a recent live run: parent 0.34 → candidate 0.29,
   delta −0.05). It stays `promotion_gate=human_gated` and can **never**
   auto-promote on a degenerate, absent, or non-positive delta — promotion is the
   operator's click. The old monolithic `country_optimizer` is **cadence-frozen**
@@ -1090,10 +1108,22 @@ the SPA sends no `Authorization` header — see the perimeter below.
 ### Live updates
 
 `lib/ws.ts::subscribeRegistryEvents(filter, onEvent)` opens a WebSocket to
-`/api/v1/registry/events?filter=<subject>&token=<t>` (the registry's NATS event
+`/api/v1/registry/events?filter=<subject>` (the registry's NATS event
 multiplexer), with 1→2→4→…→30s reconnect backoff. The registry hook and the
 live-tail panels (Findings, Analyst Outputs, Governor Events) subscribe through
 it. The WS resolves `ws://` vs `wss://` from the page protocol.
+
+**The credential is NOT in the URL.** When localStorage holds a token the
+client offers it as a WebSocket subprotocol —
+`Sec-WebSocket-Protocol: legba.bearer.v1, <base64url token>` — which travels as
+a header; the server echoes back the scheme name only. A `?token=` query param
+(the pre-2026-08-03 shape) is byte-identical to `LEGBA_REGISTRY_API_TOKEN`, the
+admin credential for the whole registry API, and a URL is printed verbatim in
+the browser's console warnings on a failed upgrade and written to every access
+log that records a request line. The server still ACCEPTS `?token=` so a stale
+SPA build doesn't hard-break on deploy, but it logs
+`registry.ws.auth.deprecated_query_token` every time; that path is removable
+once no client sends one.
 
 ### The two-layer auth chain
 

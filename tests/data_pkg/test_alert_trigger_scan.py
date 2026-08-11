@@ -406,11 +406,18 @@ async def test_band_crossing_seeds_then_fires_once(pg_pool, clean_slate):
     assert ats.TRIGGER_BAND in r1.finding.data["seeded_classes"]
     async with pg_pool.acquire() as conn:
         assert await _alert_rows(conn) == []
+        # BOTH of this desk's dimensions were watermarked. Scoped to the desk
+        # because the band scan seeds every head scorecard in the table, whoever
+        # owns it: `clean_slate` resets the watermarks but cannot reset
+        # `analyst_outputs`, so a sibling file's scorecard is a third genuine
+        # key and the global count failed at 3 == 2 in the shuffled nightly on a
+        # scan that had watermarked this desk exactly right. The band watermark
+        # key is `f"{desk}|{dim}"` — see `_scan_band_crossings`.
         seeded = await conn.fetchval(
             "SELECT count(*) FROM alert_trigger_watermarks "
-            "WHERE trigger_class = $1 AND watermark_key <> $2",
+            "WHERE trigger_class = $1 AND watermark_key LIKE $2 || '|%'",
             ats.TRIGGER_BAND,
-            ats.SEED_KEY,
+            desk,
         )
         assert seeded == 2  # both dimensions watermarked
 
@@ -476,6 +483,22 @@ async def test_band_improvement_fires_medium(pg_pool, clean_slate):
 
 
 async def test_verified_finding_bar_and_no_refire(pg_pool, clean_slate):
+    """Exactly one of four findings clears the verified bar, and it fires once.
+
+    ORDER DEPENDENCE. `clean_slate` resets the watermarks and this analyst's
+    own alert rows, but it cannot reset `findings` — the whole suite shares
+    that table. The seeding `_run` below therefore only watermarks the findings
+    that exist AT THAT MOMENT; a sibling file that inserts a qualifying
+    finding+critique later in the same session hands this scan a second genuine
+    candidate. Under `--randomly-seed` that is what happened, and the global
+    `fired == 1` failed at 2 while every one of this test's own four findings
+    had been judged correctly.
+
+    So the assertions are scoped to the four findings this test created. That
+    is also the sharper statement: `fired == 1` was only ever a proxy for "the
+    good one fired and the other three did not", and it could be satisfied by a
+    scan that fired somebody else's finding and none of ours.
+    """
     await _run(pg_pool)  # seed all classes
 
     async with pg_pool.acquire() as conn:
@@ -491,29 +514,44 @@ async def test_verified_finding_bar_and_no_refire(pg_pool, clean_slate):
         )
         await _insert_faith_critique(conn, exempt, 0.90)
         # No faithfulness verdict at all: cannot meet the verified bar.
-        await _insert_finding(conn, sev_tag="high", confidence=0.95)
+        unverified = await _insert_finding(conn, sev_tag="high", confidence=0.95)
+
+    mine = {str(good), str(low), str(exempt), str(unverified)}
+
+    def _my_alerts(rows: list[Any]) -> list[Any]:
+        return [r for r in rows if _row_data(r).get("finding_id") in mine]
 
     dispatcher = _FakeDispatcher()
     r2 = await _run(pg_pool, dispatcher)
-    assert r2.finding.data["fired"] == 1
+    assert r2.finding.data["fired"] >= 1
     async with pg_pool.acquire() as conn:
-        rows = await _alert_rows(conn)
-    assert len(rows) == 1
+        rows = _my_alerts(await _alert_rows(conn))
+    assert len(rows) == 1, (
+        "of the four findings, only the verified non-exempt one may fire"
+    )
     data = _row_data(rows[0])
     assert data["trigger_class"] == ats.TRIGGER_FINDING
     assert data["finding_id"] == str(good)
     assert data["effective_confidence"] == pytest.approx(0.80)
     assert rows[0]["severity"] == "high"
     assert good in list(rows[0]["derived_from"])
-    # The outward payload states the REAL faithfulness verdict.
-    assert dispatcher.payloads[0].verify_state == "faithfulness=0.80"
-    assert dispatcher.payloads[0].effective_confidence == pytest.approx(0.80)
+    # The outward payload states the REAL faithfulness verdict. Correlated by
+    # alert_row_id rather than taken as payloads[0] — a co-firing candidate
+    # from another file would otherwise be read as ours.
+    mine_out = [
+        p for p in dispatcher.payloads if p.alert_row_id == str(rows[0]["id"])
+    ]
+    assert len(mine_out) == 1, "the fired alert must be dispatched exactly once"
+    assert mine_out[0].verify_state == "faithfulness=0.80"
+    assert mine_out[0].effective_confidence == pytest.approx(0.80)
 
     # No refire on the next scan.
-    r3 = await _run(pg_pool)
-    assert r3.finding.data["fired"] == 0
+    await _run(pg_pool)
     async with pg_pool.acquire() as conn:
-        assert len(await _alert_rows(conn)) == 1
+        again = _my_alerts(await _alert_rows(conn))
+    assert [r["id"] for r in again] == [rows[0]["id"]], (
+        "a second scan must not re-fire an already-alerted finding"
+    )
 
 
 async def test_late_verify_still_fires_within_window(pg_pool, clean_slate):
@@ -577,6 +615,132 @@ async def test_contention_flip_fires_on_verified_tied_state_change(
     # Same state → no refire.
     r3 = await _run(pg_pool)
     assert r3.finding.data["fired"] == 0
+
+
+async def _insert_fact_from_signal(conn: Any, *, subject: str, value: str) -> tuple[UUID, UUID]:
+    """A fact in the PRODUCTION shape: a real ``facts`` row whose ``derived_from``
+    carries a real ``signals`` id. Returns ``(fact_id, signal_id)``.
+
+    The sibling contention tests above use a bare ``uuid4()`` as their "fact" and
+    have a finding cite it directly. Production never looks like that: findings
+    cite SIGNALS. Live 2026-08-03, of 229,768 ``derived_from`` refs carried by
+    findings in 7 days, 221,268 resolved to signals, 7,874 to other outputs, and
+    ZERO to facts (34 of 757,436 all-time). Those tests could only pass because
+    the rig invented a citation shape the engine does not produce — which is how
+    a trigger class that CANNOT fire stayed green for its whole life.
+    """
+    sid, fid = uuid4(), uuid4()
+    # Stamped WELL INTO THE PAST on purpose. The session DB is shared across
+    # every file in tests/data_pkg and nothing truncates `signals`, so a
+    # now()-stamped row here lands at the head of the newest-N window that
+    # `test_claim_watch`'s `_attributed_and_window` slices (`ORDER BY
+    # fetched_at DESC LIMIT window`, across ALL sources) and silently shrinks
+    # that file's global-DF sample — verified: it flipped
+    # `global_specificity_downweighted` from 3 to 6 two files later. Backdating
+    # keeps these rows out of every newest-N slice while leaving this test's own
+    # `derived_from` bridge exactly as real. (claim_watch has since hardened its
+    # own side too — its df window now rides the file's future-stamped stream —
+    # but staying out of the shared window's head remains this file's half of
+    # the bargain: this file's SPIKE stream cannot take it, spikes are recent by
+    # definition, which is exactly why the window had to stop being shared.)
+    await conn.execute(
+        "INSERT INTO signals (id, source_id, geo, fetched_at, content_hash) "
+        "VALUES ($1, 'w1c3_source', '{}'::text[], now() - interval '400 days', $2)",
+        sid, uuid4().hex,
+    )
+    await conn.execute(
+        "INSERT INTO facts (id, subject, predicate, value, confidence, "
+        "                   source_type, valid_from, analyst_id, derived_from, "
+        "                   schema_uri) "
+        "VALUES ($1, $2, 'located in', $3, 0.8, 'derived', now(), 'w1c3', "
+        "        $4::uuid[], 'iglu:legba/fact/jsonschema/1-0-0')",
+        fid, subject, value, [sid],
+    )
+    return fid, sid
+
+
+async def test_contention_flip_fires_when_the_finding_cites_the_facts_EVIDENCE(
+    pg_pool, clean_slate
+):
+    """W1-C3 — the bridge, in the shape production actually produces.
+
+    Before this fix the verified-tie LATERAL matched `f.derived_from &&
+    fact_ids` alone, so the class had NEVER fired an alert despite 1,606
+    watermark rows: contention groups track FACT ids, findings cite SIGNAL ids,
+    and the two populations never meet (exactly 1 of 2,152 live groups had ANY
+    finding citing its facts, verified or not). Here the finding cites the
+    SIGNAL its contested fact was derived from — the join the substrate's own
+    lineage supports — and the flip must page.
+    """
+    async with pg_pool.acquire() as conn:
+        subj = f"w1c3_{uuid4().hex[:8]}"
+        fact_a, sig_a = await _insert_fact_from_signal(conn, subject=subj, value="a")
+        fact_b, _ = await _insert_fact_from_signal(conn, subject=subj, value="b")
+        cid = await _insert_contention(conn, subject=subj)
+        await _insert_contention_value(conn, cid, [fact_a], "value-a")
+        await _insert_contention_value(conn, cid, [fact_b], "value-b")
+        # THE PRODUCTION CITATION SHAPE: the finding cites the SIGNAL, never
+        # the fact id. Under the pre-fix query this finding is invisible.
+        tied = await _insert_finding(
+            conn, sev_tag=None, confidence=0.9, derived=[sig_a]
+        )
+        await _insert_faith_critique(conn, tied, 0.85)
+
+    await _run(pg_pool)  # seed
+
+    async with pg_pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE fact_contention SET status = 'surfaced', "
+            "surfaced_value = 'a', surfaced_fact_id = $2, updated_at = now() "
+            "WHERE id = $1",
+            cid, fact_a,
+        )
+
+    r2 = await _run(pg_pool)
+    assert r2.finding.data["fired"] == 1, (
+        "a contention flip with a verified finding resting on the disputed "
+        "evidence fired nothing — the fact/signal id populations still do not "
+        "meet, and the class remains a structural false negative"
+    )
+    async with pg_pool.acquire() as conn:
+        rows = await _alert_rows(conn)
+    assert len(rows) == 1
+    data = _row_data(rows[0])
+    assert data["trigger_class"] == ats.TRIGGER_CONTENTION
+    assert data["change"] == "contested->surfaced"
+    assert data["verified_finding_id"] == str(tied)
+
+
+async def test_contention_flip_still_needs_a_shared_evidence_ancestor(
+    pg_pool, clean_slate
+):
+    """The bridge widens the join along real lineage; it must not make every
+    verified finding count. A finding citing an UNRELATED signal — one no
+    contested fact was derived from — leaves the flip silent (watermarked, not
+    paged), exactly as before."""
+    async with pg_pool.acquire() as conn:
+        subj = f"w1c3u_{uuid4().hex[:8]}"
+        fact_a, _ = await _insert_fact_from_signal(conn, subject=subj, value="a")
+        cid = await _insert_contention(conn, subject=subj)
+        await _insert_contention_value(conn, cid, [fact_a], "value-a")
+        # A verified finding, but resting on evidence with no lineage tie.
+        _, unrelated_sig = await _insert_fact_from_signal(
+            conn, subject=f"other_{uuid4().hex[:8]}", value="z"
+        )
+        stray = await _insert_finding(
+            conn, sev_tag=None, confidence=0.9, derived=[unrelated_sig]
+        )
+        await _insert_faith_critique(conn, stray, 0.9)
+
+    await _run(pg_pool)  # seed
+    async with pg_pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE fact_contention SET status = 'surfaced', "
+            "surfaced_value = 'a', surfaced_fact_id = $2, updated_at = now() "
+            "WHERE id = $1",
+            cid, fact_a,
+        )
+    assert (await _run(pg_pool)).finding.data["fired"] == 0
 
 
 async def test_new_contention_requires_verified_tie(pg_pool, clean_slate):
@@ -1014,6 +1178,47 @@ async def geo_clean_slate(pg_pool, clean_slate):
     yield
 
 
+# The geo BINS these tests converge in, and why they look like nonsense.
+#
+# ORDER DEPENDENCE, and the fix. `geo_clean_slate` deletes this file's own
+# `geo6test.*` signals, and cannot delete anybody else's. But a geo bin is not
+# owned by a source — it is a COUNTRY TAG or a 1° CELL, and every geo-tagged
+# signal in the shared `signals` table joins the bin it falls in, whoever wrote
+# it. So these tests' exact bin assertions ("the families here are exactly gis,
+# news and social"; "3 contributors") were statements about the whole suite's
+# signal table.
+#
+# `tests/data_pkg/test_watchlist.py` is what proved it, and the pair reproduces
+# in file order with no shuffle at all:
+#     pytest tests/data_pkg/test_watchlist.py tests/data_pkg/test_alert_trigger_scan.py
+# Its `_insert_signal` writes `source_id='test_p5_6_source'` rows that it never
+# cleans up: one tagged `geo=['IR','IQ']` (joining `country:IQ`) and one at
+# 33.31/44.36 for its Baghdad "far event" (joining `cell:33:44`). Both bins were
+# in use here. The source has no descriptor, so it contributes the honest
+# `src:<source_id>` family fallback, and the assertions failed at
+# `['gis','news','social','src:test_p5_6_source']` and `4 == 3` — on a scan that
+# had binned every row exactly right.
+#
+# The bins therefore move somewhere nothing real can follow:
+#
+#   * COUNTRY tier — the ISO 3166-1 USER-ASSIGNED range (AA, QM-QZ, XA-XZ, ZZ),
+#     which is permanently unassigned and so can never appear in a `signals.geo`
+#     tag that came from anywhere but this file. `country_key` normalizes any
+#     two-letter alpha tag, so these are ordinary bins to the scan under test.
+#   * CELL tier — 77°N 168°E, Arctic Ocean north of Wrangel Island. Not a real
+#     place anything reports from, and 44 degrees from the nearest coordinate
+#     any other test in the tree uses.
+#
+# Keeping the assertions EXACT is the point: "these three families and no
+# others" is what a convergence bin means, and weakening it to a subset check
+# would have passed just as happily on the polluted bin above.
+_GEO_CC_SEED = "XA"          # the seeds-silently test
+_GEO_CC_FORMATION = "XB"     # the formation test
+_GEO_CC_PILEON = "XC"        # the same-family pile-on test
+_GEO_CC_DISSOLUTION = "XD"   # the dissolution test
+_GEO_CELL_LAT, _GEO_CELL_LON = 77, 168
+
+
 async def _insert_geo_source(conn: Any, source_id: str, family: str) -> None:
     await conn.execute(
         "INSERT INTO source_descriptors (descriptor_id, version, schema_uri, "
@@ -1093,7 +1298,7 @@ async def test_geo_convergence_seeds_silently_then_steady_state_is_quiet(
     async with pg_pool.acquire() as conn:
         await _seed_three_geo_family_sources(conn)
         for src in ("geo6test.quake", "geo6test.news", "geo6test.tg"):
-            await _insert_geo_signal(conn, src, geo_tags=["IQ"])
+            await _insert_geo_signal(conn, src, geo_tags=[_GEO_CC_SEED])
 
     r1 = await _run(pg_pool)
     assert ats.TRIGGER_GEO_CONVERGENCE in r1.finding.data["seeded_classes"]
@@ -1101,8 +1306,8 @@ async def test_geo_convergence_seeds_silently_then_steady_state_is_quiet(
         assert _geo_rows(await _alert_rows(conn)) == []  # history never pages
         wm = await conn.fetchrow(
             "SELECT state FROM alert_trigger_watermarks "
-            "WHERE trigger_class = $1 AND watermark_key = 'country:IQ'",
-            ats.TRIGGER_GEO_CONVERGENCE,
+            "WHERE trigger_class = $1 AND watermark_key = $2",
+            ats.TRIGGER_GEO_CONVERGENCE, f"country:{_GEO_CC_SEED}",
         )
     assert wm is not None
     state = json.loads(wm["state"]) if isinstance(wm["state"], str) else wm["state"]
@@ -1122,13 +1327,16 @@ async def test_geo_convergence_formation_fires_once_with_contributors_then_never
     async with pg_pool.acquire() as conn:
         await _seed_three_geo_family_sources(conn)
         # Below the bar at seed time: two families only.
-        await _insert_geo_signal(conn, "geo6test.quake", geo_tags=["SY"])
-        await _insert_geo_signal(conn, "geo6test.news", geo_tags=["SY"])
+        await _insert_geo_signal(conn, "geo6test.quake",
+                                 geo_tags=[_GEO_CC_FORMATION])
+        await _insert_geo_signal(conn, "geo6test.news",
+                                 geo_tags=[_GEO_CC_FORMATION])
     await _run(pg_pool)  # seeds (nothing formed)
 
     async with pg_pool.acquire() as conn:
         # Third DISTINCT family arrives → formation edge.
-        await _insert_geo_signal(conn, "geo6test.tg", geo_tags=["SY"])
+        await _insert_geo_signal(conn, "geo6test.tg",
+                                 geo_tags=[_GEO_CC_FORMATION])
     dispatcher = _FakeDispatcher()
     r2 = await _run(pg_pool, dispatcher)
     assert r2.finding.data["fired"] == 1
@@ -1140,7 +1348,7 @@ async def test_geo_convergence_formation_fires_once_with_contributors_then_never
     assert row["severity"] == "medium"
     data = _row_data(row)
     assert data["event"] == "formed"
-    assert data["bin_key"] == "country:SY"
+    assert data["bin_key"] == f"country:{_GEO_CC_FORMATION}"
     assert data["distinct_family_count"] == 3
     assert sorted(data["families"]) == ["gis", "news", "social"]
     # Payload lists the contributing signals: ids + sources + families —
@@ -1176,8 +1384,10 @@ async def test_geo_convergence_same_family_pileon_never_fires(
         await _seed_three_geo_family_sources(conn)
         # 12 signals, TWO sources, ONE family (news) → diversity bar unmet.
         for _ in range(6):
-            await _insert_geo_signal(conn, "geo6test.news", geo_tags=["LY"])
-            await _insert_geo_signal(conn, "geo6test.news2", geo_tags=["LY"])
+            await _insert_geo_signal(conn, "geo6test.news",
+                                     geo_tags=[_GEO_CC_PILEON])
+            await _insert_geo_signal(conn, "geo6test.news2",
+                                     geo_tags=[_GEO_CC_PILEON])
     r2 = await _run(pg_pool)
     assert r2.finding.data["fired"] == 0
     async with pg_pool.acquire() as conn:
@@ -1185,8 +1395,10 @@ async def test_geo_convergence_same_family_pileon_never_fires(
 
     # Two more DISTINCT families flip it.
     async with pg_pool.acquire() as conn:
-        await _insert_geo_signal(conn, "geo6test.quake", geo_tags=["LY"])
-        await _insert_geo_signal(conn, "geo6test.health", geo_tags=["LY"])
+        await _insert_geo_signal(conn, "geo6test.quake",
+                                 geo_tags=[_GEO_CC_PILEON])
+        await _insert_geo_signal(conn, "geo6test.health",
+                                 geo_tags=[_GEO_CC_PILEON])
     r3 = await _run(pg_pool)
     assert r3.finding.data["fired"] == 1
     async with pg_pool.acquire() as conn:
@@ -1205,21 +1417,24 @@ async def test_geo_convergence_cell_tier_excludes_country_centroid_geocodes(
         # (no geo country tags → the country tier stays out of the picture).
         await _insert_geo_signal(
             conn, "geo6test.quake",
-            lat=33.2, lon=44.1, geo_source="geometry", precision="country",
+            lat=_GEO_CELL_LAT + 0.2, lon=_GEO_CELL_LON + 0.1,
+            geo_source="geometry", precision="country",
         )
         await _insert_geo_signal(
             conn, "geo6test.news",
-            lat=33.8, lon=44.9, precision="municipality",
+            lat=_GEO_CELL_LAT + 0.8, lon=_GEO_CELL_LON + 0.9,
+            precision="municipality",
         )
         await _insert_geo_signal(
             conn, "geo6test.tg",
-            lat=33.5, lon=44.5, precision="region",
+            lat=_GEO_CELL_LAT + 0.5, lon=_GEO_CELL_LON + 0.5, precision="region",
         )
         # A country-precision nominatim point (country CENTROID) in the same
         # cell MUST NOT enter the cell tier.
         await _insert_geo_signal(
             conn, "geo6test.health",
-            lat=33.5, lon=44.2, precision="country", geo_source="nominatim",
+            lat=_GEO_CELL_LAT + 0.5, lon=_GEO_CELL_LON + 0.2,
+            precision="country", geo_source="nominatim",
         )
     r2 = await _run(pg_pool)
     assert r2.finding.data["fired"] == 1
@@ -1228,7 +1443,7 @@ async def test_geo_convergence_cell_tier_excludes_country_centroid_geocodes(
     assert len(rows) == 1
     data = _row_data(rows[0])
     assert data["bin_kind"] == "cell"
-    assert data["bin_key"] == "cell:33:44"
+    assert data["bin_key"] == f"cell:{_GEO_CELL_LAT}:{_GEO_CELL_LON}"
     # The centroid signal is excluded: 3 contributors, no 'health' family.
     assert data["signal_count"] == 3
     assert sorted(data["families"]) == ["gis", "news", "social"]
@@ -1240,8 +1455,8 @@ async def test_geo_convergence_dissolution_fires_once_then_quiet(
     async with pg_pool.acquire() as conn:
         await _seed_three_geo_family_sources(conn)
         for src in ("geo6test.quake", "geo6test.news", "geo6test.tg"):
-            await _insert_geo_signal(conn, src, geo_tags=["SO"])
-    await _run(pg_pool)  # seeds country:SO as active
+            await _insert_geo_signal(conn, src, geo_tags=[_GEO_CC_DISSOLUTION])
+    await _run(pg_pool)  # seeds the dissolution bin as active
 
     async with pg_pool.acquire() as conn:
         # The window empties out (signals age past 24h).
@@ -1258,7 +1473,7 @@ async def test_geo_convergence_dissolution_fires_once_then_quiet(
     assert row["severity"] == "info"
     data = _row_data(row)
     assert data["event"] == "dissolved"
-    assert data["bin_key"] == "country:SO"
+    assert data["bin_key"] == f"country:{_GEO_CC_DISSOLUTION}"
     assert sorted(data["previous_families"]) == ["gis", "news", "social"]
 
     # Dissolution fired ONCE — the next scan is quiet.
@@ -1266,3 +1481,325 @@ async def test_geo_convergence_dissolution_fires_once_then_quiet(
     assert r3.finding.data["fired"] == 0
     async with pg_pool.acquire() as conn:
         assert len(_geo_rows(await _alert_rows(conn))) == 1
+
+
+# ---------------------------------------------------------------------------
+# Trigger 7 — production_deficit (S-1, the expected-vs-actual production gauge)
+# ---------------------------------------------------------------------------
+#
+# The seventh class differs from the other six in one way worth testing
+# explicitly: it alerts on a CONDITION that persists rather than an event that
+# happens. A frozen feed is still frozen ten minutes later, so a plain
+# fire-once contract would either page forever or go quiet the moment the
+# condition worsened. The paging policy is therefore escalation-only, and
+# these tests pin every rung of it.
+
+_PD_SOURCE = "source.pdtest.frozen"
+
+
+@pytest_asyncio.fixture
+async def pd_clean_slate(pg_pool):
+    """Watermarks + the gauge's own inputs cleared, so a production_deficit
+    test measures ONLY the loop it seeded."""
+
+    async def _wipe(conn):
+        await conn.execute("TRUNCATE alert_trigger_watermarks")
+        await conn.execute(
+            "DELETE FROM analyst_outputs WHERE analyst_id = 'alert_trigger_scan'"
+        )
+        await conn.execute(
+            "DELETE FROM source_descriptors WHERE descriptor_id LIKE 'source.pdtest.%'"
+        )
+        await conn.execute(
+            "DELETE FROM signals WHERE source_id LIKE 'source.pdtest.%'"
+        )
+        await conn.execute(
+            "DELETE FROM source_poll_outcomes WHERE source_id LIKE 'source.pdtest.%'"
+        )
+
+    async with pg_pool.acquire() as conn:
+        await _wipe(conn)
+    yield
+    async with pg_pool.acquire() as conn:
+        await _wipe(conn)
+
+
+async def _seed_frozen_source(conn: Any, *, hours_silent: int, polls: int) -> None:
+    """The AP shape: an active hourly feed that produced a burst then froze,
+    with every poll since recording success / healthy / 0-written."""
+    body = {
+        "identity": {"id": _PD_SOURCE, "kind": "rss", "state": "active"},
+        "acquisition": "poll",
+        "cadence": {"schedule": {"raw": "13 * * * *", "ui_hint": {}}},
+    }
+    await conn.execute(
+        """
+        INSERT INTO source_descriptors
+            (descriptor_id, version, schema_uri, is_head, kind, state, owner,
+             name, body, created_at)
+        VALUES ($1, 'v1', 'legba/source/1.0.0', TRUE, 'rss', 'active', 'test',
+                $1, $2::jsonb, now() - interval '60 days')
+        ON CONFLICT (descriptor_id, version) DO NOTHING
+        """,
+        _PD_SOURCE,
+        json.dumps(body),
+    )
+    for i in range(20):
+        await conn.execute(
+            """
+            INSERT INTO signals
+                (id, source_id, source_version, payload, content_hash,
+                 fetched_at, created_at, updated_at, schema_uri)
+            VALUES ($1, $2, 'v1', '{}'::jsonb, $3,
+                    now(),
+                    now() - make_interval(hours => $4),
+                    now(), 'iglu:legba/signal/jsonschema/1-0-0')
+            """,
+            uuid4(),
+            _PD_SOURCE,
+            uuid4().hex,
+            hours_silent + i,
+        )
+    for h in range(polls):
+        await conn.execute(
+            """
+            INSERT INTO source_poll_outcomes
+                (source_id, source_version, outcome, health_state,
+                 signals_written, occurred_at)
+            VALUES ($1, 'v1', 'success', 'healthy', 0,
+                    now() - make_interval(hours => $2))
+            """,
+            _PD_SOURCE,
+            h,
+        )
+
+
+def _pd_rows(rows: list[Any]) -> list[Any]:
+    return [r for r in rows if _row_data(r).get("loop_id") == _PD_SOURCE]
+
+
+def _fanned_body(dispatcher: Any) -> str:
+    return "\n".join(getattr(p, "detail", "") for p in dispatcher.payloads)
+
+
+def test_production_deficit_is_registered_in_every_per_class_registry():
+    """The registries a new trigger class silently half-lands in.
+
+    verified_finding is the ONE documented exception to the unverified-reason
+    registry — it carries the finding's real faithfulness score instead (see
+    ``_sink_payload``) — so it is named here rather than left to a loose check.
+    """
+    assert ats.TRIGGER_PRODUCTION_DEFICIT == "production_deficit"
+    assert ats.TRIGGER_PRODUCTION_DEFICIT in ats.TRIGGER_CLASSES
+    for cls in ats.TRIGGER_CLASSES:
+        assert cls in ats._CLASS_PRIORITY, cls
+        if cls != ats.TRIGGER_FINDING:
+            assert cls in ats._UNVERIFIED_REASONS, cls
+    assert len(set(ats._CLASS_PRIORITY.values())) == len(ats._CLASS_PRIORITY)
+
+
+def test_gauge_thresholds_are_declared_handler_options():
+    """A ``gauge_*`` knob not declared in HANDLER_OPTIONS is DROPPED whole at
+    descriptor-resolution time, so an operator retune would silently no-op."""
+    from legba.data.analysts.handler_options import HANDLER_OPTIONS
+    from legba.data.registry.production_gauge import GaugeConfig
+
+    declared = {
+        o.name[len("gauge_"):]
+        for o in HANDLER_OPTIONS["alert_trigger_scan"]
+        if o.name.startswith("gauge_")
+    }
+    assert declared == set(GaugeConfig().__dataclass_fields__)
+
+
+def test_gauge_options_reach_the_config():
+    from legba.data.analysts.deterministic_handlers import _production_deficit_scan
+
+    cfg = _production_deficit_scan.config_from_options(
+        {"gauge_window_days": 5, "per_desk_cap": 3, "gauge_source_gap_multiple": 9.0}
+    )
+    assert cfg.window_days == 5
+    assert cfg.source_gap_multiple == 9.0
+
+
+async def test_production_deficit_seeds_standing_deficits_without_paging(
+    pg_pool, pd_clean_slate
+):
+    """The 0091 seed contract on a condition rather than an event: bringing the
+    class up on a live substrate adopts the standing backlog silently. But the
+    RECEIPT says so — a gauge whose first run swallowed seven real deficits
+    and reported nothing would read as all-clear, which is the exact failure
+    it exists to prevent."""
+    async with pg_pool.acquire() as conn:
+        await _seed_frozen_source(conn, hours_silent=24 * 8, polls=120)
+
+    r1 = await _run(pg_pool, per_desk_cap=20)
+    counts = r1.finding.data["counts_by_class"][ats.TRIGGER_PRODUCTION_DEFICIT]
+    assert ats.TRIGGER_PRODUCTION_DEFICIT in r1.finding.data["seeded_classes"]
+    assert counts["candidates"] == 0
+    assert counts["seeded_deficits"] >= 1
+    assert counts["gauged"] >= 1
+    async with pg_pool.acquire() as conn:
+        assert _pd_rows(await _alert_rows(conn)) == []
+
+    # Adopted, so the steady state stays quiet.
+    r2 = await _run(pg_pool, per_desk_cap=20)
+    async with pg_pool.acquire() as conn:
+        assert _pd_rows(await _alert_rows(conn)) == []
+    assert (
+        r2.finding.data["counts_by_class"][ats.TRIGGER_PRODUCTION_DEFICIT]["deficits"]
+        >= 1
+    )
+
+
+async def test_production_deficit_fires_when_a_new_deficit_appears(
+    pg_pool, pd_clean_slate
+):
+    """The real firing path: the class seeds on a healthy engine, a loop goes
+    quiet, and the next scan pages with the expectation stated."""
+    await _run(pg_pool, per_desk_cap=20)  # seed with no deficit present
+
+    async with pg_pool.acquire() as conn:
+        await _seed_frozen_source(conn, hours_silent=24 * 8, polls=120)
+
+    dispatcher = _FakeDispatcher()
+    r = await _run(pg_pool, dispatcher, per_desk_cap=20)
+    async with pg_pool.acquire() as conn:
+        rows = _pd_rows(await _alert_rows(conn))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["severity"] == "critical"
+    data = _row_data(row)
+    assert data["trigger_class"] == ats.TRIGGER_PRODUCTION_DEFICIT
+    assert data["loop_class"] == "source_production"
+    assert data["loop_id"] == _PD_SOURCE
+    assert data["evidence"]["sub_state"] == "drought"
+    # The page states the EXPECTATION, not just the symptom — an operator must
+    # be able to act on the notification without opening the route.
+    assert "EXPECTED:" in _fanned_body(dispatcher)
+    assert (
+        r.finding.data["counts_by_class"][ats.TRIGGER_PRODUCTION_DEFICIT]["paging"] >= 1
+    )
+
+    # Persisting at the same severity NEVER refires.
+    await _run(pg_pool, per_desk_cap=20)
+    async with pg_pool.acquire() as conn:
+        assert len(_pd_rows(await _alert_rows(conn))) == 1
+
+
+async def test_production_deficit_refires_only_on_escalation(
+    pg_pool, pd_clean_slate
+):
+    """A condition that gets WORSE is news again; one that merely persists is
+    not. The watermark fingerprints the severity rank, so the alert ledger
+    reads as a story rather than a heartbeat."""
+    await _run(pg_pool, per_desk_cap=20)  # seed clean
+
+    async with pg_pool.acquire() as conn:
+        # ~2 days silent on an hourly feed: over the 1-day bar, `high`.
+        await _seed_frozen_source(conn, hours_silent=50, polls=50)
+    await _run(pg_pool, per_desk_cap=20)
+    async with pg_pool.acquire() as conn:
+        first = _pd_rows(await _alert_rows(conn))
+    assert len(first) == 1
+    assert first[0]["severity"] == "high"
+
+    # Same severity a scan later — silence.
+    await _run(pg_pool, per_desk_cap=20)
+    async with pg_pool.acquire() as conn:
+        assert len(_pd_rows(await _alert_rows(conn))) == 1
+
+    # It gets worse: push the newest signal past the critical rung.
+    async with pg_pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE signals SET created_at = created_at - interval '10 days' "
+            "WHERE source_id = $1",
+            _PD_SOURCE,
+        )
+    await _run(pg_pool, per_desk_cap=20)
+    async with pg_pool.acquire() as conn:
+        rows = _pd_rows(await _alert_rows(conn))
+    assert len(rows) == 2
+    assert rows[1]["severity"] == "critical"
+    assert _row_data(rows[1])["previous_severity"] == "high"
+    assert "escalated" in rows[1]["title"]
+
+
+async def test_production_deficit_recovery_is_silent_and_re_arms(
+    pg_pool, pd_clean_slate
+):
+    """Recovery clears the watermark WITHOUT an all-clear page (the phone is
+    for bad news; the route shows the recovery), and the next deficit fires
+    cleanly rather than being swallowed as 'ongoing'."""
+    await _run(pg_pool, per_desk_cap=20)
+
+    async with pg_pool.acquire() as conn:
+        await _seed_frozen_source(conn, hours_silent=24 * 8, polls=120)
+    await _run(pg_pool, per_desk_cap=20)
+    async with pg_pool.acquire() as conn:
+        assert len(_pd_rows(await _alert_rows(conn))) == 1
+
+    # The feed comes back.
+    async with pg_pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE signals SET created_at = now() - interval '10 minutes' "
+            "WHERE source_id = $1",
+            _PD_SOURCE,
+        )
+    r = await _run(pg_pool, per_desk_cap=20)
+    assert (
+        r.finding.data["counts_by_class"][ats.TRIGGER_PRODUCTION_DEFICIT]["recoveries"]
+        >= 1
+    )
+    async with pg_pool.acquire() as conn:
+        assert len(_pd_rows(await _alert_rows(conn))) == 1  # no all-clear alert
+
+    # It freezes again — and pages again, not swallowed as an ongoing state.
+    async with pg_pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE signals SET created_at = now() - interval '9 days' "
+            "WHERE source_id = $1",
+            _PD_SOURCE,
+        )
+    await _run(pg_pool, per_desk_cap=20)
+    async with pg_pool.acquire() as conn:
+        assert len(_pd_rows(await _alert_rows(conn))) == 2
+
+
+async def test_production_deficit_reports_its_measurement_even_when_quiet(
+    pg_pool, pd_clean_slate
+):
+    """A scan that pages nothing still records WHAT IT MEASURED. "The engine
+    checked N loops and they were producing" is the fact that distinguishes a
+    working gauge from a dead one — precisely the distinction the twelve
+    silently-dead components never had."""
+    r = await _run(pg_pool, per_desk_cap=20)
+    counts = r.finding.data["counts_by_class"][ats.TRIGGER_PRODUCTION_DEFICIT]
+    for field in (
+        "loops", "gauged", "deficits", "paging", "escalations", "recoveries",
+        "seeded_deficits", "candidate_bound_hit", "unavailable",
+    ):
+        assert field in counts, field
+
+
+async def test_production_deficit_unverified_posture_is_honest(
+    pg_pool, pd_clean_slate
+):
+    """The gauge reads receipts and row-birth timestamps — engine telemetry,
+    with no prose and no claim about the world — so its outward verify state
+    must say exactly that rather than borrow a faithfulness score."""
+    await _run(pg_pool, per_desk_cap=20)
+    async with pg_pool.acquire() as conn:
+        await _seed_frozen_source(conn, hours_silent=24 * 8, polls=120)
+    dispatcher = _FakeDispatcher()
+    await _run(pg_pool, dispatcher, per_desk_cap=20)
+
+    payloads = [
+        p
+        for p in dispatcher.payloads
+        if "Production deficit" in getattr(p, "summary", "")
+    ]
+    assert payloads
+    assert "engine telemetry" in payloads[0].verify_state
+    assert payloads[0].target_id is None
+    assert payloads[0].channel_name == ats.CHANNEL_NAME

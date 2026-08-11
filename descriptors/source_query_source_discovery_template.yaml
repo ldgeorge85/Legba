@@ -1,0 +1,103 @@
+# W1-E BIND (partial — see gap note) — query_source_discovery template
+# descriptor (P-13; src/legba/data/discovery/query_source_discovery.py, 298
+# LOC).
+#
+# query_source_discovery is the reference implementation of the P-13 SOURCE
+# discovery flavor: given a list of candidate feeds, it validates each
+# (liveness + trial pull) before registering it as a real source_descriptors
+# row (discovery/materializer.py's validate-before-register path), with
+# selector auto-wire on top. This is exactly the primitive multi-domain scale
+# needs — onboarding N new feeds for a new domain without hand-authoring N
+# source descriptors. Until this file, zero descriptors of any state
+# referenced `kind: query_source_discovery` (verified in-tree and against
+# the live `source_descriptors` table).
+#
+# ACTOR-PLANE WIRING — LANDED (was the ⚠ BIGGER GAP in the W1-E draft):
+# `materializer.py` DOES import this module by string
+# (`_build_source_discovery_handler`'s `module_by_kind` dict) and the module
+# itself is well-tested (tests/data_pkg/test_discovery_p13.py runs ~400
+# lines of real-Postgres integration tests against it: validate-before-
+# register, selector auto-wire, state recording). What was missing was the
+# CALLER: `materializer.py`'s `run_source_discovery_cycle` had no caller in
+# src/ outside its own tests, so no actor could drive a source-discovery
+# descriptor — the TARGET flavor was driven from
+# `dapr_actors.py::TargetActor._run_discovery_cycle` and the source flavor by
+# nothing at all.
+#
+# `SourceCore.run_discovery_cycle()` (runtime/source_actor.py) is now the
+# source-flavor twin of that branch, and `SourceActor.run` routes to it on
+# `descriptor.discovery is not None` — BEFORE the acquisition check, since a
+# discovery template does not pull (its materialised children do). A
+# discovery descriptor that declares a `cadence.schedule` gets the usual
+# `poll_<id>` reminder and fires on it; without one it runs on explicit
+# invocation only.
+#
+# Still `state: draft`: this closes the dispatch gap, it does NOT activate
+# the descriptor. Promoting it needs an operator-populated `list_source`
+# (below) and live verification.
+#
+# `discovery.list_source` below is DELIBERATELY EMPTY (`inline:[]`) — this
+# is a structural template, not seed data. The `relabel` rules mirror the
+# ones exercised by tests/data_pkg/test_discovery_p13.py's
+# `_source_discovery_descriptor` fixture (mechanical host/url mapping, not
+# curated content). An operator wiring a real domain's feed list populates
+# `list_source` (or a config-driven fetch) with real URLs.
+#
+# State: draft (required anyway — draft gets no live actor even once the
+# dispatch gap above is closed).
+
+identity:
+  id: source.query_source_discovery.template
+  name: "Query Source Discovery — template (BLOCKED on actor-dispatch, see gap note)"
+  kind: rss                # the TEMPLATE's own instance kind; materialised
+                            # children inherit + relabel from here per P-13.
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L2
+  state: draft
+  owner: w1e_built_but_unbound
+  created: "2026-08-03T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [discovery, news, template]
+  source_class: analysis
+
+acquisition: poll
+# No cadence: a discovery template's materialised children pull, the
+# template itself does not (matches the schema's own validator exemption
+# for discovery-block sources).
+
+config:
+  url: "https://placeholder.invalid/feed.xml"   # template default; never fetched directly
+
+discovery:
+  kind: query_source_discovery
+  validate_before_register: true
+  relabel:
+    - source_labels: [url]
+      target_label: config.url
+      action: set
+    - source_labels: [host]
+      target_label: identity.id
+      action: format
+      replacement: "src_disc_{{ host | slug }}"
+    - source_labels: [host]
+      target_label: identity.name
+      action: format
+      replacement: "Discovered: {{ host }}"
+    - source_labels: [tags]
+      target_label: scope.tags
+      action: merge_list
+      extend_with: [news, discovered]
+  config:
+    list_source: "inline:[]"        # EMPTY — no fabricated seed feeds
+    default_source_kind: rss
+
+pipeline:
+  ingestion_filters: []
+  enrichment: []
+
+subscription_policy: open

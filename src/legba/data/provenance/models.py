@@ -199,6 +199,31 @@ class ScorecardPayload(_AnalystOutputBase):
     kind_marker: Literal["scorecard"] = "scorecard"
 
 
+class SituationUpdatePayload(_AnalystOutputBase):
+    """The 13th kind — one cycle's SITUATION TRAJECTORY read (continuity P2).
+
+    Written by the ``situation_tracker`` analyst: for every open situation that
+    picked up new VERIFIED evidence since the tracker's watermark, one dated
+    delta claim (escalates / de_escalates / broadens / unchanged) grounded in
+    exactly the new items, cited ``[[ref:N]]`` in the composition convention.
+    Lands in the generic ``analyst_outputs`` table.
+
+    It is a FIRST-CLASS graded output, not a receipt: it goes through the same
+    faithfulness verify gate as a composition (its ``data['citations']`` bridge
+    is the standard sub-claim shape), and the same floor governs its
+    consumption. That is the point of the kind existing at all — "this new event
+    escalates the situation we were already watching" is a CLAIM, and an
+    ungraded claim is exactly what this platform refuses to ship.
+
+    The trajectory ROWS this run appends to ``situation_events`` carry
+    ``source_output_id`` = this row's id, so every ledger delta resolves back to
+    the graded prose that asserted it. All trajectory structure rides the
+    inherited free-form ``data`` dict, so ``extra='forbid'`` never rejects it.
+    """
+
+    kind_marker: Literal["situation_update"] = "situation_update"
+
+
 class AlertPayload(_AnalystOutputBase):
     """Operator-routed alert (severity-gated, NATS-emitted)."""
 

@@ -83,7 +83,7 @@ from ..stack.nlp_service import (
     NlpServiceUnavailable,
 )
 from ._contract import FilterContext, FilterHealth
-from ._fact_graph import edge_label_for_predicate, upsert_fact_edge
+from ._fact_graph import edge_label_for_predicate, resolve_vertex_id, upsert_fact_edge
 from .ner import (
     _MD_BOLD_RE,
     _MD_LINK_RE,
@@ -674,6 +674,125 @@ def _is_possessive_fragment(surface: str) -> bool:
 _EMPLOYMENT_PREDICATES: frozenset[str] = frozenset({
     "employed by", "spokesperson for",
 })
+
+
+# ---------------------------------------------------------------------------
+# CW-6 — CAPITAL-AS-GOVERNMENT METONYMY
+# ---------------------------------------------------------------------------
+#
+# News writes governments as their capitals: "tensions between Madrid and
+# Rabat", "Kyiv says", "Washington's allies". NER reads the capital as a
+# LOCATION, the relation extractor reads the sentence's inter-state verb, and
+# the pair lands in `facts` as a geographic claim about a CITY. Verified
+# read-only on the live substrate (2026-08-03), the Madrid cluster alone:
+#
+#     Madrid border with Europe / France / Spain / Schengen / Ceuta / Italy
+#     Madrid member of Europe / Spain / EU / European Union
+#     Madrid conflict with France
+#
+# Every one of those is Spain's government wearing its capital's name, and
+# none of them is a fact about the city. K-4 R3 then harvested them into
+# contested-fact questions ("which value of 'border with' for 'madrid' is
+# correct?") that scored 0/3, alongside kiev/conflict-with, kiev/spokesperson-
+# for and washington/ally-of — the same phenomenon, four more capitals.
+#
+# The gate is PREDICATE-DRIVEN, the same shape as its D6/D13 siblings, and
+# scoped hard so the city keeps its real facts: "Madrid located in Spain" and
+# "Madrid capital of Spain" are untouched, because those predicates are
+# precisely the ones a city legitimately takes. What is dropped are relations
+# only a STATE has.
+
+#: Capital cities (and a few seats of government) that routinely stand in for
+#: their state in news prose. Curated + lower-cased, the module's established
+#: gazetteer pattern — an unlisted city flows through untouched.
+#:
+#: CITY-STATES ARE DELIBERATELY ABSENT (Singapore, Monaco, Vatican City,
+#: Luxembourg City): there the city IS the state, so its inter-state relations
+#: are real facts and dropping them would be the guard inventing a metonymy.
+_GOVERNMENT_METONYM_SUBJECTS: frozenset[str] = frozenset({
+    # Europe
+    "madrid", "paris", "london", "berlin", "rome", "moscow", "kyiv", "kiev",
+    "brussels", "the hague", "warsaw", "prague", "budapest", "vienna",
+    "bern", "berne", "stockholm", "oslo", "copenhagen", "helsinki", "dublin",
+    "lisbon", "athens", "sofia", "bucharest", "belgrade", "zagreb",
+    "sarajevo", "skopje", "tirana", "minsk", "chisinau", "kishinev",
+    "ljubljana", "bratislava", "riga", "vilnius", "tallinn", "reykjavik",
+    "nicosia", "valletta", "podgorica", "pristina",
+    # Americas
+    "washington", "ottawa", "mexico city", "brasilia", "brasília",
+    "buenos aires", "santiago", "lima", "bogota", "bogotá", "caracas",
+    "quito", "la paz", "asuncion", "asunción", "montevideo", "havana",
+    "managua", "san salvador", "tegucigalpa", "panama city", "port-au-prince",
+    # MENA
+    "tehran", "ankara", "cairo", "riyadh", "doha", "abu dhabi", "kuwait city",
+    "manama", "muscat", "amman", "beirut", "damascus", "baghdad", "sanaa",
+    "sana'a", "tripoli", "tunis", "algiers", "rabat", "khartoum",
+    "jerusalem", "ramallah", "nouakchott",
+    # Africa
+    "addis ababa", "nairobi", "kampala", "kigali", "dar es salaam", "dodoma",
+    "lusaka", "harare", "pretoria", "abuja", "accra", "dakar", "bamako",
+    "ouagadougou", "niamey", "n'djamena", "conakry", "freetown", "monrovia",
+    "abidjan", "yaounde", "yaoundé", "kinshasa", "brazzaville", "luanda",
+    "maputo", "mogadishu", "asmara", "djibouti city", "juba",
+    # Asia-Pacific
+    "beijing", "peking", "tokyo", "seoul", "pyongyang", "new delhi", "delhi",
+    "islamabad", "kabul", "dhaka", "colombo", "kathmandu", "thimphu",
+    "naypyidaw", "bangkok", "hanoi", "phnom penh", "vientiane",
+    "kuala lumpur", "jakarta", "manila", "canberra", "wellington",
+    "ulaanbaatar", "taipei", "astana", "nur-sultan", "tashkent", "bishkek",
+    "dushanbe", "ashgabat", "baku", "yerevan", "tbilisi",
+    # seats of government that are metonyms in their own right
+    "the kremlin", "kremlin", "the white house", "white house",
+    "downing street", "10 downing street", "the elysee", "elysee",
+    "the pentagon", "pentagon", "whitehall", "capitol hill",
+})
+
+#: Relations only a STATE has. A capital city does not sign treaties, join
+#: unions, sanction anyone, take an ally or fight a war — so under one of
+#: these the subject is unambiguously its government, and the triple is a
+#: mis-subjected claim rather than a fact about a place.
+#:
+#: CONTAINMENT AND LOCATION PREDICATES ARE DELIBERATELY ABSENT — "capital of",
+#: "located in", "part of", "headquartered in", "based in". Those are the
+#: relations a city genuinely takes, and they are exactly the legitimate
+#: Madrid facts on the live substrate ("Madrid located in Spain", "Madrid
+#: capital of Spain"). A wrong VALUE under one of them ("Madrid capital of
+#: France") is a direction/truth defect for a different gate; it is not
+#: metonymy, and widening this set to catch it would take the real city facts
+#: with it.
+_STATE_ONLY_PREDICATES: frozenset[str] = frozenset({
+    "border with", "borders", "neighbor of", "neighbour of",
+    "member of",
+    "conflict with", "at war with", "war with",
+    "ally of", "allied with", "opponent of", "hostile toward",
+    "sanctioned by", "signed agreement with", "diplomatic relations with",
+    "recognizes", "recognises", "annexed", "occupies", "claims",
+    "spokesperson for",
+})
+
+
+def _is_capital_metonymy(subject: str, predicate: str, value: str) -> bool:
+    """True when a CAPITAL standing in for its government is being minted as
+    a geographic fact ("Madrid border with France", "Kyiv conflict with X").
+
+    Deterministic, predicate-driven and conservative. Fires ONLY when:
+
+      * the SUBJECT is a curated capital / seat of government (city-states
+        excluded — there the city IS the state); AND
+      * the predicate is a relation only a STATE has (containment and location
+        predicates are absent by design, so the city's real facts survive);
+        AND
+      * subject and value are not the same referent (that reflexive case is
+        already owned by :func:`_is_reflexive_after_canon`, which has a better
+        reason for it).
+    """
+    subj = " ".join(str(subject or "").split()).strip().lower()
+    if subj not in _GOVERNMENT_METONYM_SUBJECTS:
+        return False
+    pred = normalize_predicate((predicate or "").strip().lower())
+    if pred not in _STATE_ONLY_PREDICATES:
+        return False
+    return bool(str(value or "").strip())
 
 
 def _is_employment_country_subject(subject: str, predicate: str) -> bool:
@@ -1506,6 +1625,13 @@ class FactExtractorHandler:
         # artifact. Gazetteer-backed (reliable country test).
         if _is_employment_country_subject(subject, predicate):
             return "employment_country_subject"
+        # CW-6 — a CAPITAL standing in for its government ("tensions between
+        # Madrid and Rabat" -> "Madrid border with ..."). Checked LAST among
+        # the structural gates: it is the narrowest and the most recently
+        # measured, so anything an older gate already owns keeps its
+        # established reason and the drop-log stays comparable across time.
+        if _is_capital_metonymy(subject, predicate, value):
+            return "capital_metonymy"
         return None
 
     # ----------------------------------------------------------- facts write
@@ -1713,12 +1839,24 @@ class FactExtractorHandler:
                 written += 1
                 if cfg.emit_graph_edges and self._graph_store is not None:
                     try:
+                        # The graph keys vertices on entity_profiles.id, so the
+                        # endpoints are resolved on the SAME connection that
+                        # just wrote the fact. An unresolved endpoint yields
+                        # None and upsert_fact_edge skips loudly — a fact whose
+                        # actors are not yet entities has no place in a graph
+                        # whose whole contract is stable identity.
                         await upsert_fact_edge(
                             self._graph_store,
                             subject=t["subject"],
+                            subject_id=await resolve_vertex_id(
+                                conn, t["subject"], t["subject_class"]
+                            ),
                             subject_class=t["subject_class"],
                             predicate=t["predicate"],
                             value=t["value"],
+                            value_id=await resolve_vertex_id(
+                                conn, t["value"], t["value_class"]
+                            ),
                             value_class=t["value_class"],
                             fact_id=str(fact_id),
                         )

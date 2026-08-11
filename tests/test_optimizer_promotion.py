@@ -459,3 +459,117 @@ def test_optimizer_workflow_input_roundtrips_without_new_fields():
     d = dataclasses.asdict(wf)
     assert d["fitness_metric"] == "critique_proxy"
     assert "min_paired" in d
+
+
+# ---------------------------------------------------------------------------
+# M-1 — the correctness gate is no longer DEAD.
+#
+# It counted `unit_reference_labels` (one row, retired analyst, zero source
+# ids), so it read `insufficient_sample, n_labels=0` for every candidate ever
+# evaluated and could never change state — not a strict gate, a dead one. It now
+# reads the operator gold set, which grows every time a week is labelled.
+# ---------------------------------------------------------------------------
+
+
+def _operator(labels):
+    from legba.data import correctness_axis
+
+    return correctness_axis.score(labels)
+
+
+def test_correctness_gate_reports_the_operator_axis_not_the_dead_table():
+    from legba.data import correctness_axis
+
+    rec = _pair_faithfulness(
+        {f"f{i}": 0.4 for i in range(10)},
+        {f"f{i}": 0.6 for i in range(10)},
+        min_paired=8, min_delta=0.03, judge_model="j", n_labels=0,
+        operator=_operator(["correct", "partially_correct"]),
+    )
+    op = rec["correctness_operator"]
+    assert op["source_table"] == "correctness_labels"
+    assert op["correctness"] == 0.75
+    assert op["n_scored"] == 2
+    assert op["status"] == "insufficient_sample"     # 2 < the floor
+    assert op["sufficient"] is False
+    assert op["min_labels_required"] == correctness_axis.MIN_UNIT_LABELS
+    assert op["mix"]["correct"] == 1
+
+
+def test_correctness_gate_can_actually_open():
+    """The point of the rewire: with enough operator verdicts the block reaches
+    `scored`. The old one could not, ever."""
+    rec = _pair_faithfulness(
+        {f"f{i}": 0.4 for i in range(10)},
+        {f"f{i}": 0.6 for i in range(10)},
+        min_paired=8, min_delta=0.03, judge_model="j", n_labels=0,
+        operator=_operator(["correct"] * 12),
+    )
+    op = rec["correctness_operator"]
+    assert op["status"] == "scored"
+    assert op["sufficient"] is True
+    assert op["n_scored"] == 12
+
+
+def test_correctness_gate_with_no_verdicts_says_no_labels_not_insufficient():
+    """`insufficient_sample` implies a sample that is accruing; with zero
+    verdicts nothing is accruing and the state must say so."""
+    rec = _pair_faithfulness(
+        {f"f{i}": 0.4 for i in range(10)},
+        {f"f{i}": 0.6 for i in range(10)},
+        min_paired=8, min_delta=0.03, judge_model="j", n_labels=0,
+        operator=None,
+    )
+    op = rec["correctness_operator"]
+    assert op["status"] == "no_labels"
+    assert op["correctness"] is None       # never a fabricated 0.0
+    assert op["n_labels"] == 0
+
+
+def test_correctness_never_enters_the_promotion_decision():
+    """`promotable` is decided by the paired faithfulness delta alone — an
+    all-`incorrect` operator record must not veto a positive delta, and an
+    all-`correct` one must not rescue a sub-margin one (labels_api P2-5)."""
+    parent = {f"f{i}": 0.40 for i in range(10)}
+    good = {f"f{i}": 0.60 for i in range(10)}   # +0.20, promotable
+    flat = {f"f{i}": 0.41 for i in range(10)}   # +0.01, below margin
+
+    promotable_but_wrong = _pair_faithfulness(
+        parent, good, min_paired=8, min_delta=0.03, judge_model="j", n_labels=0,
+        operator=_operator(["incorrect"] * 20),
+    )
+    assert promotable_but_wrong["promotable"] is True
+    assert promotable_but_wrong["correctness_operator"]["correctness"] == 0.0
+
+    blocked_but_right = _pair_faithfulness(
+        parent, flat, min_paired=8, min_delta=0.03, judge_model="j", n_labels=0,
+        operator=_operator(["correct"] * 20),
+    )
+    assert blocked_but_right["promotable"] is False
+    assert blocked_but_right["correctness_operator"]["correctness"] == 1.0
+
+
+def test_the_two_correctness_axes_are_separate_keys_in_the_eval_record():
+    rec = _pair_faithfulness(
+        {f"f{i}": 0.4 for i in range(10)},
+        {f"f{i}": 0.6 for i in range(10)},
+        min_paired=8, min_delta=0.03, judge_model="j", n_labels=3,
+        operator=_operator(["correct"]),
+    )
+    # PRIMARY (operator gold set) and SECONDARY (source-id overlap) never merge:
+    # different tables, different n, different status vocabulary.
+    assert rec["correctness_operator"]["source_table"] == "correctness_labels"
+    assert rec["correctness_operator"]["n_labels"] == 1
+    assert rec["correctness_vs_reference"]["n_labels"] == 3
+    assert rec["correctness_vs_reference"]["status"] == "insufficient_sample"
+
+
+def test_honest_null_record_also_carries_both_correctness_axes():
+    rec = _pair_faithfulness(
+        {"a": 0.5, "b": 0.5, "c": 0.5}, {"a": 0.9},
+        min_paired=8, min_delta=0.03, judge_model="j", n_labels=1,
+        operator=_operator(["partially_correct"]),
+    )
+    assert rec["degenerate"] is True
+    assert rec["correctness_operator"]["correctness"] == 0.5
+    assert rec["correctness_vs_reference"]["brier"] is None

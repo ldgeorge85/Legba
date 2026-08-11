@@ -23,12 +23,8 @@ descriptor-level opt-in/opt-out works at the surface level.
 
 from __future__ import annotations
 
-import importlib
-import logging
 from dataclasses import dataclass
 from typing import Any, Callable
-
-logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -87,25 +83,34 @@ def discover_output_kinds() -> dict[str, OutputHandler]:
 
     Returns a dict keyed by ``KIND_NAME`` mapping to an
     :class:`OutputHandler` bundle.
+
+    K-3: previously a failed import logged a warning and was skipped. That
+    silence is expensive here because the emit dispatch in
+    ``actor_output_emit`` looks the kind up with ``.get()`` and ``continue``\\ s
+    on a miss — so an unimportable output module meant exports stopped, with
+    no error anywhere in the chain. A module named in
+    :data:`_OUTPUT_KIND_MODULE_NAMES` must load.
+
+    Raises
+    ------
+    KindDiscoveryError
+        Any declared module failed to import or is missing ``KIND_NAME``.
     """
+    from ..kind_discovery import (
+        DiscoveryFailure, import_declared_module, raise_if_failed, require_attrs,
+    )
+
     registry: dict[str, OutputHandler] = {}
+    failures: list[DiscoveryFailure] = []
     for mod_name in _OUTPUT_KIND_MODULE_NAMES:
-        try:
-            module = importlib.import_module(f"{__name__}.{mod_name}")
-        except Exception as exc:                                # pragma: no cover
-            logger.warning(
-                "outputs.discover.import_failed module=%s err=%s",
-                mod_name, exc,
-            )
+        dotted = f"{__name__}.{mod_name}"
+        module = import_declared_module("outputs", dotted, failures)
+        if module is None:
+            continue
+        if not require_attrs("outputs", dotted, module, ("KIND_NAME",), failures):
             continue
 
-        kind_name = getattr(module, "KIND_NAME", None)
-        if not kind_name:
-            logger.warning(
-                "outputs.discover.skip module=%s reason=missing_KIND_NAME",
-                mod_name,
-            )
-            continue
+        kind_name = getattr(module, "KIND_NAME")
 
         emit = getattr(module, "emit", None)
         if emit is not None and not callable(emit):
@@ -117,6 +122,7 @@ def discover_output_kinds() -> dict[str, OutputHandler]:
             module=module,
         )
 
+    raise_if_failed(failures)
     return registry
 
 

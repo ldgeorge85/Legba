@@ -511,9 +511,11 @@ Available tools:
   - query_hypotheses([target_id], [status], [situation_id], [limit]) — competing-hypothesis (ACH) rows (thesis vs counter_thesis, evidence balance, status: active / confirmed / refuted).
   - get_timeline(subject, [limit]) — time-ordered merge of current facts and recent signals about one subject.
   - compare_targets(target_ids) — side-by-side substrate rollup for two or more target ids.
-  - query_paths(subject, object, [max_hops<=3], [polarity_product], [limit]) — ranked SIGNED paths A->...->B over open nexuses; each path carries its net polarity_product (the structural-balance sign of the chain: +1 net-supportive / -1 net-antagonistic). polarity_product filters to that net sign.
-  - find_proxy_chains(subject, object, [max_hops<=3], [polarity_product], [limit]) — INDIRECT links only (multi-hop chains + reified A->via->B cut-outs); the proxy path from A to B.
-  - query_brokers(camp_a, camp_b, [max_hops<=3], [limit]) — entities that SIT ON paths between two entity sets (the broker between two camps), ranked by how many A->B paths run through them.
+  - query_paths(subject, object, [max_hops<=3], [polarity_product], [limit], [families]) — ranked SIGNED paths A->...->B over the open entity graph; each path carries its net polarity_product (the structural-balance sign of the chain: +1 net-supportive / -1 net-antagonistic). polarity_product filters to that net sign.
+  - find_proxy_chains(subject, object, [max_hops<=3], [polarity_product], [limit], [families]) — INDIRECT links only (multi-hop chains + reified A->via->B cut-outs); the proxy path from A to B.
+  - query_brokers(camp_a, camp_b, [max_hops<=3], [limit], [families]) — entities that SIT ON paths between two entity sets (the broker between two camps), ranked by how many A->B paths run through them.
+
+  All three walks traverse ASSERTED relationships only (families relation/reference). A co-mention is not a relationship, so pass families=["cooccurrence"] to walk the co-mention cloud deliberately. An endpoint naming no entity (or an ambiguous one) comes back in `warnings` — an empty result with a warning is NOT "they are unconnected".
 
 Finished intelligence — the platform's OWN analysis (analysis-derived; consult these FIRST, they encode prior work — weigh per the provenance rules above):
   - list_findings([target_id], [analyst_id], [severity], [since_hours], [include_superseded], [limit]) — recent LIVE findings the platform already produced (country/world situational assessments, meta-findings; superseded revisions are excluded unless include_superseded=true); effective_confidence folds in the critic's grade. Cite the finding id.

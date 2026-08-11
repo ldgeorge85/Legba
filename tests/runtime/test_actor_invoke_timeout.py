@@ -4,12 +4,18 @@
 
 The dapr-python ``ActorProxy.run`` (``invoke_method``) defaults to the SDK
 global ``DAPR_HTTP_TIMEOUT_SECONDS`` (60s). On the busiest G20 targets the
-heaviest deterministic analyst — ``cross_source_dedup`` — holds its queued
-``run`` turn past 60s while it sweeps a large finding pool, so the round-trip
+heaviest deterministic analyst — then ``cross_source_dedup`` — held its queued
+``run`` turn past 60s while it swept a large finding pool, so the round-trip
 threw ``asyncio.TimeoutError`` (surfaced as ``trigger.run.failed``) on a tail of
 fires even though the analyst completed. The fix passes an explicit
 ``ActorProxyFactory`` carrying a larger, env-overridable budget on both the
 reactive trigger-dispatch path and the cadence fan-out.
+
+(2026-08-02: ``cross_source_dedup`` is no longer that analyst. It declared a
+predicate-less ``subscription.targets`` block, which the runtime fans out to
+every active target, so 44 copies each ran the same full-pool scan; it is now a
+singleton at ~0.85s a run. The budget these tests pin is unchanged and still
+correct — it now serves the rest of the fleet rather than dedup.)
 
 These tests pin the resolver semantics + the factory wiring (no daprd needed).
 """

@@ -180,11 +180,15 @@ async def test_reconcile_surfaces_disagreement_and_extends_refs() -> None:
 
 @pytest.mark.asyncio
 async def test_reconcile_no_country_targets_is_noop_no_query() -> None:
+    """B-8: the no-op answer is ``None`` (NOT MEASURED), not ``[]`` (measured,
+    they agree). Nothing was compared here, and the journal must not be able to
+    render that as a finding of agreement — the 08-03 entry did exactly that."""
     conn = _RoutingConn(scorecards=[], compositions=[])
     out = await _port(conn)._reconcile_scorecard_disagreements(
         [{"target_id": "world"}, {"target_id": None}], []
     )
-    assert out == []
+    assert out is None
+    assert out != []                            # the distinction is the point
     assert conn.fetch_calls == []               # early-return: never touches the pool
 
 
@@ -238,5 +242,7 @@ async def test_reconcile_is_fail_safe_on_db_error() -> None:
     conn = _RoutingConn(scorecards=[], compositions=[], raise_on="kind = 'scorecard'")
     refs: list[str] = ["A0"]
     out = await _port(conn)._reconcile_scorecard_disagreements([{"target_id": "us"}], refs)
-    assert out == []                            # degrades to honest empty, never raises
+    # B-8: degrades to honest ABSENCE, never raises — and never to `[]`, which
+    # would claim a reconciliation that did not happen.
+    assert out is None
     assert refs == ["A0"]                       # refs untouched on failure

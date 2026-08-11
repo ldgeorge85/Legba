@@ -39,7 +39,7 @@ from typing import Any
 
 import asyncpg
 
-from ...run_accounting import record_tool_call
+from ...run_accounting import record_tool_call, redact_tool_args
 from ...schemas.action_pack import ActionPack
 from .events import GovernorEvent, NatsPublish, record_governor_event
 from .governor import PackGovernorEnforcer, pack_tool_timeout_seconds
@@ -147,10 +147,24 @@ class Agency:
     ) -> None:
         """Stamp one tool call onto the bound run account. Never raises.
 
-        Arguments and results are deliberately NOT collected — they are
-        unbounded (a substrate_read result can be the whole slice) and already
-        live in ``action_pack_invocations``. What the receipt needs is that the
-        call happened, through which pack, and how it ended.
+        ARGUMENTS are recorded, bounded and secret-redacted by
+        :func:`~legba.data.run_accounting.redact_tool_args`. They were omitted
+        before on the grounds that they "already live in
+        ``action_pack_invocations``" — they do not: that table is
+        ``(id, pack_id, pack_version, tool_name, budget_account, requested_by,
+        tenant_id, cost_usd, units, outcome, job_id, occurred_at)`` and has no
+        args column, so the arguments were recorded nowhere at all. Without
+        them the tool leg of a receipt is unfalsifiable: two ``search_corpus``
+        calls with completely different queries look identical in the audit
+        record, so a finding cannot be traced to the evidence it reached for.
+
+        Recorded on EVERY exit path, including the blocks — a blocked call's
+        arguments are exactly what you want when arguing about whether the
+        governor was right.
+
+        RESULTS are still not collected: a ``substrate_read`` result can be the
+        whole slice, and unlike the arguments it is reconstructable by
+        re-running the call.
         """
         try:
             fields: dict[str, Any] = {
@@ -158,6 +172,7 @@ class Agency:
                 "pack": pack.identity.id,
                 "name": call.tool_name,
                 "duration_ms": int((time.monotonic() - started_monotonic) * 1000),
+                "args": redact_tool_args(getattr(call, "args", None)),
             }
             if exc is not None:
                 fields["status"] = "error"

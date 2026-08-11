@@ -62,11 +62,13 @@ from typing import Any, Mapping
 
 from ...provenance.models import FindingPayload
 from ....runtime.analyst_method import AnalystMethodResult
-# W2 shared canon spine — prefer the new shared module path (the old
-# deterministic_handlers/_entity_canon is now a re-export shim). canonicalize_entity
+# W2 shared canon spine — the ONE canon at legba.data._entity_canon (the old
+# deterministic_handlers/_entity_canon re-export shim is gone). canonicalize_entity
 # normalizes a span; is_junk_entity drops true junk; is_org_surface types orgs.
 from ..._entity_canon import (
+    DIRECTIONAL_TOKENS,
     canonicalize_entity,
+    differs_by_direction,
     identity_fold,
     is_junk_entity,
     is_org_surface,
@@ -187,6 +189,199 @@ def _fallback_class_compatible(stored_cls: str, cls: str) -> bool:
     if stored_cls == cls:
         return True
     return frozenset({stored_cls, cls}) in _FALLBACK_COMPATIBLE_PAIRS
+
+
+# ---------------------------------------------------------------------------
+# V-G6 (2026-08-03) — the CROSS-SCRIPT TRANSLITERATION guard (person only).
+#
+# THE LIVE DEFECT. NER read Arabic source text — `آفي بالوط`, the Arabic
+# transliteration of the Israeli officer Avi Bluth — through the NLLB translate
+# hop, which romanized it "Avi Balut". By the time the mention reached this
+# resolver every trace of its Arabic provenance was gone, and the mint-time
+# ladder is exact-string all the way down: an exact-name probe, then an
+# article/alias-normalized probe. Neither computes a similarity, so
+# ``lookup_key('avi bluth') != lookup_key('avi balut')`` and the fork is
+# guaranteed. The table now holds FOUR rows for one man — "Avi Blot", "Bluth",
+# "Avi Balut", "Avi Bluth" — and the split rode through the unit finding (two
+# officers, two dismissals) into country_composition, region_composition and the
+# world read with every layer passing verify. The judge could not catch it: the
+# cited Arabic signal does literally contain the phantom name.
+#
+# THE PROBE. A THIRD rung on the existing ladder, running only when both
+# exact-string probes miss — i.e. exactly at new-name time. Person class only.
+# Four conditions, all required, all measured against the live table:
+#
+#   1. SAME TOKEN COUNT, at least two. Drops the single-token noise class where
+#      short names phonetically collide with everything.
+#   2. NO DIGITS. Drops "Geran-2 Seeker"/"Geran-3 Seeker" and the "209 PM EDT"
+#      weather-junk class, where a digit is the whole distinction.
+#   3. WHOLE-STRING EDIT DISTANCE <= 2. Bluth/Balut is 2.
+#   4. PER-TOKEN DOUBLE METAPHONE overlap, primary OR alt on each side. The ALT
+#      code is load-bearing and not decoration: dmetaphone('bluth') = 'PL0' but
+#      dmetaphone('balut') = 'PLT', so a primary-only test MISSES this exact
+#      case; the alt codes match ('PLT' = 'PLT'). A naive whole-string
+#      dmetaphone appears to work only because it truncates to four characters —
+#      coincidence, not signal, and not relied on for the decision.
+#   5. NO DIRECTION token distinguishes the pair (W3-C, 2026-08-04). Added after
+#      a full population census: of the 726 pairs conditions 1-4 accept, THIRTY
+#      differ only by an opposing compass bearing — "East Germany" / "West
+#      Germany", "Eastern Pendleton" / "Western Pendleton", "Northeast El Paso"
+#      / "Northwest El Paso" — and every one was hand-confirmed a guaranteed-
+#      wrong merge. This is the residual false positive V-G6's own scope note
+#      predicted ("Southwest Asian"/"Southeast Asian"), found thirty times over.
+#      The shipped token list also carries positional qualifiers and the
+#      non-English bearings the live table uses, which takes the count to 32 of
+#      726 (re-measured by scripts/measure_translit_backlog.py: 726 -> 694). The
+#      two extra pairs are "Battlegroup West"/"Battlegroup East" and "EAST
+#      CENTRAL"/"West central" — the same class, not a widening of it. Measured
+#      cost in false rejections: zero. The list is
+#      :data:`_entity_canon.DIRECTIONAL_TOKENS`, matched as WHOLE tokens —
+#      "Mosaab Gharbi"/"Mossab Gharbi" is one real man, and a stem test would
+#      read his surname as the Arabic for "west" and refuse the fold.
+#
+# MEASURED, read-only, over the 20.5k active person rows: the naive
+# whole-string-dmetaphone + edit-distance predicate accepts 1,720 pairs and its
+# samples are junk (Khan/Ken, cae/Gay, Air/Yarr). The four conditions above
+# accept 720, and a 35-pair hand sample was overwhelmingly genuine
+# transliteration duplicates — Sergey/Sergei Lavrov, Sergey/Sergei Shoigu,
+# Volodomyr Zelensky/Volodymyr Zelenskiy, Alexander Syrsky/Sirsky, Yegor/Egor
+# Kovalchuk, Zahran Maddani/Zohran Mamdani — at roughly 90% precision. The three
+# Avi pairs are all accepted.
+#
+# SCOPE, stated rather than assumed. This is FORWARD-ONLY: it stops the next Avi
+# Balut and does not merge the four rows already live (the entity_researcher's
+# candidate blocker cannot even propose that pair — trigram similarity 0.43
+# against a 0.55 floor, and its trgm probe ships disabled). Person-class ONLY:
+# the same predicate over org and location surfaces needs separate validation,
+# because a digit or a direction is often the entire distinction there
+# ("Southwest Asian"/"Southeast Asian" was among the residual false positives
+# even in the person set). Both are deliberate boundaries, not oversights.
+#
+# A hit is treated EXACTLY like the M4 alias-probe hit that precedes it — the
+# already-reviewed convergence semantics, for free: class compatibility is
+# required, the keeper's class is never promoted or mutated, the incoming surface
+# is recorded on the keeper's ``merged_aliases`` and the write name becomes the
+# keeper's. The phantom becomes an alias on the real officer instead of a row.
+# ---------------------------------------------------------------------------
+
+#: The index-backed PREFILTER (migration 0165): the whole-name phonetic skeleton,
+#: which narrows 20.5k person rows to a mean bucket of 3 before the exact
+#: predicate runs. Recall measured at 97% of the pairs the predicate accepts; the
+#: 3% it cannot see keep TODAY's behaviour (a new row is minted), so a prefilter
+#: miss is a fix not applied, never a regression.
+#:
+#: ``$1`` is the incoming surface. ``regexp_split_to_array`` on both sides is the
+#: token vector the per-token phonetic test walks.
+_TRANSLIT_PROBE_SQL = """
+WITH incoming AS (
+    SELECT lower(btrim($1::text)) AS lo,
+           regexp_split_to_array(lower(btrim($1::text)), '\\s+') AS toks
+)
+SELECT p.id, p.entity_class, p.canonical_name
+  FROM entity_profiles p, incoming i
+ WHERE p.entity_class = 'person'
+   AND p.merged_into IS NULL
+   AND COALESCE(p.data->>'gc_status', '') NOT IN ('merged', 'junk')
+   AND public.entity_phonetic_key(p.canonical_name)
+       = public.entity_phonetic_key($1::text)
+   AND p.canonical_name !~ '[0-9]'
+   AND array_length(i.toks, 1) >= 2
+   AND array_length(regexp_split_to_array(lower(btrim(p.canonical_name)), '\\s+'), 1)
+       = array_length(i.toks, 1)
+   AND lower(btrim(p.canonical_name)) <> i.lo
+   AND levenshtein(lower(btrim(p.canonical_name)), i.lo) <= 2
+   -- (5) W3-C — the COMPASS-DIRECTION gate. A pair whose differing token is a
+   -- compass bearing or a positional qualifier is never one referent spelled
+   -- twice: "East Germany"/"West Germany", "Eastern Pendleton"/"Western
+   -- Pendleton". ``$2`` is _entity_canon.DIRECTIONAL_TOKENS passed as a
+   -- PARAMETER, not spelled inline, so this probe and the backlog measurement
+   -- in scripts/measure_translit_backlog.py can never disagree about what
+   -- counts as a direction — the whole point of the exercise being that the
+   -- before/after counts stay comparable.
+   AND NOT EXISTS (
+       SELECT 1
+         FROM generate_subscripts(
+                  regexp_split_to_array(lower(btrim(p.canonical_name)), '\\s+'), 1
+              ) AS d
+        WHERE (regexp_split_to_array(lower(btrim(p.canonical_name)), '\\s+'))[d]
+              IS DISTINCT FROM i.toks[d]
+          AND (
+              (regexp_split_to_array(lower(btrim(p.canonical_name)), '\\s+'))[d]
+                  = ANY($2::text[])
+              OR i.toks[d] = ANY($2::text[])
+          )
+   )
+   AND NOT EXISTS (
+       SELECT 1
+         FROM generate_subscripts(
+                  regexp_split_to_array(lower(btrim(p.canonical_name)), '\\s+'), 1
+              ) AS k
+        WHERE NOT (
+            ARRAY[
+                dmetaphone(
+                    (regexp_split_to_array(lower(btrim(p.canonical_name)), '\\s+'))[k]
+                ),
+                dmetaphone_alt(
+                    (regexp_split_to_array(lower(btrim(p.canonical_name)), '\\s+'))[k]
+                )
+            ]
+            && ARRAY[dmetaphone(i.toks[k]), dmetaphone_alt(i.toks[k])]
+        )
+   )
+ ORDER BY p.created_at ASC, p.id ASC
+ LIMIT 1
+"""
+
+#: The receipts counter — named for the mechanism (a transliteration variant), the
+#: storage it lands in (``data->'merged_aliases'``), and the ``alias_folded``
+#: event ``_record_provenance`` already emits. Deliberately NOT ``*_merged``:
+#: "merge" in this codebase means the reversible tombstone+redirect the
+#: entity_researcher owns, and this probe does not do that.
+_TRANSLIT_COUNTER = "translit_aliases_folded"
+
+#: :data:`DIRECTIONAL_TOKENS` as the sorted ``text[]`` bound to ``$2``. Sorted
+#: only so the bound parameter is stable in logs and EXPLAIN output.
+_DIRECTION_TOKEN_ARRAY: list[str] = sorted(DIRECTIONAL_TOKENS)
+
+
+async def _probe_transliteration_variant(conn: Any, text: str, cls: str) -> Any:
+    """The V-G6 person-only phonetic probe, or ``None``. Never raises.
+
+    Degrade-not-drop: a probe failure (the 0165 index/function not yet applied on
+    an older database, a transient read error) leaves the historical behaviour —
+    a new profile is minted — rather than breaking ingestion. That is the whole
+    safety argument for adding a rung to a live mint path.
+
+    The W3-C compass gate is applied TWICE on purpose. It is in the SQL so the
+    live probe and the read-only backlog measurement accept the same population,
+    and it is re-applied here in Python so the rule is enforced even against a
+    row the SQL surfaced anyway — an older database whose planner never bound
+    ``$2``, a hand-written call site, or a token the SQL split kept punctuation
+    on. The Python side strips token punctuation, so it can only ever refuse
+    MORE than the SQL did, and a refusal is a fold not applied: today's
+    behaviour, a new row minted, never a regression.
+    """
+    if cls != "person":
+        return None
+    try:
+        row = await conn.fetchrow(_TRANSLIT_PROBE_SQL, text, _DIRECTION_TOKEN_ARRAY)
+    except Exception as exc:  # noqa: BLE001 — never break entity resolution
+        logger.warning(
+            "entity_resolution.translit_probe_failed name=%r err=%s", text[:80], exc
+        )
+        return None
+    if row is None:
+        return None
+    keeper_name = str(row["canonical_name"] or "")
+    if differs_by_direction(keeper_name, text):
+        logger.info(
+            "entity_resolution.translit_direction_gated incoming=%r keeper=%r "
+            "— the differing token is a compass/positional direction, so these "
+            "are two referents, not two spellings",
+            text[:80], keeper_name[:80],
+        )
+        return None
+    return row
 
 
 #: SQL ``ORDER BY`` fragment mirroring :data:`_CLASS_RANK` — used by the
@@ -430,6 +625,7 @@ async def _resolve_batch(
     signals_processed = 0
     links_created = 0
     edges_upserted = 0
+    translit_folded = 0
     # Per-run cache so two signals mentioning the same entity reuse the id
     # without a second upsert round-trip. Keyed by the CLASS-AGNOSTIC identity
     # fold (DQ P4) so every surface form of one referent — across classes —
@@ -625,6 +821,27 @@ async def _resolve_batch(
                                 probe,
                             )
                             via_fallback = pre is not None
+                    if pre is None:
+                        # V-G6 — the CROSS-SCRIPT TRANSLITERATION probe (person
+                        # only; see the block comment above). Runs LAST, only when
+                        # both exact-string probes missed, i.e. exactly at
+                        # new-name time. A hit rides the M4 convergence semantics
+                        # unchanged: the incoming surface becomes an alias on the
+                        # existing officer instead of a second officer.
+                        pre = await _probe_transliteration_variant(conn, text, cls)
+                        if pre is not None:
+                            # The M4 convergence semantics, reused verbatim: class
+                            # compatibility required, the keeper's class never
+                            # promoted, the incoming surface recorded as an alias.
+                            via_fallback = True
+                            translit_folded += 1
+                            logger.info(
+                                "entity_resolution.translit_alias_folded "
+                                "incoming=%r keeper=%r — a phonetic/edit-distance "
+                                "variant of an existing person, folded as an alias "
+                                "rather than minted as a second officer",
+                                text[:80], str(pre["canonical_name"])[:80],
+                            )
                     if pre is not None:
                         stored_cls = str(pre["entity_class"])
                         stored_name = str(pre["canonical_name"])
@@ -879,6 +1096,7 @@ async def _resolve_batch(
         "entities_upserted": len(name_to_id),
         "links_created": links_created,
         "edges_upserted": edges_upserted,
+        _TRANSLIT_COUNTER: translit_folded,
     }
 
 
@@ -921,6 +1139,7 @@ async def handle(
         "entities_upserted": 0,
         "links_created": 0,
         "edges_upserted": 0,
+        _TRANSLIT_COUNTER: 0,
     }
     pool = getattr(deps, "pg_pool", None) if deps is not None else None
     if pool is not None:

@@ -6,9 +6,11 @@ Implements the L-102 filter-kind contract for progressive signal
 deduplication. Four tiers ordered cheapest-first:
 
   1. **URL exact** — canonicalize (strip fragment, sort query params,
-     lowercase host), SHA-256 hash, look up in a Redis set. 7-day TTL.
+     lowercase host, drop a leading ``www.``), SHA-256 hash, look up in a
+     Redis set. 7-day TTL.
   2. **Content hash** — normalize body text (HTML strip, whitespace
-     collapse, lowercase), SHA-256, look up in a Redis set. 7-day TTL.
+     collapse, lowercase) with agency wire-revision markers stripped from
+     the title, SHA-256, look up in a Redis set. 7-day TTL.
   3. **Semantic (vector)** — embed title + summary via an L-122 embedding
      service handed in as a typed sub-connection (per L-102 §5 sub-ports
      pattern); cosine-similar above threshold (default 0.92) against a
@@ -33,6 +35,54 @@ Real implementation — no mocks. Substrate boundaries (Redis + Qdrant +
 embedding service) are typed Protocols; tests pass real clients
 (integration) or process-local fakes for the embedding port (since the
 L-122 production handler may not have landed yet at the time this lands).
+
+CW-7 — variant classes the keys could not see
+---------------------------------------------
+The identity rules themselves live in :mod:`legba.data._url_canon`, shared
+verbatim with the ingest-side engine and the per-source baseline's backstop
+``content_hash`` (they used to disagree). Two variant classes K-4 R3 surfaced
+are now folded into the keys — ``www.``-label URLs and marker-only agency wire
+re-sends. The third, a publisher's article arriving as a messaging-CHANNEL
+permalink, is DETECTED AND COUNTED (``channel_post_signals`` in the health
+detail) rather than guessed at: nothing cheap connects a ``t.me/<channel>/<n>``
+post to the publisher's own URL — different host, different path, often a
+rewritten headline and only an excerpt of the body — so the only honest
+resolutions are semantic (tier 3, already available) or a per-channel
+publisher map somebody maintains. Guessing would mint FALSE alias links, which
+is destructive in a way a missed duplicate is not. The counter is the number
+anyone deciding to build the real fix would need first.
+
+CW-7b — counting the folds CW-7 actually made
+----------------------------------------------
+CW-7 instrumented the one class it DECLINED to resolve and neither of the two
+it DID. There was consequently no way to ask the running system whether the
+``www.`` strip or the wire-revision strip had ever fired: both are silent
+transforms inside a hash input, and a fold that never engages looks exactly
+like a fold that engages constantly. The house rule is to count invocations
+before believing a wiring works; these two were the exception, so
+``url_www_folded`` and ``wire_revision_folded`` now sit beside
+``channel_post_signals`` in the health detail.
+
+They were verified by hand first, read-only against the live substrate on
+2026-08-03, and both are real:
+
+  * **www** — 47,740 of 82,711 stored ``canonical_url`` values carry a ``www.``
+    label, and 7 hosts appear BOTH ways. Running the real ``canonical_url()``
+    over every row, 26 canonical keys are reached by more than one raw URL and
+    all 26 fold purely on the ``www.`` strip (Anadolu article ids arriving as
+    both ``aa.com.tr/...`` and ``www.aa.com.tr/...``). Small, and real.
+  * **wire revision** — of 91,719 distinct titles, 823 are changed by
+    ``normalize_wire_title`` and 408 normalized keys are reached by more than
+    one raw title — Yonhap re-sends, mostly (``(LEAD)`` / ``(2nd LD)`` /
+    ``(3rd LD)`` / ``(URGENT)`` over an identical headline). The bigger of the
+    two by an order of magnitude.
+
+KNOWN GAP: the INGEST-side engine (:mod:`legba.data.filters.ingest_dedupe`) runs
+the same two folds through the same helpers and has no counter surface at all —
+it is a stateless per-signal helper called from the source actor, with no
+``health_check`` to hang a counter on. Its folds are therefore still invisible.
+Counting them means giving the source actor somewhere to put the number, which
+is a wider change than this one and is NOT done here.
 """
 
 from __future__ import annotations
@@ -54,6 +104,8 @@ from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .._url_canon import canonical_url as _canonical_url
+from .._url_canon import normalize_wire_title, strip_www as _strip_www
 from ..sources._contract import Signal
 from ._contract import FilterContext, FilterHealth
 
@@ -308,6 +360,23 @@ class Dedupe4TierHandler:
             "signals_out": 0,
             "signals_dropped": 0,
             "tier_hits": {1: 0, 2: 0, 3: 0, 4: 0},
+            # CW-7 — the size of the duplicate class this handler can SEE and
+            # cannot resolve (channel permalinks vs the publisher's own
+            # article). Counted rather than guessed: see _CHANNEL_POST_HOSTS.
+            "channel_post_signals": 0,
+            # CW-7b — the two folds CW-7 DID make. They shipped uncounted: the
+            # only instrumentation CW-7 added was `channel_post_signals`, the
+            # class it declined to resolve, so there was no way to answer "does
+            # the www strip ever fire?" from the running system — the house rule
+            # is to count invocations before believing a wiring works, and these
+            # two were the exception. Verified read-only against the live
+            # substrate on 2026-08-03 (82,711 canonical urls / 91,719 distinct
+            # titles): the www strip folds 26 canonical keys that would
+            # otherwise be distinct documents, and the wire-revision strip
+            # changes 823 titles and merges 408 normalized-title keys. Both
+            # work. Now they say so.
+            "url_www_folded": 0,
+            "wire_revision_folded": 0,
         }
 
         # Lazy: track collections we've ensure-created so repeat target
@@ -365,6 +434,19 @@ class Dedupe4TierHandler:
         """
         self._counters["signals_in"] += 1
         ext_id = _external_id(signal)
+        # CW-7: measure the unresolved variant class before doing anything
+        # else, so its size is known whether or not any tier fires.
+        if _is_channel_post(signal):
+            self._counters["channel_post_signals"] += 1
+        # CW-7b: and measure the two folds we DO make, in the same place and for
+        # the same reason. Counted HERE rather than inside the key helpers
+        # because those run twice on a tier-1/2 miss (once to look up, once to
+        # insert) and a variant class is a property of the SIGNAL, not of how
+        # many times we hashed it.
+        if _url_has_www_label(signal):
+            self._counters["url_www_folded"] += 1
+        if _title_has_wire_revision(signal):
+            self._counters["wire_revision_folded"] += 1
 
         try:
             # Tiers execute in order. The L-248 ``tiers`` selector + each
@@ -435,6 +517,17 @@ class Dedupe4TierHandler:
             signals_dropped_24h=self._counters["signals_dropped"],
             detail={
                 "tier_hits": dict(self._counters["tier_hits"]),
+                # CW-7: the duplicate class this handler sees and refuses to
+                # guess at. Zero means "none arrived", never "solved".
+                "channel_post_signals": self._counters["channel_post_signals"],
+                # CW-7b: the two folds this handler DOES make. Same reading as
+                # above — zero means "no variant of that shape arrived", never
+                # "the fold is broken" and never "the fold is unnecessary". They
+                # exist because CW-7 shipped both folds with no counter at all,
+                # so "is the www strip doing anything?" could only be answered
+                # by hand-querying the substrate.
+                "url_www_folded": self._counters["url_www_folded"],
+                "wire_revision_folded": self._counters["wire_revision_folded"],
                 # L-248: the resolved active tier set the handler is
                 # actually running (post the AND of config.tiers + per-
                 # tier enabled flags + port availability for tier 3).
@@ -470,50 +563,14 @@ class Dedupe4TierHandler:
     def canonical_url(url: str) -> str:
         """Canonicalize a URL for Tier 1 hashing.
 
-        Rules:
-
-          * Lowercase scheme + host.
-          * Strip fragment (``#...``).
-          * Sort query params lexicographically by name; preserve
-            duplicate keys via stable order on (name, value).
-          * Drop empty query params.
-          * Strip default ports (``:80`` http, ``:443`` https).
-          * Preserve path case (paths are case-sensitive per RFC 3986).
-
-        Returns the canonical URL as a string. Idempotent — running it on
-        an already-canonical URL is a no-op.
+        Thin delegation to :func:`legba.data._url_canon.canonical_url`, which
+        is where the rules live (CW-7): the ingest-side engine and the
+        per-source baseline's backstop ``content_hash`` key on the SAME
+        function, so the three surfaces cannot drift apart the way they had.
+        Kept as a staticmethod here because every existing caller reaches it
+        through the handler.
         """
-        if not url:
-            return ""
-        try:
-            parts = urlsplit(url.strip())
-        except ValueError:
-            return url.strip()
-
-        scheme = (parts.scheme or "").lower()
-        netloc = (parts.hostname or "").lower()
-        if parts.port is not None:
-            default = (scheme == "http" and parts.port == 80) or (
-                scheme == "https" and parts.port == 443
-            )
-            if not default:
-                netloc = f"{netloc}:{parts.port}"
-        if parts.username or parts.password:
-            # Preserve userinfo only if present (rare for normal URLs).
-            user = parts.username or ""
-            pw = f":{parts.password}" if parts.password else ""
-            netloc = f"{user}{pw}@{netloc}" if user or pw else netloc
-
-        # Sort query: parse, drop empty-value pairs, sort by (key, value).
-        query_pairs = [
-            (k, v)
-            for k, v in parse_qsl(parts.query, keep_blank_values=False)
-            if k
-        ]
-        query_pairs.sort(key=lambda kv: (kv[0], kv[1]))
-        query = urlencode(query_pairs, doseq=False)
-
-        return urlunsplit((scheme, netloc, parts.path or "", query, ""))
+        return _canonical_url(url)
 
     def _canonical_url_hash(self, signal: Signal) -> str | None:
         url = (
@@ -549,6 +606,7 @@ class Dedupe4TierHandler:
 
           * Concatenate ``payload.title`` + ``payload.summary`` +
             ``payload.body`` / ``payload.raw_body`` if present.
+          * Strip agency WIRE-REVISION markers from the title (CW-7).
           * Strip HTML tags.
           * Collapse whitespace (multi-space, tabs, newlines) to single
             space.
@@ -558,8 +616,11 @@ class Dedupe4TierHandler:
         chunks: list[str] = []
         for field in ("title", "summary", "body", "raw_body"):
             val = _payload_str(signal, field)
-            if val:
-                chunks.append(val)
+            if not val:
+                continue
+            if field == "title":
+                val = normalize_wire_title(val)
+            chunks.append(val)
         joined = " ".join(chunks)
         stripped = _STRIP_HTML_RE.sub(" ", joined)
         collapsed = _WS_RE.sub(" ", stripped).strip().lower()
@@ -844,6 +905,85 @@ class Dedupe4TierHandler:
 _STRIP_HTML_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9_\-]")
+
+
+# ---------------------------------------------------------------------------
+# CW-7 — CANONICALIZER VARIANT CLASSES
+#
+# K-4 R3's sampling turned up duplicate populations the tier-1/tier-2 keys
+# could not see, and they double-count every precision measurement taken off
+# the stream as well as double-flagging every consumer downstream. Two of the
+# three classes are cheap and land here; the third is documented and counted
+# rather than half-solved (see _CHANNEL_POST_HOSTS below).
+# ---------------------------------------------------------------------------
+
+#: Hosts whose URLs are CHANNEL POSTS — a per-message permalink that carries
+#: a publisher's article without ever naming the publisher's own URL.
+#:
+#: THIS CLASS IS DETECTED AND COUNTED, NOT RESOLVED, and deliberately so. A
+#: t.me/<channel>/<n> post and the publisher's own article are the same
+#: document, but nothing cheap connects them: the post has its own host, its
+#: own path, frequently a rewritten headline, and often only an excerpt of the
+#: body — so neither the URL key nor the content key can see the pair, and the
+#: only honest resolutions are semantic (tier 3, already available to any
+#: target that wants it) or a per-channel publisher map somebody has to
+#: maintain. Guessing here would mint FALSE duplicate links into
+#: ``signal_aliases``, which is destructive in a way a missed duplicate is
+#: not. So the population is measured instead: ``channel_post_signals`` in the
+#: health detail says how large the unresolved class is, which is the number
+#: anyone deciding whether to build the real fix would need first.
+_CHANNEL_POST_HOSTS: frozenset[str] = frozenset({
+    "t.me", "telegram.me", "telegram.dog",
+})
+
+
+def _signal_url(signal: Signal) -> str:
+    """The URL this handler keys on, in the tier-1 preference order."""
+    return (
+        signal.canonical_url
+        or _payload_str(signal, "url")
+        or _payload_str(signal, "link")
+        or _payload_str(signal, "source_url")
+    )
+
+
+def _is_channel_post(signal: Signal) -> bool:
+    """True when this signal's URL is a messaging-CHANNEL permalink."""
+    url = _signal_url(signal)
+    if not url:
+        return False
+    try:
+        host = _strip_www(urlsplit(url.strip()).hostname or "")
+    except ValueError:
+        return False
+    return host in _CHANNEL_POST_HOSTS
+
+
+def _url_has_www_label(signal: Signal) -> bool:
+    """True when the tier-1 key CHANGED because a ``www.`` label was stripped.
+
+    Asks :func:`legba.data._url_canon.strip_www` rather than testing the prefix
+    itself, so the counter can never disagree with the fold it is reporting on
+    (``www2``/``wwwtest`` are genuinely different origins and are NOT stripped —
+    a prefix test here would over-count them).
+    """
+    url = _signal_url(signal)
+    if not url:
+        return False
+    try:
+        host = (urlsplit(url.strip()).hostname or "").lower()
+    except ValueError:
+        return False
+    return bool(host) and _strip_www(host) != host
+
+
+def _title_has_wire_revision(signal: Signal) -> bool:
+    """True when the tier-2 key CHANGED because an agency revision marker was
+    stripped from the title ("(LEAD)", "(2nd LD)", "UPDATE 1-", "URGENT:")."""
+    title = _payload_str(signal, "title")
+    if not title:
+        return False
+    return normalize_wire_title(title) != title
 
 
 def _safe_name(name: str) -> str:

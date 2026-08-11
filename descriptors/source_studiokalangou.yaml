@@ -1,0 +1,113 @@
+# Niger desk (country_watch_ne) coverage pass — 2026-08-03. Ships DRAFT.
+#
+# Studio Kalangou (studiokalangou.org) — Niger's Fondation Hirondelle station.
+# Hirondelle is the Swiss non-profit that builds independent newsrooms in
+# conflict and post-conflict states; Studio Kalangou has run in Niger since
+# 2016, produces daily bulletins in FIVE languages (French, Hausa, Zarma,
+# Fulfulde, Tamasheq), and carries a standing fact-checking desk. Its own
+# masthead: "Informations, débats, magazines : toute l'actualité du Niger, en
+# 5 langues" (fetched 2026-08-03 from the À propos page).
+#
+# WHY IT EARNS A SLOT NEXT TO ActuNiger. It is the only candidate in this batch
+# that reports OUT of rural Niger rather than out of Niamey — the sample items
+# below are from Goudoumaria, in Diffa region. On a desk whose whole problem is
+# that it sees Niger only through wire copy about the junta, a station with
+# up-country correspondents is the complementary instrument, not a redundant
+# one. It is also the lowest-volume feed in the batch (10 items, roughly two
+# bulletins a day) and is priced accordingly — a quality lane, not a volume one.
+#
+# VERIFIED LIVE 2026-08-03 by direct fetch: HTTP 200,
+# `application/rss+xml; charset=UTF-8`, 10 items, 84 Niger place-name hits.
+# Newest item read `Sun, 02 Aug 2026 17:00:00 +0000` on the first probe and
+# `Mon, 03 Aug 2026 17:00:00 +0000` when re-parsed a few hours later through
+# feedparser — i.e. the feed ADVANCED mid-verification, which is the strongest
+# available evidence that it is live rather than serving a snapshot (the exact
+# thing the AP hubs failed to do for six days). Sample headlines seen: internet
+# access at Goudoumaria (Village intelligent project); young people evaluating
+# the PVI's effects at Goudoumaria; "La semaine sur Kalangou" for 2026-08-01.
+# WordPress feed, keyless, no auth wall.
+#
+# NOT A DUPLICATE: checked read-only against source_descriptors — no head row
+# points at studiokalangou.org, and no Nigerien domestic outlet is registered
+# at all (the NE inflow was wire/aggregator copy only). See
+# source_actuniger_politique.yaml's header for the live 7-day NE count.
+#
+# geo: [NE] = publisher origin, honest and useful: a Nigerien station writing
+# about Niger, so the post-enrichment fallback in data/sources/baseline.py
+# correctly rescues domestic stories whose bodies name only a Nigerien locality
+# (Goudoumaria, Diffa, Tillabéri) and never the country. The same declaration
+# on a regional or global feed would be a bug — see
+# source_rsshub_apnews_world.yaml.
+#
+# source_class: reporting — an independent non-profit newsroom. Not
+# `official` (Hirondelle is an NGO operator, not a government or IGO publisher)
+# and not `state_media`, though the funding is donor/institutional rather than
+# commercial. Credibility host studiokalangou.org (seeded 0.70/wire by the
+# registrar): higher than the commercial domestic press on editorial-integrity
+# and fact-checking grounds, below the international wires on reach and
+# desk depth.
+#
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after the route is
+# re-verified live on the instance.
+
+identity:
+  id: source.studiokalangou.news
+  name: Studio Kalangou — Niger (Fondation Hirondelle)
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: source_batch_2026_08
+  created: "2026-08-03T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [NE]
+  # The station broadcasts in five languages but publishes its web feed in
+  # French; language_detect below confirms per signal rather than trusting this.
+  languages: [fr]
+  tags: [news, world, africa, sahel, niger, francophone, local, source_batch_2026_08]
+  source_class: reporting
+
+acquisition: poll
+
+cadence:
+  # Hourly, staggered minute offset. Roughly two bulletins/day, so most polls
+  # are 304s — near-free with the handler's conditional GET, and hourly keeps
+  # the same-day bulletin from waiting.
+  schedule:
+    factory_kind: cron
+    raw: "50 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 60
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.studiokalangou.org/feed/"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

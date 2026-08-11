@@ -215,16 +215,40 @@ def unverified_state(reason: str) -> str:
     return f"unverified — {reason}"
 
 
+#: The canonical ``unassessable`` verify-state string (Q-1). NOT ``unverified``:
+#: the verify pass ran, it simply extracted nothing gradeable, and collapsing the
+#: two would tell an operator no pass had happened when one had.
+UNASSESSABLE_STATE = "unassessable — verify ran but extracted no gradeable claim"
+
+
 def verify_state_from_score(
     faithfulness_score: Any,
     *,
     unverified_reason: str = "no faithfulness verdict recorded for this finding",
+    score_state: Any = None,
+    provisional: Any = None,
 ) -> str:
-    """Fold an optional faithfulness score into the payload verify state."""
+    """Fold an optional faithfulness score into the payload verify state.
+
+    Q-1: three states reach an operator's notification, not two.
+
+    * ``faithfulness=0.82`` — a real, adjudicated measurement;
+    * ``faithfulness=0.82 (provisional — deterministic floor, no LLM judge)`` —
+      a real measurement no grader confirmed;
+    * ``unassessable — …`` — no measurement at all.
+
+    ``score_state`` / ``provisional`` are OPTIONAL and default to ``None``, so
+    every existing caller that passes only a score is byte-identical.
+    """
+    if str(score_state or "") == "unassessable":
+        return UNASSESSABLE_STATE
     if isinstance(faithfulness_score, (int, float)) and not isinstance(
         faithfulness_score, bool
     ):
-        return f"faithfulness={float(faithfulness_score):.2f}"
+        state = f"faithfulness={float(faithfulness_score):.2f}"
+        if provisional:
+            state += " (provisional — deterministic floor, no LLM judge)"
+        return state
     return unverified_state(unverified_reason)
 
 

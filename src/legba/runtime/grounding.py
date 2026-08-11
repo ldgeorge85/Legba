@@ -118,6 +118,19 @@ __all__ = [
 # code change; an empty/blank override falls back to the safe default.
 _DEFAULT_TRUSTED_SOURCE_TYPES: tuple[str, ...] = ("seed", "curated")
 
+#: W3-A — the `entity_edges` families a GROUNDING preamble may assert, and the
+#: one place in the system where `reference` is WANTED. The analytics handlers
+#: exclude the imported lattice because an IGO membership is not evidence that
+#: two actors are ALIGNED; this reader is rendering ground truth, and an
+#: imported membership is simply TRUE. Same axis, opposite intent — which is
+#: why this list is stated here rather than inherited from a shared helper.
+#:
+#: `cooccurrence` is excluded for the reason it is excluded everywhere: two
+#: entities in one document is not a relationship, and asserting one into a
+#: prompt preamble as ground truth is how a co-mention becomes a "fact".
+_GROUNDING_EDGE_FAMILIES: tuple[str, ...] = (
+    "relation", "reference", "structural")
+
 
 def trusted_source_types() -> tuple[str, ...]:
     """The ``source_type`` values admitted into the grounding preamble.
@@ -1862,43 +1875,75 @@ class SubstrateGroundingResolver:
     async def _query_nexuses(
         self, names: Sequence[str], *, trusted: Sequence[str], limit: int,
     ) -> list[GroundingNexus]:
-        # PROVENANCE GATE (mirrors _query_facts): only seed/curated signed
-        # relationships reach the preamble. The reified/promoted ``agent``
-        # nexus lane (relationship_reifier, proposed_edge_governance) is an
-        # analysis product, not ground truth, so it is excluded here.
+        """Signed ground-truth relationships for the preamble, from `entity_edges`.
+
+        PROVENANCE GATE (mirrors ``_query_facts``): only seed/curated signed
+        relationships reach the preamble. The reified/promoted ``agent`` lane
+        (relationship_reifier, proposed_edge_governance) is an analysis
+        product, not ground truth, so it is excluded here.
+
+        W3-A — CUT OVER TO ``entity_edges``, AND NOTE THE INVERTED FAMILY
+        POLICY. ``graph_mining`` and ``structural_balance`` exclude the
+        ``reference`` tier because an imported IGO membership is not evidence
+        of alignment; this reader WANTS exactly that tier, because it is
+        rendering ground truth and the imported lattice is true. The axis is
+        the same, the intent is opposite — which is why the family filter is
+        stated explicitly here rather than inherited from a shared helper.
+
+        The provenance gate still runs on ``source_type`` (the caller's
+        ``trusted`` list is an operator knob, ``LEGBA_GROUNDING_TRUSTED_SOURCE_
+        TYPES``), and ``edge_family`` is an ADDITIONAL guard rather than a
+        replacement: a curated edge that is somehow tiered ``cooccurrence`` is
+        still a co-mention and still not a relationship worth asserting.
+
+        THE BARE-QID FILTER STAYS, and the reason is worth recording because
+        the id-keyed store makes it look redundant and it is not. The endpoint
+        names come from ``entity_profiles.canonical_name`` rather than from
+        whatever string the importer wrote, so the obvious conclusion is that
+        "Q30 member of Q1065" can no longer be rendered. Measured live
+        2026-08-03: SEVEN `entity_profiles` rows ARE canonically named as a
+        bare QID, and seven open edges have such an endpoint. The importer
+        minted the profile under the QID, so the unreadable line survives the
+        move intact. The filter is dropped only when those profiles are.
+        """
         lowered = [n.casefold() for n in names]
         sql = """
-            SELECT subject, rel_type, object, polarity, valid_from
-            FROM nexuses
-            WHERE lower(subject) = ANY($1::text[])
-              AND source_type = ANY($2::text[])
-              AND superseded_by IS NULL
-              AND (valid_until IS NULL OR valid_until > now())
+            SELECT sp.canonical_name AS subject,
+                   e.edge_type       AS rel_type,
+                   dp.canonical_name AS object,
+                   e.polarity, e.valid_from
+            FROM entity_edges e
+            JOIN entity_profiles sp ON sp.id = e.src_id
+            JOIN entity_profiles dp ON dp.id = e.dst_id
+            WHERE lower(sp.canonical_name) = ANY($1::text[])
+              AND e.source_type = ANY($2::text[])
+              AND e.edge_family = ANY($4::text[])
+              AND e.superseded_by IS NULL
+              AND (e.valid_until IS NULL OR e.valid_until > now())
             ORDER BY
-              (source_type IN ('seed','curated')) DESC,
-              confidence DESC NULLS LAST,
-              valid_from DESC NULLS LAST
+              (e.source_type IN ('seed','curated')) DESC,
+              e.confidence DESC NULLS LAST,
+              e.valid_from DESC NULLS LAST
             LIMIT $3
         """
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch(sql, lowered, list(trusted), int(limit))
-        out: list[GroundingNexus] = []
-        for r in rows:
+            rows = await conn.fetch(
+                sql, lowered, list(trusted), int(limit),
+                list(_GROUNDING_EDGE_FAMILIES))
+        return [
+            GroundingNexus(
+                subject=r["subject"],
+                rel_type=r["rel_type"],
+                object=r["object"],
+                polarity=(int(r["polarity"]) if r["polarity"] is not None else None),
+                valid_from=r["valid_from"],
+            )
+            for r in rows
             # A bare-QID subject OR object renders an unreadable edge line
             # ("Q30 member of Q1065") — skip it (degrade to no-grounding for
             # this relationship) for the same reason bare-QID fact values go.
-            if _is_bare_qid(r["subject"]) or _is_bare_qid(r["object"]):
-                continue
-            out.append(
-                GroundingNexus(
-                    subject=r["subject"],
-                    rel_type=r["rel_type"],
-                    object=r["object"],
-                    polarity=(int(r["polarity"]) if r["polarity"] is not None else None),
-                    valid_from=r["valid_from"],
-                )
-            )
-        return out
+            if not _is_bare_qid(r["subject"]) and not _is_bare_qid(r["object"])
+        ]
 
     async def resolve_situations(
         self, *, scope_target_id: str | None, limit: int,

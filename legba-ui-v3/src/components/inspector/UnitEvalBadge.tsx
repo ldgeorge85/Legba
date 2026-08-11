@@ -22,7 +22,15 @@ import { FAITHFULNESS_EXPLAIN } from '@/lib/verdictModel'
  *  first-time reader doesn't mistake either for an error. */
 const EXPLAIN =
   `${FAITHFULNESS_EXPLAIN} "Unmeasured" means no graded labels exist yet for ` +
-  "this unit — nothing has been checked against a reference, not a broken score."
+  "this unit — nothing has been checked against a reference, not a broken score. " +
+  // M-1 — the operator segment is a DIFFERENT measurement from faithfulness and
+  // must not be read as a refinement of it: a finding can be scrupulously
+  // faithful to citations that do not support the read it drew from them, which
+  // is exactly what the first gold-set round found.
+  '"Operator" is the gold-set score: a human read the finding and judged ' +
+  "whether it was RIGHT — independent of the machine judge, and never averaged " +
+  'with faithfulness. "Indicative" means too few verdicts exist to call it a ' +
+  "rate; the number is shown with its n rather than withheld."
 
 export function UnitEvalBadge({ analystId }: { analystId: string | null | undefined }) {
   const [score, setScore] = useState<UnitEvalScore | null>(null)

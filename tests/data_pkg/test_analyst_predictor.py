@@ -487,3 +487,93 @@ async def test_read_slice_shapes_daily_buckets() -> None:
     series = _aggregate_daily(rows)
     assert series is not None
     assert series.counts.tolist() == [2380.0, 2410.0]
+
+
+# ---------------------------------------------------------------------------
+# DQ-H1 guard SCOPING (2026-08-02)
+#
+# The AutoARIMA availability probe used to run at MODULE IMPORT and log ERROR.
+# The registry image does not ship statsforecast and never forecasts (verified
+# live: ModuleNotFoundError in legba-legba-registry-1, PRESENT in runtime +
+# worker) but does import this module to register the kind — so every registry
+# boot emitted the DQ-H1 ERROR as routine noise, which is worse than no guard:
+# a REAL runtime regression became indistinguishable from the daily false alarm.
+#
+# The loud failure must stay fully intact in a process that can forecast, and
+# must not fire in one that cannot.
+# ---------------------------------------------------------------------------
+
+
+def test_probe_does_not_run_at_import_time():
+    """Importing the module must not probe — that is the whole scoping fix."""
+    import importlib
+    import sys
+
+    import legba.data.analysts.predictor as pred
+
+    # A fresh import of the module registers no probe result.
+    sys.modules.pop("legba.data.analysts.predictor", None)
+    try:
+        fresh = importlib.import_module("legba.data.analysts.predictor")
+        assert fresh._statsforecast_available.cache_info().currsize == 0, (
+            "the probe ran at import time — the registry will scream again"
+        )
+    finally:
+        sys.modules["legba.data.analysts.predictor"] = pred
+
+
+def test_missing_statsforecast_still_screams_loudly_on_the_forecast_path(
+    monkeypatch, caplog
+):
+    """The loud-fail is INTACT where it matters: a process that reaches a
+    forecast with a broken image gets the DQ-H1 ERROR and a naive fallback."""
+    import builtins
+    import logging
+
+    import numpy as np
+
+    import legba.data.analysts.predictor as pred
+
+    real_import = builtins.__import__
+
+    def _no_statsforecast(name, *a, **kw):
+        if name.startswith("statsforecast"):
+            raise ImportError("No module named 'statsforecast'")
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", _no_statsforecast)
+    pred._statsforecast_available.cache_clear()
+    try:
+        series = np.asarray([float(i % 5) + 1.0 for i in range(30)])
+        with caplog.at_level(logging.ERROR, logger=pred.logger.name):
+            result = pred._forecast_arima(series, horizon_days=3, ci_level=80)
+
+        # Degraded HONESTLY — the method label says naive_mean, never auto_arima.
+        assert result.method == "naive_mean"
+        errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert any("statsforecast.UNAVAILABLE" in r.getMessage() for r in errors), (
+            caplog.text
+        )
+    finally:
+        monkeypatch.undo()
+        pred._statsforecast_available.cache_clear()
+
+
+def test_probe_is_memoized_so_the_scream_is_once_per_process():
+    """lru_cache preserves the once-per-process contract the boot probe had —
+    a forecasting process must not log the ERROR on every single run."""
+    import legba.data.analysts.predictor as pred
+
+    pred._statsforecast_available.cache_clear()
+    try:
+        first = pred._statsforecast_available()
+        second = pred._statsforecast_available()
+
+        assert first is second
+        info = pred._statsforecast_available.cache_info()
+        # One probe, one cached answer, every later call served from it.
+        assert info.currsize == 1
+        assert info.misses == 1
+        assert info.hits == 1
+    finally:
+        pred._statsforecast_available.cache_clear()

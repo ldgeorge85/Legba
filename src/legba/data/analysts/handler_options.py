@@ -296,6 +296,18 @@ def _window_days(name: str, doc: str) -> OptionSpec:
     return OptionSpec(name, "int", doc, minimum=1, maximum=_MAX_WINDOW_DAYS)
 
 
+#: The closed `edge_family` vocabulary — migration 0143's CHECK constraint, and
+#: `vocabulary_entries` carries the same four values. Bound as `choices` so a
+#: descriptor naming a family that does not exist is REJECTED at validation
+#: rather than silently producing an empty graph at runtime.
+_EDGE_FAMILY_CHOICES = ("relation", "reference", "cooccurrence", "structural")
+
+
+def _edge_families(doc: str) -> OptionSpec:
+    return OptionSpec(
+        "edge_families", "str_list", doc, choices=_EDGE_FAMILY_CHOICES)
+
+
 # ---------------------------------------------------------------------------
 # THE CATALOG — sub-handler name → its declared knobs
 # ---------------------------------------------------------------------------
@@ -359,6 +371,130 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
             "one bin before it fires (diversity is the signal).",
             minimum=2,
             maximum=1000,
+        ),
+        # -- S-1 production gauge (production_deficit class) -----------------
+        # Every knob is a legba.data.registry.production_gauge.GaugeConfig
+        # field under the `gauge_` prefix, so the route and the alert plane
+        # cannot be tuned apart. Raising a multiple trades recall for
+        # precision; the defaults were calibrated against the live fleet
+        # (2026-08-03) so the analyst classes fire on nothing and the source
+        # class fires on the documented broken set.
+        _window_days(
+            "gauge_window_days",
+            "production gauge: trailing history depth every baseline (cadence, "
+            "runs-per-output, source inter-arrival gaps) is computed over.",
+        ),
+        _pos_float(
+            "gauge_analyst_missed_periods",
+            "production gauge: whole cron intervals of analyst silence before "
+            "a cadence deficit exists. Deliberately above the liveness "
+            "watchdog's 2x edge alert — this is the 'still dead N periods "
+            "later' tier.",
+            maximum=1000.0,
+        ),
+        _pos_float(
+            "gauge_analyst_min_absence_minutes",
+            "production gauge: absolute floor under the cadence test so a "
+            "fast-cadence analyst cannot page on a few jittered ticks.",
+            maximum=_MAX_WINDOW_DAYS * 24.0 * 60.0,
+        ),
+        _pos_float(
+            "gauge_analyst_drought_multiple",
+            "production gauge: multiples of an analyst's OWN runs-per-output "
+            "rate before barren runs count as a production drought.",
+            maximum=1000.0,
+        ),
+        _pos_int(
+            "gauge_analyst_min_runs_since",
+            "production gauge: absolute floor on barren runs before a drought "
+            "can be declared.",
+        ),
+        _pos_int(
+            "gauge_analyst_min_producing_runs",
+            "production gauge: producing runs needed in the window before an "
+            "analyst has a production expectation at all (below it the loop "
+            "reads insufficient_history, never a deficit).",
+        ),
+        _pos_float(
+            "gauge_source_gap_multiple",
+            "production gauge: multiples of a source's own MAXIMUM observed "
+            "inter-arrival gap before silence is a drought. Keyed to the "
+            "source's own history so a bursty feed raises its own bar.",
+            maximum=1000.0,
+        ),
+        _pos_float(
+            "gauge_source_cadence_multiple",
+            "production gauge: floor on the source drought bar expressed in "
+            "declared poll intervals — covers a feed whose entire history is "
+            "one backfill burst (observed max gap ~0).",
+            maximum=10000.0,
+        ),
+        _pos_float(
+            "gauge_source_min_drought_minutes",
+            "production gauge: absolute floor — no source pages inside this "
+            "much silence however tight its own history.",
+            maximum=_MAX_WINDOW_DAYS * 24.0 * 60.0,
+        ),
+        _pos_int(
+            "gauge_source_min_signals_for_gap",
+            "production gauge: signals needed in the window before the "
+            "inter-arrival gap statistic is trusted.",
+        ),
+        _pos_int(
+            "gauge_source_min_polls_for_silent",
+            "production gauge: healthy polls needed before ZERO production "
+            "counts as the 'silent' sub-state.",
+        ),
+        _unit_float(
+            "gauge_source_max_error_share",
+            "production gauge: above this share of errored polls the "
+            "condition is an ERROR (the liveness watchdog's beat), not a "
+            "production deficit — gauged, never paged, so one fault is not "
+            "reported twice under two names.",
+        ),
+        _pos_int(
+            "gauge_backlog_min_owner_runs",
+            "production gauge: owner-analyst runs needed in the window before "
+            "'the backlog never drains' is a fair reading (below it, the "
+            "resolver's own cadence deficit is the honest attribution).",
+        ),
+        # -- INTEGRITY loops (R-train 2026-08-05) ------------------------
+        _window_days(
+            "gauge_judge_window_days",
+            "production gauge: trailing window for the LLM-judge availability "
+            "read. SHORT by design — a judge outage is acute (26 hours of it "
+            "wrote 611 floor-only critiques and dropped fleet mean "
+            "faithfulness 0.21 with no alarm), and a three-week denominator "
+            "would dilute a full day of silence into a rounding error.",
+        ),
+        _unit_float(
+            "gauge_judge_min_adjudicated_share",
+            "production gauge: share of critiques that must carry an "
+            "adjudicated (judge_status='llm') verdict. Below 1.0 because "
+            "individual judge calls legitimately soft-fail without the "
+            "component being down.",
+        ),
+        _unit_float(
+            "gauge_judge_share_tolerance",
+            "production gauge: the band beneath the adjudicated-share floor "
+            "counting as one severity step. The default puts a TOTAL judge "
+            "outage at critical, exactly.",
+        ),
+        _pos_float(
+            "gauge_drift_severity_divisor",
+            "production gauge: diverged descriptors per severity step in the "
+            "live-vs-tree prompt drift loop. The default makes the first "
+            "divergence page, because a live prompt that is not the tree's IS "
+            "the analytic method actually running.",
+            maximum=1000.0,
+        ),
+        _pos_float(
+            "gauge_state_drift_severity_divisor",
+            "production gauge: deactivation-HAZARD descriptors per severity step "
+            "in the live-vs-tree STATE drift loop — descriptors the tree calls "
+            "draft/retired that are running live, and that a re-registration "
+            "from the repo would therefore take off-line.",
+            maximum=1000.0,
         ),
     ),
     # The standalone geo scan is a deprecated no-op stub (the emission folded
@@ -478,7 +614,26 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
         _pos_int("signal_cap", "New signals examined per run."),
         _pos_int("question_cap", "Open questions loaded per run."),
         _pos_int("edge_cap", "bearing_edges written per run."),
-        _pos_int("flag_cap", "review_flags written per run."),
+        _pos_int(
+            "flag_cap",
+            "review_flags written per run — the budget is shared by consumer "
+            "flags and (when armed) the F5 question self-flags.",
+        ),
+        OptionSpec(
+            "question_flags",
+            "str",
+            "F5 (v4.1.0). A matched question the forward consumption walk "
+            "finds NO consumer for writes ONE open SELF-flag (output_id = "
+            "founded_on_id = the hypothesis id, reason "
+            "new_evidence_bears_on_unconsumed_question) — K-4 R4 measured "
+            "output_consumption at 0 rows for ALL 112 watched questions, so "
+            "the consumer-only walk left review_flags empty ALL-TIME and the "
+            "watcher's detect surface invisible. One open flag per question "
+            "(the 0107 partial unique index), shared flag_cap. CHOICE-LOCKED: "
+            "'on' / 'off'; ships 'off' — the X-1 byte-identical contract, "
+            "armed by the same descriptor PUT that arms the bearing gate.",
+            choices=("on", "off"),
+        ),
         _nonneg_int(
             "embed_cap", "Question embeddings computed per run (0 disables)."
         ),
@@ -510,6 +665,45 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
             "Attributed-signal floor below which the global-df discount is "
             "INERT (a df estimated from too few documents is worse than "
             "none).",
+        ),
+        OptionSpec(
+            "deictic_guard",
+            "str",
+            "CW-3. Refuse to match a thesis that leans on a referent it does "
+            "not carry (\"the incident\", \"the alleged Ukrainian attack\") — "
+            "K-4 R3 measured the class at 0.133 because the string every "
+            "plane reads does not contain the proposition. Skipped and "
+            "counted (skipped_deictic_questions), never down-weighted; the "
+            "questions stay open in every other read path. The durable fix is "
+            "upstream (open_question_tool inlines the origin finding's title "
+            "at write time); this is the backstop for rows written before it. "
+            "CHOICE-LOCKED: 'on' (default) / 'off'.",
+            choices=("on", "off"),
+        ),
+        OptionSpec(
+            "contention_subject_anchor",
+            "str",
+            "CW-5. Require a fact_contention question's SUBJECT to be present "
+            "in the signal — literally or through a resolved canonical alias "
+            "— before the pair can edge. Without it the matcher edges off the "
+            "contested VALUE alone: K-4 R3's \"which value of 'located in' "
+            "for texas\" matched a SpaceX story with no Texas token in it. "
+            "Counted contention_subject_unanchored. CHOICE-LOCKED: 'on' "
+            "(default) / 'off'.",
+            choices=("on", "off"),
+        ),
+        _nonneg_float(
+            "contention_liveness_days",
+            "CW-4. A fact_contention question is only watched while its "
+            "dispute is live: not arbiter-collapsed, and carrying a non-junk "
+            "value asserted within this many days. DEFAULT 0 = DISABLED, and "
+            "deliberately so: replayed over the K-4 R3 gold set the filter "
+            "removed 7 correct matches for 8 false ones against a 60% base "
+            "false rate, because a group COLLAPSES once the arbiter resolves "
+            "the dispute — i.e. downstream of the evidence arriving. Built, "
+            "tested and one PUT away for when a liveness signal that actually "
+            "separates the two contention populations exists; see "
+            "claim_watch_guards for the numbers.",
         ),
         _pos_int(
             "max_questions_per_signal",
@@ -557,8 +751,22 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
         _nonneg_int(
             "bearing_confirm_cap",
             "Core-plane confirm judgments per run over gate-YES edges only. "
-            "The confirm records a second opinion ON the edge and never "
-            "blocks one. 0 disables the leg.",
+            "Sized to bearing_gate_cap since CW-1 made the confirm a DECIDER: "
+            "an over-cap pair is un-adjudicated, not merely un-annotated. "
+            "0 disables the leg (every gate survivor writes 'unconfirmed').",
+        ),
+        OptionSpec(
+            "bearing_confirm_mode",
+            "str",
+            "What a confirm verdict does. 'blocking' (default, CW-1) DROPS a "
+            "confirm-NO candidate the way a gate-NO is dropped — K-4 R3 "
+            "measured confirm-yes 0.667 vs confirm-no 0.085 on the live "
+            "gated stream. 'advisory' restores the 3.3.0 stamp-only leg. "
+            "CHOICE-LOCKED: a typo must fail the catalog loudly rather than "
+            "silently restore a population measured at 0.267. An UNRESOLVED "
+            "confirm is never blocked under either mode — it is written and "
+            "flagged data.bearing_watch='unconfirmed'.",
+            choices=("blocking", "advisory"),
         ),
     ),
     "fact_contention_arbiter": (),
@@ -618,13 +826,30 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
     "graph_mining": (
         _flag(
             "augment_from_nexuses",
-            "Augment the mined graph with open nexus edges.",
+            "Augment the mined graph with open entity_edges rows.",
         ),
         _flag("augment_from_age", "Augment the mined graph from Apache AGE."),
+        _edge_families(
+            "Which entity_edges families the mining walks. Default excludes "
+            "'cooccurrence' — a co-mention is not a tie, and it was 8,635 of "
+            "12,732 open rows, so brokerage was largely measuring which nouns "
+            "co-occur in the news. 'reference' IS included: for BROKERAGE an "
+            "IGO membership is a genuine conduit."
+        ),
     ),
     "structural_balance": (
-        _flag("augment_from_nexuses", "Augment the signed graph with nexuses."),
+        _flag(
+            "augment_from_nexuses",
+            "Augment the signed graph with open entity_edges rows.",
+        ),
         _flag("augment_from_age", "Augment the signed graph from Apache AGE."),
+        _edge_families(
+            "Which entity_edges families the balance ratio counts. Default is "
+            "'relation' + 'structural' ONLY: 86% of the open signed edge set "
+            "is imported Wikidata country->IGO membership at +1, so counting "
+            "'reference' made balance_ratio a statement about UN co-membership "
+            "rather than about alignment. Widen it deliberately or not at all."
+        ),
     ),
     "proposed_edge_governance": (
         _unit_float(
@@ -642,6 +867,28 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
         ),
         _pos_int("max_promotions_per_run", "Promotion cap per run."),
         _pos_int("max_rejections_per_run", "Rejection cap per run."),
+        # K-G2 retention. A SEPARATE age-out from reject_*: that one fires on
+        # raw confidence and produced_at, this one on EARNED evidence with
+        # staleness measured from the newest backing signal.
+        _unit_float(
+            "retire_bar",
+            "Qualification score below which a stale pending candidate is "
+            "retired. Must match the reifier's qualification_bar — a lower "
+            "value here would retire candidates the typer still wants.",
+        ),
+        _pos_int(
+            "retire_min_sources",
+            "Independent-source floor used by the retirement verdict. Mirrors "
+            "the reifier's min_independent_sources.",
+            maximum=10,
+        ),
+        _nonneg_int(
+            "retire_stale_days",
+            "Days without NEW supporting evidence before a below-bar candidate "
+            "retires. A candidate that gains a source restarts its clock. 0 "
+            "DISABLES retirement.",
+        ),
+        _pos_int("max_retirements_per_run", "Retirement cap per run."),
     ),
     # -- entities ------------------------------------------------------------
     "entity_resolution": (
@@ -707,9 +954,15 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
     ),
     "cross_source_dedup": (
         _pos_int("max_groups_per_run", "Dedup groups collapsed per run."),
+        _pos_int(
+            "max_semantic_candidates",
+            "Signals the semantic pass queries per run. The candidate query was "
+            "unbounded (~100k rows a run); this is the bound.",
+        ),
         _unit_float(
             "semantic_threshold",
-            "Cosine similarity at/above which two signals are the same story.",
+            "Cosine similarity at/above which two signals are the same story. "
+            "Measured, not tuned — see scripts/measure_dedupe_threshold.py.",
         ),
         OptionSpec(
             "qdrant_collection",
@@ -738,6 +991,9 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
         _pos_int("max_signals", "Signals examined per run."),
     ),
     "corpus_indexer": (_pos_int("batch_limit", "Signals indexed per run."),),
+    "corpus_retention": (
+        _pos_int("batch_limit", "Tombstoned corpus docs deleted per run."),
+    ),
     "signal_embedder": (
         _pos_int("batch_limit", "Signals selected per run."),
         _pos_int("max_embeds", "Embeddings computed per run."),
@@ -907,6 +1163,51 @@ ANALYST_KIND_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
             "Software), each optionally weighted as 'Person:2'. Additive with "
             "slice_focus; same re-order-never-filter contract.",
             pattern=_FOCUS_TOKEN_PATTERN,
+        ),
+    ),
+    # K-G2. The reifier's throughput and quality dials. THROUGHPUT is
+    # max_candidates × batch_size; QUALITY is qualification_bar ×
+    # min_independent_sources. They are separate levers on purpose — the bar
+    # controls WHICH edges may enter the graph, the cap controls HOW MANY get
+    # typed, and the bake-off is explicit that the bar is not a yield optimiser
+    # and must not be sold as one (docs/TYPING_BAKEOFF_2026-08-03.md §6.5).
+    "relationship_reifier": (
+        _pos_int(
+            "max_candidates",
+            "Candidates typed per run (the cadence is twice daily, so the daily "
+            "figure is 2x this). Bounds the per-run LLM spend regardless of how "
+            "deep the qualifying queue is. See the arithmetic in "
+            "descriptors/analyst_relationship_reifier.yaml.",
+            maximum=5000,
+        ),
+        _pos_int(
+            "batch_size",
+            "Candidates per LLM typing call. 12 is MEASURED (17/17 clean calls "
+            "over 200 candidates, zero truncation) and cuts prompt tokens per "
+            "candidate from 1,462 to 297. 1 restores the one-call-per-candidate "
+            "shape. Above 24 is unevidenced and showed a possible judgement "
+            "shift.",
+            maximum=40,
+        ),
+        OptionSpec(
+            "qualification_bar",
+            "float",
+            "Weighted qualification score a candidate must clear to earn a "
+            "typing call. 0.42 is the recommended setting (~12,000 qualifying "
+            "of ~176,000 pending). LOWERING it widens the queue but can never "
+            "re-admit single-sourced candidates — min_independent_sources is a "
+            "separate hard floor for exactly that reason.",
+            minimum=0.0,
+            maximum=1.0,
+        ),
+        _pos_int(
+            "min_independent_sources",
+            "Hard floor on distinct INDEPENDENT sources behind a candidate, "
+            "counted after collapsing syndicated content. Not expressible as a "
+            "weight: a single-sourced pair with huge salience would otherwise "
+            "buy its way in. 92.1% of the live pending pool fails this floor, "
+            "and that is the sludge the graph exists to exclude.",
+            maximum=10,
         ),
     ),
 }

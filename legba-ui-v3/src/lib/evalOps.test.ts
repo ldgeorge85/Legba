@@ -19,10 +19,13 @@ import {
   isInsufficient,
   insufficientLabel,
   evalBadge,
+  operatorSegment,
+  correctnessLabel,
   orderedBandHorizons,
   bandRateLabel,
   bandCalibrationEmpty,
   type ScorecardRow,
+  type UnitCorrectnessRow,
   type ConsumerLagRow,
   type GovernorEventRow,
   type AuditEntryRow,
@@ -585,5 +588,96 @@ describe('evalBadge', () => {
     expect(evalBadge(ev({ faithfulness: null, correctness_vs_reference: null }))).toBe('unmeasured')
     expect(evalBadge(null)).toBe('unmeasured')
     expect(evalBadge(undefined)).toBe('unmeasured')
+  })
+})
+
+// --------------------------------------------------------------------------
+// M-1 — the OPERATOR correctness axis on the dimension badge.
+//
+// A different measurement from the source-overlap `correctness` above: a human
+// judged whether the finding was RIGHT, independent of the machine judge. The
+// two never merge into one number, and the operator figure never appears
+// without its n.
+// --------------------------------------------------------------------------
+describe('operatorSegment', () => {
+  it('carries the n and marks a sub-floor reading indicative', () => {
+    expect(
+      operatorSegment(ev({ correctness_operator: 0.5, n_operator_scored: 2, operator_sufficient: false })),
+    ).toBe('operator 0.50 (n=2, indicative)')
+  })
+  it('drops the qualifier once the server says the sample is sufficient', () => {
+    expect(
+      operatorSegment(ev({ correctness_operator: 0.62, n_operator_scored: 24, operator_sufficient: true })),
+    ).toBe('operator 0.62 (n=24)')
+  })
+  it('renders nothing without verdicts — absence is absent, not zero', () => {
+    expect(operatorSegment(ev())).toBe('')
+    expect(operatorSegment(ev({ correctness_operator: 0.5, n_operator_scored: 0 }))).toBe('')
+    expect(operatorSegment(ev({ correctness_operator: null, n_operator_scored: 3 }))).toBe('')
+    expect(operatorSegment(null)).toBe('')
+  })
+  it('a real 0.0 is a verdict, not an absence', () => {
+    expect(
+      operatorSegment(ev({ correctness_operator: 0, n_operator_scored: 1, operator_sufficient: false })),
+    ).toBe('operator 0.00 (n=1, indicative)')
+  })
+})
+
+describe('evalBadge with the operator axis', () => {
+  it('appends the operator segment with its OWN n, never merged', () => {
+    expect(
+      evalBadge(ev({ correctness_operator: 0.5, n_operator_scored: 2, operator_sufficient: false })),
+    ).toBe('faithfulness 0.88 | correctness 0.71 (n=12) | operator 0.50 (n=2, indicative)')
+  })
+  it('operator verdicts alone leave the unmeasured state', () => {
+    expect(
+      evalBadge(
+        ev({
+          faithfulness: null,
+          correctness_vs_reference: null,
+          correctness_operator: 1,
+          n_operator_scored: 1,
+        }),
+      ),
+    ).toBe('operator 1.00 (n=1, indicative)')
+  })
+  it('still unmeasured when no axis has a number', () => {
+    expect(
+      evalBadge(ev({ faithfulness: null, correctness_vs_reference: null, correctness_operator: null })),
+    ).toBe('unmeasured')
+  })
+})
+
+describe('correctnessLabel', () => {
+  const row = (over: Partial<UnitCorrectnessRow> = {}): UnitCorrectnessRow => ({
+    unit: 'escalation',
+    correctness: 1,
+    n_labels: 1,
+    n_scored: 1,
+    n_unresolvable: 0,
+    mix: { correct: 1 },
+    sufficient: false,
+    min_labels: 10,
+    status: 'indicative only — n=1 scored verdict, below the 10 floor',
+    display: 'correctness 1.00 (n=1 scored: 1 correct / 0 partial / 0 incorrect) — indicative only — n=1 scored verdict, below the 10 floor',
+    correctness_vs_reference: null,
+    n_reference_labels: 0,
+    reference_status: 'no gold labels',
+    faithfulness: 0.92,
+    judge_pipeline_version: '2026-08-03/1',
+    ...over,
+  })
+
+  it('renders the SERVER-composed display verbatim (mix + status included)', () => {
+    // The UI must never recompose a ratio out of its evidence — the honesty
+    // contract lives server-side, in one place.
+    expect(correctnessLabel(row())).toContain('n=1 scored')
+    expect(correctnessLabel(row())).toContain('1 correct')
+    expect(correctnessLabel(row())).toContain('indicative only')
+  })
+  it('unmeasured for a missing row or an empty display', () => {
+    expect(correctnessLabel(null)).toBe('unmeasured')
+    expect(correctnessLabel(undefined)).toBe('unmeasured')
+    expect(correctnessLabel(row({ display: '' }))).toBe('unmeasured')
   })
 })

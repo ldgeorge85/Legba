@@ -14,13 +14,11 @@ import httpx
 
 import sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from _bringup_http import registry_base, registry_client  # noqa: E402
 from _token import resolve_token  # noqa: E402
 
 
-BASE = os.environ.get(
-    "LEGBA_REGISTRY_URL",
-    "http://127.0.0.1:8090/api/v1/registry",
-)
+BASE = registry_base()
 TOKEN = resolve_token()
 
 # Model-serving endpoints + served model names are deployment config, not
@@ -274,14 +272,6 @@ COMPONENTS: list[tuple[str, dict]] = [
 ]
 
 
-def _client() -> httpx.Client:
-    return httpx.Client(
-        base_url=BASE,
-        headers={"Authorization": f"Bearer {TOKEN}"},
-        timeout=20,
-    )
-
-
 def _ensure_pg_password_secret(client: httpx.Client) -> None:
     """Ensure the Postgres password SecretRef points at a vault entry."""
     secret_id = "pg.cluster_main.password"
@@ -305,7 +295,7 @@ def _strip_version(body: dict) -> dict:
 
 
 def main() -> int:
-    with _client() as client:
+    with registry_client(BASE, TOKEN, timeout=20) as client:
         _ensure_pg_password_secret(client)
         # Discover already-registered components.
         r = client.get("/stack")

@@ -66,6 +66,8 @@ from ..provenance.consumption import (
     CONSUMPTION_CONTEXT_BASIS,
     CONSUMPTION_CONTEXT_PERIPHERY,
 )
+from ._llm_budget import CHARS_PER_TOKEN, budget_chars
+from .claim_contradiction import detect_contradictions, render_tension_block
 from ..provenance.models import FindingPayload
 from ...runtime.analyst_method import AnalystMethodResult, LLMHandlerLike
 
@@ -124,14 +126,51 @@ read cannot see)."""
 
 MAX_TITLE_CHARS: int = 200
 MAX_BODY_CHARS: int = 600
+"""FLOOR on the per-input body excerpt — it used to be the ceiling.
+
+F-D (2026-08-03): this constant, times :data:`MAX_INPUT_FINDINGS`, WAS the
+composition's entire input window. 15 x 600 chars is roughly 2,250 estimated
+tokens against the 32,000-token budget the UNIT path packs against — about 7%.
+The tier meant to see ACROSS desks saw less of its inputs than any leaf saw of
+its signals. The excerpt is now sized from the shared budget by
+:func:`composition_body_cap`; this stays as the never-go-below floor, so no path
+can render less than the historical excerpt."""
+
 MAX_EVIDENCE_ITEMS: int = 3
+
+#: F-D — ceiling on ONE input finding's body excerpt however much budget is free.
+#: Composition inputs are FINDINGS, not articles: live bodies average ~1.2-2.4k
+#: chars across every producing desk, so this holds essentially all of them whole
+#: while still bounding a pathological row.
+MAX_FULL_BODY_CHARS: int = 4000
+
+#: F-D — the share of the input-token budget the FINDINGS BLOCK may claim. The
+#: rest of the turn is the system prompt, the grounding preamble, the periphery
+#: and continuity blocks, the contested sidecar and the freshness advisory — all
+#: separately bounded, all spliced around this block. Half is deliberately
+#: conservative: the point is to stop reading through a keyhole, not to fill the
+#: window.
+COMPOSITION_SLICE_BUDGET_SHARE: float = 0.5
 
 # P3-T3/T7 — how much of a cited sub-claim's body to capture on its citation as
 # ``evidence_text`` at synth time, so the composition faithfulness VERIFY (run in
 # a LATER actor step) checks each composed clause against the EXACT point-in-time
 # evidence the model saw — no verify-time re-fetch (which could read a superseded
-# sub-claim). Bounded so ``data['citations']`` stays compact.
-MAX_EVIDENCE_TEXT_CHARS: int = 600
+# sub-claim).
+#
+# F-D (2026-08-03): raised 600 -> 3600, matching the UNIT judge's whole-evidence
+# bound (``verify._EVIDENCE_TOTAL_CHARS``). At 600 the cap BOUND on essentially
+# every composition citation in production — measured read-only on the live
+# substrate, country_composition citations averaged 567 of 600 chars against
+# cited bodies averaging 2,352 — so the judge graded the whole composition tower
+# against roughly the first quarter of each sub-claim, and a composed clause
+# resting on anything the cited finding said after its BLUF read as ungrounded.
+# The composition citation now carries the same evidence window a unit citation
+# does. (The 08-03 panel reported this as "0 of 551 citations carry resolvable
+# text"; that measurement read ``source_text``/``snippet``/``body``, which is the
+# UNIT citation shape. Composition citations carry ``evidence_text`` and 542 of
+# 542 had it — the defect was never absence, it was the width of the window.)
+MAX_EVIDENCE_TEXT_CHARS: int = 3600
 
 
 # F-1 (MASTER_PLAN 2026-07-13) — COMPOSE-TIME HEAD RE-RESOLUTION (freshness).
@@ -410,10 +449,21 @@ SITUATION_REGISTER_NAME_CHARS: int = 120
 situation name is a short frame LABEL, and the cap is what bounds the register's
 worst-case footprint (and therefore its captured evidence text) to a known size."""
 
-SITUATION_REGISTER_EVIDENCE_CHARS: int = 2400
+SITUATION_REGISTER_TRAJECTORY_DEPTH: int = 3
+"""How many DATED deltas per frame the register carries (continuity P2, D5).
+Three is the plan's number and is what a reader needs to see a direction rather
+than a point: one delta is an event, three is a trend or the absence of one."""
+
+SITUATION_REGISTER_WHY_CHARS: int = 180
+"""Per-delta ``why`` cap in the register. A ledger ``why`` is already one
+sentence; this bounds the pathological case so the register's worst-case
+footprint (and therefore its captured evidence text) stays a known size."""
+
+SITUATION_REGISTER_EVIDENCE_CHARS: int = 5000
 """Cap on the register's captured ``evidence_text``. Sized to hold the WHOLE
 rendered register at its own bounds (:data:`SITUATION_REGISTER_CAP` frames x
-~225 chars + header ~ 1.9k) rather than reusing
+~225 chars of frame line + :data:`SITUATION_REGISTER_TRAJECTORY_DEPTH` trajectory
+lines of ~250 + header ~ 4.4k) rather than reusing
 :data:`MAX_EVIDENCE_TEXT_CHARS` (600, sized for ONE sub-claim body). Load-bearing:
 ``verify._ordinal_evidence_map`` applies NO cap of its own, so the synth-side
 capture IS what the judge grades against — a 600-char cut would silently hide the
@@ -623,7 +673,13 @@ class MetaFindingsDeps(Protocol):
 # ---------------------------------------------------------------------------
 
 
-from ._tradecraft import with_preamble  # noqa: E402
+from ._tradecraft import (  # noqa: E402
+    COMPOSITION_BODY_SHAPE,
+    CONSEQUENCE_RULE,
+    NO_INSTRUMENT_READINGS,
+    as_of_rule,
+    with_preamble,
+)
 
 _SYSTEM_PROMPT = with_preamble(
     """TASK — second-order synthesis. You are given FIRST-ORDER FINDINGS from OTHER analysts (each with title, body, confidence, evidence, and a source analyst_id). Produce ONE second-order FINDING that is only visible when these outputs are considered together: the higher-order pattern, the convergent claim, the contradiction, or the emergent narrative. Lead `body` with the BLUF. DO NOT re-state any individual finding verbatim. Cite which analysts ground each claim (by analyst_id). If the findings disagree, surface the disagreement rather than averaging it away.
@@ -650,9 +706,43 @@ Respond with strict JSON, nothing else: {"title": "...", "body": "...", "confide
 #      that keeps the RAG-rollback failure mode (an uncited prior leaking into
 #      cited analysis) structurally unavailable: the ONLY licensed sources of
 #      "before" are two blocks that must be cited like any other evidence.
+#: D1 anchored for the COMPOSITION layer. A composition has no slice header —
+#: its dated anchors are the ``produced_at=`` values the block renderer prints
+#: on every shown block, so the as-of is taken from the newest of those. Same
+#: zero-new-facts property as the unit form: the date is a copy of rendered
+#: text, never a read of the wall clock.
+_COMPOSITION_AS_OF = as_of_rule(
+    "'*As of <date>; composed from <N> <unit|country|region|desk> reads, "
+    "latest <time>.*'. Take the date and time from the MOST RECENT produced_at "
+    "printed on a shown block — rendered as a human calendar date and time, "
+    "never as the raw ISO/microsecond value — and take the count from the "
+    "blocks actually shown. If the shown blocks span more than a day, say so "
+    "in the same line ('reads span 1-3 August')."
+)
+
+
 def _continuity_rule(letter: str) -> str:
-    """The continuity rule text, lettered for one composition prompt."""
+    """The continuity rule text, lettered for one composition prompt.
+
+    PHASE-V — carries the D1 as-of clause in front of the continuity
+    obligations, and repairs the two lines D5 traced the machine-internals leak
+    to. Both repairs are one-liners with outsized effect, because the model was
+    reading each as a REPORTING REQUIREMENT rather than as the anti-embellishment
+    guard it was written to be:
+
+      * The worked example ``'no material change since the prior read of <its
+        produced_at>'`` invited a literal substitution of the column value, so
+        56/117 compositions narrated a microsecond ISO timestamp at the
+        operator. It now shows a human date and states the rendering rule.
+      * ``'describe a situation ONLY as ... its own name, status, intensity and
+        event count'`` was meant to CAP what may be said about a frame; it read
+        as a list of fields to print, so 27/117 compositions reported
+        ``intensity 54.59 and 302 events`` as prose. The cap now names only the
+        two reader-facing fields, and the two instrument readings are explicitly
+        decide-with-never-print.
+    """
     return (
+        _COMPOSITION_AS_OF + " "
         f"({letter}) CONTINUITY — a PRIOR READ block (this same target's previous "
         "verified read, carrying its OWN produced_at) and/or an OPEN SITUATION "
         "REGISTER block (the currently-open situation frames for this scope, each "
@@ -665,16 +755,125 @@ def _continuity_rule(letter: str) -> str:
         "produced_at, a situation's last_event_at / age) — NEVER on 'today', 'now', "
         "'as of this run', or the time you are running; (3) if nothing material "
         "changed, SAY SO plainly and briefly (e.g. 'no material change since the "
-        "prior read of <its produced_at> [[ref:N]]') rather than re-deriving the "
+        "3 August morning read [[ref:N]]' — a HUMAN calendar date derived from the "
+        "block's produced_at, NEVER the raw ISO/microsecond timestamp) rather than "
+        "re-deriving the "
         "same picture in different words; (4) describe a situation ONLY as the "
-        "register states it — its own name, status, intensity and event count — "
+        "register states it — its own name and status — "
         "and never upgrade, downgrade, or re-date it beyond what the register "
-        "shows. NEVER assert continuity of ANY kind — an escalation, a "
+        "shows. The register's intensity score and event_count are internal "
+        "instrument readings: USE them to decide, never PRINT them, and never "
+        "promote a NEGATIVE finding into a named 'situation frame'. NEVER assert "
+        "continuity of ANY kind — an escalation, a "
         "de-escalation, a trend, an 'ongoing'/'longstanding' framing, or that "
         "something has 'been building' — unless it is grounded in the cited PRIOR "
         "READ block or the SITUATION REGISTER block. If NEITHER block is shown "
         "this is a FIRST read of this target: say so plainly and make NO claim "
         "about what came before. "
+    )
+
+
+# ---------------------------------------------------------------------------
+# PHASE-V D6 — the composition rule set, generated per prompt
+# ---------------------------------------------------------------------------
+#
+# Every composition reads like the minutes of a status meeting because that is
+# what it was asked for. 94 of 117 sampled compositions ran an OBSERVATION /
+# JUDGMENT roll call — one bullet per unit in fixed order, then the same items
+# again with "Assessment:" in front — and the residual "judgment" was one
+# tautological sentence. Three prompt lines produce that, and all three are
+# repaired here rather than in three hand-edited copies:
+#
+#   * The COVERAGE rule was stated as an EQUAL-AIRTIME obligation whose worked
+#     example was a unit-naming sentence, so the model satisfied it with an
+#     enumeration and had no room left for an argument. Its integrity guarantee
+#     (never silently drop a shown block) is real and is KEPT — it just moves to
+#     a footer.
+#   * The HEDGE rule handed the model the bureaucratic register verbatim ("the
+#     units indicate / suggest"), so hedging became a house voice instead of a
+#     calibration duty.
+#   * The ONLY structural instruction was "lead body with a one-line BLUF", so
+#     the model invented a skeleton — and the skeleton the other two rules imply
+#     is the roll call.
+#
+# WHAT IS DELIBERATELY NOT TOUCHED: the TRACEABILITY rule in every prompt (a
+# [[ref:N]] marker is a PROMISE that block N literally states the claim it tags;
+# never introduce a fact, proper noun, or specific not present in a cited
+# block). D6's one risky line — "say what these blocks TOGETHER show that none
+# shows alone" — is exactly the line that invites synthesis beyond the evidence,
+# and TRACEABILITY is what polices it. The shape rule below must never ship
+# without it.
+
+
+def _shape_rule(letter: str, *, block_noun: str, lead: str) -> str:
+    """The (d)-slot SHAPE rule: judgment in the body, coverage in a footer."""
+    return (
+        f"({letter}) {COMPOSITION_BODY_SHAPE} "
+        f"The BLUF names {lead}. '## The picture' is CONNECTED ARGUMENT: what "
+        f"these {block_noun} TOGETHER show that none shows alone, ordered by "
+        "consequence — every clause still carrying its [[ref:N]] and still "
+        "bound by the TRACEABILITY rule below, which is what keeps 'together' "
+        "from becoming 'invented'. Do NOT write a paragraph or a bullet per "
+        f"{block_noun[:-1] if block_noun.endswith('s') else block_noun}, do NOT "
+        "restate a shown block verbatim, and do NOT emit an OBSERVATION / "
+        "JUDGMENT skeleton or any other section list of your own. "
+    )
+
+
+def _tension_rule(letter: str, *, block_noun: str, a: str, b: str) -> str:
+    """The (c)-slot DISAGREEMENT rule + where the disagreement is written.
+
+    Extends the existing directional-disagreement rule to FACTUAL disagreement,
+    which is the leg that failed silently and visibly: on one desk, one day, the
+    energy_security unit reported the Strait of Hormuz "remains effectively
+    shut" while economic_coercion reported "no concrete closure is in place" —
+    and the country composition inherited both blocks and narrated them as
+    agreement. The old rule only ever asked about sub-claims pointing in
+    different DIRECTIONS; two blocks asserting incompatible states of the same
+    FACT sailed through it.
+    """
+    return (
+        f"({letter}) SURFACE DISAGREEMENT in the '## Tension' section — do NOT "
+        f"average it into a false consensus. When {a} and {b} point in "
+        f"different directions, NAME BOTH and cite BOTH diverging {block_noun} "
+        "via their two [[ref:N]] ordinals. DISAGREEMENT INCLUDES FACTUAL "
+        "DISAGREEMENT, not only directional disagreement: BEFORE you write, "
+        "check whether two shown blocks assert incompatible STATES OF THE SAME "
+        "FACT (one says a chokepoint is closed, another says no closure is in "
+        "place). When they do, name both sources, quote both "
+        "characterizations, cite both [[ref:N]] handles, and say which is "
+        "better supported and why — do NOT silently adopt one, and do NOT "
+        "combine them into a sentence that implies they agree. When the shown "
+        "blocks genuinely agree, say so plainly in one line rather than "
+        "manufacturing a tension. "
+    )
+
+
+def _hedge_rule(letter: str, *, tic: str, worked: str) -> str:
+    """The (b)-slot HEDGE rule — a calibration duty, not a house voice."""
+    return (
+        f"({letter}) HEDGE to the evidence — weaken your language as "
+        "effective_confidence drops, and attribute a judgment to the source "
+        "that made it when it matters who said it. Hedging is a CALIBRATION "
+        f"DUTY, not a house voice: do NOT open clauses with '{tic}' as a tic. "
+        f"Prefer a dated, attributed statement ('{worked}') over an agentless "
+        "hedge. "
+    )
+
+
+def _coverage_rule(letter: str, *, block_noun: str, unit_noun: str) -> str:
+    """The coverage rule — integrity guarantee kept, airtime obligation dropped."""
+    return (
+        f"({letter}) COVERAGE IS A FOOTER, NOT THE BODY. Every shown "
+        f"{unit_noun} must still be accounted for — silently dropping one is an "
+        f"integrity failure — but a {unit_noun} whose read is unremarkable is "
+        "accounted for by NAMING IT IN THE '## Coverage' LINE, not by giving it "
+        f"a bullet in the body. A {unit_noun} with NO block shown is an "
+        "unassessed GAP: name it in that same line as a gap and NEVER infer, "
+        f"estimate, or invent its state. A {unit_noun} earns space in '## The "
+        f"picture' ONLY when it changes the read. Do not claim to cover a "
+        f"{unit_noun} whose block is not shown, and never attach a [[ref:N]] to "
+        "a gap. "
     )
 
 
@@ -692,7 +891,34 @@ def _continuity_rule(letter: str) -> str:
 # consensus, and narrates an HONEST EMPTY read (confidence 0.0, no fabricated
 # evidence) when a country has no verified sub-claims.
 _COMPOSITION_SYSTEM = with_preamble(
-    """TASK — per-country COMPOSITION. You are given the VERIFIED, faithfulness-checked SUB-CLAIMS (first-order unit findings) for ONE country from up to seven bounded units (leadership_transition, energy_security, escalation, narrative_coordination, internal_stability, military_posture, economic_coercion). Each block STARTS with a [[ref:N]] handle (a small integer N) and shows its source unit analyst_id, effective_confidence (already min(confidence, faithfulness)), title and body. Produce ONE second-order per-country READ. RULES: (a) CITE EVERY factual clause inline with a [[ref:N]] marker using EXACTLY the small integer N shown as the [[ref:N]] handle at the START of the sub-claim block it rests on; NEVER invent an N and NEVER cite an N not shown; a clause with no sub-claim behind it must NOT assert a fact. (b) HEDGE to the evidence — prefer 'the units indicate / suggest / as of the latest sweep' over categorical claims, and weaken your language as effective_confidence drops. (c) If the sub-claims DISAGREE or point different directions, SURFACE the disagreement explicitly (name the tension) — do NOT average it into a false consensus. (d) Lead body with a one-line BLUF; do not restate any sub-claim verbatim. (e) HONEST EMPTY: if there are no verified sub-claims for this country, say so plainly with confidence 0.0 and NO fabricated evidence. (f) TRACEABILITY — a [[ref:N]] marker is a PROMISE that sub-claim block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown sub-claim blocks actually say. NEVER introduce a fact, proper noun, place-name, or event specific (a magnitude, date, location, or count) that is not present in a cited block — do NOT add concrete details a unit did not state (e.g. an event's magnitude or location, or a named actor, commitment, or position no block mentions). If you cannot ground a clause in a shown block, DROP the clause; an in-range [[ref:N]] does NOT license a claim its block does not make. (g) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence actually shown for a cited block, and invent NO per-unit confidence figure or a unit that is not present; do NOT silently change a unit's stated severity or which driver it called dominant — if you aggregate differing unit severities, say so explicitly (e.g. 'aggregating unit severities moderate+low -> moderate'). (h) UNIT COVERAGE — account for EVERY bounded unit whose sub-claim block is SHOWN: either CITE it via its [[ref:N]] handle, or, when its read is unremarkable, NAME the unit and say so plainly (e.g. 'the military_posture and narrative_coordination units report nothing notable this window') — do NOT silently drop a shown unit from the read. Do NOT claim to cover a unit whose block is NOT shown; that unit is an unassessed GAP — name it as such and NEVER infer its state. """
+    """TASK — per-country COMPOSITION. You are given the VERIFIED, faithfulness-checked SUB-CLAIMS (first-order unit findings) for ONE country from up to seven bounded units (leadership_transition, energy_security, escalation, narrative_coordination, internal_stability, military_posture, economic_coercion). Each block STARTS with a [[ref:N]] handle (a small integer N) and shows its source unit analyst_id, effective_confidence (already min(confidence, faithfulness)), title and body. Produce ONE second-order per-country READ. RULES: (a) CITE EVERY factual clause inline with a [[ref:N]] marker using EXACTLY the small integer N shown as the [[ref:N]] handle at the START of the sub-claim block it rests on; NEVER invent an N and NEVER cite an N not shown; a clause with no sub-claim behind it must NOT assert a fact. """
+    + _hedge_rule(
+        "b",
+        tic="the units indicate / suggest",
+        worked="the escalation desk's 3 August read has ...",
+    )
+    + _tension_rule(
+        "c",
+        block_noun="sub-claim blocks",
+        a="one unit's sub-claim",
+        b="another's",
+    )
+    + _shape_rule(
+        "d",
+        block_noun="units",
+        lead=(
+            "the single most consequential thing on this desk and why it "
+            "matters — ranked on the STAKES the cited blocks describe (cited "
+            "loss of life or armed conflict, then cited disruption to a system "
+            "many actors depend on, then cited irreversibility, then cited "
+            "proximity), NEVER on which block scored the highest "
+            "effective_confidence and NEVER on which item merely changed"
+        ),
+    )
+    + """(e) HONEST EMPTY: if there are no verified sub-claims for this country, say so plainly with confidence 0.0 and NO fabricated evidence. (f) TRACEABILITY — a [[ref:N]] marker is a PROMISE that sub-claim block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown sub-claim blocks actually say. NEVER introduce a fact, proper noun, place-name, or event specific (a magnitude, date, location, or count) that is not present in a cited block — do NOT add concrete details a unit did not state (e.g. an event's magnitude or location, or a named actor, commitment, or position no block mentions). If you cannot ground a clause in a shown block, DROP the clause; an in-range [[ref:N]] does NOT license a claim its block does not make. (g) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence actually shown for a cited block, and invent NO per-unit confidence figure or a unit that is not present; do NOT silently change a unit's stated severity or which driver a unit called its lead — if you aggregate differing unit severities, say so explicitly (e.g. 'aggregating unit severities moderate+low -> moderate'). """
+    + NO_INSTRUMENT_READINGS
+    + " "
+    + _coverage_rule("h", block_noun="sub-claim blocks", unit_noun="unit")
     + _continuity_rule("i")
     + """Respond with strict JSON only: {"title":"...","body":"...with [[ref:N]] markers...","confidence":0.0-1.0,"evidence":["..."],"tags":["..."]}"""
 )
@@ -710,8 +936,35 @@ _COMPOSITION_SYSTEM = with_preamble(
 # ``[[contested:<contention_id>]]`` naming BOTH arbiter-surfaced sides. (The true
 # WORLD run composes REGIONS via ``_WORLD_OVER_REGIONS_SYSTEM`` below.)
 _REGION_COMPOSITION_SYSTEM = with_preamble(
-    """TASK — REGIONAL COMPOSITION. You are given the VERIFIED, faithfulness-checked per-COUNTRY READS (second-order country_composition findings) for the member countries of ONE world region, one or more per country. Each block STARTS with a [[ref:N]] handle (a small integer N) and shows its source analyst_id, effective_confidence (already min(confidence, faithfulness)), title and body. You MAY also be given a CONTESTED FACTS block: open disputes over a single fact (subject+predicate) where the arbiter surfaced more than one value cluster. Produce ONE second-order REGIONAL READ over the shown country reads. RULES: (a) CITE EVERY factual clause inline with a [[ref:N]] marker using EXACTLY the small integer N shown as the [[ref:N]] handle at the START of the COUNTRY READ block it rests on; NEVER invent an N, NEVER cite a raw signal, and NEVER cite an N not shown; a clause with no country read behind it must NOT assert a fact. (b) HEDGE to the evidence — prefer 'the country reads indicate / suggest / as of the latest composition' over categorical claims, and weaken your language as effective_confidence drops. (c) SURFACE CROSS-COUNTRY DISAGREEMENT: when one country's read and another's point in different directions, NAME BOTH countries and cite BOTH diverging country-read blocks via their two [[ref:N]] ordinals — do NOT average them into a false regional consensus. (d) Lead body with a one-line BLUF that NAMES the specific REGION this read covers — infer the region from the shown country reads, which are ALL members of ONE region — and frame the assessment AS a regional read; do NOT open with a global 'The world faces…' frame (this is a REGION, not the world), and do not restate any country read verbatim. (e) CONTESTED FACTS: when a claim touches a listed contested group, NAME both surfaced sides and mark it [[contested:<contention_id>]] using EXACTLY a contention_id shown in the block; NEVER pick a side the arbiter did not surface and NEVER invent a contested id. (f) HONEST EMPTY: if there are no country reads, say so plainly with confidence 0.0 and NO fabricated evidence. (g) TRACEABILITY — a [[ref:N]] marker is a PROMISE that country-read block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown country reads actually say. NEVER introduce a country, actor, event specific, or figure not present in a cited country-read block; if you cannot ground a clause in a shown block, DROP it (an in-range [[ref:N]] does NOT license a claim its block does not make). (h) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence shown for a cited block, and do NOT silently alter a country read's severity or dominant driver; make any aggregation explicit. """
-    + _continuity_rule("i")
+    """TASK — REGIONAL COMPOSITION. You are given the VERIFIED, faithfulness-checked per-COUNTRY READS (second-order country_composition findings) for the member countries of ONE world region, one or more per country. Each block STARTS with a [[ref:N]] handle (a small integer N) and shows its source analyst_id, effective_confidence (already min(confidence, faithfulness)), title and body. You MAY also be given a CONTESTED FACTS block: open disputes over a single fact (subject+predicate) where the arbiter surfaced more than one value cluster. Produce ONE second-order REGIONAL READ over the shown country reads. RULES: (a) CITE EVERY factual clause inline with a [[ref:N]] marker using EXACTLY the small integer N shown as the [[ref:N]] handle at the START of the COUNTRY READ block it rests on; NEVER invent an N, NEVER cite a raw signal, and NEVER cite an N not shown; a clause with no country read behind it must NOT assert a fact. """
+    + _hedge_rule(
+        "b",
+        tic="the country reads indicate / suggest",
+        worked="Sudan's 3 August country read carries ...",
+    )
+    + _tension_rule(
+        "c",
+        block_noun="country-read blocks",
+        a="one country's read",
+        b="another's",
+    )
+    + _shape_rule(
+        "d",
+        block_noun="country reads",
+        lead=(
+            "the specific REGION this read covers (infer it from the shown "
+            "country reads, which are ALL members of ONE region) and the "
+            "single most consequential thing in it — do NOT open with a global "
+            "'The world faces...' frame; this is a REGION, not the world"
+        ),
+    )
+    + CONSEQUENCE_RULE
+    + " "
+    + """(e) CONTESTED FACTS: when a claim touches a listed contested group, NAME both surfaced sides and mark it [[contested:<contention_id>]] using EXACTLY a contention_id shown in the block; NEVER pick a side the arbiter did not surface and NEVER invent a contested id. (f) HONEST EMPTY: if there are no country reads, say so plainly with confidence 0.0 and NO fabricated evidence. (g) TRACEABILITY — a [[ref:N]] marker is a PROMISE that country-read block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown country reads actually say. NEVER introduce a country, actor, event specific, or figure not present in a cited country-read block; if you cannot ground a clause in a shown block, DROP it (an in-range [[ref:N]] does NOT license a claim its block does not make). (h) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence shown for a cited block, and do NOT silently alter a country read's severity or the driver it called its lead; make any aggregation explicit. """
+    + NO_INSTRUMENT_READINGS
+    + " "
+    + _coverage_rule("i", block_noun="country-read blocks", unit_noun="country")
+    + _continuity_rule("j")
     + """Respond with strict JSON only: {"title":"...","body":"...with [[ref:N]] (and any [[contested:<id>]]) markers...","confidence":0.0-1.0,"evidence":["..."],"tags":["..."]}"""
 )
 
@@ -736,8 +989,35 @@ _WORLD_COMPOSITION_SYSTEM = _REGION_COMPOSITION_SYSTEM
 # Distinct constant from ``_REGION_COMPOSITION_SYSTEM`` so the S2-T2 region compose
 # (which composes COUNTRY reads and keeps that prompt) is untouched.
 _WORLD_OVER_REGIONS_SYSTEM = with_preamble(
-    """TASK — GLOBAL world COMPOSITION over REGIONS. You are given the VERIFIED, faithfulness-checked per-REGION READS (second-order region_composition findings), one per region. For a region that had NO region read this cycle, one or more of its per-COUNTRY reads are shown IN ITS PLACE (a degrade — treat them as that region's available evidence). Each block STARTS with a [[ref:N]] handle (a small integer N) and shows its source analyst_id, effective_confidence (already min(confidence, faithfulness)), title and body. You MAY also be given a CONTESTED FACTS block (open disputes over a single fact where the arbiter surfaced more than one value cluster) and a REGION COVERAGE block naming world regions that have NO read at all this cycle. Produce ONE second-order WORLD READ. RULES: (a) CITE EVERY factual clause inline with a [[ref:N]] marker using EXACTLY the small integer N shown as the [[ref:N]] handle at the START of the read block it rests on; NEVER invent an N, NEVER cite a raw signal, and NEVER cite an N not shown; a clause with no read behind it must NOT assert a fact. (b) HEDGE to the evidence — prefer 'the region reads indicate / suggest / as of the latest composition' over categorical claims, and weaken your language as effective_confidence drops. (c) SURFACE CROSS-REGION DISAGREEMENT: when one region's read and another's point in different directions, NAME BOTH regions and cite BOTH diverging blocks via their two [[ref:N]] ordinals — do NOT average them into a false global consensus. (d) Lead body with a one-line BLUF; do not restate any read verbatim. (e) CONTESTED FACTS: when a claim touches a listed contested group, NAME both surfaced sides and mark it [[contested:<contention_id>]] using EXACTLY a contention_id shown in the block; NEVER pick a side the arbiter did not surface and NEVER invent a contested id. (f) REGION GAPS: if the REGION COVERAGE block lists a region as having NO read, NAME that region plainly as an unassessed gap with NO current read — do NOT infer, estimate, or invent its state, and NEVER attach a [[ref:N]] to a gap region. (g) HONEST EMPTY: if there are no reads at all, say so plainly with confidence 0.0 and NO fabricated evidence. (h) TRACEABILITY — a [[ref:N]] marker is a PROMISE that block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown reads actually say. NEVER introduce a region, country, actor, event specific, or figure not present in a cited block; if you cannot ground a clause in a shown block, DROP it (an in-range [[ref:N]] does NOT license a claim its block does not make). (i) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence shown for a cited block, and do NOT silently alter a read's severity or dominant driver; make any aggregation explicit. """
-    + _continuity_rule("j")
+    """TASK — GLOBAL world COMPOSITION over REGIONS. You are given the VERIFIED, faithfulness-checked per-REGION READS (second-order region_composition findings), one per region. For a region that had NO region read this cycle, one or more of its per-COUNTRY reads are shown IN ITS PLACE (a degrade — treat them as that region's available evidence). Each block STARTS with a [[ref:N]] handle (a small integer N) and shows its source analyst_id, effective_confidence (already min(confidence, faithfulness)), title and body. You MAY also be given a CONTESTED FACTS block (open disputes over a single fact where the arbiter surfaced more than one value cluster) and a REGION COVERAGE block naming world regions that have NO read at all this cycle. Produce ONE second-order WORLD READ. RULES: (a) CITE EVERY factual clause inline with a [[ref:N]] marker using EXACTLY the small integer N shown as the [[ref:N]] handle at the START of the read block it rests on; NEVER invent an N, NEVER cite a raw signal, and NEVER cite an N not shown; a clause with no read behind it must NOT assert a fact. """
+    + _hedge_rule(
+        "b",
+        tic="the region reads indicate / suggest",
+        worked="the Africa read of 3 August carries ...",
+    )
+    + _tension_rule(
+        "c",
+        block_noun="region-read blocks",
+        a="one region's read",
+        b="another's",
+    )
+    + _shape_rule(
+        "d",
+        block_noun="region reads",
+        lead=(
+            "the single most consequential situation on this board and why it "
+            "matters. THIS IS THE WORLD HEADLINE: it is read as the tower's "
+            "answer to 'what matters most right now', so getting the ranking "
+            "right is this read's whole job"
+        ),
+    )
+    + CONSEQUENCE_RULE
+    + " "
+    + """(e) CONTESTED FACTS: when a claim touches a listed contested group, NAME both surfaced sides and mark it [[contested:<contention_id>]] using EXACTLY a contention_id shown in the block; NEVER pick a side the arbiter did not surface and NEVER invent a contested id. (f) REGION GAPS: if the REGION COVERAGE block lists a region as having NO read, NAME that region plainly in the '## Coverage' line as an unassessed gap with NO current read — do NOT infer, estimate, or invent its state, and NEVER attach a [[ref:N]] to a gap region. (g) HONEST EMPTY: if there are no reads at all, say so plainly with confidence 0.0 and NO fabricated evidence. (h) TRACEABILITY — a [[ref:N]] marker is a PROMISE that block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown reads actually say. NEVER introduce a region, country, actor, event specific, or figure not present in a cited block; if you cannot ground a clause in a shown block, DROP it (an in-range [[ref:N]] does NOT license a claim its block does not make). (i) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence shown for a cited block, and do NOT silently alter a read's severity or the driver it called its lead; make any aggregation explicit. """
+    + NO_INSTRUMENT_READINGS
+    + " "
+    + _coverage_rule("j", block_noun="region-read blocks", unit_noun="region")
+    + _continuity_rule("k")
     + """Respond with strict JSON only: {"title":"...","body":"...with [[ref:N]] (and any [[contested:<id>]]) markers...","confidence":0.0-1.0,"evidence":["..."],"tags":["..."]}"""
 )
 
@@ -756,7 +1036,33 @@ _WORLD_OVER_REGIONS_SYSTEM = with_preamble(
 # Distinct constant from ``_WORLD_OVER_REGIONS_SYSTEM`` so the world/region
 # compositions are untouched.
 _THEMATIC_COMPOSITION_SYSTEM = with_preamble(
-    """TASK — GLOBAL THEMATIC COMPOSITION over ESCALATION. You are given the VERIFIED, faithfulness-checked per-DESK ESCALATION READS (first-order `escalation` unit findings), ONE per country desk, each for a DIFFERENT country. Each block STARTS with a [[ref:N]] handle (a small integer N) and shows its source analyst_id, its DESK (target_id — the country the read is for), effective_confidence (already min(confidence, faithfulness)), title and body. You MAY also be given a DESK COVERAGE block naming desks that have NO escalation read this cycle. Produce ONE second-order GLOBAL ESCALATION READ that surveys near-term escalation risk ACROSS the desks. RULES: (a) CITE EVERY factual clause inline with a [[ref:N]] marker using EXACTLY the small integer N shown as the [[ref:N]] handle at the START of the desk read block it rests on, and NAME the desk (country) it is about; NEVER invent an N, NEVER cite a raw signal, and NEVER cite an N not shown; a clause with no desk read behind it must NOT assert a fact. (b) HEDGE to the evidence — prefer 'the desk reads indicate / suggest / as of the latest sweep' over categorical claims, and weaken your language as effective_confidence drops. (c) SURFACE CROSS-DESK STRUCTURE: name the desks with the HIGHEST assessed escalation risk and cite each; when desks point in different directions, NAME BOTH and cite BOTH diverging blocks via their two [[ref:N]] ordinals — do NOT average them into a false global consensus. (d) CORRELATION — two desks whose reads rest on the SAME underlying wire signal (a shared cross-border incident, one alliance move seen from both sides) are NOT independent corroboration; do NOT count them twice or let a single shared event inflate the global picture. When two cited desks clearly describe the SAME underlying event, SAY SO rather than presenting them as two independent data points. (e) DESK GAPS: if the DESK COVERAGE block lists a desk as having NO read, NAME that desk plainly as an unassessed gap with NO current escalation read — do NOT infer, estimate, or invent its state, and NEVER attach a [[ref:N]] to a gap desk. (f) Lead body with a one-line BLUF naming where global escalation risk is concentrated; do not restate any desk read verbatim. (g) HONEST EMPTY: if there are no desk reads at all, say so plainly with confidence 0.0 and NO fabricated evidence. (h) TRACEABILITY — a [[ref:N]] marker is a PROMISE that desk-read block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown desk reads actually say. NEVER introduce a country, actor, event specific, or figure not present in a cited block; if you cannot ground a clause in a shown block, DROP it (an in-range [[ref:N]] does NOT license a claim its block does not make). (i) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence shown for a cited block, and do NOT silently alter a desk read's severity or dominant vector; make any aggregation explicit. """
+    """TASK — GLOBAL THEMATIC COMPOSITION over ESCALATION. You are given the VERIFIED, faithfulness-checked per-DESK ESCALATION READS (first-order `escalation` unit findings), ONE per country desk, each for a DIFFERENT country. Each block STARTS with a [[ref:N]] handle (a small integer N) and shows its source analyst_id, its DESK (target_id — the country the read is for), effective_confidence (already min(confidence, faithfulness)), title and body. You MAY also be given a DESK COVERAGE block naming desks that have NO escalation read this cycle. Produce ONE second-order GLOBAL ESCALATION READ that surveys near-term escalation risk ACROSS the desks. RULES: (a) CITE EVERY factual clause inline with a [[ref:N]] marker using EXACTLY the small integer N shown as the [[ref:N]] handle at the START of the desk read block it rests on, and NAME the desk (country) it is about; NEVER invent an N, NEVER cite a raw signal, and NEVER cite an N not shown; a clause with no desk read behind it must NOT assert a fact. """
+    + _hedge_rule(
+        "b",
+        tic="the desk reads indicate / suggest",
+        worked="the Ukraine desk's 3 August read has ...",
+    )
+    + _tension_rule(
+        "c",
+        block_noun="desk-read blocks",
+        a="one desk's read",
+        b="another's",
+    )
+    + """(d) CORRELATION — two desks whose reads rest on the SAME underlying wire signal (a shared cross-border incident, one alliance move seen from both sides) are NOT independent corroboration; do NOT count them twice or let a single shared event inflate the global picture. When two cited desks clearly describe the SAME underlying event, SAY SO rather than presenting them as two independent data points. (e) DESK GAPS: if the DESK COVERAGE block lists a desk as having NO read, NAME that desk plainly in the '## Coverage' line as an unassessed gap with NO current escalation read — do NOT infer, estimate, or invent its state, and NEVER attach a [[ref:N]] to a gap desk. """
+    + _shape_rule(
+        "f",
+        block_noun="desk reads",
+        lead=(
+            "where global escalation risk is actually concentrated. THIS READ "
+            "FEEDS THE WORLD HEADLINE, so its ordering propagates: rank the "
+            "desks by stakes, and never present them as a list sorted by score"
+        ),
+    )
+    + CONSEQUENCE_RULE
+    + " "
+    + """(g) HONEST EMPTY: if there are no desk reads at all, say so plainly with confidence 0.0 and NO fabricated evidence. (h) TRACEABILITY — a [[ref:N]] marker is a PROMISE that desk-read block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown desk reads actually say. NEVER introduce a country, actor, event specific, or figure not present in a cited block; if you cannot ground a clause in a shown block, DROP it (an in-range [[ref:N]] does NOT license a claim its block does not make). (i) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence shown for a cited block, and do NOT silently alter a desk read's severity or the vector it called its lead; make any aggregation explicit. """
+    + NO_INSTRUMENT_READINGS
+    + " "
     + _continuity_rule("j")
     + """Respond with strict JSON only: {"title":"...","body":"...with [[ref:N]] markers naming each desk...","confidence":0.0-1.0,"evidence":["..."],"tags":["..."]}"""
 )
@@ -894,6 +1200,25 @@ def _defuse_child_ref_markers(text: str) -> str:
 # than shipping an empty citations array. Capped so the rare fallback can't
 # balloon the payload with the per-citation ``evidence_text``.
 _FALLBACK_BASIS_CITATIONS_CAP = 25
+
+
+def composition_body_cap(n_inputs: int) -> int:
+    """Per-input body-excerpt cap, sized from the SHARED input-token budget (F-D).
+
+    The findings block may claim :data:`COMPOSITION_SLICE_BUDGET_SHARE` of
+    ``LEGBA_LLM_INPUT_TOKEN_BUDGET``, split evenly across the inputs, then
+    clamped into ``[MAX_BODY_CHARS, MAX_FULL_BODY_CHARS]``.
+
+    The FLOOR is what makes this safe to ship: however small the budget, or
+    however many inputs a world read degrades into, every input still renders at
+    least the historical 600-char excerpt. Nothing is ever dropped for budget —
+    the slice is already count-capped upstream (``MAX_INPUT_FINDINGS`` /
+    ``MAX_WORLD_INPUT_FINDINGS``) and a dropped input is a country the world read
+    cannot see, which is a worse failure than a wide turn.
+    """
+    usable = int(budget_chars() * COMPOSITION_SLICE_BUDGET_SHARE)
+    per_row = usable // max(int(n_inputs), 1)
+    return max(MAX_BODY_CHARS, min(per_row, MAX_FULL_BODY_CHARS))
 
 
 def _build_composition_citation(
@@ -1148,6 +1473,39 @@ def _input_salience_magnitude(row: Mapping[str, Any]) -> float:
     return magnitude_of(_extract_input_salience(row))
 
 
+def _verified_claim_texts(row: Mapping[str, Any]) -> list[str]:
+    """The SUPPORTED claim texts from this input's faithfulness verify ledger.
+
+    R2. The ledger (``data.verification.claim_verdicts``) has been persisted per
+    finding since P2-4 and read by nothing but the UI; the composition gather now
+    projects it (``read_other_analyst_findings``'s lateral). Only ``supported``
+    rows are returned — a contradiction between two claims the verify pass already
+    rejected is not news, and building a tension block out of failed claims would
+    hand the composition our own errors as evidence.
+
+    Tolerates the two shapes asyncpg hands back (parsed list, or a JSON string)
+    and every malformed row in between; a row it cannot read contributes nothing.
+    """
+    raw = row.get("claim_verdicts")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
+            return []
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out: list[str] = []
+    for entry in raw:
+        if not isinstance(entry, Mapping):
+            continue
+        if entry.get("verdict") != "supported":
+            continue
+        text = entry.get("text")
+        if isinstance(text, str) and text.strip():
+            out.append(text.strip())
+    return out
+
+
 def _render_salience_lead_block(sliced: Sequence[Mapping[str, Any]]) -> str:
     """S-2b: a compact directive telling the composition model its sub-claim
     blocks are ordered by CONSEQUENCE and to LEAD with the most consequential
@@ -1347,6 +1705,10 @@ def _render_user_prompt(
         f"First-order findings to synthesize: {len(rows)}.\n"
         f"Contributing analysts: {', '.join(contributing_analysts) or '(none)'}.\n\n"
     )
+    # F-D: the excerpt width comes from the SHARED input-token budget, not from a
+    # fixed constant that made this tier read its inputs at ~7% of the leaves'
+    # window. Floored at the historical 600 so no render ever narrows.
+    body_cap = composition_body_cap(len(rows))
     body_lines: list[str] = []
     for i, row in enumerate(rows, start=1):
         title = str(row.get("title") or "(untitled)")[:MAX_TITLE_CHARS]
@@ -1366,7 +1728,7 @@ def _render_user_prompt(
         # Defuse a lower-tier composition's OWN [[ref:N]] markers embedded in
         # its body BEFORE truncating — a truncated marker (cut mid-bracket)
         # would otherwise dodge the rewrite and leave a dangling artifact.
-        body = _defuse_child_ref_markers(body)[:MAX_BODY_CHARS]
+        body = _defuse_child_ref_markers(body)[:body_cap]
         # Evidence likewise — column or nested.
         evidence: list[str] = []
         ev_raw = row.get("evidence")
@@ -1401,9 +1763,20 @@ def _render_user_prompt(
             # legible. Omitted for an unstamped input (no consequence claim).
             _sal_mag = _input_salience_magnitude(row)
             sal_part = f" salience={_sal_mag:.2f}" if _sal_mag >= 0.0 else ""
+            # R3 (2026-08-05): the desk's own SEVERITY call, on the page beside the
+            # confidence. The ranking defect (a routine howitzer procurement leading
+            # over a war) happened because confidence was THE ONLY NUMBER RENDERED,
+            # so an ordering prompt had nothing to order BY. Salience landed here in
+            # S-2b; severity is the other half, it is a first-class column the row
+            # already carries, and the periphery block has rendered it since it was
+            # written. Omitted when the input carries no severity tag — never
+            # invented.
+            _sev = _row_severity_level(row)
+            sev_part = f" severity={_sev}" if _sev else ""
             attribution = (
                 f"      analyst_id={analyst_id} {fid_part}"
-                f"effective_confidence={conf_val}{sal_part} produced_at={produced_at}"
+                f"effective_confidence={conf_val}{sal_part}{sev_part}"
+                f" produced_at={produced_at}"
             )
         else:
             attribution = (
@@ -1775,7 +2148,62 @@ async def read_open_situations(
                 ),
             }
         )
+    await _attach_trajectory(conn, out)
     return out
+
+
+async def _attach_trajectory(
+    conn,  # type: ignore[no-untyped-def]
+    situations: list[dict[str, Any]],
+) -> None:
+    """CONTINUITY P2 (plan D5) — enrich each register frame with its TRAJECTORY.
+
+    This is the upgrade from a Phase-1 register to a Phase-2 one. Phase 1 could
+    only show a frame's CURRENT numbers, so a composition asked "what changed"
+    had to infer movement from a single snapshot — which is precisely the shape
+    that invites a model to narrate a trend it cannot see. Each frame now carries
+    the ledger's own answer: its trajectory state and its last few DATED deltas,
+    each with the date of the EVIDENCE that moved it.
+
+    Mutates ``situations`` in place, adding ``trajectory_state`` and
+    ``trajectory`` (a bounded, newest-first list). A frame the ledger has never
+    spoken about gets NEITHER key — absent, not defaulted, so "never assessed"
+    stays distinguishable from "assessed and steady".
+
+    BEST-EFFORT, DEGRADE-NEVER-BREAK, matching the posture of the whole
+    continuity gather: any error logs and leaves the register exactly as Phase 1
+    rendered it. A compose never fails because its memory was unavailable.
+    """
+    if not situations:
+        return
+    try:
+        from ..situations.trajectory import read_current_states, read_trajectories
+
+        ids = [s["situation_id"] for s in situations]
+        states = await read_current_states(conn, ids)
+        ledger = await read_trajectories(
+            conn, ids, per_situation=SITUATION_REGISTER_TRAJECTORY_DEPTH,
+        )
+    except Exception as exc:  # pragma: no cover — best-effort enrichment
+        logger.warning(
+            "meta_synth.situation_trajectory.unavailable err=%s — register "
+            "renders without trajectory (Phase-1 shape)", exc,
+        )
+        return
+    for entry in situations:
+        sid = entry["situation_id"]
+        state = states.get(sid)
+        if state is None:
+            continue
+        entry["trajectory_state"] = state
+        entry["trajectory"] = [
+            {
+                "delta": row["delta"],
+                "occurred_at": _iso_text(row["occurred_at"]),
+                "why": str(row["why"])[:SITUATION_REGISTER_WHY_CHARS],
+            }
+            for row in ledger.get(sid, ())
+        ]
 
 
 def _iso_text(value: Any) -> str | None:
@@ -1879,11 +2307,25 @@ def _render_situation_register_lines(
         events_txt = str(events) if isinstance(events, int) else "n/a"
         age = s.get("age_days")
         age_txt = f"{float(age):.1f}d" if isinstance(age, (int, float)) else "n/a"
+        state = s.get("trajectory_state")
         lines.append(
             f"      - {s.get('name')} :: status={s.get('status')} "
             f"intensity={intensity_txt} events={events_txt} "
             f"last_event_at={s.get('last_event_at') or '(none)'} open_for={age_txt}"
+            + (f" trajectory={state}" if state else "")
         )
+        # CONTINUITY P2 — the frame's own DATED deltas, newest first. This is
+        # what turns "what changed since the prior read" from a reconstruction
+        # into a quotation: the model is shown the ledger's dated answer and
+        # cites the register block for it, so a trajectory claim is graded
+        # against the trajectory record rather than against a snapshot.
+        for delta in s.get("trajectory") or ():
+            if not isinstance(delta, Mapping):
+                continue
+            lines.append(
+                f"          * {delta.get('occurred_at') or '(undated)'} "
+                f"{delta.get('delta')}: {delta.get('why')}"
+            )
     return lines
 
 
@@ -1913,7 +2355,10 @@ def _render_continuity_block(
         "CHANGED against them, and take every date from the block itself — never "
         "from the time you are running. If nothing material changed, say that "
         "plainly. Never assert a trend, escalation, or 'ongoing' framing that "
-        "these blocks do not support.",
+        "these blocks do not support. Where a frame carries dated trajectory "
+        "lines, those ARE the record of how it moved — use them for direction "
+        "and their dates for timing; where a frame carries none, the system has "
+        "no trajectory for it, which is not the same as it being steady.",
         "",
     ]
     body_lines: list[str] = []
@@ -2327,9 +2772,17 @@ async def read_other_analyst_findings(
         # INNER (not LEFT) is the "verify must have run" gate — unverified
         # sub-claims never enter the composition. The score → effective_confidence
         # fold mirrors substrate_reads_api._hydrate_finding.
+        # R2 (2026-08-05): the same lateral now also lifts the CLAIM LEDGER the
+        # verify pass already wrote for this finding. It has been on disk since
+        # P2-4 and no Python has ever read it — the composition gathered its
+        # inputs' SCORES and never their CLAIMS, which is precisely why it could
+        # not notice that two of them asserted incompatible states of the same
+        # fact. One extra projected column, no extra query, no new join.
         join = """
             JOIN LATERAL (
-                SELECT (cr.data->>'overall_score')::real AS faithfulness_score
+                SELECT (cr.data->>'overall_score')::real AS faithfulness_score,
+                       cr.data->'data'->'verification'->'claim_verdicts'
+                           AS claim_verdicts
                   FROM analyst_outputs cr
                  WHERE cr.kind = 'critique'
                    AND cr.data->>'analyzed_output_id' = f.id::text
@@ -2347,7 +2800,8 @@ async def read_other_analyst_findings(
         )
         select_extra = (
             ", LEAST(f.confidence, v.faithfulness_score) AS effective_confidence,"
-            " v.faithfulness_score AS faithfulness_score"
+            " v.faithfulness_score AS faithfulness_score,"
+            " v.claim_verdicts AS claim_verdicts"
         )
 
     _cols = (
@@ -3167,9 +3621,10 @@ def _render_desk_coverage_block(coverage: Sequence[Mapping[str, Any]]) -> str:
 #   * PREPENDS run AFTER appends, and salience prepends BEFORE freshness, which
 #     is what leaves freshness first in the final turn.
 
-#: Rough token estimate divisor — the same chars/4 convention
-#: ``inline_target._estimate_tokens`` uses (no tokenizer on the hot path).
-_PROMPT_CHARS_PER_TOKEN = 4
+#: Rough token estimate divisor — THE shared chars/4 convention
+#: (``_llm_budget.CHARS_PER_TOKEN``), no tokenizer on the hot path. Aliased
+#: rather than re-spelled so the composition and unit estimates cannot drift.
+_PROMPT_CHARS_PER_TOKEN = CHARS_PER_TOKEN
 
 _BLOCK_APPEND = "append"
 _BLOCK_PREPEND = "prepend"
@@ -3754,6 +4209,28 @@ async def _run(
     user_prompt = _render_user_prompt(
         sliced, contributing_analysts, include_source_ids=is_composition
     )
+    # R2: compare the shown findings' VERIFIED claims against EACH OTHER before
+    # composing. Keyed on the rendered ordinal (i, 1-based) so a detected pair's
+    # handles are the ones the model can actually cite. Non-composition paths and
+    # rows whose critique carried no ledger contribute nothing — the check is
+    # silently inert rather than absent, and ``contradictions_checked`` below
+    # records which of those two it was.
+    _claims_by_ref: dict[int, list[str]] = {}
+    if is_composition:
+        for _i, _row in enumerate(sliced, start=1):
+            _verified = _verified_claim_texts(_row)
+            if _verified:
+                _claims_by_ref[_i] = _verified
+    _input_contradictions = (
+        detect_contradictions(_claims_by_ref) if _claims_by_ref else []
+    )
+    if _input_contradictions:
+        logger.warning(
+            "meta.composition.input_contradictions n=%d refs=%s — the input set "
+            "asserts incompatible states; the tension block is being rendered",
+            len(_input_contradictions),
+            [(c.a_ref, c.b_ref, c.group) for c in _input_contradictions],
+        )
     # The EIGHT optional prompt blocks, through the ONE budgeted interface
     # (:class:`_PromptBlockAssembler`). Order, separators and guards are the
     # established ones — see the class comment for the two preserved asymmetries
@@ -3788,6 +4265,19 @@ async def _run(
             start_ordinal=_continuity_start_ordinal,
         ),
         when=is_composition and (prior_row is not None or register_situations),
+        position=_BLOCK_APPEND,
+        separator="\n\n",
+    )
+    # R2: the COMPUTED tension. Appended right after continuity and ahead of the
+    # contested (fact-plane) block, because the two are the same idea at two
+    # altitudes — this one is disagreement between the desk's own FINDINGS, that
+    # one between the world's facts — and a reader should meet them together.
+    # ``_input_contradictions`` was computed over the SAME ``sliced`` list the
+    # findings block rendered, so its [[ref:N]] handles are the shown ordinals.
+    _blocks.add(
+        "input_contradictions",
+        lambda: render_tension_block(_input_contradictions),
+        when=is_composition and bool(_input_contradictions),
         position=_BLOCK_APPEND,
         separator="\n\n",
     )
@@ -4118,11 +4608,37 @@ async def _run(
                 _eval_block["salience_check"] = _salience_check
                 finding.data["eval"] = _eval_block
                 steps.append({
+                    # R3: no longer advisory. The verify pass reads this stamp and
+                    # counts a FAILED lead as a soft faithfulness failure, so the
+                    # verdict has a consequence instead of a note. The check itself
+                    # is unchanged — it was always right, it was only ever unread.
                     "phase": "salience_check",
-                    "kind": "advisory",
+                    "kind": "counted",
                     "pass": _salience_check.get("pass"),
                     "gap": _salience_check.get("gap"),
                 })
+
+        # --- INPUT CONTRADICTIONS (R2) --------------------------------
+        # Stamp what the tension block was built from, so the composition's own
+        # row records which P ∧ ¬P pairs it was SHOWN. The verify pass reads this
+        # to decide whether the body actually surfaced them; without the stamp,
+        # "the composition ignored a contradiction" would be unprovable after the
+        # fact. ``contradictions_checked`` distinguishes "looked, found none" from
+        # "never looked" — the S-1 habit applied to this check's own zero.
+        _eval_block = finding.data.get("eval")
+        if not isinstance(_eval_block, dict):
+            _eval_block = {}
+        _eval_block["contradictions_checked"] = bool(_claims_by_ref)
+        _eval_block["contradictions"] = [
+            c.as_dict() for c in _input_contradictions
+        ]
+        finding.data["eval"] = _eval_block
+        steps.append({
+            "phase": "input_contradictions",
+            "kind": "counted",
+            "checked_refs": len(_claims_by_ref),
+            "detected": len(_input_contradictions),
+        })
 
         # --- CORRELATION GUARD (S2-T4 T7) -----------------------------
         # Detect cited heads that rest on the SAME underlying wire signal (shared
@@ -5180,6 +5696,7 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
 __all__ = [
     "AnalystMethodResult",
     "COMPOSITION_SIG_PREFIX",
+    "COMPOSITION_SLICE_BUDGET_SHARE",
     "CONTINUITY_CITATION_KEY",
     "CONTINUITY_PRIOR",
     "CONTINUITY_PRIOR_BODY_CHARS",
@@ -5196,7 +5713,9 @@ __all__ = [
     "HANDLER_VERSION",
     "KIND_NAME",
     "LLMHandlerLike",
+    "MAX_FULL_BODY_CHARS",
     "MAX_INPUT_FINDINGS",
+    "composition_body_cap",
     "MetaFindingsDeps",
     "MetaFindingsSynthesizerRunner",
     "OUTPUT_KIND",

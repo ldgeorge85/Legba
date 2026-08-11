@@ -37,17 +37,17 @@ are being counted. Anchor every scope claim to these:
 |---|---|---|---|
 | **1 — Minimal cold-start** | **3** shared RSS | The smallest loop that proves the path from empty volumes: BBC World, Al Jazeera World, Deutsche Welle. This is *all a fresh deploy gets* if it stops at the documented working-set. | `scripts/bringup_register_sources.py` (standalone 3-source registrar) and the working-set script `scripts/bringup_register_p17_workingset.py` (RUNBOOK §7) |
 | **2 — Full repo catalog** | **46** sources | The full catalog of independently-verified, no-auth feeds: **43 `rss` + 3 `geojson`** hazard feeds. **NOT auto-run on deploy and NOT part of the working-set bring-up** — a separate manual step a fresh operator currently misses. Running it is how you reach current/full scope. | `scripts/bringup_register_source_catalog.py` (the `CATALOG` tuple — 46 `CatalogEntry`, owner `s1_catalog`) |
-| **3 — Live-productive** | **110** sources | The real "productive scope" of a representative running deployment: distinct `source_id` values that have actually emitted signals — the catalog sources **plus** the operator-pinned standalone descriptors (state-media, Telegram, …; §2.3) **plus** the activated breadth batches (§2.5–§2.7) **plus** seed / world-baseline curated adapters. Exceeds the active-registered count because retired and paused feeds keep the signals they already produced. | Live reconcile against the production `signals` table |
+| **3 — Live-productive** | **~117** sources (moving) | The real "productive scope" of a representative running deployment: distinct `source_id` values that have actually emitted signals — the catalog sources **plus** the operator-pinned standalone descriptors (state-media, Telegram, …; §2.3) **plus** the activated breadth batches (§2.5–§2.7) **plus** seed / world-baseline curated adapters. Exceeds the active-registered count because retired and paused feeds keep the signals they already produced. | Live reconcile against the production `signals` table |
 
 Two adjacent counts round out the picture (neither is a different set of
 *feeds* — they are registry / fan-out bookkeeping):
 
-- **107 registered head source descriptors** — distinct non-autowired **active**
+- **105 registered head source descriptors** — distinct non-autowired **active**
   head `source_descriptors` rows in the registry (the catalog plus the
   operator-pinned `descriptors/source_*.yaml`, the activated breadth batches and
-  seed sources; a further 2 are registered but **paused**, 7 **retired**, and 1
-  is a `configured` manual-ingest lane, which is why the active-registered count
-  and the live-productive count differ). **This number moves** — it is generated
+  seed sources; a further 9 are registered but **paused** and 9 **retired**,
+  which is why the active-registered count and the live-productive count
+  differ). **This number moves** — it is generated
   from the live registry, never hand-maintained here: see
   [RELEASE_STATE.md](RELEASE_STATE.md) for the current breakdown by kind.
 - **Autowired per-target fan-out templates** (`src_autowire*` / `src_tmpl*`) —
@@ -67,9 +67,10 @@ Two adjacent counts round out the picture (neither is a different set of
 > bring-up does **not** invoke (§4). A review that sees "only 3 RSS feeds" is
 > reading the cold-start set.
 
-**The one-line answer.** *3 minimal · 46 catalog · 110 live-productive* — plus
-107 active-registered head descriptors (and no autowired fan-out templates
-materialized in this deployment). The fix for the "only 3 feeds" state is to
+**The one-line answer.** *3 minimal · 46 catalog · a moving live scope* — the
+active-registered head-descriptor count is generated, never hand-typed here
+(105 at the last [RELEASE_STATE.md](RELEASE_STATE.md) regeneration; no
+autowired fan-out templates materialized in this deployment). The fix for the "only 3 feeds" state is to
 register the 46-source catalog (§4), then the breadth batches (§2.5–§2.7) an
 operator activates deliberately.
 
@@ -170,7 +171,7 @@ bounded-unit waves:
 | `source.irna.english` | `rss` | none | `state_media` | **Active** — polls healthy (empty windows in the observed period). Islamic Republic News Agency (Iran). |
 | `source.presstv.english` | `rss` | none | `state_media` | **Paused** (was active). Press TV (Iran, English). The descriptor records no pause reason — read it as an operator disposition, not a documented verdict on the feed. |
 | `source.ukrinform.english` | `rss` | none | `state_media` | **Active** — registered and polling (has hit transient feed errors). Ukrinform (Ukraine state wire). |
-| `source.ucdp.ged` | `ucdp` (§7.15) | none *(designed)* | `analysis` | **RETIRED** (live head `state='retired'`). The descriptor shipped as a no-auth public GED API, but the live endpoint returned **`401 Unauthorized`** — it never wrote a signal, and rather than leaving a permanently-unhealthy feed registered it has been retired outright. The handler kind (§7.15) remains built; re-registering is the path if upstream authorization is ever obtained. |
+| `source.ucdp.ged` | `ucdp` (§7.15) | free access token | `analysis` | **RETIRED** (live head `state='retired'`). The descriptor shipped against a no-auth public GED API; upstream had introduced a token, so the single poll it ever made returned **`401 Unauthorized`**. Token auth landed in the handler the same morning, but rather than leave a credential-less feed registered it was retired outright — one poll, one 401, zero signals, ever. The handler kind (§7.15) remains built and token-ready; obtaining a token and re-registering is the path back (§7.15). |
 
 The state-media feeds exist precisely so the `narrative_coordination` unit (and
 the `source_class` weighting, §2.4) can read them as **framing** — an
@@ -244,11 +245,13 @@ outlet **route** into a standard RSS feed the existing `rss` handler polls.
 - **Ships inert; since activated.** The ten `descriptors/source_rsshub_*.yaml`
   feeds all ship **`state: draft`**, so bulk registration creates **no live
   actor** — even with the sidecar up, nothing polls until the operator activates
-  each descriptor (`draft → configured → active`). All **ten have since been
-  activated** in this deployment (live head `state='active'`), so the lane is no
-  longer inert here; the descriptors on disk still read `draft`, which is the
-  intended shape — the repo ships the safe default and the FSM records the
-  operator's decision. Registrar (idempotent, house pattern):
+  each descriptor (`draft → configured → active`). All ten were subsequently
+  **activated** in this deployment, so the lane is no longer inert here — and
+  the five `apnews` topic-hub routes have since been **paused** (the operator's
+  running curation; the RFI / Focus Taiwan / RFA / Al Jazeera routes plus
+  `apnews.world` stay active). The descriptors on disk still read `draft`,
+  which is the intended shape — the repo ships the safe default and the FSM
+  records the operator's decisions. Registrar (idempotent, house pattern):
   `scripts/bringup_register_rsshub_sources.py`, which also seeds host-level
   `source_credibility` rows for the upstream outlets (the feed's article links
   are the *real* outlet URLs, so the credibility filter keys on `apnews.com` /
@@ -275,7 +278,7 @@ outlet **route** into a standard RSS feed the existing `rss` handler polls.
   → `python scripts/bringup_register_rsshub_sources.py` (registers drafts +
   seeds credibility) → verify each route on the instance → activate per desk.
 
-### 2.6 The Wave-A breadth batch (41 no-auth feeds — 40 now ACTIVE, 1 paused)
+### 2.6 The Wave-A breadth batch (41 no-auth feeds — 38 now ACTIVE, 3 paused)
 
 The **Wave-A** batch is the additive-breadth slice of the 2026-07-02/03
 new-source research sweep (`planning/SOURCE_RESEARCH_2026-07-02.md`,
@@ -291,10 +294,11 @@ new source kind and no sidecar, straight onto the existing handlers. It is
   `json_api` feeds (WHO Disease Outbreak News, NHK World, ISW) carry field paths
   marked **VERIFY** in-descriptor — probe the live JSON and correct any before
   activating (a wrong path makes the handler emit nothing + report `unhealthy`;
-  it never fabricates). **Live state in this deployment: 40 active, 1 paused**
-  (`source.nhk.world_news` — one of the three `json_api` feeds; the descriptor
-  records no pause reason, so treat the pause as an operator disposition, not a
-  documented verdict on the route).
+  it never fabricates). **Live state in this deployment: 38 active, 3 paused**
+  (`source.nhk.world_news` — one of the three `json_api` feeds — plus
+  `source.spiegel.international` and `source.stategov.press_releases`; the
+  descriptors record no pause reason, so treat a pause as an operator
+  disposition, not a documented verdict on the route).
 - **Registrar (idempotent, house pattern):**
   `scripts/bringup_register_wave_a_sources.py` — registers the 41 drafts and
   seeds host-level `source_credibility` rows for the upstream outlets
@@ -395,7 +399,7 @@ the reference deployment:
 | Source (descriptor) | Auth | Status |
 |---|---|---|
 | `source.telegram.org_channels` | Telegram API (id/hash/session) | **Active** — re-authenticated 2026-07-16 with a fresh session, polling every 30 minutes (softened from 15). The live exemplar of a credentialed source. |
-| `source.gdelt.doc_api` | none (free `json_api`) | Registered; the handler works, but GDELT's free DOC API rate-limits (`429`) bursty polls. **Currently `paused`** in the reference deployment (flip to active to resume the spaced cron cadence). |
+| `source.gdelt.doc_api` | none (free `json_api`) | **Retired 2026-08-02** (migration 0121), superseded by `source.gdelt.files`. It was never actually paused after the `429` incident — it stayed active and polled at an 84.3% error rate (273 errors / 326 polls / 229 signals over 7 days) while the file-dump successor did 8,974 signals at 92.3% success. Both share GDELT's per-IP rate limit, so running both cost the successor headroom. The `json_api` handler is unaffected and still exercised by the ReliefWeb example + the live probe. |
 | ~~`source.acled.conflict`~~ | OAuth2 password grant | **Removed from the wired set (operator decision, 2026-07-16).** The account never received the portal data-API grant (reads 403'd; 0 signals ever), so the descriptor and its poll history were deleted and the seed entry removed. The OAuth2 handler + seed-adapter *machinery* remain in-tree; re-wiring is a registration away if access is ever granted. |
 | `source.gdelt.bigquery` | GCP service account | descriptor-defined, **dormant** — no creds. |
 | `source.mediacloud.world` | MediaCloud API key | descriptor-defined, **dormant** — no creds. |
@@ -441,22 +445,23 @@ in **`SETUP.md`** (the from-zero bootstrap guide) and **`RUNBOOK.md`** (operator
 runbook). This doc does not duplicate them.
 
 **Validated live scope** (a representative running deployment, point-in-time
-reconcile against the production tables):
+reconcile against the production tables, 2026-08-10):
 
 | Metric | Count |
 |---|---|
-| Distinct sources actively producing signals | **53** |
-| Signals ingested | **90,983** |
-| Analyst outputs (all kinds) | **5,595** |
-| — of which findings | **3,083** |
-| Facts | **4,971** |
-| Nexuses | **5,140** |
-| Situations | **61** |
-| Hypotheses | **1,017** |
+| Distinct sources that have produced signals | **117** |
+| Signals ingested | **140,258** |
+| Analyst outputs (all kinds) | **41,912** |
+| — of which findings | **19,682** |
+| Facts | **41,247** |
+| Nexuses | **17,690** |
+| Situations | **89** |
+| Hypotheses | **4,586** |
 
-The 53 live sources = the 46 catalog integrations plus the operator-pinned
-standalone descriptors (state-media, Telegram, …; §2.3) plus the seed /
-world-baseline curated sources.
+The ~117 live-productive sources = the 46 catalog integrations plus the
+operator-pinned standalone descriptors (state-media, Telegram, …; §2.3), the
+activated breadth batches (§2.5–§2.7), and the seed / world-baseline curated
+sources — including retired/paused feeds that keep the signals they produced.
 
 ---
 
@@ -811,18 +816,34 @@ already). The bounded-unit waves added it as a conflict-event feed for the
 `lookback_days` (default 365 — GED is a batch, not a stream). The cursor tracks a
 `StartDate` high-water mark; external-id + content-hash dedupe absorb the overlap.
 
-**Auth (designed) — none.** GED is documented as a free, public, no-auth endpoint
-(`https://ucdpapi.pcr.uu.se/api/gedevents/{version}`), unlike ACLED's OAuth2
-account — the descriptor ships `state: active` with no vault secret. **LICENSE:**
-UCDP data is CC BY 4.0 (free reuse *with* attribution — attribute "Uppsala
-Conflict Data Program (UCDP)" on any re-export).
+**Auth — a free access token, sent as a header.** GED lives at
+`https://ucdpapi.pcr.uu.se/api/gedevents/{version}`. It was originally a
+public, no-auth endpoint and this section used to say so; UCDP has since
+introduced a free, registration-gated access token (to deter bot traffic) that
+rides **every** request as `x-ucdp-access-token`. The descriptor carries
+`config.access_token_secret` as a **vault ref** (`source.ucdp.access_token`,
+never plaintext), with `LEGBA_UCDP_ACCESS_TOKEN` as an env fallback for a quick
+bring-up. With no token resolvable the handler **skips the pull entirely** — no
+HTTP, no 401 spam — and records `ucdp: no token configured`. **LICENSE:** UCDP
+data is CC BY 4.0 (free reuse *with* attribution — attribute "Uppsala Conflict
+Data Program (UCDP)" on any re-export).
 
-> **Honest live status.** The handler is written against the documented GED API
-> shape and unit-tested against a fixture, but the **live endpoint currently
-> returns `401 Unauthorized`** for this deployment — so the source is registered
-> and active yet **produces zero signals**: effectively **paused pending an access
-> token / upstream authorization**. Treat UCDP as wired-but-not-yet-flowing until
-> the upstream 401 clears.
+> **Honest live status — RETIRED, not silently broken.** The full history, since
+> a review re-raised this as "401 on every poll": the source registered `active`
+> on 2026-07-03 01:56 UTC against the then-correct no-auth assumption, made
+> **exactly one** poll (04:00 UTC) which returned `401 Unauthorized`, and was
+> paused at 07:33. The handler gained token auth and the clean no-token degrade
+> at 07:36 — three minutes later — so the 401 is only reproducible by code that
+> no longer exists. The descriptor was retired outright on 2026-07-28 (live head
+> `state='retired'`); it has issued no request since. **One poll, one 401, zero
+> signals, ever** — not an ongoing failure and nothing left to pause.
+>
+> **The blocker is external, not a defect.** To bring UCDP back an operator
+> must request a token at <https://ucdp.uu.se/apidocs/>, store it as vault
+> secret `source.ucdp.access_token`, re-register the current in-tree descriptor
+> (which ships `state: draft` on purpose — draft descriptors register in bulk
+> but get no live actor), and transition `draft → configured → active`. The
+> exact calls are in the descriptor's own OPERATOR FLIP header.
 
 ---
 
@@ -834,7 +855,7 @@ Conflict Data Program (UCDP)" on any re-export).
 | `geojson` | poll | free | none | any RFC-7946 GeoJSON document URL |
 | `gdelt_query` | poll | free tier (GCP scan-billed; capped) | GCP service account | GDELT 2.0, 100+ langs, ~15-min |
 | `acled` | poll | free (non-commercial) | API key + email | ACLED conflict/protest events |
-| `ucdp` | poll | free (CC BY 4.0) | none *(designed; live endpoint currently 401s)* | UCDP GED organized-violence events |
+| `ucdp` | poll | free (CC BY 4.0) | free access token (`x-ucdp-access-token`) | UCDP GED organized-violence events |
 | `mediacloud` | poll | free tier | API key | Media Cloud open-news corpus |
 | `opensanctions` | poll | free (bulk) / paid (API) | none (bulk) / API key | sanctions / PEPs / criminal lists |
 | `scraper` | poll | free (+ optional proxy cost) | none / proxy pool | arbitrary sites via drop-in impl |
@@ -862,7 +883,7 @@ How it works:
 2. Normalize the host: lowercase, strip `www.`, drop user-info + port, decode
    punycode (IDN).
 3. Look it up in the registry-backed `source_credibility` table (created in
-   `0001_baseline.sql`; the migration head is **0085**). On a miss, retry
+   `0001_baseline.sql`). On a miss, retry
    against progressively-trimmed parent domains
    (`news.bbc.co.uk` → `bbc.co.uk` → `co.uk`); first hit wins. A small
    per-instance TTL'd LRU cache (default 3600 s) avoids re-querying the same

@@ -314,7 +314,24 @@ async def _quarantine_orphan_proposed_edges(pool: Any) -> int:
     We only touch rows still ``status='pending'`` so we never disturb already-
     promoted/rejected/orphaned edges or the supersession history. ``orphaned``
     is a NEW terminal status outside the governance ``pending`` work-set —
-    non-destructive (the row is retained for audit, not deleted)."""
+    non-destructive (the row is retained for audit, not deleted).
+
+    W3-A — THE TOMBSTONE HOLE. The existence probe used to be a bare
+    ``ep.canonical_name = pe.source_entity``, which is satisfied by a MERGED
+    TOMBSTONE: an endpoint naming an entity the GC merged away still "existed",
+    so the row was neither quarantined nor (before
+    :func:`_repoint_proposed_edges`) re-pointed, and it sat ``pending`` forever
+    while the sweep re-counted it every hour.
+
+    The probe now asks the question the caller actually means — "does this name
+    reach a LIVE entity?" — by chasing ``resolve_entity`` (0086, cycle-safe) to
+    the terminal survivor and requiring THAT to be un-merged. Note what this
+    deliberately does NOT do: an endpoint naming a tombstone whose keeper is
+    live still resolves, so it is NOT quarantined. Those rows belong to the
+    re-point path, which preserves the candidate; quarantining them would
+    destroy a promotable edge to fix a bookkeeping error. Only a name that
+    reaches no live entity at all — unknown, or a degenerate chain that
+    dead-ends in another tombstone — is orphaned."""
     async with pool.acquire() as conn:
         result = await conn.execute(
             """
@@ -324,11 +341,17 @@ async def _quarantine_orphan_proposed_edges(pool: Any) -> int:
                AND (
                    NOT EXISTS (
                        SELECT 1 FROM entity_profiles ep
+                       JOIN entity_profiles k
+                         ON k.id = public.resolve_entity(ep.id)
                        WHERE ep.canonical_name = pe.source_entity
+                         AND k.merged_into IS NULL
                    )
                    OR NOT EXISTS (
                        SELECT 1 FROM entity_profiles ep
+                       JOIN entity_profiles k
+                         ON k.id = public.resolve_entity(ep.id)
                        WHERE ep.canonical_name = pe.target_entity
+                         AND k.merged_into IS NULL
                    )
                )
             """
@@ -856,6 +879,113 @@ async def _repoint_nexuses(conn: Any, loser: str, keeper: str) -> int:
     return touched
 
 
+#: Terminal status for a candidate whose endpoints, once re-pointed onto their
+#: merge keeper, turn out to name an edge another candidate already carries.
+#: A NEW terminal status outside the governance ``pending`` work-set, added the
+#: same way ``orphaned`` was: the row is retained for audit, never deleted, and
+#: its evidence is folded onto the survivor first so nothing is lost.
+PROPOSED_EDGE_MERGED_STATUS = "merged"
+
+
+async def _repoint_proposed_edges(conn: Any, loser: str, keeper: str) -> int:
+    """Re-point `proposed_edges` endpoints from ``loser`` onto ``keeper``.
+
+    THE GAP THIS CLOSES. ``_compact_merged_edges`` has always re-pointed
+    `nexuses` and `facts` and has NEVER touched `proposed_edges`, so every
+    candidate naming a merged loser keeps naming a tombstone for good. Measured
+    live 2026-08-03: 13,222 rows name a tombstone, 5,844 still ``pending``.
+
+    The cost is not cosmetic. The candidate queue is keyed on
+    ``uq_proposed_edges_triple`` (lower(source), lower(target), rel_type), so
+    the same real pair sits in the queue TWICE — once under the loser surface
+    and once under the keeper's — and both get accrued, qualified and typed.
+    3,268 of those rows collide with a keeper-named row that already exists;
+    that duplication is the re-spend, and folding it is the point of this
+    function.
+
+    Three outcomes per row, mirroring ``_repoint_nexuses``:
+      * a re-pointed SELF-LOOP (both endpoints land on the keeper) is
+        ``rejected`` — the same verdict ``proposed_edge_governance`` gives a
+        self-referential candidate, so the queue and the promoter agree;
+      * a COLLISION with an existing keeper-named candidate folds this row's
+        evidence onto that survivor (confidence maxed, lineage unioned, the
+        stronger status kept) and marks this row ``merged``. Folding before
+        marking is what keeps a citation from being dropped;
+      * otherwise the endpoints are re-pointed in place.
+
+    Returns rows touched.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT id, source_entity, target_entity, relationship_type, status,
+               confidence, evidence_text, derived_from
+          FROM proposed_edges
+         WHERE lower(source_entity) = lower($1)
+            OR lower(target_entity) = lower($1)
+        """,
+        loser,
+    )
+    lo = loser.lower()
+    touched = 0
+    for row in rows:
+        new_s = keeper if (row["source_entity"] or "").lower() == lo \
+            else row["source_entity"]
+        new_t = keeper if (row["target_entity"] or "").lower() == lo \
+            else row["target_entity"]
+        if new_s and new_t and new_s.lower() == new_t.lower():
+            await conn.execute(
+                "UPDATE proposed_edges SET status = 'rejected', "
+                "reviewed_at = now() WHERE id = $1 AND status <> 'rejected'",
+                row["id"])
+            touched += 1
+            continue
+        collide = await conn.fetchrow(
+            """
+            SELECT id, status, confidence FROM proposed_edges
+             WHERE lower(source_entity) = lower($1)
+               AND lower(target_entity) = lower($2)
+               AND relationship_type = $3
+               AND id <> $4
+             LIMIT 1
+            """,
+            new_s, new_t, row["relationship_type"], row["id"],
+        )
+        if collide is not None:
+            # Fold FIRST — the evidence has to reach the survivor before this
+            # row leaves the work-set, or the merge silently costs a citation.
+            # `pending` is the only status the governance sweep still works, so
+            # it wins over any terminal one: an edge one of whose two rows is
+            # still in play stays in play.
+            await conn.execute(
+                """
+                UPDATE proposed_edges
+                   SET confidence   = GREATEST(confidence, $2),
+                       derived_from = COALESCE((SELECT array_agg(DISTINCT e)
+                                       FROM unnest(derived_from || $3::uuid[]) e),
+                                      '{}'::uuid[]),
+                       evidence_text = CASE
+                           WHEN evidence_text = '' THEN $4 ELSE evidence_text END,
+                       status = CASE WHEN status = 'pending' OR $5 = 'pending'
+                                     THEN 'pending' ELSE status END
+                 WHERE id = $1
+                """,
+                collide["id"], float(row["confidence"] or 0.0),
+                list(row["derived_from"] or []), row["evidence_text"] or "",
+                row["status"],
+            )
+            await conn.execute(
+                "UPDATE proposed_edges SET status = $2, reviewed_at = now() "
+                "WHERE id = $1",
+                row["id"], PROPOSED_EDGE_MERGED_STATUS)
+        else:
+            await conn.execute(
+                "UPDATE proposed_edges SET source_entity = $2, "
+                "target_entity = $3 WHERE id = $1",
+                row["id"], new_s, new_t)
+        touched += 1
+    return touched
+
+
 async def _repoint_facts(conn: Any, loser: str, keeper: str) -> int:
     """Re-point OPEN facts.subject from ``loser`` to ``keeper`` (the entity
     endpoint; ``value`` is often a literal and is left for a later pass). A
@@ -929,6 +1059,12 @@ async def _compact_merged_edges(pool: Any, batch_limit: int = 200) -> int:
                     if loser and keeper and loser.lower() != keeper.lower():
                         total += await _repoint_nexuses(conn, loser, keeper)
                         total += await _repoint_facts(conn, loser, keeper)
+                        # The third name-keyed edge surface. Omitted since this
+                        # sweep was written, which is why 13,222 candidates
+                        # still name a tombstone and 3,268 real pairs sit in
+                        # the queue twice.
+                        total += await _repoint_proposed_edges(
+                            conn, loser, keeper)
                     await conn.execute(
                         """
                         UPDATE entity_profiles

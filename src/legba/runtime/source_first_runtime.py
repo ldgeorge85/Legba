@@ -1068,6 +1068,18 @@ def _analyst_ids_for_target(
         sub_targets = ((arow.get("body") or {}).get("subscription") or {}).get("targets")
         if not sub_targets:
             continue  # analyst doesn't bind to targets by selector
+        if sub_targets.get("id_list"):
+            # UNION analyst (W1-E `subscription.targets.id_list`, e.g.
+            # cross_target_raw): the kind reads the WHOLE declared set in one
+            # READ_SLICE pass. Per-(analyst, target) coalescing triggers are
+            # meaningless for it — each member target would register its own
+            # trigger with its own cooldown and fire a redundant, byte-identical
+            # union run. Worse, `id_list` with no predicate used to fall through
+            # the `not pred` branch below and match EVERY active target, not
+            # just the listed ones. A union subscription is cadence-driven by
+            # construction (`AnalystActor._cadence_targets` returns None → one
+            # global run); it registers no signal-coalescing trigger.
+            continue
         pred = sub_targets.get("predicate")
         if not pred:
             ids.append(analyst_id)  # selector present, no predicate → all targets

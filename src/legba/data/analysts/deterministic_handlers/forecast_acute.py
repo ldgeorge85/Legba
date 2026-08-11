@@ -428,20 +428,45 @@ async def issue_weekly_forecasts(
     return issued
 
 
-async def resolve_open_acute_forecasts(deps: Any, options: Mapping[str, Any]) -> int:
+async def resolve_open_acute_forecasts(
+    deps: Any, options: Mapping[str, Any], *, receipt: dict[str, Any] | None = None,
+) -> int:
     """Grade every acute forecast whose window has CLOSED and SETTLED.
 
     o = 1 if >=1 class-K event occurred in [window_start, window_end) by the
     UPSTREAM event time, else 0. Stamps resolved_by='forecast_acute_exogenous'.
     Never overwrites an already-resolved row (operator labels win). Best-effort;
-    returns the count resolved."""
+    returns the count resolved.
+
+    2026-08-02 — an optional ``receipt`` out-dict, the SAME pattern
+    ``issue_weekly_forecasts`` already carries, because ``resolved=0`` was
+    ambiguous in exactly the way ``issued=0`` used to be. A daily
+    ``resolved=0 resolved_total=0`` line reads identically whether (a) nothing
+    was due, (b) every row was skipped for want of a region geo, or (c) every
+    count threw — and an engine review reading only that line concluded the
+    resolve leg had been "silently dead its whole life" when in fact it had
+    simply never been handed a gradeable row (the 06-24 batch is VOIDED by
+    design, the 07-29 batch's window had not opened yet). The reason + counters
+    below make those three cases distinguishable at INFO.
+
+    ``reason`` is one of ``no_pool`` / ``nothing_due`` / ``resolved``. The int
+    return contract is UNCHANGED (calibration_tracking passes no ``receipt``)."""
+    def _stamp(reason: str, **extra: Any) -> None:
+        if receipt is not None:
+            receipt["reason"] = reason
+            receipt.update(extra)
+
     pool = getattr(deps, "pg_pool", None) if deps is not None else None
     if pool is None:
+        _stamp("no_pool")
         return 0
     grace = int(options.get("acute_grace_days", RESOLUTION_GRACE_DAYS))
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=grace)
     resolved = 0
+    skipped_no_geo = 0
+    count_failed = 0
+    due = 0
     try:
         async with pool.acquire() as conn:
             open_rows = await conn.fetch(
@@ -457,8 +482,7 @@ async def resolve_open_acute_forecasts(deps: Any, options: Mapping[str, Any]) ->
                 """,
                 cutoff,
             )
-            if not open_rows:
-                return 0
+            due = len(open_rows)
             geo_cache: dict[str, list[str]] = {}
             for row in open_rows:
                 region = row["region"]
@@ -467,13 +491,29 @@ async def resolve_open_acute_forecasts(deps: Any, options: Mapping[str, Any]) ->
                     geo = await _region_geo(conn, region)
                     geo_cache[region] = geo
                 if not geo:
+                    # Was a bare `continue` with NO log at all — the most silent
+                    # skip on the plane. An unmappable region strands its row
+                    # forever, so say so once per row, loudly enough to see.
+                    skipped_no_geo += 1
+                    logger.warning(
+                        "forecast_acute.resolve_skipped_no_geo id=%s region=%s",
+                        row["id"], region,
+                    )
                     continue
                 try:
                     cnt = await _count_class_k(
                         conn, geo, row["window_start"], row["window_end"],
                     )
                 except Exception as exc:  # noqa: BLE001 — leave unresolved, retry next tick
-                    logger.debug("forecast_acute.count_failed id=%s err=%s", row["id"], exc)
+                    # Was logger.debug — invisible at INFO, which is how a
+                    # per-row death could have run for months unseen. WARNING
+                    # with the exception CLASS + the forecast id.
+                    count_failed += 1
+                    logger.warning(
+                        "forecast_acute.resolve_count_failed id=%s region=%s "
+                        "err_class=%s err=%s",
+                        row["id"], region, type(exc).__name__, exc,
+                    )
                     continue
                 outcome = 1 if cnt >= 1 else 0
                 await conn.execute(
@@ -488,10 +528,60 @@ async def resolve_open_acute_forecasts(deps: Any, options: Mapping[str, Any]) ->
                     row["id"], outcome, int(cnt), RESOLVED_BY, now,
                 )
                 resolved += 1
+            # SELF-CHECK — gradeable rows still unresolved AFTER the pass. The
+            # resolver grades every row it fetches, so a non-zero count here
+            # means the leg is genuinely failing, not merely idle. VOIDED rows
+            # are excluded: they are unresolved BY DESIGN and would otherwise
+            # pin this counter above zero forever (that permanent 19 is exactly
+            # what read as a dead resolver from the outside).
+            stale = await conn.fetchrow(
+                """
+                SELECT count(*)::int AS n,
+                       COALESCE(EXTRACT(DAY FROM ($1::timestamptz
+                           - min(window_end)))::int, 0) AS oldest_days
+                FROM acute_forecasts
+                WHERE resolved_outcome IS NULL
+                  AND window_end < $2::timestamptz
+                  AND (resolved_by IS NULL OR resolved_by NOT LIKE 'voided:%')
+                """,
+                now, cutoff,
+            )
+            stale_n = int(stale["n"]) if stale else 0
+            stale_days = int(stale["oldest_days"]) if stale else 0
     except Exception as exc:  # noqa: BLE001
-        logger.warning("forecast_acute.resolve_failed err=%s", exc)
+        logger.warning(
+            "forecast_acute.resolve_failed err_class=%s err=%s",
+            type(exc).__name__, exc,
+        )
+        _stamp(
+            "resolve_failed", due=due, resolved=resolved,
+            skipped_no_geo=skipped_no_geo, count_failed=count_failed,
+        )
+        return resolved
+    # The whole point of the reason: `due=0` (idle, honest) must never read the
+    # same as `due>0, resolved=0` (every gradeable row skipped or threw).
+    if resolved:
+        _reason = "resolved"
+    elif due:
+        _reason = "all_due_rows_skipped"
+    else:
+        _reason = "nothing_due"
+    _stamp(
+        _reason,
+        due=due,
+        resolved=resolved,
+        skipped_no_geo=skipped_no_geo,
+        count_failed=count_failed,
+        stale_unresolved=stale_n,
+        stale_oldest_days=stale_days,
+    )
     if resolved:
         logger.info("forecast_acute.resolved n=%d source=%s", resolved, RESOLVED_BY)
+    if stale_n:
+        logger.warning(
+            "forecast_acute.resolve_stale_backlog n=%d oldest_days=%d",
+            stale_n, stale_days,
+        )
     return resolved
 
 

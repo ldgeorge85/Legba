@@ -37,7 +37,15 @@ import pytest
 from legba.data.analysts.deterministic_handlers import fact_contention_arbiter as arb
 
 
-NOW = datetime(2026, 6, 29, tzinfo=timezone.utc)
+# The fixture anchor. DYNAMIC on purpose: `_run_arbiter` scores with the REAL
+# clock, and rows stamped from a hard-coded date age with every real day that
+# passes. The near-tie fixture scores 0.4·0.5^(age_days/30); pinned at
+# 2026-06-29 it crossed MIN_SURFACE_SCORE=0.15 on 2026-08-10 ~10:48Z (age
+# 42.45d), the abstain cause flipped near_tie→weak, and all eight LLM-leg
+# tests died at once — a time bomb, not a flake. Anchoring at import keeps the
+# rows effectively age-0 (import→run skew is minutes; r ≈ 1.0) for every
+# harness, tonight and in a year.
+NOW = datetime.now(timezone.utc)
 
 
 # ---------------------------------------------------------------------------

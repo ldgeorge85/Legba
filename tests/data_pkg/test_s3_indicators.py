@@ -308,6 +308,72 @@ def test_coerce_finding_no_prose_no_json_omits_indicators():
 
 
 # ---------------------------------------------------------------------------
+# 2b. DS-1 — the DEGRADE path keeps the I&W block too
+# ---------------------------------------------------------------------------
+#
+# The live shape, not a hypothetical: a ``max_tokens`` cut lands mid-JSON, the
+# parse raises, and ``_salvage_envelope_body`` recovers a COMPLETE markdown body
+# from the ``"body"`` string the model had already finished writing. The
+# structured array serializes AFTER the body, so truncation takes the array and
+# leaves the prose — and the degrade path used to drop the prose watch section
+# on the floor rather than deriving from it. Measured on disruption_status: 3 of
+# 76 findings (all lane_black_sea), each carrying six good watch bullets and no
+# ``data.indicators``, invisible to the indicator_tracker diff.
+
+#: A real truncated envelope — cut inside the ``indicators`` array, body intact.
+_TRUNCATED_MID_INDICATORS = (
+    '{\n'
+    '  "title": "Black Sea lane - interdiction risk - degrading",\n'
+    '  "body": "*As of 2026-08-05; slice covers the trailing 24h to the run '
+    'date; 19 signals.*\\n**BLUF:** No material change; the Black Sea lane '
+    'continues to face a degrading interdiction and physical-risk environment '
+    '[1].\\n\\n## Indicators to watch\\n- New confirmed drone or missile '
+    'attacks on civilian vessels in the Black Sea.\\n- Announcements of '
+    'insurers reinstating or further withdrawing war-risk coverage.\\n- '
+    'Reported reductions in vessel transits or cargo volumes through Black Sea '
+    'ports.\\n",\n'
+    '  "confidence": 0.55,\n'
+    '  "evidence": ["1", "3"],\n'
+    '  "tags": ["topic:disruption_status", "severity:elevated"],\n'
+    '  "indicators": [\n'
+    '    {"id": "corridor-attack-or-seizure", "statement": "Attack, seizure'
+)
+
+
+def test_a_truncated_envelope_keeps_the_indicators_its_prose_carries():
+    """ACCEPTANCE (DS-1): the degrade path derives the I&W block from the
+    salvaged body, exactly as the structured path already does."""
+    fp = _coerce_finding(_TRUNCATED_MID_INDICATORS, fallback_title="fb")
+    # It really is the degrade path — this is not the structured branch.
+    assert fp.confidence == 0.3
+    assert fp.tags == ["unstructured"]
+    # The salvaged body is markdown, not JSON scaffolding.
+    assert fp.body.startswith("*As of 2026-08-05;")
+    assert '"body"' not in fp.body
+    inds = fp.data.get("indicators")
+    assert isinstance(inds, list) and len(inds) == 3
+    assert {e["status"] for e in inds} == {"not_observed"}
+    assert inds[0]["statement"].startswith("New confirmed drone or missile")
+    # Derived entries are pre-registered, never cited: the prose bullets are
+    # forward-looking, and a citation nobody made must not be invented.
+    assert all(e["citations"] == [] for e in inds)
+
+
+def test_a_truncated_envelope_without_a_watch_section_invents_nothing():
+    """Degrade-not-fabricate is the whole posture: no watch section in the
+    salvaged prose ⇒ no ``indicators`` key at all."""
+    raw = (
+        '{\n  "title": "T",\n'
+        '  "body": "*As of 2026-08-05.*\\n**BLUF:** Transits held steady at '
+        'the reported level [2].\\n",\n'
+        '  "confidence": 0.55,\n  "indicators": [\n    {"id": "transit'
+    )
+    fp = _coerce_finding(raw, fallback_title="fb")
+    assert fp.confidence == 0.3
+    assert "indicators" not in fp.data
+
+
+# ---------------------------------------------------------------------------
 # 3. VERIFY — triggered must cite; not_observed/expired exempt
 # ---------------------------------------------------------------------------
 

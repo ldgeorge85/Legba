@@ -48,11 +48,48 @@ def test_parse_unit_eval_reads_nested_units_with_honest_null():
     })
     ev = sp.parse_unit_eval(data)
     assert ev["escalation"] == {
-        "faithfulness": 0.88, "correctness_vs_reference": 0.71, "n_labeled": 12,
+        "faithfulness": 0.88,
+        "judge_pipeline_version": None,
+        "correctness_operator": None,
+        "n_operator_scored": 0,
+        "operator_sufficient": False,
+        "correctness_vs_reference": 0.71,
+        "n_labeled": 12,
     }
     assert ev["energy_security"] == {
-        "faithfulness": None, "correctness_vs_reference": None, "n_labeled": 0,
+        "faithfulness": None,
+        "judge_pipeline_version": None,
+        "correctness_operator": None,
+        "n_operator_scored": 0,
+        "operator_sufficient": False,
+        "correctness_vs_reference": None,
+        "n_labeled": 0,
     }
+
+
+def test_parse_unit_eval_carries_the_operator_axis_and_its_judge_population():
+    """M-1/M-2 — the operator gold-set axis rides as its OWN keys, and the
+    faithfulness figure names the judge that produced it."""
+    data = _scorer_data({
+        "escalation": {
+            "faithfulness": 0.92,
+            "faithfulness_population": {"judge_pipeline_version": "2026-08-03/1"},
+            "correctness_operator": 0.5,
+            "n_operator_scored": 2,
+            "operator_sufficient": False,
+            "correctness_vs_reference": None,
+            "n_labeled": 0,
+        },
+    })
+    rec = sp.parse_unit_eval(data)["escalation"]
+    assert rec["correctness_operator"] == 0.5
+    assert rec["n_operator_scored"] == 2
+    assert rec["operator_sufficient"] is False
+    assert rec["judge_pipeline_version"] == "2026-08-03/1"
+    # Highly faithful AND only half right — the two axes must be readable
+    # side by side, never averaged into one "quality" number.
+    assert rec["faithfulness"] == 0.92
+    assert rec["correctness_vs_reference"] is None
 
 
 def test_parse_unit_eval_accepts_json_string_and_degrades_empty_on_garbage():
@@ -97,12 +134,44 @@ def test_fold_unit_eval_attaches_block_and_flags_low_aggregate_faithfulness():
     assert esc_eval["n_labeled"] == 5
     assert esc_eval["faithfulness_flagged"] is True
 
-    # An unmeasured unit reads null everywhere and is NEVER flagged.
+    # An unmeasured unit reads null everywhere and is NEVER flagged — on BOTH
+    # correctness axes as well as faithfulness.
     lead_eval = verdict["dimensions"]["leadership_transition"]["eval"]
     assert lead_eval == {
-        "faithfulness": None, "correctness_vs_reference": None,
-        "n_labeled": 0, "faithfulness_flagged": False,
+        "faithfulness": None,
+        "judge_pipeline_version": None,
+        "correctness_operator": None,
+        "n_operator_scored": 0,
+        "operator_sufficient": False,
+        "correctness_vs_reference": None,
+        "n_labeled": 0,
+        "faithfulness_flagged": False,
     }
+
+
+def test_fold_unit_eval_keeps_the_operator_axis_off_the_band():
+    """M-1 — the operator axis is DISPLAYED on the card and never demotes it:
+    the band is the T1 banding's verdict, and a human's semantic judgement of a
+    different finding must not silently move it."""
+    verdict = _verdict_with_dims(
+        escalation={"band": "high", "basis": [str(uuid4())], "reason": "qualified"},
+    )
+    sp.fold_unit_eval(
+        verdict,
+        {"escalation": {"faithfulness": 0.95, "correctness_operator": 0.0,
+                        "n_operator_scored": 1, "operator_sufficient": False}},
+        faith_floor=0.50,
+    )
+    dim = verdict["dimensions"]["escalation"]
+    assert dim["band"] == "high"                       # untouched
+    assert dim["eval"]["correctness_operator"] == 0.0  # displayed
+    assert dim["eval"]["n_operator_scored"] == 1
+    assert dim["eval"]["operator_sufficient"] is False
+    assert dim["eval"]["faithfulness_flagged"] is False
+
+    # ...and the rendered body shows the n beside the number, never alone.
+    body = sp.build_scorecard_payload("country_g20_us", verdict).body
+    assert "op=0.0(n=1,indicative)" in body
 
 
 def test_fold_unit_eval_does_not_flag_healthy_faithfulness():

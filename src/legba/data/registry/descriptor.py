@@ -1044,6 +1044,9 @@ class DescriptorRegistry:
                 "registry.target.inert_inline_analyst_block descriptor_id=%s: %s",
                 descriptor_id, msg,
             )
+        warnings.extend(
+            await self._validate_references_or_dlq(descriptor, family, actor)
+        )
         try:
             # Vocabulary checks per family. Only target descriptors carry
             # scope-level vocab references; analyst descriptors reference
@@ -1123,6 +1126,149 @@ class DescriptorRegistry:
         # registration on missing webhook for a freshly-seen schema.
         await self._check_webhook_if_obsolete(family, schema_uri)
         return warnings
+
+    #: Descriptor states in which the runtime will actually bind the descriptor
+    #: and therefore follow its string references. A ``retired`` analyst or a
+    #: ``configured`` source may legitimately name a module that has since been
+    #: deleted — refusing to store it would block the very act of parking it.
+    _BINDING_STATES: frozenset[str] = frozenset({"active", "paused"})
+
+    async def _validate_references_or_dlq(
+        self,
+        descriptor: DescriptorT,
+        family: Family,
+        actor: str,
+    ) -> list[str]:
+        """K-3 — refuse a descriptor that names code which is not there.
+
+        Until now nothing checked these strings at registration. Pydantic
+        asserts ``method.impl`` is a non-empty string and never parses it;
+        ``method.prompt_module`` is checked for presence and never resolved;
+        ``method.sub_handler`` has no validator at all. So a descriptor naming
+        a renamed module registered cleanly, went ``active``, and the failure
+        appeared later as an analyst that quietly used the wrong prompt or
+        never fired — far from the change that caused it.
+
+        The pattern already exists in this codebase and is simply not applied
+        to descriptors: ``conversion.resolve_impl`` importlib-resolves a
+        webhook ``impl`` eagerly at registration and refuses on failure
+        (*"Eager-resolve the impl so an unimportable path fails
+        registration"*). This is that, for the descriptor path.
+
+        Fatal only for descriptors in :data:`_BINDING_STATES`. A broken
+        reference on a ``retired`` / ``draft`` / ``configured`` descriptor is
+        reported as a registration WARNING through the same channel the X-1
+        dead-config notes use — visible, recorded, not blocking.
+
+        ``IMPLICIT`` resolutions are never fatal: they are live, working
+        bindings today (a deterministic analyst whose descriptor id doubles as
+        its ``SUB_HANDLERS`` key). They are surfaced as warnings because that
+        binding is invisible in the descriptor body and a rename breaks it
+        with no error anywhere.
+        """
+        from .descriptor_refs import (
+            DescriptorReferenceError, ReferenceStatus, audit_references,
+            extract_references, format_failures,
+        )
+
+        family_name = {
+            Family.ANALYST: "analyst",
+            Family.SOURCE: "source",
+            Family.ACTION_PACK: "action_pack",
+        }.get(family)
+        if family_name is None:
+            return []
+
+        identity = descriptor.identity
+        # ``LifecycleState`` is a ``str`` Enum, and ``str(LifecycleState.ACTIVE)``
+        # is ``'LifecycleState.ACTIVE'`` under 3.11 — not ``'active'``. Reading
+        # ``.value`` is what makes the binding-state gate actually gate; taking
+        # ``str()`` here silently made every check non-fatal.
+        raw_state = getattr(identity, "state", "")
+        state = str(getattr(raw_state, "value", raw_state) or "")
+        body = descriptor.model_dump(mode="json", by_alias=True)
+        refs = extract_references(
+            family=family_name,
+            descriptor_id=identity.id,
+            version=str(getattr(identity, "version", "")),
+            state=state,
+            body=body,
+            kind=str(getattr(identity, "kind", "") or "") or None,
+        )
+        if not refs:
+            return []
+
+        try:
+            resolutions = audit_references(refs)
+        except Exception as exc:  # noqa: BLE001
+            # Building the palettes imports the analyst/source packages. If
+            # THAT fails the process is already broken in a way boot discovery
+            # reports loudly; do not convert it into a spurious rejection of a
+            # descriptor that may be perfectly fine.
+            logger.error(
+                "registry.reference_check.unavailable descriptor_id=%s err=%s",
+                identity.id, exc,
+            )
+            return [f"reference check unavailable: {type(exc).__name__}: {exc}"]
+
+        failures = [r for r in resolutions if r.failing]
+        notes = [
+            r.as_line() for r in resolutions
+            if r.status is ReferenceStatus.IMPLICIT
+        ]
+
+        if failures and state in self._BINDING_STATES:
+            summary = format_failures(
+                failures, context=f"{family_name}:{identity.id} state={state}",
+            )
+            logger.error("registry.reference_check.failed %s", summary)
+            payload = descriptor.model_dump(mode="json", by_alias=True)
+            validation_error = {
+                "kind": "descriptor_reference",
+                "unresolved": [
+                    {
+                        "field": r.reference.field_path,
+                        "value": r.reference.raw,
+                        "ref_type": r.reference.ref_type.value,
+                        "status": r.status.value,
+                        "detail": r.detail,
+                    }
+                    for r in failures
+                ],
+                "message": summary,
+            }
+            dl_id = await self._write_dead_letter(
+                actor=actor,
+                family=family,
+                payload=payload,
+                declared_schema_uri=identity.schema_uri,
+                validation_error=validation_error,
+            )
+            await self._publish_dlq_event(
+                family=family,
+                descriptor_id=identity.id,
+                actor=actor,
+                declared_schema_uri=identity.schema_uri,
+                error_kind="descriptor_reference",
+                error_summary=summary,
+                dead_letter_id=str(dl_id) if dl_id else None,
+            )
+            raise DescriptorValidationError(
+                summary,
+                attempted_payload=payload,
+                declared_schema_uri=identity.schema_uri,
+                validation_error=validation_error,
+                dead_letter_id=str(dl_id) if dl_id else None,
+            )
+
+        for r in failures:
+            logger.warning(
+                "registry.reference_check.unresolved_non_binding "
+                "descriptor_id=%s state=%s %s",
+                identity.id, state, r.as_line(),
+            )
+            notes.append(r.as_line())
+        return notes
 
     async def _check_webhook_if_obsolete(
         self,

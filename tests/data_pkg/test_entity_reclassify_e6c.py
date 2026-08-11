@@ -81,7 +81,19 @@ _CANNED = {
 
 
 class _CannedClassifier:
-    """Extracts the quoted names from the prompt and emits a class per name."""
+    """Extracts the quoted names from the prompt and emits a class per name.
+
+    A name NOT in ``_CANNED`` is a FOREIGN row: ``reclassify_entities`` runs
+    over the suite's shared ``entity_profiles`` pool, so under shuffle the
+    batches carry whatever unexamined rows sibling files left behind. Those
+    rows get their batch's OWN current class back at confidence 0.5 — below
+    the 0.75 apply gate, so an ``apply=True`` pass can stamp them examined but
+    can never MOVE them. The old default was ``("person", 0.9)``, which the
+    entity-pool framing turned into a confident person verdict for every
+    foreign generic-entity row — this file silently rewriting sibling
+    fixtures' ``entity_class`` was itself an order dependency, pointed the
+    other way. The pool is read from the system prompt the way a real model
+    would (the ``_CountingLLM`` precedent below)."""
 
     def __init__(self) -> None:
         self.calls = 0
@@ -89,12 +101,13 @@ class _CannedClassifier:
     async def chat_complete(self, messages, *, max_tokens=None, temperature=None,
                             system=None, **kw):
         self.calls += 1
+        cur = "entity" if "CURRENTLY typed `entity`" in (system or "") else "person"
         prompt = messages[0]["content"]
         names = re.findall(r'"([^"]+)"', prompt)
         out = []
         for nm in names:
             cls, conf = _CANNED.get(re.sub(r"\s+", " ", nm.strip().lower()),
-                                    ("person", 0.9))
+                                    (cur, 0.5))
             out.append({"name": nm, "class": cls, "confidence": conf, "why": "t"})
 
         class _R:
@@ -208,9 +221,24 @@ async def test_apply_moves_confident_reclass_reversibly(pg_pool):
         assert "reclass_seen_at" in (await data(seaking))
         assert "reclass_seen_at" in (await data(person))
 
-        # idempotent: a second apply examines nothing (all marked seen).
-        exam3, chg3, _ = await reclassify_entities(conn, llm, apply=True, max_rows=50)
-    assert exam3 == 0 and chg3 == 0
+        # Idempotent: the pool has drained of THIS test's rows — a fresh
+        # selection over the ENTIRE remaining pool never returns a seen row.
+        # The old spelling ran a second apply and asserted `exam3 == 0`, a
+        # statement that the whole suite left no unexamined person row in the
+        # shared DB: the 08-08 shuffled nightly failed it at 14 == 0 on
+        # fourteen rows this file never seeded. The drain contract is
+        # per-row (`reclass_seen_at` excludes it from the pool), so it is
+        # asserted per-row.
+        mine = {ocean, ministry, war, seaking, person}
+        pool_size = await conn.fetchval(
+            "SELECT count(*) FROM entity_profiles WHERE entity_class = 'person'"
+        )
+        still_selectable = {
+            c.id for c in await select_reclass_candidates(conn, pool_size + 5)
+        }
+    assert mine.isdisjoint(still_selectable), (
+        "an applied row must never be re-examined"
+    )
 
 
 # ===========================================================================
@@ -312,10 +340,21 @@ async def test_apply_entity_pool_moves_confidently_stays_entity_when_unclear(pg_
         assert "reclass_seen_at" in d_org
         assert "reclass_seen_at" in (await data(concept))  # examined, marked, unmoved
 
-        # idempotent drain, same as the person pool.
-        exam2, chg2, _ = await reclassify_entities(
-            conn, llm, apply=True, max_rows=50, source_class="entity")
-    assert exam2 == 0 and chg2 == 0
+        # Idempotent drain, same as the person pool — and restated the same
+        # way (own rows out of the pool, never "the suite left the entity
+        # bucket empty"; see test_apply_moves_confident_reclass_reversibly).
+        mine = {org, region, concept}
+        pool_size = await conn.fetchval(
+            "SELECT count(*) FROM entity_profiles WHERE entity_class = 'entity'"
+        )
+        still_selectable = {
+            c.id
+            for c in await select_reclass_candidates(
+                conn, pool_size + 5, source_class="entity")
+        }
+    assert mine.isdisjoint(still_selectable), (
+        "an applied row must never be re-examined"
+    )
 
 
 class _CountingLLM:

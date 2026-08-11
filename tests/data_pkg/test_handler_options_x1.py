@@ -33,6 +33,7 @@ from typing import Any
 import pytest
 
 from legba.data.analysts.deterministic import SUB_HANDLERS
+from legba.data.analysts.deterministic_handlers import _production_deficit_scan
 from legba.data.analysts.handler_options import (
     HANDLER_OPTIONS,
     RESERVED_OPTION_KEYS,
@@ -93,6 +94,42 @@ def _option_reads_for(sub_handler: str) -> set[str]:
     return reads
 
 
+#: Option FAMILIES read through a PREFIX rather than by literal key. The regex
+#: above can never match one — the reader strips the prefix and hands the
+#: remainder to a typed config object, so no ``options.get("gauge_window_days")``
+#: literal exists anywhere. Grepping is not the point though; reachability is,
+#: and for these the proof is strictly stronger: the family's reader is CALLED
+#: with a probe value and the value must actually land on the config it
+#: produces. A declared name whose field does not exist, or whose value is
+#: dropped, fails — which is the same defect the literal sweep exists to catch.
+_PREFIX_FAMILIES: dict[str, tuple[tuple[str, Any], ...]] = {
+    "alert_trigger_scan": (
+        (
+            _production_deficit_scan.OPTION_PREFIX,
+            _production_deficit_scan.config_from_options,
+        ),
+    ),
+}
+
+
+def _prefix_family_reads(sub_handler: str, declared: set[str]) -> set[str]:
+    """Declared names PROVEN reachable by invoking their family's reader."""
+    proven: set[str] = set()
+    for prefix, reader in _PREFIX_FAMILIES.get(sub_handler, ()):
+        base = reader({})
+        for name in declared:
+            if not name.startswith(prefix):
+                continue
+            field = name[len(prefix):]
+            current = getattr(base, field, None)
+            if not isinstance(current, (int, float)) or isinstance(current, bool):
+                continue
+            probe = current + 1  # any value the default is not
+            if getattr(reader({name: probe}), field, None) == probe:
+                proven.add(name)
+    return proven
+
+
 # ---------------------------------------------------------------------------
 # The catalog is not fiction
 # ---------------------------------------------------------------------------
@@ -120,11 +157,14 @@ def test_every_declared_knob_is_actually_read_by_its_handler(sub_handler):
     them — a declared-but-unread knob is dead config with extra steps."""
     if sub_handler not in SUB_HANDLERS:
         pytest.skip("covered by test_catalog_declares_no_sub_handler...")
+    declared = set(known_option_names(sub_handler))
     reads = _option_reads_for(sub_handler)
-    for name in known_option_names(sub_handler):
+    reads |= _prefix_family_reads(sub_handler, declared)
+    for name in sorted(declared):
         assert name in reads, (
             f"handler_options declares {sub_handler}.{name} but "
-            f"{_module_for(sub_handler)} never reads options[{name!r}]"
+            f"{_module_for(sub_handler)} never reads options[{name!r}] "
+            "(and no prefix-family reader lands it either)"
         )
 
 

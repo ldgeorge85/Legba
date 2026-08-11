@@ -12,7 +12,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .lifecycle import LifecycleState
+from .lifecycle import LifecycleState, WireEnumCoercion
 from .properties import (
     DropdownStatic,
     Number,
@@ -23,7 +23,10 @@ from .properties import (
 )
 
 
-class StackComponentBase(BaseModel):
+class StackComponentBase(WireEnumCoercion):
+    # strict=True + a LifecycleState field ⇒ the wire's bare strings need the
+    # mixin's ``mode='before'`` coercer; see :class:`WireEnumCoercion`. Every
+    # component family below inherits this class, so all nine inherit the fix.
     model_config = ConfigDict(strict=True, extra="forbid")
 
     id: str = Field(pattern=r"^[a-z][a-z0-9_.]*$", max_length=128)

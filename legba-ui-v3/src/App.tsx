@@ -146,10 +146,10 @@ interface LegbaPanelParams {
 const COMPONENTS = { default: LegbaPanelComponent }
 
 /**
- * Anchor-panel tab (item 5): renders the title WITHOUT a close button, so the
- * Live Feed and Inspector can't be closed out of the workspace — they are the
- * two fixed surfaces the whole shell drives. Everything else keeps the default
- * closable tab.
+ * Anchor-panel tab (item 5): renders the title WITHOUT a close button, so a
+ * pinned panel can't be closed out of the workspace. RETAINED but currently
+ * UNUSED — see {@link ANCHOR_KINDS}. Any future kind added to that set picks
+ * this tab up again with no other change.
  */
 function AnchorTab(props: IDockviewPanelHeaderProps) {
   return (
@@ -165,13 +165,20 @@ function AnchorTab(props: IDockviewPanelHeaderProps) {
 
 const TAB_COMPONENTS = { anchor: AnchorTab }
 
-/** Singletons pinned as non-closable anchors (item 5) — the two fixed surfaces
- *  the shell drives; opened anywhere (boot seed / sidebar / palette) they use
- *  the close-button-less {@link AnchorTab}. */
-const ANCHOR_KINDS: ReadonlySet<PanelKind> = new Set<PanelKind>([
-  'system.findings',
-  'system.inspector',
-])
+/**
+ * Singletons pinned as non-closable anchors (item 5) — opened anywhere (boot
+ * seed / sidebar / palette) they use the close-button-less {@link AnchorTab}.
+ *
+ * EMPTY as of the operator's call 2026-08-04. `system.findings` (Live Feed) and
+ * `system.inspector` used to be pinned here; they are now ordinary closable
+ * panels. Nothing is stranded by closing them — both still open by default at
+ * boot (the seed is unchanged) and reopen from the sidebar or the command
+ * palette — so pinning only cost the operator the ability to reclaim the space.
+ *
+ * The machinery is kept, not deleted: adding a kind back to this set is the
+ * whole change needed to pin a future surface.
+ */
+export const ANCHOR_KINDS: ReadonlySet<PanelKind> = new Set<PanelKind>([])
 
 export function App() {
   const mode = currentMode()

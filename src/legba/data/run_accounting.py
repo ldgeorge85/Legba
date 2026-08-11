@@ -56,6 +56,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -142,6 +143,53 @@ def current_tool_calls() -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# S-4 — reading the calls made AFTER the receipt was flushed
+# ---------------------------------------------------------------------------
+#
+# The analyst run writes its ``analyst_traces`` row (and therefore snapshots
+# ``current_llm_calls()``) BEFORE the faithfulness verify pass runs — it has to,
+# because V-B's absence-slice check reads ``analyst_traces.input_row_refs`` for
+# THIS run over the same connection. The judge's ``chat_complete`` then lands in
+# the still-bound account, after the snapshot, and was simply discarded at
+# ``reset_run_accounting``.
+#
+# That is why the judge leg appeared in no receipt: not a missing chokepoint —
+# ``LLMProviderHandler.chat_complete`` accounted the call correctly all along —
+# but a flush that happened one step too early. These two functions let the
+# caller take a WATERMARK at flush time and read exactly the tail recorded
+# after it, which is by construction the post-receipt (verify/judge) leg.
+
+
+def llm_call_watermark() -> int:
+    """Count of LLM calls recorded so far under the bound account.
+
+    Pair with :func:`llm_calls_since`. Returns 0 when nothing is bound, which
+    makes the unbound case degrade to "no tail" rather than raising.
+    """
+    acct = _account.get()
+    if acct is None:
+        return 0
+    return len(acct.llm_calls)
+
+
+def llm_calls_since(watermark: int) -> list[dict[str, Any]]:
+    """LLM calls recorded after ``watermark`` (from :func:`llm_call_watermark`).
+
+    Returns copies, so a caller stamping its own fields (e.g. the ``leg`` tag)
+    cannot mutate the account. Never includes the ``{"truncated": N}`` marker —
+    that belongs to the whole-account flush, not to a tail slice; a tail taken
+    after the ``_MAX_CALLS`` cap is simply empty, matching the drop that
+    actually happened.
+    """
+    acct = _account.get()
+    if acct is None:
+        return []
+    if watermark < 0:
+        watermark = 0
+    return [dict(entry) for entry in acct.llm_calls[watermark:]]
+
+
+# ---------------------------------------------------------------------------
 # Recorders — called from the provider / agency planes. NEVER raise.
 # ---------------------------------------------------------------------------
 
@@ -183,8 +231,9 @@ def record_tool_call(**fields: Any) -> None:
 
     Canonical fields: ``source`` (``"agency"``), ``pack``, ``name``,
     ``admitted``, ``status``, ``block_cause``, ``duration_ms``, ``cost_usd``,
-    ``units``. Tool ARGUMENTS and RESULTS are deliberately not collected — they
-    are unbounded and already ledgered in ``action_pack_invocations``.
+    ``units``, and ``args`` (see :func:`redact_tool_args`). Tool RESULTS are
+    still not collected — a ``substrate_read`` result can be the whole slice,
+    and unlike the arguments it is reconstructable by re-running the call.
     """
     try:
         acct = _account.get()
@@ -198,6 +247,169 @@ def record_tool_call(**fields: Any) -> None:
         acct.tool_calls.append(entry)
     except Exception:  # pragma: no cover — instrumentation must never fail a run
         logger.debug("run_accounting.record_tool_call failed", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# Tool arguments — bounded + secret-redacted
+# ---------------------------------------------------------------------------
+#
+# WHY THIS EXISTS. ``tool_calls`` recorded that a tool ran, through which pack,
+# and how it ended — but not WHAT IT WAS ASKED. That makes the tool leg of a
+# receipt unfalsifiable: two `search_corpus` calls with completely different
+# queries were indistinguishable in the audit record, so a finding could not be
+# traced back to the evidence the analyst actually reached for.
+#
+# The old docstring justified the omission by saying arguments "already live in
+# ``action_pack_invocations``". They do not. That table's columns are
+# ``id, pack_id, pack_version, tool_name, budget_account, requested_by,
+# tenant_id, cost_usd, units, outcome, job_id, occurred_at`` — verified against
+# the live schema. There is no args column and never was, so the arguments were
+# not recorded ANYWHERE. The receipt is the right home for them: it is
+# per-run, hash-chained, and already retention-bounded at 45 days.
+#
+# The two hazards are real and are what the rest of this section is:
+#
+#   * UNBOUNDED — a ``substrate_read`` filter can carry a large id list, and
+#     ``analyst_traces`` already grows +7.2k rows/day at 604 MB.
+#   * SECRETS — a tool arg can carry a credential (the vault holds 20, incl.
+#     ``api_key`` / ``map_key`` / ``primary_key`` / ``api_hash`` / ``session``
+#     shapes), and this row is durable, hash-chained, and leaves the box via
+#     ``substrate_export``. A leak here is permanent and portable.
+
+#: Name tokens that mark a value as a credential. Matched against the key split
+#: on ``_ - . /`` and camelCase, so ``api_key`` / ``apiKey`` / ``auth.token``
+#: all hit while ``keyword`` and ``monkey`` do not.
+_SECRET_NAME_TOKENS: frozenset[str] = frozenset({
+    "key", "keys", "apikey", "token", "tokens", "secret", "secrets",
+    "password", "passwd", "pwd", "pass", "credential", "credentials",
+    "cred", "creds", "auth", "authorization", "session", "sessions",
+    "cookie", "cookies", "bearer", "private", "signature", "salt",
+})
+
+#: Compound names that are credentials but whose tokens are individually
+#: innocent. Kept separate on purpose: putting ``hash`` in the token set above
+#: would also redact ``content_hash`` / ``signal_hash``, which are load-bearing
+#: forensics and not secrets. Substring match, lowercased.
+_SECRET_NAME_SUBSTRINGS: tuple[str, ...] = ("api_hash", "apihash")
+
+#: Value shapes that are secrets whatever the key is called — the second net,
+#: for a credential passed under an innocuous name. Deliberately narrow: broad
+#: entropy heuristics would redact ids, hashes and geohashes.
+_SECRET_VALUE_PREFIXES: tuple[str, ...] = ("sk-", "sk_", "bearer ", "eyj", "-----begin")
+
+_REDACTED = "[redacted]"
+
+#: Bounds. Sized so a typical call records in full and a pathological one still
+#: fits comfortably inside a jsonb column beside the rest of the receipt.
+_MAX_ARG_KEYS = 25
+_MAX_ARG_DEPTH = 3
+_MAX_ARG_ITEMS = 10
+_MAX_ARG_VALUE_CHARS = 200
+_MAX_ARGS_SERIALIZED_CHARS = 2_000
+
+
+#: Word splitter for arg names. The acronym alternative comes FIRST so
+#: ``API_KEY`` tokenises to {api, key} rather than to six single letters — an
+#: all-caps env-style name is exactly the shape a credential arrives in, and a
+#: naive "split before every capital" rule silently fails to match it.
+_NAME_TOKEN_RE = re.compile(r"[A-Z]+(?![a-z])|[A-Z][a-z]*|[a-z]+|[0-9]+")
+
+
+def _name_tokens(name: str) -> set[str]:
+    """Split an arg name into comparable tokens (snake, kebab, dotted, camel).
+
+    ``api_key`` / ``apiKey`` / ``APIKey`` / ``API_KEY`` / ``auth.token`` all
+    yield the token that matters; ``keyword`` and ``monkey`` yield one token
+    each and therefore do not match.
+    """
+    return {tok.lower() for tok in _NAME_TOKEN_RE.findall(str(name))}
+
+
+def _is_secret_name(name: str) -> bool:
+    lowered = str(name).lower()
+    if any(frag in lowered for frag in _SECRET_NAME_SUBSTRINGS):
+        return True
+    return bool(_name_tokens(str(name)) & _SECRET_NAME_TOKENS)
+
+
+def _is_secret_value(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    probe = value.strip().lower()
+    return probe.startswith(_SECRET_VALUE_PREFIXES)
+
+
+def _redact_value(value: Any, depth: int) -> Any:
+    if _is_secret_value(value):
+        return _REDACTED
+    if isinstance(value, (bool, int, float)) or value is None:
+        return value
+    if isinstance(value, str):
+        if len(value) > _MAX_ARG_VALUE_CHARS:
+            return value[:_MAX_ARG_VALUE_CHARS] + f"…(+{len(value) - _MAX_ARG_VALUE_CHARS})"
+        return value
+    if depth >= _MAX_ARG_DEPTH:
+        return f"[depth>{_MAX_ARG_DEPTH}]"
+    if isinstance(value, dict):
+        return _redact_mapping(value, depth + 1)
+    if isinstance(value, (list, tuple, set)):
+        items = list(value)
+        kept = [_redact_value(v, depth + 1) for v in items[:_MAX_ARG_ITEMS]]
+        if len(items) > _MAX_ARG_ITEMS:
+            kept.append(f"…(+{len(items) - _MAX_ARG_ITEMS} more)")
+        return kept
+    return _redact_value(str(value), depth)
+
+
+def _redact_mapping(mapping: dict[Any, Any], depth: int) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for i, (raw_key, raw_val) in enumerate(mapping.items()):
+        key = str(raw_key)
+        if i >= _MAX_ARG_KEYS:
+            out["_truncated_keys"] = len(mapping) - _MAX_ARG_KEYS
+            break
+        out[key] = _REDACTED if _is_secret_name(key) else _redact_value(raw_val, depth)
+    return out
+
+
+def redact_tool_args(args: Any) -> dict[str, Any]:
+    """A receipt-safe rendering of one pack tool's arguments.
+
+    Redaction is by KEY NAME first (``api_key``, ``authToken``, ``session`` …)
+    and by VALUE SHAPE second (``sk-``, ``Bearer ``, a JWT, a PEM header), so a
+    credential passed under an innocuous name is still caught. It deliberately
+    OVER-redacts: any key whose tokens include ``key`` goes, which costs the
+    occasional ``sort_key`` in a diagnostic. That trade is not close — the
+    downside of over-redaction is a lost debugging hint, and the downside of
+    under-redaction is a live credential written into a hash-chained row that
+    is retained for 45 days and leaves the box via ``substrate_export``.
+
+    Bounded on every axis (keys, depth, list length, string length, and a final
+    serialized-size backstop) so a large filter argument cannot bloat the row.
+    Never raises: an un-renderable argument degrades to a marker, because this
+    is instrumentation and must not fail a tool call that otherwise succeeded.
+    """
+    try:
+        if args is None:
+            return {}
+        if not isinstance(args, dict):
+            return {"_args": _redact_value(args, 0)}
+        redacted = _redact_mapping(args, 0)
+        # Backstop: many small keys can still add up. Collapse to the key NAMES,
+        # which keep the call identifiable, and say how big it was.
+        try:
+            size = len(json.dumps(redacted, default=str, ensure_ascii=False))
+        except Exception:  # pragma: no cover — defensive
+            size = 0
+        if size > _MAX_ARGS_SERIALIZED_CHARS:
+            return {
+                "_oversize_chars": size,
+                "_keys": sorted(str(k) for k in list(args)[:_MAX_ARG_KEYS]),
+            }
+        return redacted
+    except Exception:  # pragma: no cover — instrumentation must never fail a run
+        logger.debug("run_accounting.redact_tool_args failed", exc_info=True)
+        return {"_unrenderable": True}
 
 
 def prompt_digest(messages: Any, system: Any = None) -> tuple[str | None, int]:
@@ -223,7 +435,10 @@ __all__ = [
     "reset_run_accounting",
     "current_llm_calls",
     "current_tool_calls",
+    "llm_call_watermark",
+    "llm_calls_since",
     "record_llm_call",
     "record_tool_call",
+    "redact_tool_args",
     "prompt_digest",
 ]

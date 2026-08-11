@@ -99,6 +99,10 @@ const KIND_GROUP: Partial<Record<PanelKind, NavGroupId>> = {
   // --- Investigation: dig into the why ---
   'system.entities': 'investigation',
   'system.search': 'investigation',
+  // K-G4 — walking the world graph is an INVESTIGATION verb, not plumbing, so
+  // it is pinned here rather than left to the `system.*` → Engine Room
+  // fallback. It spends one of the U-3 ≤22 visible sidebar rows deliberately.
+  'system.graph_walk': 'investigation',
   // The merged Provenance surface (U-3 — Why/Lineage/Flow tabs).
   'system.provenance': 'investigation',
 

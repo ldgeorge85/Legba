@@ -153,7 +153,12 @@ The substrate layers, in order:
   empty and you can never write a fact, nexus, or finding.
 
 The analyst fleet:
-  - country_assessor — one per G20 target.
+  - the bounded per-country units — leadership_transition, energy_security,
+    escalation, narrative_coordination, internal_stability, military_posture,
+    economic_coercion — one run per desk each.
+  - country_composition — the per-country second-order read that fuses those
+    units. THIS is what "a country-level assessment" means today; the old
+    country_assessor monolith is retired (state=draft) and writes nothing.
   - world_assessor — the global signal slice (your sibling META analyst).
   - cross_analyst_correlator — contradictions / agreements / blind spots across
     findings (your richest fuel).

@@ -74,6 +74,7 @@ from .deterministic_handlers import (
     collection_gap,
     composition_lineage_sweep,
     corpus_indexer,
+    corpus_retention,
     cross_source_coalesce,
     cross_source_dedup,
     desk_baseline,
@@ -263,6 +264,11 @@ OUTPUT_KIND_BY_SUB_HANDLER: dict[str, object] = {
     # analytical finding (like signal_summarizer / entity_resolution); the per-run
     # counts (examined / indexed / failed) live in the trace.
     "corpus_indexer": TRACE_ONLY,
+    # corpus_retention — corpus_indexer's mirror: drains the corpus_tombstones
+    # queue (mig 0175) by DELETING docs whose signals row is gone. Pure
+    # side-effect sweep against OpenSearch; the per-run counts (examined /
+    # deleted / pending / skipped_row_alive) live in the trace.
+    "corpus_retention": TRACE_ONLY,
     # evidence_archiver (P2-1) — pure side-effect sweep: archives the original
     # bytes behind CITED signals content-addressed onto the archive volume,
     # upserts the evidence_archive sidecar (mig 0104) + stamps
@@ -386,6 +392,12 @@ SUB_HANDLERS: dict[str, Any] = {
     # shared pool). Idempotent + forward-progressing (stamps signals.indexed_at;
     # OpenSearch `_id` = the signal id, so a re-index overwrites in place).
     "corpus_indexer": corpus_indexer.handle,
+    # corpus_retention — the corpus DELETE path, the mirror of corpus_indexer.
+    # Drains corpus_tombstones (written transactionally by every signals-deletion
+    # site) against OpenSearch. Re-verifies the row is actually gone before
+    # deleting, so a bad tombstone can never destroy a live doc. Idempotent
+    # (deleting an absent doc is a success), bounded retries.
+    "corpus_retention": corpus_retention.handle,
     # evidence_archiver — P2-1 cited-evidence archival sweep: fetches + stores
     # the original bytes behind signals cited by VERIFIED findings (content-
     # addressed at {LEGBA_ARCHIVE_ROOT}/{sha256[:2]}/{sha256}), stamps

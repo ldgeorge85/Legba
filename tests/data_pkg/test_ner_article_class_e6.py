@@ -46,11 +46,18 @@ def test_article_no_cue_is_never_person(s):
     ("the Kerch Strait", "location"),        # trailing geographic feature
     ("the Palace of Justice", "location"),   # leading place head
     ("the White House", "organization"),     # curated metonymic seat
+    # W3-C (2026-08-04) moved two of these OFF the generic bucket, in the same
+    # direction R8 was pushing and for the same reason. "Cup" became an event cue
+    # (the live person table held "Asian Championships", "World Cup Group K" and
+    # "Gold Cup" as people); "strait" became a leading place head alongside the
+    # trailing form "the Kerch Strait" already used. Both surfaces now carry the
+    # SAME specific class as their bare twin, which is exactly the fold this
+    # test's own rationale is about — a generic pair is always GRAY.
+    ("the World Cup", "event"),
+    ("the Strait of Malacca", "location"),   # leading place head (W3-C)
     # Still unrecognised by every gazetteer → the generic bucket, unchanged.
     ("The Economist", "entity"),
     ("a Su-34", "entity"),
-    ("the World Cup", "entity"),
-    ("the Strait of Malacca", "entity"),
 ])
 def test_article_no_cue_class(s, expected):
     assert clf(s) == expected, f"{s!r} should be {expected}, got {clf(s)!r}"

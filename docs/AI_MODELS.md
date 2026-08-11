@@ -30,7 +30,7 @@ The three roles are:
    fans out.
 2. **LLM providers + embeddings** — the analysis plane. A self-hosted vLLM LLM
    (gpt-oss-120b) is the **core analyst plane** ($0, self-hosted) that runs the
-   eight bounded reasoning units, the composition tower, and **every scheduled
+   nine bounded reasoning units, the composition tower, and **every scheduled
    analyst** — including the first-person journal, whose voice phase moved fully
    onto this plane on 2026-07-06; a hosted Anthropic model
    (Claude Opus 4.8) is reserved for the **consult / deep-consult** kinds only
@@ -43,25 +43,27 @@ The three roles are:
    through provider handlers bound to stack-component descriptors.
 3. **The faithfulness verify judge** — an LLM that scores each cited finding for
    *faithfulness*: does each claim actually follow from its cited evidence? It
-   powers the mandatory post-finding verify pass (§3). **Currently this judge is
-   the SAME core reasoning model** (`llm.primary.openai_compat`, gpt-oss-120b)
-   that generates the units and compositions — it is **NOT** cross-family. This
-   is a deliberate, temporary choice: the earlier 8B cross-family judge
-   (`llm.verify.slm_8b`, Llama-3.1-8B) proved too weak — harsh and mis-aimed — so
-   the strong reasoning model runs the judging to prove the flow. **Known
-   limitation:** a model verifying prose from the same model shares its blind
-   spots, so the faithfulness signal is weaker than an independent cross-family
-   judge; the deterministic citation-presence floor and the signed provenance
-   chain still backstop it, and a dedicated reasoning judge model is planned. It
-   measures **groundedness, not truth** — a well-cited claim can still be wrong
-   about the world; the judge only checks that the prose is supported by the
-   sources it cites.
+   powers the mandatory post-finding verify pass (§3). The judge resolves
+   through its **own repointable route** (a five-rung ladder whose top rung is
+   the `LEGBA_JUDGE_STACK_REF` env override — §3): the **shipped descriptor
+   default is same-model** (every verify-bearing descriptor's judge ref equals
+   its own `llm.primary.openai_compat` — self-hostable, no second endpoint
+   required, with the known limitation that a model verifying prose from the
+   same model shares its blind spots), while the **reference deployment
+   repoints every judge call cross-family** at a hosted Gemma judge
+   (`llm.judge.cerebras_gemma4_31b.openai_compat`, Cerebras). The generated
+   [RELEASE_STATE.md](RELEASE_STATE.md) reports both layers — descriptor
+   default and effective route — so neither can stand in for the other. The
+   deterministic citation-presence floor and the signed provenance chain
+   backstop the judge either way. It measures **groundedness, not truth** — a
+   well-cited claim can still be wrong about the world; the judge only checks
+   that the prose is supported by the sources it cites.
 
 This split matches the platform's planes (see `DESIGN.md`): the **acquisition
 plane** uses the baseline NLP models; the **analysis plane** uses the LLM
 providers and embeddings; the **verify pass** runs the faithfulness judge
-(currently the same core model, not cross-family — see §3) over what the
-analysis plane produced.
+(cross-family on the reference deployment via the repointable judge route —
+see §3) over what the analysis plane produced.
 
 > **Hard rule — no litellm/dspy in the inference path.** litellm and dspy
 > **never** ship in the runtime image or an analyst's inference path. The base
@@ -184,7 +186,7 @@ native wire shape. The registry of handlers is
 
 | Subprovider | Handler | Wire API | Auth | Notes |
 |-------------|---------|----------|------|-------|
-| `vllm` | `VLLMProviderHandler` (`vllm.py`) | `POST /v1/chat/completions` (OpenAI-compatible) | Bearer **or** HTTP Basic | Self-hosted gpt-oss-120b (core plane — and, currently, the faithfulness verify judge itself; see §3); the earlier self-hosted 8B (`llm.verify.slm_8b`) is no longer wired as the verify judge; zero-cost price table; coalesces vLLM multi-choice (reasoning + final) output. |
+| `vllm` | `VLLMProviderHandler` (`vllm.py`) | `POST /v1/chat/completions` (OpenAI-compatible) | Bearer **or** HTTP Basic | Self-hosted gpt-oss-120b (core plane; also the handler class the hosted OpenAI-compatible judge endpoints resolve to — see §3); the self-hosted 8B (`llm.verify.slm_8b`) is no longer wired as the verify judge but now serves `claim_watch`'s bearing gate; zero-cost price table; coalesces vLLM multi-choice (reasoning + final) output. |
 | `anthropic` | `AnthropicProviderHandler` (`anthropic.py`) | `POST /v1/messages` | `x-api-key` | Hoists system role to top-level `system`; required `max_tokens`; maps extended-thinking + cache tokens into `LLMUsage`. Consult/deep only. |
 | `openai` | `OpenAIProviderHandler` (`openai.py`) | `POST /v1/chat/completions` | Bearer | Routes reasoning models (`gpt-5`, `o*`) to `max_completion_tokens` + `reasoning_effort`. Registered as a subprovider; no live component points at it today. |
 
@@ -193,7 +195,7 @@ Shared base behavior:
 - **Auth is a switch.** `LLMProviderConfig` (`src/legba/data/schemas/stack.py`)
   supports **Bearer** (`api_key`) or **HTTP Basic** (`api_user` + `api_pass`);
   when both are present, Basic wins. The self-hosted 8B host
-  (`llm.verify.slm_8b`, no longer wired as the verify judge) is fronted by Caddy
+  (`llm.verify.slm_8b`) is fronted by Caddy
   Basic Auth, so it uses the Basic path; the 120b uses Bearer.
 - **Retry/backoff** on `429`/`500`/`502`/`503`/`529` (honors `retry-after`),
   up to 3 retries; `TransientLLMFailure` vs `HardLLMFailure` classification so
@@ -216,7 +218,9 @@ Shared base behavior:
 |--------------|----------|-------|------|
 | `llm.primary.openai_compat` | `https://llm.example.internal` | `gpt-oss-120b` | core analyst plane (units + compositions + every scheduled analyst) |
 | `llm.anthropic.opus_4_7` | `https://api.anthropic.com` | `claude-opus-4-8` | consult / deep-consult plane only |
-| `llm.verify.slm_8b` | self-hosted 8B host (Caddy Basic Auth) | 8B model (Llama-3.1-8B, "legba-slm") | **NOT the current verify judge** — faithfulness verify now runs on the core model (§3); this 8B is retained for a future dedicated judge |
+| `llm.judge.cerebras_gemma4_31b.openai_compat` | `https://api.cerebras.ai` | `gemma-4-31b` | the reference deployment's **effective faithfulness judge** (cross-family, hosted; selected via `LEGBA_JUDGE_STACK_REF` — §3) |
+| `llm.judge.nemotron3_super.openai_compat` / `llm.judge.nemotron3_ultra.openai_compat` | `https://openrouter.ai/api` | `nemotron-3-super` / `-ultra` (free routes) | registered alternate judge routes, **not** in the effective route (free-route latency blocks the emit path — the rolled-back first in-line trial) |
+| `llm.verify.slm_8b` | self-hosted 8B host (Caddy Basic Auth) | 8B model (Llama-3.1-8B, "legba-slm") | **not the verify judge** — it now serves `claim_watch`'s post-match **bearing gate** (a yes/no "does this signal bear on this thesis?" filter) and remains the candidate for a future self-hosted cross-family judge |
 
 > **Component id vs model name.** The Anthropic id is historically
 > `llm.anthropic.opus_4_7`, but the id is just a label — the config's
@@ -224,14 +228,15 @@ Shared base behavior:
 > (env-overridable via `LEGBA_CONSULT_MODEL_NAME`). The id was left unchanged to
 > avoid re-pointing every descriptor that references it.
 
-> **Note on `llm.verify.slm_8b`.** This is the retired 8B cross-family judge
+> **Note on `llm.verify.slm_8b`.** This is the former 8B verify-judge
 > component. As of 2026-07-01 the units + compositions declare
-> `method.llm.verify: raw: llm.primary.openai_compat`, so faithfulness verify
-> runs on the **core reasoning model**, not the 8B (§3). The 8B component may
-> still be registered live via `PUT /stack/{id}`, but nothing points at it as the
-> verify judge today; a dedicated reasoning judge is planned. If the verify
-> component is absent or the flag is off, the verify pass falls back to its
-> deterministic floor (§3).
+> `method.llm.verify: raw: llm.primary.openai_compat` (the same-model
+> descriptor default; the reference deployment's effective judge is the
+> env-repointed Cerebras route — §3). The 8B is not idle: `claim_watch`
+> resolves it through the registry stack component + CredentialVault as the
+> **bearing gate** (measured as a strong negative filter, never fail-closed).
+> If the judge route is absent or the flag is off, the verify pass falls back
+> to its deterministic floor (§3).
 
 The `LLMProviderConfig` holds `api_endpoint`, the vault credential(s)
 (`api_key` **or** `api_user`/`api_pass`), `model_name`, `max_tokens`, and
@@ -272,7 +277,7 @@ no code change.
 reserved for the **consult / deep-consult** kinds only (billed — used sparingly),
 and even there it is only the *default* choice: each consult/deep-consult request
 may pick the free core plane instead (the model picker — §5).
-**Every scheduled analyst** — the eight bounded reasoning units, the per-country /
+**Every scheduled analyst** — the nine bounded reasoning units, the per-country /
 per-region / world composition tower (plus the thematic `escalation_composition`),
 the critic, the deterministic maintenance analysts, and the first-person **journal**
 (both its GATHER and VOICE phases — the journal's voice phase previously ran on
@@ -281,8 +286,8 @@ for the on-demand consult/deep-consult kinds only) —
 runs on the core OpenAI-compatible plane (`llm.primary.openai_compat`,
 gpt-oss-120b). The critic runs there with `allow_self_correlated=true` (it is no
 longer a cross-provider check; the faithfulness verify pass in §3 is now the
-trust gate — though that pass currently also runs on the core model, not
-cross-family; see §3). The core plane sends **no `max_tokens`** — output length is left to the
+trust gate — cross-family on the reference deployment via the judge route;
+see §3). The core plane sends **no `max_tokens`** — output length is left to the
 model's own budget — while the prompt **input** is bounded by
 `LEGBA_LLM_INPUT_TOKEN_BUDGET` (default `32000`).
 
@@ -310,19 +315,26 @@ The pass has two layers:
    marker**, or whose marker resolves to **no real `signal_id`**, is an
    UNSUPPORTED span. The floor score is the fraction of checkable claims that are
    supported. This layer needs no model and cannot be turned off.
-2. **An optional LLM judge — currently the core reasoning model.** When the
-   descriptor declares `method.llm.verify` (all eight units + every composition in
+2. **An optional LLM judge — resolved through its own route.** When the
+   descriptor declares `method.llm.verify` (all nine units + every composition in
    the tower do) **and** the `LEGBA_VERIFY_LLM_JUDGE` flag is on, the runtime wires an LLM
-   judge to refine per-claim verdicts. **As of 2026-07-01 that judge is the SAME
-   core model** (`llm.primary.openai_compat`, gpt-oss-120b) that wrote the finding
-   — it is **NOT** cross-family. This is a deliberate, temporary choice: the
-   earlier 8B cross-family judge (`llm.verify.slm_8b`, Llama-3.1-8B) proved too
-   weak — harsh and mis-aimed in the composition shake-down — so the strong
-   reasoning model runs the judging to prove the flow. **Known limitation:** a
-   model verifying prose from the same model shares its blind spots, so the
-   faithfulness signal is weaker than an independent cross-family judge; the
-   deterministic floor above and the signed provenance chain still backstop it,
-   and a dedicated reasoning judge model is planned. It is a normal
+   judge to refine per-claim verdicts. The judge is **not** hard-bound to the
+   generating model: resolution walks a ladder — `LEGBA_JUDGE_STACK_REF` (env,
+   deployment-wide) > `method.llm.judge` > `method.llm.verify` >
+   `method.llm.primary` — so one env var repoints every judge call at once and
+   rolls back the same way, with the blast radius provably limited to
+   verify-declaring descriptors. The **shipped descriptor default is
+   same-model** (`llm.primary.openai_compat`, gpt-oss-120b — self-hostable; a
+   model verifying prose from the same model shares its blind spots, which the
+   deterministic floor and the signed provenance chain backstop). The
+   **reference deployment sets the env rung** to the hosted cross-family judge
+   (`llm.judge.cerebras_gemma4_31b.openai_compat` — Gemma on Cerebras; chosen
+   after a free-route trial showed judge latency blocking the emit path, and
+   validated against gold labels rather than against the same-model judge's
+   scores). Every critique stamps the model that judged it (`judge_llm_ref`)
+   and a `judge_pipeline_version` (the deterministic + prompt rule-set
+   revision, `2026-08-10/1` today), so verdict populations from different
+   judges or rule-sets are never pooled. It is a normal
    `LLMProviderHandler`, built through the same cached factory as every other LLM.
 
 The result is a per-finding faithfulness score in `[0, 1]`, persisted as a
@@ -335,9 +347,13 @@ the row. A planted fabrication with no supporting citation is flagged unsupporte
 
 **Honest behavior when the judge is unavailable.** If the flag is off, the
 component is unregistered, or the judge host is unreachable, the pass **soft-fails**:
-it degrades to the deterministic floor and labels the verdict
-`judge-unavailable` — it **never fabricates a number**. So a run always yields a
-real (if coarser) faithfulness verdict.
+it degrades to the deterministic floor, stamps `judge_status='deterministic'`,
+and publishes the score **PROVISIONAL under a 0.85 ceiling** — it **never
+fabricates a number** (a ~30-hour hosted-judge outage in 2026-08 produced a
+window of honestly-marked deterministic verdicts, and a `judge_availability`
+gauge now pages on that shape). A body whose claims fail to segment publishes
+an explicit `unassessable` state and **no score** rather than a perfect 1.0.
+So a run always yields a real (if coarser) faithfulness verdict.
 
 **Caveat — citation-marker variants.** Core-plane models sometimes emit
 full-width or bracket-variant citation markers (`【3】` / `［3］`) instead of ASCII
@@ -348,8 +364,7 @@ citation count (and the faithfulness score with it).
 **Same yardstick reused by the optimizer.** The scoped GEPA experiment
 (`unit_optimizer`, over the single `leadership_transition` unit) measures each
 candidate prompt with a **real before/after faithfulness delta on this same
-faithfulness judge** (currently the core `llm.primary.openai_compat` model, not
-cross-family — see above). It stays `promotion_gate=human_gated` and can never
+faithfulness judge** (whatever the judge route resolves to — see above). It stays `promotion_gate=human_gated` and can never
 auto-promote on a degenerate, absent, or non-positive delta (a live measurement
 read parent `0.34` → candidate `0.29`, i.e. **-0.05**, so it did not promote).
 The old monolithic `country_optimizer` stays cadence-frozen (its descriptor is
@@ -437,22 +452,25 @@ one forced final-synthesis turn:
 1. **Plan** — render the system prompt + tool whitelist + the operator's
    question.
 2. **Round** — the LLM emits strict JSON: either a tool call
-   (`{"tool": ..., "args": ...}`), a batch of independent tool calls
+   (`{"tool": ..., "args": ...}`), or a batch of independent tool calls
    (`{"tools": [...]}`, up to `MAX_TOOLS_PER_BATCH`, run concurrently for one
-   round's cost), or a final answer
-   (`{"final": true, "answer": ..., "uncertainty": ..., "cited_refs": [...],
-   "unanswered_aspects": [...]}`).
+   round's cost). The **final answer is deliberately NOT JSON**: it is a
+   sentinel line (`<<<FINAL>>>`), a short metadata header (uncertainty, cited
+   refs, unanswered aspects), then the answer as plain markdown — the sentinel
+   contract replaced JSON-wrapped markdown because a token-capped long answer
+   that truncated mid-string failed to parse and burned rounds regenerating
+   itself; a truncated sentinel answer still parses.
 3. **Act** — a requested tool is dispatched against the substrate and its JSON
    result appended to the conversation.
 4. **Loop** — back to Round, up to the cap, after which a final turn is forced
    with the tools withheld so the operator always gets a structured answer.
 
 The tool whitelist is a set of **read-only substrate primitives** (`_KNOWN_TOOLS`,
-17 today: `search_signals`, `query_facts`, `inspect_entity`, `query_nexuses`,
-`query_hypotheses`, `get_timeline`, `compare_targets`, `query_paths`,
-`find_proxy_chains`, `query_brokers`, `list_findings`, `list_situations`,
-`query_predictions`, `list_targets`, `list_sources`, `vector_search`, and
-`search_context`). Both vector tools are now **live**: `vector_search` is semantic
+19 today: `search_signals`, `search_corpus`, `read_document`, `query_facts`,
+`inspect_entity`, `query_nexuses`, `query_hypotheses`, `get_timeline`,
+`compare_targets`, `query_paths`, `find_proxy_chains`, `query_brokers`,
+`list_findings`, `list_situations`, `query_predictions`, `list_targets`,
+`list_sources`, `vector_search`, and `search_context`). Both vector tools are now **live**: `vector_search` is semantic
 similarity over the `legba_signals` signal-vector collection, and `search_context`
 is semantic search over the curated reference corpora (`world_context` /
 `tradecraft`) returning cited chunks — the embedder-through-port that backs them is
@@ -529,11 +547,12 @@ the substrate facts are only as current as the last seed run, and the vector-bac
 Tier-2 free-text background — now LIVE — is a separate, non-citable preamble (caveat 3
 below).
 
-**Status.** Tier-1 structured grounding is live and opted-in on all **eight bounded
+**Status.** Tier-1 structured grounding is live and opted-in on all **nine bounded
 reasoning units** — the seven broad ones (`leadership_transition`, `energy_security`, `escalation`,
 `narrative_coordination`, `internal_stability`, `military_posture`,
-`economic_coercion`) plus `proliferation_watch` (narrow: tag-scoped to the ~8
-nuclear-relevant desks, not the full g20/watch roster) — each declares a `grounding:` block. The injected
+`economic_coercion`) plus the narrow `proliferation_watch` (tag-scoped to the ~8
+nuclear-relevant desks) and the thematic `disruption_status` (tag-scoped to the
+supply-chain desks) — each declares a `grounding:` block. The injected
 preamble folds in **accumulated** `facts`, polarity-signed `nexuses`, and a separate
 clearly-labelled block of ongoing `situation` frames (e.g. "US head of government
 Trump since 2025-01-20; US–Iran active conflict since 2026-02-28; NATO member
@@ -604,10 +623,10 @@ and `ANALYSIS.md` §7.9.
 ## Configuration reference
 
 All AI-model wiring is declarative stack-component config, registered by
-`scripts/bringup_register_stack.py` (the current faithfulness verify judge simply
-reuses the already-registered `llm.primary.openai_compat` component; the retired
-8B judge, if ever revived, is pointed live via a `PUT /stack/{id}` when the 8B
-host comes up) and resolved at runtime through the
+`scripts/bringup_register_stack.py` (the descriptor-default judge simply
+reuses the already-registered `llm.primary.openai_compat` component; the
+hosted judge routes are separate registered components an operator selects
+with `LEGBA_JUDGE_STACK_REF`) and resolved at runtime through the
 registry + vault. There are no AI-model env vars in the runtime path — secrets are
 vault ids, endpoints are config fields.
 
@@ -615,7 +634,8 @@ vault ids, endpoints are config fields.
 |-----------------|--------|----------------|
 | `llm.primary.openai_compat` | `legba/stack/llm_provider/1.0.0` | Self-hosted gpt-oss-120b LLM — core analyst plane (vLLM, OpenAI-compatible) |
 | `llm.anthropic.opus_4_7` | `legba/stack/llm_provider/1.0.0` | Anthropic Claude `claude-opus-4-8` (hosted; consult/deep plane only) |
-| `llm.verify.slm_8b` | `legba/stack/llm_provider/1.0.0` | Self-hosted 8B model (Llama-3.1-8B, "legba-slm"; HTTP Basic via Caddy) — the **retired** cross-family judge; **not** the current verify judge (faithfulness verify now runs on `llm.primary.openai_compat`, §3) |
+| `llm.judge.cerebras_gemma4_31b.openai_compat` | `legba/stack/llm_provider/1.0.0` | Hosted Gemma judge (Cerebras) — the reference deployment's effective faithfulness judge (§3) |
+| `llm.verify.slm_8b` | `legba/stack/llm_provider/1.0.0` | Self-hosted 8B model (Llama-3.1-8B, "legba-slm"; HTTP Basic via Caddy) — **not** the verify judge; serves `claim_watch`'s bearing gate |
 | `embed.primary.openai_compat` | `legba/stack/embedding/1.0.0` | `bge-m3` embeddings (vLLM `/v1/embeddings`, 1024-dim) |
 | `nlp.local.legba_models` | `legba/stack/nlp_service/1.0.0` | `legba-models` translate / classify / extract / summarize |
 
@@ -623,12 +643,13 @@ vault ids, endpoints are config fields.
 |-----------------|---------|
 | `llm.primary.api_key` | gpt-oss-120b LLM **and** `bge-m3` embeddings (shared box) |
 | `llm.anthropic.api_key` | Anthropic provider (consult/deep) |
-| `llm.verify.*` Basic-auth creds (`api_user` / `api_pass`) | the retired self-hosted 8B judge host (Caddy Basic Auth); unused while verify runs on the core model |
+| `llm.verify.*` Basic-auth creds (`api_user` / `api_pass`) | the self-hosted 8B host (Caddy Basic Auth) — the `claim_watch` bearing gate |
 | `nlp.local.legba_models.api_user` / `.api_pass` | `legba-models` Basic Auth (external path) |
 
 | Flag / env var | Effect |
 |----------------|--------|
-| `LEGBA_VERIFY_LLM_JUDGE` | Gates the optional LLM judge ON (currently the core `llm.primary.openai_compat` model, §3); off → verify pass runs the deterministic citation-presence floor only (labelled `judge-unavailable`) |
+| `LEGBA_VERIFY_LLM_JUDGE` | Gates the optional LLM judge ON (resolved through the judge route, §3); off → verify pass runs the deterministic citation-presence floor only (`judge_status='deterministic'`, PROVISIONAL under a ceiling) |
+| `LEGBA_JUDGE_STACK_REF` | Rung 1 of the judge-resolution ladder: repoints **every** judge call in the deployment at the named `llm_provider` component (the reference deployment sets the hosted cross-family judge); unset → descriptor defaults apply (§3) |
 | `LEGBA_CONSULT_MODEL_NAME` | Overrides the model name for the consult/deep `opus` (Anthropic) plane — the default plane for those kinds (default `claude-opus-4-8`). The per-request `opus`/`core` plane picker (§5) is a server-side allowlist, not an env var |
 | `LEGBA_LLM_INPUT_TOKEN_BUDGET` | Caps the core-plane prompt **input** (default `32000`); the core plane sends no `max_tokens` on output |
 | `LEGBA_WORLD_CONTEXT_DISABLED_UNITS` | Per-unit kill-switch for Tier-2 `world_context` RAG injection (§7). The auto-rollback guard writes to this (and the state file below) to suppress injection on the next run without a restart |

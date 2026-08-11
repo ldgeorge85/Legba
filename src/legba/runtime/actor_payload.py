@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 from uuid import UUID
 
@@ -192,6 +193,113 @@ def _select_output_payload(method_result: Any, output_kind: OutputKind) -> Any:
     """
     selector = _PAYLOAD_SELECTORS.get(output_kind, _payload_finding)
     return selector(method_result)
+
+
+# ---------------------------------------------------------------------------
+# Failure trace-finalizer: analyst_traces write for a run that DIED
+# ---------------------------------------------------------------------------
+
+#: ``analyst_traces.status`` for a run that started and raised. The column is
+#: free text (no CHECK) and every row ever written carried ``'success'`` — the
+#: partial index ``analyst_traces_status_idx ... WHERE status <> 'success'``
+#: was built for exactly this vocabulary and, until now, indexed nothing.
+TRACE_STATUS_FAILED = "failed"
+
+#: ``bucket_kind`` (:func:`legba.runtime.actor_retry._classify_exception`) →
+#: the ``ActorRunOutcome`` value the run's except-handler settles on. Kept here
+#: so the failure trace can state the outcome WITHOUT the caller having to
+#: thread it through before the per-bucket branch decides it. The 'hard' bucket
+#: lands HARD_FAIL under every ``hard.strategy`` (pause/drop/dlq_and_alert), so
+#: the mapping is total.
+_BUCKET_OUTCOME = {
+    "budget": "budget_throttled",
+    "transient": "transient_fail",
+    "hard": "hard_fail",
+}
+
+
+async def _write_failure_trace(
+    receipt_chain: Any | None,
+    *,
+    run_id: UUID,
+    analyst_id: str,
+    analyst_version: str,
+    cadence_trigger: str,
+    target_id: str | None,
+    exc: BaseException,
+    bucket_kind: str,
+    attempts_made: int,
+    max_attempts: int | None,
+    run_started_at: datetime,
+) -> bool:
+    """Write the ``analyst_traces`` row for a run that STARTED and then died.
+
+    Until this landed, the trace was written on the SUCCESS path only (the
+    ``receipt_chain.record(...)`` call after the analyst-output INSERT), so a
+    run that exhausted its transient retries — or raised anywhere else past
+    the substrate read — left NOTHING behind but a log line. Two production
+    incidents hid inside that gap: the run history showed the analyst's last
+    SUCCESSFUL run and every staleness read agreed the fleet was healthy,
+    because a dead run is indistinguishable from a run that never fired.
+
+    The row carries ``status='failed'`` plus an ``error_payload`` stating the
+    error class, the classified retry bucket, the settled outcome, and the
+    attempt count — enough to tell "the model 500'd three times" from "the
+    descriptor is malformed" without reaching for container logs.
+
+    Chain semantics: a failed run is still a run, so the receipt chain extends
+    over it. ``output_row_refs`` is empty (nothing landed) and
+    ``output_payload`` restates the error, so the hash is still computed over
+    real run content and the chain stays linear.
+
+    Returns ``True`` when a row landed. NEVER raises: the caller is already
+    handling an exception and a failing trace write must not mask it (this is
+    the path that runs when Postgres itself is the reason the run died). All
+    failures log at WARNING and return ``False``.
+
+    ``receipt_chain`` is ``None`` on the spike integration-test path; that
+    degrades to a no-op exactly as the success path does.
+    """
+    if receipt_chain is None:
+        return False
+    try:
+        outcome = _BUCKET_OUTCOME.get(bucket_kind, "hard_fail")
+        error_payload = {
+            "error_class": type(exc).__name__,
+            "error_module": type(exc).__module__,
+            "error": str(exc)[:4096],
+            "bucket": bucket_kind,
+            "outcome": outcome,
+            "attempts_made": int(attempts_made),
+            "max_attempts": (
+                int(max_attempts) if max_attempts is not None else None
+            ),
+        }
+        await receipt_chain.record(
+            run_id=run_id,
+            analyst_id=analyst_id,
+            analyst_version=analyst_version,
+            cadence_trigger=cadence_trigger,
+            target_id=target_id,
+            input_row_refs=[],
+            input_payload=None,
+            prompt_module_hash=None,
+            prompt_rendered=None,
+            output_row_refs=[],
+            output_payload=error_payload,
+            run_started_at=run_started_at,
+            run_ended_at=datetime.now(timezone.utc),
+            status=TRACE_STATUS_FAILED,
+            error_payload=error_payload,
+        )
+        return True
+    except BaseException as trace_exc:   # noqa: BLE001 - must not mask ``exc``
+        logger.warning(
+            "dapr_actors.analyst.failure_trace.failed "
+            "analyst_id=%s run_id=%s err=%s",
+            analyst_id, run_id, trace_exc,
+        )
+        return False
 
 
 # ---------------------------------------------------------------------------

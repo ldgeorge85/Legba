@@ -22,6 +22,19 @@ export interface UnitEvalScore {
   n_labeled: number
   n_findings: number
   status: string | null
+  /**
+   * M-1 — the PRIMARY correctness axis: OPERATOR gold-set verdicts. Segregated
+   * from `correctness_vs_reference` (a different table, a different question)
+   * and never pooled with faithfulness. `operator_sufficient` is false below
+   * the server's floor, which is where the whole gold set sits today — the
+   * badge marks such a reading `indicative` rather than hiding it.
+   */
+  correctness_operator?: number | null
+  n_operator_labels?: number
+  n_operator_scored?: number
+  operator_sufficient?: boolean
+  operator_mix?: Record<string, number>
+  operator_status?: string | null
   /** The honest, server-composed badge string — rendered verbatim. */
   badge: string
 }

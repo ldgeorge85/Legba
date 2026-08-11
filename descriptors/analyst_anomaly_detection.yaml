@@ -1,0 +1,62 @@
+# W1-E BIND — Anomaly Detection analyst descriptor (L-006 sub-split B;
+# deterministic_handlers/anomaly_detection.py).
+#
+# Three deterministic detectors over bucketed signal-count/sentiment series:
+# rate spikes (z-score of latest bucket vs trailing distribution), sentiment
+# shifts (same, on mean sentiment), and novel-entity emergence (entities in
+# the latest window absent from the trailing window). No LLM. When `inputs`
+# is empty the handler self-queries via deps.pg_pool + time_bucket() (see
+# _pull_bucketed_signals) — so a META subscription (no `targets` block, no
+# substrate.direct_queries reader supplying raw rows) is the correct shape:
+# it lets the handler's own bucketed pull run rather than handing it raw
+# signal-shaped dicts it would misinterpret as bucket rows.
+#
+# Until this file: registered in SUB_HANDLERS but zero descriptors of any
+# state referenced it (verified in-tree and against the live
+# analyst_descriptors table), and analyst_traces has zero rows for it.
+# Emerging-event / rate-spike detection is directly load-bearing for the
+# stated direction (surfacing anomalies across an expanding, multi-domain
+# signal pool before any analyst has written a finding about them).
+#
+# State: draft — registration + the operator's activate flip are deploy
+# steps out of this pass's no-deploy remit.
+
+identity:
+  id: anomaly_detection
+  name: Anomaly Detection (Rate Spikes / Sentiment Shifts / Novel Entities)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: w1e_built_but_unbound
+
+subscription:
+  # No `targets` block -> META analyst: one global sweep per cadence tick.
+  # `inputs` reaches the handler empty, so it self-queries bucketed rows off
+  # deps.pg_pool (see module docstring) rather than being handed a raw
+  # signal-shaped slice it would misread as pre-bucketed input.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: anomaly_detection
+  # Ships with no options block -> handler defaults (z_threshold, window,
+  # novel_lookback per the module's _DEFAULT_* constants). An operator can
+  # tune via method.options once live.
+
+cadence:
+  fallback_schedule: "22,52 * * * *"
+  cooldown_seconds: 900
+
+outputs: []

@@ -1,11 +1,24 @@
 /**
  * FeedFilterBar — the ONE filter surface for the unified Live Feed (S7-T4).
  *
- * A single row that carries: removable typed-facet CHIP pills, a free-text /
- * `key:value` input (type `severity:high ` and it becomes a chip), quick facet
- * dropdowns (severity + verification), and the saved-views strip. Verification
- * is a first-class facet here — the "verify" dropdown writes `verified:`/
- * `confidence:` chips read against the ICD-203 verdict vocabulary.
+ * Carries: removable typed-facet CHIP pills, a free-text / `key:value` input
+ * (type `severity:high ` and it becomes a chip), a row of quick facet
+ * dropdowns, and the saved-views strip. Verification is a first-class facet —
+ * the "verify" dropdown writes `verified:`/`confidence:` chips read against the
+ * ICD-203 verdict vocabulary.
+ *
+ * The dropdown row is the feed's DRILL-DOWN surface, and every control on it
+ * writes an ordinary chip, so anything the sidebar/map can put on the feed the
+ * operator can also set — and clear — by hand:
+ *
+ *   desk/target · producer (units · compositions · other) · output kind ·
+ *   severity · verification · effective-confidence floor
+ *
+ * The desk and producer option lists are supplied by the panel (`deskOptions` /
+ * `producerOptions`) because they are DATA — the live desk roster and the
+ * producers that actually exist — not a hard-coded menu. `kindOptions` likewise
+ * lists only the substrate output kinds actually present in the loaded rows: an
+ * empty axis renders as a disabled "any kind", never a fabricated menu.
  *
  * Pure-ish presentational: all state lives in the parent (`ParsedFilter`); this
  * component only edits chips/text and raises callbacks. The filter model lives
@@ -13,6 +26,7 @@
  */
 import { Search, X, BookmarkPlus } from 'lucide-react'
 import { VerdictLegend } from '@/components/VerdictBadge'
+import { PRODUCER_GROUP_LABEL, type ProducerClass, type ProducerOption } from '@/lib/feedProducers'
 import {
   chipValue,
   mergeChips,
@@ -26,6 +40,21 @@ import {
 } from '@/lib/feedFilters'
 
 const SEVERITY_OPTS = ['', 'low', 'medium', 'high', 'critical'] as const
+
+/**
+ * The effective-confidence FLOOR quick-pick (`minconf:` chip). 0.50 is the
+ * system-wide verification floor (the platform's 0.50 decision, mirrored server
+ * side as `substrate_reads_api._FAITH_FLOOR`), so "clears the floor" is a real,
+ * named threshold rather than an arbitrary slider stop.
+ */
+const BAND_OPTS: Array<{ value: string; label: string }> = [
+  { value: '', label: 'any effective conf' },
+  { value: '0.5', label: 'effective ≥ 0.50 (clears floor)' },
+  { value: '0.7', label: 'effective ≥ 0.70' },
+]
+
+/** Group the producer options into `<optgroup>`s, preserving the model's order. */
+const PRODUCER_GROUP_ORDER: ProducerClass[] = ['unit', 'composition', 'other']
 
 /** Verification quick-pick → the chip it writes (verified / confidence facet). */
 const VERIFY_OPTS: Array<{ value: string; label: string; chip: FeedChip | null }> = [
@@ -46,6 +75,12 @@ function currentVerifyValue(chips: FeedChip[]): string {
   return ''
 }
 
+/** One desk/target option — the exact `target_id` plus its human name. */
+export interface DeskOption {
+  id: string
+  label: string
+}
+
 export interface FeedFilterBarProps {
   parsed: ParsedFilter
   onChange: (next: ParsedFilter) => void
@@ -55,6 +90,12 @@ export interface FeedFilterBarProps {
   onDeleteView: (name: string) => void
   /** True when a severity facet is meaningless (the raw-signals stream). */
   severityDisabled?: boolean
+  /** The desk roster (+ any target in view) for the desk dropdown. */
+  deskOptions?: DeskOption[]
+  /** Grouped producers for the analyst/unit dropdown (see `feedProducers`). */
+  producerOptions?: ProducerOption[]
+  /** Substrate output kinds present in the loaded rows. */
+  kindOptions?: string[]
 }
 
 export function FeedFilterBar({
@@ -65,6 +106,9 @@ export function FeedFilterBar({
   onSaveView,
   onDeleteView,
   severityDisabled = false,
+  deskOptions = [],
+  producerOptions = [],
+  kindOptions = [],
 }: FeedFilterBarProps) {
   // The input mirrors the free text; a completed `key:value` token (Enter or a
   // trailing space) is lifted OUT of the input into a chip pill.
@@ -87,9 +131,25 @@ export function FeedFilterBar({
     onChange({ chips: mergeChips(parsed.chips, p.chips), text: p.text })
   }
 
+  // A chip value the option list doesn't carry (hand-typed, or a desk the
+  // roster hasn't loaded yet) still has to SHOW in its dropdown — otherwise the
+  // select silently falls back to "any" and lies about the active filter.
+  const deskValue = chipValue(parsed.chips, 'target')
+  const deskChoices: DeskOption[] =
+    deskValue && !deskOptions.some((d) => d.id === deskValue)
+      ? [{ id: deskValue, label: deskValue }, ...deskOptions]
+      : deskOptions
+  const producerValue = chipValue(parsed.chips, 'analyst')
+  const producerChoices: ProducerOption[] =
+    producerValue && !producerOptions.some((p) => p.id === producerValue)
+      ? [{ id: producerValue, label: producerValue, group: 'other', present: false }, ...producerOptions]
+      : producerOptions
+  const kindValue = chipValue(parsed.chips, 'kind')
+  const kindChoices = kindValue && !kindOptions.includes(kindValue) ? [kindValue, ...kindOptions] : kindOptions
+
   return (
     <div className="mb-2 space-y-1.5" data-testid="feed-filter-bar">
-      {/* Row 1 — chips + input + quick facet dropdowns */}
+      {/* Row 1 — free text / `key:value` input */}
       <div className="flex flex-wrap items-center gap-1.5 text-label">
         <div className="relative flex min-w-[180px] flex-1 items-center">
           <Search className="pointer-events-none absolute left-2 h-3.5 w-3.5 text-ink-3" aria-hidden />
@@ -108,6 +168,80 @@ export function FeedFilterBar({
             aria-label="feed filter"
           />
         </div>
+        <VerdictLegend />
+      </div>
+
+      {/* Row 2 — the drill-down dropdowns. Every one writes an ordinary chip,
+          so each is equally clearable from the chip row below. */}
+      <div className="flex flex-wrap items-center gap-1.5 text-label">
+        {/* Desk / target — the facet the sidebar SEEDS and the operator owns. */}
+        <select
+          className="max-w-[150px] rounded border border-line bg-surf-2 px-1.5 py-1 text-ink-2"
+          value={deskValue}
+          title="desk / target facet — the same chip a sidebar desk click seeds"
+          onChange={(e) => setChips(setChip(parsed.chips, 'target', e.target.value))}
+          data-testid="feed-facet-desk"
+          aria-label="desk filter"
+        >
+          <option value="">any desk</option>
+          {deskChoices.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.label}
+            </option>
+          ))}
+        </select>
+
+        {/* Producer — units / compositions / other, grouped. */}
+        <select
+          className="max-w-[170px] rounded border border-line bg-surf-2 px-1.5 py-1 text-ink-2 disabled:opacity-40"
+          value={producerValue}
+          disabled={severityDisabled}
+          title={
+            severityDisabled
+              ? 'signals are raw intake — they carry no producing analyst'
+              : 'analyst / unit facet'
+          }
+          onChange={(e) => setChips(setChip(parsed.chips, 'analyst', e.target.value))}
+          data-testid="feed-facet-producer"
+          aria-label="producer filter"
+        >
+          <option value="">any producer</option>
+          {PRODUCER_GROUP_ORDER.map((group) => {
+            const inGroup = producerChoices.filter((p) => p.group === group)
+            if (inGroup.length === 0) return null
+            return (
+              <optgroup key={group} label={PRODUCER_GROUP_LABEL[group]}>
+                {inGroup.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </optgroup>
+            )
+          })}
+        </select>
+
+        {/* Output kind — only the substrate kinds actually in view. */}
+        <select
+          className="max-w-[130px] rounded border border-line bg-surf-2 px-1.5 py-1 text-ink-2 disabled:opacity-40"
+          value={kindValue}
+          disabled={kindChoices.length === 0}
+          title={
+            kindChoices.length === 0
+              ? 'no output kinds loaded yet'
+              : 'substrate output kind facet'
+          }
+          onChange={(e) => setChips(setChip(parsed.chips, 'kind', e.target.value))}
+          data-testid="feed-facet-kind"
+          aria-label="output kind filter"
+        >
+          <option value="">any kind</option>
+          {kindChoices.map((k) => (
+            <option key={k} value={k}>
+              {k}
+            </option>
+          ))}
+        </select>
 
         <select
           className="rounded border border-line bg-surf-2 px-1.5 py-1 text-ink-2 disabled:opacity-40"
@@ -144,10 +278,31 @@ export function FeedFilterBar({
             </option>
           ))}
         </select>
-        <VerdictLegend />
+
+        {/* Effective-confidence floor — the numeric band gate, distinct from the
+            ICD-203 verification LEVEL next to it. */}
+        <select
+          className="rounded border border-line bg-surf-2 px-1.5 py-1 text-ink-2 disabled:opacity-40"
+          value={severityDisabled ? '' : chipValue(parsed.chips, 'minconf')}
+          disabled={severityDisabled}
+          title={
+            severityDisabled
+              ? 'signals carry no graded confidence'
+              : 'surfaced (critic-folded) effective-confidence floor'
+          }
+          onChange={(e) => setChips(setChip(parsed.chips, 'minconf', e.target.value))}
+          data-testid="feed-facet-band"
+          aria-label="effective confidence floor"
+        >
+          {BAND_OPTS.map((o) => (
+            <option key={o.value || 'any'} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
       </div>
 
-      {/* Row 2 — active chip pills (removable) */}
+      {/* Row 3 — active chip pills (removable) */}
       {parsed.chips.length > 0 && (
         <div className="flex flex-wrap items-center gap-1" data-testid="feed-active-chips">
           {parsed.chips.map((c) => (
@@ -180,7 +335,7 @@ export function FeedFilterBar({
         </div>
       )}
 
-      {/* Row 3 — saved views */}
+      {/* Row 4 — saved views */}
       <div className="flex flex-wrap items-center gap-1.5 text-label">
         <span className="text-ink-3">views:</span>
         {views.length === 0 && <span className="text-ink-3">none saved</span>}

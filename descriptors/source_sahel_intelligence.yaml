@@ -1,0 +1,110 @@
+# Niger desk (country_watch_ne) coverage pass — 2026-08-03. Ships DRAFT.
+#
+# Sahel Intelligence (sahel-intelligence.com) — the batch's REGIONAL security
+# lane. Per its own À propos page (fetched 2026-08-03): published by GIC
+# Conseil (Paris), running for over ten years, a weekly strategic review of the
+# Sahel covering counter-terrorism, narco-trafficking, smuggling, arms and
+# politics, sourced from a correspondent network across more than ten Sahel
+# countries. The paid product is a confidential weekly cahier; the public RSS
+# is the free news-brief stream, which is what this descriptor takes.
+#
+# WHY A REGIONAL LANE AT ALL. Niger's security picture is not made in Niger.
+# The tri-border JNIM/ISGS pressure, the Lake Chad basin, the AES bloc's
+# relations with Bamako and Ouagadougou, and the Nigerian border kidnapping
+# economy all determine what the Niger desk is looking at, and none of it is
+# domestic Nigerien copy. ActuNiger and Studio Kalangou give the desk Niger;
+# this gives it the neighbourhood.
+#
+# VERIFIED LIVE 2026-08-03 by direct fetch: HTTP 200,
+# `application/rss+xml; charset=UTF-8`, 10 items, newest item
+# `Mon, 03 Aug 2026 16:35:41 +0000` (same day, minutes before the probe), 61
+# Niger/Sahel place-name hits. Sample headlines seen: a Swiss national and a
+# soldier killed in an attack near Bangui; the new Libyan High Council of State
+# turning toward elections; 52 people kidnapped in Zamfara State, Nigeria.
+# WordPress feed, keyless, no auth wall.
+#
+# NOT A DUPLICATE: checked read-only against source_descriptors — no head row
+# points at sahel-intelligence.com. The nearest neighbours in the roster are
+# source.rsshub.rfi.afrique and source.africanews.all, both general-interest
+# rather than security-specialist; cross-outlet repeats collapse downstream in
+# cross_source_dedup.
+#
+# geo: [] — DELIBERATE. This is a Paris-published regional title covering ten
+# countries, so `scope.geo` (which is publisher ORIGIN, and which
+# data/sources/baseline.py promotes into the indexed `geo` column as a
+# post-enrichment fallback) must stay empty: declaring [NE] would fallback-tag
+# a Bangui or Zamfara story as Nigerien whenever the body failed to geocode,
+# and declaring [FR] would hand the France desk the whole Sahel. Desks reach
+# this feed through the standard auto-wire (kind `rss` + tag `news` +
+# owner_tenant `shared`) and narrow per signal on their own geo predicate.
+#
+# source_class: reporting — the RSS stream is news briefs, not the paid
+# analytical cahier. Credibility host sahel-intelligence.com (seeded 0.60/wire
+# by the registrar): a genuine decade-old specialist title with disclosed
+# corporate publisher, scored below the international wires because it is a
+# small commercial intelligence shop whose reporting is largely single-sourced
+# to its own correspondent network and rarely independently corroborated — a
+# real reason for the verify layer to treat its uncorroborated claims with
+# more caution than an AP or Reuters brief, which is exactly what a lower
+# host score buys.
+#
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after the route is
+# re-verified live on the instance.
+
+identity:
+  id: source.sahelintelligence.news
+  name: Sahel Intelligence — regional security
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: source_batch_2026_08
+  created: "2026-08-03T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  # EMPTY on purpose — regional title, ten-country beat. See the geo note above.
+  geo: []
+  languages: [fr]
+  tags: [news, world, africa, sahel, security, francophone, source_batch_2026_08]
+  source_class: reporting
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "52 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 60
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://sahel-intelligence.com/feed/"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

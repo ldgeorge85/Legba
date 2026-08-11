@@ -408,7 +408,7 @@ async def test_pull_yields_signals_and_advances_cursor() -> None:
         assert sig.canonical_url
         assert sig.content_hash
         assert sig.payload["event_code"] == "145"
-        assert sig.payload["geo"]["country_code"] == "BR"
+        assert sig.payload["geo"]["country_code_fips"] == "BR"
         assert sig.payload["raw_body"]["GLOBALEVENTID"] in (10, 11, 12)
         assert sig.raw_provenance["kind"] == "gdelt_query"
         assert sig.raw_provenance["table"] == EVENTS_TABLE
@@ -793,5 +793,5 @@ async def test_live_small_pull_against_real_bigquery() -> None:
 
     # If we got rows, validate their shape.
     for sig in signals:
-        assert sig.payload["geo"]["country_code"] == "BR"
+        assert sig.payload["geo"]["country_code_fips"] == "BR"
         assert sig.payload["raw_body"]["GLOBALEVENTID"] is not None

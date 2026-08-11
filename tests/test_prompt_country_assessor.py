@@ -10,6 +10,7 @@ is the authoritative check; this guards against regressions.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 
 import pytest
 
@@ -19,17 +20,44 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _as_dspy_stores_it(instructions: str) -> str:
+    """The instruction text as dspy will hold it after ``with_instructions``.
+
+    dspy runs every signature's instructions through :func:`inspect.cleandoc`
+    (it treats them interchangeably with a class docstring), which strips
+    leading blank space and TRAILING NEWLINES. ``_SYSTEM_PROMPT`` is built by
+    ``with_preamble`` and ends in a newline, so a byte-for-byte comparison
+    against ``signature.instructions`` fails on the whitespace alone — which
+    is exactly how this test broke, silently, in the June squash: it asserted
+    a property dspy no longer promises and stopped guarding the one it does.
+
+    Normalising the EXPECTED side (never the actual side) keeps the assertion
+    honest: any drift in the prompt's actual CONTENT still fails loudly, only
+    dspy's documented whitespace normalisation is forgiven.
+    """
+    return inspect.cleandoc(instructions)
+
+
 def test_build_returns_module_with_baseline_instructions():
     import legba.prompts.country_assessor.v1 as m
     from legba.data.analysts.inline_target import _SYSTEM_PROMPT
 
     # Single source of truth: GEPA evolves exactly the prompt inference uses.
+    # This half stays BYTE-EXACT — it compares our module against our analyst,
+    # with no dspy in between, so there is nothing to normalise away.
     assert m.BASELINE_INSTRUCTIONS == _SYSTEM_PROMPT
 
     mod = m.build()
     predictors = list(mod.predictors())
     assert len(predictors) == 1
-    assert predictors[0].signature.instructions == _SYSTEM_PROMPT
+    assert predictors[0].signature.instructions == _as_dspy_stores_it(
+        _SYSTEM_PROMPT
+    )
+    # Guard the normalisation itself: cleandoc must only be trimming
+    # whitespace. If a future dspy started truncating or rewriting the text,
+    # the assertion above would keep passing while the prompt silently lost
+    # content — so pin that the two differ by NOTHING but surrounding space.
+    assert predictors[0].signature.instructions.strip() == _SYSTEM_PROMPT.strip()
 
 
 def test_parent_path_resolves_to_real_text_not_the_missing_marker():

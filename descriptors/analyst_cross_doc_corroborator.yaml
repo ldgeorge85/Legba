@@ -112,6 +112,33 @@ method:
     is NOT citable until you read_document it. NEVER cite a document whose body you did
     not actually read.
 
+    DATE THE REPORTING AND THE EVENT SEPARATELY. Your retrieved documents are
+    marked RETRIEVED and print their own collection and publication dates; the
+    working-set signals print theirs. The corpus spans YEARS, so a document you
+    pulled may be far older than the working set — the printed dates are the
+    only thing that tells them apart. Whenever the two differ, write BOTH and
+    say which is which: "a funeral held 4 August for people killed on 23
+    November 2023 [N]", never a bare "on 23 November 2023" attached to a claim
+    about something happening now. A date that appears in a document's PROSE is
+    a date inside the story; it is not that document's publication date and it
+    is not automatically your claim's date.
+
+    AGE CHANGES WHAT CORROBORATION MEANS — this is your unit's specific trap.
+    Two documents reporting the same claim YEARS APART are not two independent
+    confirmations of a current fact: the later one may simply be repeating the
+    earlier one, and neither speaks to the present state. When you count
+    independent sources, state the DATE RANGE they span, and say plainly when
+    your corroboration rests on material older than the working set. A claim
+    supported only by archive documents is corroborated AS HISTORY — say so,
+    and lower your confidence in any present-tense reading of it.
+
+    NO PLANNING PROSE IN YOUR OUTPUT. Your tool calls happen in the gather
+    phase; by the time you write the finding the gathering is over. Do NOT
+    preface the JSON with a sentence about what you are going to do ("We will
+    use search_corpus.", "Let me search…", "Attempting to call…"). The first
+    character of your response must be { and the last must be }. Anything
+    before the brace is not analysis and cannot be published.
+
     STEP 3 — JUDGE CORROBORATION. Determine, from the documents you actually read:
     - How many INDEPENDENT sources report the claim? INDEPENDENCE MATTERS: the same
       wire story republished by ten aggregators is ONE source, not ten. Trace a story

@@ -30,7 +30,6 @@ returns the other kinds.
 
 from __future__ import annotations
 
-import importlib
 import logging
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -117,17 +116,32 @@ def discover_discovery_kinds() -> dict[str, DiscoveryHandlerBundle]:
     registry.
 
     The static-target shortcut (:data:`static_mod.STATIC_KIND_NAME`) is
-    always present. First-party kinds (L-181 / L-182) register as they
-    land. Modules that fail to import are logged + skipped — the
-    registry still returns the kinds that did import (same defensive
-    shape :func:`legba.data.analysts.discover_analyst_kinds` has).
+    always present. First-party kinds (L-181 / L-182) register as they land.
+
+    K-3: the "Wave B modules: not yet present is the expected state"
+    exemption is retired — both declared modules have shipped, and the
+    ``logger.info`` skip it left behind would hide a rename indefinitely
+    (a discovery kind that vanishes just stops materializing targets, which
+    looks like "no new targets found"). A module named in
+    :data:`_KIND_MODULE_NAMES` must import and expose the contract.
 
     Returns
     -------
     dict[str, DiscoveryHandlerBundle]
         Keyed by ``KIND_NAME``.
+
+    Raises
+    ------
+    KindDiscoveryError
+        Any declared module failed to import, lacks ``KIND_NAME``, or
+        surfaces no ``discover`` callable.
     """
+    from ..kind_discovery import (
+        DiscoveryFailure, import_declared_module, raise_if_failed, require_attrs,
+    )
+
     registry: dict[str, DiscoveryHandlerBundle] = {}
+    failures: list[DiscoveryFailure] = []
 
     # Sentinel: static-target shortcut.
     registry[static_mod.STATIC_KIND_NAME] = DiscoveryHandlerBundle(
@@ -142,23 +156,14 @@ def discover_discovery_kinds() -> dict[str, DiscoveryHandlerBundle]:
     )
 
     for mod_name in _KIND_MODULE_NAMES:
-        try:
-            module = importlib.import_module(f"{__name__.rsplit('.', 1)[0]}.{mod_name}")
-        except Exception as exc:                                # pragma: no cover
-            # Wave B modules: not yet present is the expected state.
-            logger.info(
-                "discovery.discover.import_skipped module=%s err=%s",
-                mod_name, exc,
-            )
+        dotted = f"{__name__.rsplit('.', 1)[0]}.{mod_name}"
+        module = import_declared_module("discovery", dotted, failures)
+        if module is None:
+            continue
+        if not require_attrs("discovery", dotted, module, ("KIND_NAME",), failures):
             continue
 
-        kind_name = getattr(module, "KIND_NAME", None)
-        if not kind_name:
-            logger.warning(
-                "discovery.discover.skip module=%s reason=missing_KIND_NAME",
-                mod_name,
-            )
-            continue
+        kind_name = getattr(module, "KIND_NAME")
 
         handler_cls = getattr(module, "HANDLER", None) or getattr(
             module, "DISCOVERY_HANDLER", None
@@ -180,10 +185,12 @@ def discover_discovery_kinds() -> dict[str, DiscoveryHandlerBundle]:
             config_schema = config_schema or getattr(handler_cls, "config_schema", None)
 
         if discover_fn is None:
-            logger.warning(
-                "discovery.discover.skip module=%s reason=missing_discover_callable",
-                mod_name,
-            )
+            failures.append(DiscoveryFailure(
+                registry="discovery",
+                module=dotted,
+                reason="missing_contract",
+                detail="no discover callable on the module or its HANDLER class",
+            ))
             continue
 
         registry[str(kind_name)] = DiscoveryHandlerBundle(
@@ -200,6 +207,7 @@ def discover_discovery_kinds() -> dict[str, DiscoveryHandlerBundle]:
             is_static=False,
         )
 
+    raise_if_failed(failures)
     return registry
 
 

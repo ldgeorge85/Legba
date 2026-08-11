@@ -1,0 +1,201 @@
+id,source_entity,target_entity,pe_confidence,independent_sources,source_families,raw_signals,syndication_ratio,subject_mentions,object_mentions,desk_geo_hit,desk_entity_hit,age_days,c_multi_source,c_source_diversity,c_salience,c_desk_relevance,qual_score,qualifies,retention,stratum,idx
+13073f00-9330-46d9-91b4-4e8a5b10f95e,Board of Peace,Tel Aviv,0.4,1,1,1,1.0,79,77,False,False,0.5,0.0,0.0,0.7008,0.0,0.1402,False,keep,S0_floor,0
+1afe8297-3bc1-4758-8472-d968801434fb,Idaho,Tyson,0.4,1,1,1,1.0,45,1,True,False,25.3,0.0,0.0,0.1115,0.6,0.1123,False,keep,S0_floor,1
+1c74fc4a-8076-4214-a763-00d6d3512003,East Siberian River Steamship Company,Sibirsk,0.4,1,1,1,1.0,1,1,True,False,32.3,0.0,0.0,0.1115,0.6,0.1123,False,retire,S0_floor,2
+2198058e-f002-494c-98e0-423a007dcdaf,IRGC,Revolutionary Guards Corps,0.4,1,1,1,1.0,343,2,True,False,4.2,0.0,0.0,0.1767,0.6,0.1253,False,keep,S0_floor,3
+57571172-e2a1-44a0-b7ff-56918ba08f71,Trump,almost four months,0.4,1,1,1,1.0,450,1,False,False,47.5,0.0,0.0,0.1115,0.0,0.0223,False,retire,S0_floor,4
+5a4faab0-9a04-45a0-9d1f-b510efdf2a95,804 PM EDT,Mahoning Creek Lake,0.4,1,1,1,1.0,1,2,True,False,0.7,0.0,0.0,0.1115,0.6,0.1123,False,keep,S0_floor,5
+8db2c0b0-c123-4884-863f-3f5329832120,Islamabad,the NCCIA Cybercrime Reporting Centre,0.45000002,1,1,2,2.0,207,2,True,False,3.3,0.0,0.0,0.1767,0.6,0.1253,False,keep,S0_floor,6
+955a7a52-4b45-49de-9043-1e80a115f263,Central Ben Hill County,Georgia,0.4,1,1,1,1.0,1,89,True,False,1.7,0.0,0.0,0.1115,0.6,0.1123,False,keep,S0_floor,7
+95c69d7e-6db4-44b1-9c78-bbda3e51cd79,Alexey Likhachev,Units 7 and,0.4,1,1,1,1.0,34,1,True,False,10.3,0.0,0.0,0.1115,0.6,0.1123,False,keep,S0_floor,8
+978270a1-617a-4f37-a7ef-0089e9cf7a82,the Council of the International Maritime Organization,the International Maritime Organization,0.4,1,1,1,1.0,1,25,True,False,22.8,0.0,0.0,0.1115,0.6,0.1123,False,keep,S0_floor,9
+a3075251-62f9-4fea-8556-9df780aadf7a,HIMARS,Iranshahr,0.4,1,1,1,1.0,12,7,False,False,17.4,0.0,0.0,0.3345,0.0,0.0669,False,keep,S0_floor,10
+ad807d95-3d66-4a70-8dc2-6f470f09b273,Geoffrey Watson SC,Labor,0.4,1,1,1,1.0,2,34,True,False,3.5,0.0,0.0,0.1767,0.6,0.1253,False,keep,S0_floor,11
+b8c1f7e1-8518-4b01-9662-c4e16cece137,Bulgaria,Carter,0.4,1,1,1,1.0,48,5,True,False,0.3,0.0,0.0,0.2882,0.6,0.1476,False,keep,S0_floor,12
+c063188e-6aa2-453b-887a-dbeee45dcb3d,Moscow,the Moscow Plant,0.4,1,1,1,1.0,1120,1,False,False,46.4,0.0,0.0,0.1115,0.0,0.0223,False,retire,S0_floor,13
+e8f50044-b951-4da2-8172-028519e8becc,Dur - Untash,Susa,0.4,1,1,1,1.0,1,1,True,False,23.1,0.0,0.0,0.1115,0.6,0.1123,False,keep,S0_floor,14
+0f064be1-5930-48cb-946b-d262ac717b66,Araghchi,the Council of Foreign Ministers,0.4,1,1,1,1.0,151,8,True,False,10.3,0.0,0.0,0.3534,0.6,0.1607,False,keep,S1_low,15
+1bc8779c-5c52-4d33-8a54-d60e938dd07a,Caspian,Europe,0.4,1,1,1,1.0,8,1613,False,True,4.1,0.0,0.0,0.3534,1.0,0.2207,False,keep,S1_low,16
+26974b1d-0de4-40db-9db9-991901b3e4e2,Israel,the Brandenburg Gate,0.4,1,1,1,1.0,2982,2,True,True,2.1,0.0,0.0,0.1767,1.0,0.1853,False,keep,S1_low,17
+2ff318b3-fc62-4266-bb9e-0422add74cc0,Mikhail Fyodorov,Russian Foreign Ministry,0.4,1,1,1,1.0,10,66,True,False,4.5,0.0,0.0,0.3857,0.6,0.1671,False,keep,S1_low,18
+33d541f2-e058-4a9f-867b-96b2a636bb47,Claudia Sheinbaum,Mark Carney,0.4,1,1,1,1.0,11,33,True,False,14.5,0.0,0.0,0.3997,0.6,0.1699,False,keep,S1_low,19
+3c7de674-5e89-4ddd-9d0b-e1f96f0a2562,Crimea,the Russian Defense Ministry,0.5,1,1,3,3.0,212,195,False,False,10.5,0.0,0.0,0.849,0.0,0.1698,False,keep,S1_low,20
+3d961c22-db8d-46bf-a833-6777d351a64a,Israel,"the "" Committee of Political Inquiry",0.4,1,1,1,1.0,2982,1,True,True,26.3,0.0,0.0,0.1115,1.0,0.1723,False,keep,S1_low,21
+44d6057e-49aa-4403-a178-1b3807e18dd5,The UK Labour Party,United States,0.4,1,1,1,1.0,1,9204,False,True,41.3,0.0,0.0,0.1115,1.0,0.1723,False,retire,S1_low,22
+56631676-6a58-4b83-a873-67567b503d28,Serhii Korovayny,Ukraine,0.45000002,1,1,2,2.0,2,4287,True,True,41.0,0.0,0.0,0.1767,1.0,0.1853,False,retire,S1_low,23
+570f7fa2-2821-4327-954a-66eccaa2923c,Argentina,hamm,0.4,1,1,1,1.0,676,1,True,True,2.3,0.0,0.0,0.1115,1.0,0.1723,False,keep,S1_low,24
+5fd80e12-1679-4114-a849-192fefb771e7,News Domodedovo,Ukraine,0.4,1,1,1,1.0,1,4287,True,True,0.0,0.0,0.0,0.1115,1.0,0.1723,False,keep,S1_low,25
+68e74cdf-c540-4c12-9220-250aa6b86f89,Iraq,Military,0.4,1,1,1,1.0,688,27,True,False,14.8,0.0,0.0,0.536,0.6,0.1972,False,keep,S1_low,26
+6aed1020-16b4-43d2-941b-60e842de4147,& quot;America 250,United States,0.4,1,1,1,1.0,1,9204,True,True,30.6,0.0,0.0,0.1115,1.0,0.1723,False,retire,S1_low,27
+6da848cd-ca34-47b3-9d98-5e83740b8e62,Glen Canyon,United States,0.4,1,1,1,1.0,12,9204,True,True,25.1,0.0,0.0,0.4126,1.0,0.2325,False,keep,S1_low,28
+73bf19ac-c8ec-4f4a-bf59-62597c860a0b,Austro,France,0.4,1,1,1,1.0,1,1932,True,True,1.8,0.0,0.0,0.1115,1.0,0.1723,False,keep,S1_low,29
+79514da3-f489-4b93-a6e2-5d7a093b168e,Edi Rama,United States,0.4,1,1,1,1.0,5,9204,False,True,25.9,0.0,0.0,0.2882,1.0,0.2076,False,keep,S1_low,30
+7f06a0e1-a5fa-4179-b17a-73e420794135,Gaza,Ishaq Dar,0.4,1,1,1,1.0,955,31,True,False,4.9,0.0,0.0,0.5575,0.6,0.2015,False,keep,S1_low,31
+8d2ea73c-d0a5-4a25-8eb5-0fe959585249,Balogun,IOC,0.4,1,1,1,1.0,75,29,True,False,9.8,0.0,0.0,0.5471,0.6,0.1994,False,keep,S1_low,32
+934e8fb2-cb69-4743-a2c2-63c7e9bd1f35,LA 2028,United Kingdom,0.4,1,1,1,1.0,1,1339,False,True,25.5,0.0,0.0,0.1115,1.0,0.1723,False,keep,S1_low,33
+9c6935ab-1086-418a-88b4-7bceb10ee797,Donald Trump,Nazis,0.4,1,1,1,1.0,1492,18,True,False,23.8,0.0,0.0,0.4736,0.6,0.1847,False,keep,S1_low,34
+ce1c1c97-c4a5-468b-8ba4-6353a8f5c50d,A-400,France,0.4,1,1,1,1.0,1,1932,True,True,8.0,0.0,0.0,0.1115,1.0,0.1723,False,keep,S1_low,35
+de6dceaa-8ade-4dd1-b6c5-09c135542533,Transportation Department,United States,0.4,1,1,1,1.0,1,9204,True,True,8.9,0.0,0.0,0.1115,1.0,0.1723,False,keep,S1_low,36
+ed4e5174-c108-48fc-9633-ee260ff9847e,Indonesia,the European - Mediterranean Seismological Center,0.45000002,1,1,1,1.0,319,0,True,True,48.1,0.0,0.0,0.0,1.0,0.15,False,retire,S1_low,37
+f8107e21-5cfa-402c-b13f-b1a221fd16f5,Negeri Sembilan,Pakatan Harapan,0.6,1,1,5,5.0,16,12,True,False,0.5,0.0,0.0,0.4126,0.6,0.1725,False,keep,S1_low,38
+ff602817-3ae6-4802-8adc-7c8c4537a8a9,Israel,Maron al -,0.4,1,1,1,1.0,2982,1,False,True,13.2,0.0,0.0,0.1115,1.0,0.1723,False,keep,S1_low,39
+01d4fdd2-c9ed-487c-9aaa-e794e6709e55,Czechia,Hornicek,0.45000002,2,2,2,1.0,53,2,False,False,0.3,0.3333,1.0,0.1767,0.0,0.3853,False,keep,S2_mid,40
+0a1fd942-6f43-480e-809a-ea8a215c728a,Argentina,Maria Zakharova,0.4,1,1,1,1.0,676,152,True,True,12.8,0.0,0.0,0.8092,1.0,0.3118,False,keep,S2_mid,41
+0c797c54-c022-4028-8a09-44e0019242c9,Australia,TASS,0.4,1,1,1,1.0,476,608,False,True,39.4,0.0,0.0,0.9921,1.0,0.3484,False,retire,S2_mid,42
+19c8b56c-66cf-49f0-ac64-9a7087592956,UN Women,United Nations,0.45000002,2,2,2,1.0,3,844,False,False,0.8,0.3333,1.0,0.223,0.0,0.3946,False,keep,S2_mid,43
+233da665-1ff3-4cc0-a448-bdda5836cf45,Africa,Defense,0.4,1,1,1,1.0,508,187,True,True,6.3,0.0,0.0,0.8423,1.0,0.3185,False,keep,S2_mid,44
+2407a6f9-0f23-4ada-bd36-1c9ab4c64e7d,Germany,Jewish,0.4,1,1,1,1.0,913,128,True,True,22.3,0.0,0.0,0.7817,1.0,0.3063,False,keep,S2_mid,45
+250360ed-fe42-43c0-83e1-1507dbe45f5c,Europe,Labour,0.4,1,1,1,1.0,1613,115,False,True,41.9,0.0,0.0,0.7647,1.0,0.3029,False,retire,S2_mid,46
+2770c173-30d7-41f9-a657-414ebcc708ed,Saudi Arabia,Texas,0.5,1,1,1,1.0,809,200,True,True,37.6,0.0,0.0,0.8531,1.0,0.3206,False,retire,S2_mid,47
+36cb497c-7f9a-46dd-bed4-b428065d33c1,Damen,TSSM,0.45000002,2,2,2,1.0,4,2,False,False,4.4,0.3333,1.0,0.1767,0.0,0.3853,False,keep,S2_mid,48
+49a7f9bb-619b-4445-9c08-7336c4b82344,Africa,Texas,0.4,1,1,1,1.0,508,200,False,True,12.1,0.0,0.0,0.8531,1.0,0.3206,False,keep,S2_mid,49
+4acd1f58-8c85-4fea-ae89-f220e51192f4,Karolina Muchova,Noskova,0.45000002,2,2,2,1.0,3,12,False,False,22.9,0.3333,1.0,0.223,0.0,0.3946,False,keep,S2_mid,50
+4b475bd5-2232-4478-a998-3b9f909cd355,Israel,Navy,0.4,1,1,1,1.0,2982,158,True,True,1.9,0.0,0.0,0.8154,1.0,0.3131,False,keep,S2_mid,51
+6a8d0ba3-4a90-413b-9314-7aa4ff789e56,Fields Medal,The International Mathematical Union,0.45000002,2,2,2,1.0,6,3,False,False,10.7,0.3333,1.0,0.223,0.0,0.3946,False,keep,S2_mid,52
+70cbfd97-4780-4349-862c-7a059f36636b,Jorge Rodriguez,the Bolivarian Republic,0.45000002,2,2,2,1.0,26,4,False,False,22.8,0.3333,1.0,0.2589,0.0,0.4018,False,keep,S2_mid,53
+849551b0-6896-40e4-bcbd-beb44f5422b1,Germany,Yemen,0.4,1,1,1,1.0,913,373,True,True,1.0,0.0,0.0,0.953,1.0,0.3406,False,keep,S2_mid,54
+8639ba4e-36be-41b0-98ea-cb64845f1cc3,Austria,Pakistan,0.4,1,1,1,1.0,109,750,False,True,2.4,0.0,0.0,0.7561,1.0,0.3012,False,keep,S2_mid,55
+89303f7d-566b-411e-b126-0998601b8cbb,Jarell Quansah,Reece James,0.45000002,2,2,2,1.0,3,4,False,False,36.8,0.3333,1.0,0.223,0.0,0.3946,False,retire,S2_mid,56
+8b8a3ed2-6107-4332-a96b-609a7d030784,Japan,Mexico,0.4,1,1,1,1.0,708,378,False,True,43.4,0.0,0.0,0.9551,1.0,0.341,False,retire,S2_mid,57
+93c4719f-9311-4170-bb60-c09a39bbc2cf,Kolvet,TPUSA,0.5,2,2,3,1.5,3,5,False,False,11.6,0.3333,1.0,0.223,0.0,0.3946,False,keep,S2_mid,58
+94933870-3c4f-47e5-8e28-a686ef18593c,India,Romania,0.4,1,1,1,1.0,1003,110,True,True,9.9,0.0,0.0,0.7576,1.0,0.3015,False,keep,S2_mid,59
+95ab34e8-1acb-4c87-b330-eae5665d92cb,Essequibo,Mark Phillips,0.45000002,2,2,2,1.0,2,3,False,False,13.7,0.3333,1.0,0.1767,0.0,0.3853,False,keep,S2_mid,60
+97bcd17c-9c53-4814-bdb5-a70af94fda0c,LAF,Lebanon,0.45000002,2,2,2,1.0,2,1094,False,False,2.3,0.3333,1.0,0.1767,0.0,0.3853,False,keep,S2_mid,61
+99b12914-a72d-4687-84ac-9445e7949e11,Village People,Willis,0.45000002,2,2,2,1.0,4,4,False,False,33.2,0.3333,1.0,0.2589,0.0,0.4018,False,retire,S2_mid,62
+9c5c913e-1559-4797-86f1-82c85e3cceb2,China,Los Angeles,0.4,1,1,1,1.0,1400,146,True,True,29.4,0.0,0.0,0.8028,1.0,0.3106,False,keep,S2_mid,63
+9d760468-6580-4c1f-8b38-41be7d4ab6d1,Belarus,Israel,0.4,1,1,1,1.0,252,2982,False,True,48.8,0.0,0.0,0.8901,1.0,0.328,False,retire,S2_mid,64
+a85a6061-3d2d-4713-873a-6e20bf0dd401,Andean,Keiko Fujimori,0.5,2,2,3,1.5,5,43,False,False,5.1,0.3333,1.0,0.2882,0.0,0.4076,False,keep,S2_mid,65
+b317e410-96c2-4aa6-9efb-b16c6851a62e,France,SEOUL,0.45000002,1,1,2,2.0,1932,1948,True,True,22.1,0.0,0.0,1.0,1.0,0.35,False,keep,S2_mid,66
+b690be95-20e5-4e1c-9d0b-75c8e1d240bc,Liberia,United States,0.45000002,1,1,2,2.0,126,9204,False,True,6.2,0.0,0.0,0.7792,1.0,0.3058,False,keep,S2_mid,67
+ba490a50-a24f-4413-af51-d52db43d1672,England,South Africa,0.5,1,1,3,3.0,564,478,True,True,30.0,0.0,0.0,0.9928,1.0,0.3486,False,retire,S2_mid,68
+bed07c7c-6e40-40df-bb91-0cbd65309ee7,S. Korea,United Kingdom,0.55,1,1,4,4.0,370,1339,True,True,10.6,0.0,0.0,0.9517,1.0,0.3403,False,keep,S2_mid,69
+c5bb1e60-1696-426b-9032-fafdde46e099,Italy,White House,0.4,1,1,1,1.0,470,215,True,True,25.3,0.0,0.0,0.8647,1.0,0.3229,False,keep,S2_mid,70
+c922ecff-d87d-4517-926e-d66b2a396fbe,Ra’am,anti - Netanyahu,0.45000002,2,2,2,1.0,4,2,False,False,1.1,0.3333,1.0,0.1767,0.0,0.3853,False,keep,S2_mid,71
+ceacab34-1fd7-4014-8b67-cc77ccd72258,Belgium,United Kingdom,0.4,1,1,1,1.0,282,1339,False,True,21.1,0.0,0.0,0.9081,1.0,0.3316,False,keep,S2_mid,72
+d3c00193-9a47-4c94-ba1c-3bb01cace340,India,Nigeria,0.4,1,1,1,1.0,1003,395,True,True,17.8,0.0,0.0,0.9622,1.0,0.3424,False,keep,S2_mid,73
+d41b6104-0532-4eb7-9349-f1d339f7e739,British Steel,London,0.45000002,2,1,2,1.0,7,267,True,False,15.1,0.3333,0.5,0.3345,0.6,0.4069,False,keep,S2_mid,74
+db71f827-9501-4b47-8dd9-2ea3dbb88abc,Mansour Abbas,Yesh Atid,0.5,2,2,3,1.5,5,3,False,False,1.1,0.3333,1.0,0.223,0.0,0.3946,False,keep,S2_mid,75
+dc7138cc-0055-4893-ad06-e3ac6a474585,Azerbaijan,SOCAR,0.45000002,2,2,2,1.0,78,3,False,False,4.1,0.3333,1.0,0.223,0.0,0.3946,False,keep,S2_mid,76
+ddf95582-0165-4160-9a04-f0e3cc678d7d,Black Sea,United Kingdom,0.4,1,1,1,1.0,157,1339,False,True,47.1,0.0,0.0,0.8144,1.0,0.3129,False,retire,S2_mid,77
+e1d24af2-6ac4-453b-9108-1880046c0121,Anastasiia Berezovska,Interpol,0.5,2,2,3,1.5,5,19,False,False,30.9,0.3333,1.0,0.2882,0.0,0.4076,False,retire,S2_mid,78
+e9787b0b-8951-434c-bed3-40ec6e13774a,Europe,Peru,0.4,1,1,1,1.0,1613,105,False,True,1.4,0.0,0.0,0.7502,1.0,0.3,False,keep,S2_mid,79
+033c2cc5-13ed-4789-a0a9-232e929539b2,Arbaeen Headquarters,IRNA,0.55,2,2,4,2.0,4,1190,True,False,0.0,0.3333,1.0,0.2589,0.6,0.4918,True,keep,S3_high,80
+12754069-edd7-4a01-8ab6-7b5395064b68,Greenland,Mark Rutte,0.5,2,2,2,1.0,38,66,False,False,25.4,0.3333,1.0,0.5893,0.0,0.4679,True,keep,S3_high,81
+17891773-6b6c-47a1-a0b0-8609915577e1,IRNA,Iran Air Flight 655,0.45000002,2,2,2,1.0,1190,3,True,False,31.0,0.3333,1.0,0.223,0.6,0.4846,True,keep,S3_high,82
+19298147-09d6-4d6b-91fb-43166e401423,Argentina,Latin America,0.5,2,1,3,1.5,676,44,True,True,2.1,0.3333,0.5,0.6123,1.0,0.5225,True,keep,S3_high,83
+198ba832-2898-4f49-b2b3-094e28794f53,Judiciary,United Nations,0.45000002,2,2,2,1.0,25,844,True,False,4.8,0.3333,1.0,0.5241,0.6,0.5448,True,keep,S3_high,84
+1ce2f13e-8268-46df-98c4-4cf9e768c9be,Hamas,Rafah,0.5,2,2,3,1.5,381,13,True,False,1.3,0.3333,1.0,0.4245,0.6,0.5249,True,keep,S3_high,85
+2431ed37-d32c-432c-aef4-95ed8d01e45e,Havat Gilad,Nablus,0.45000002,2,2,2,1.0,4,73,True,False,10.0,0.3333,1.0,0.2589,0.6,0.4918,True,keep,S3_high,86
+263dda19-ecc9-4afa-bd10-9d98af762d73,Alexander Bastrykin,the Russian Investigative Committee,0.6,2,2,4,2.0,18,12,True,False,10.1,0.3333,1.0,0.4126,0.6,0.5225,True,keep,S3_high,87
+2e1aae9d-a003-4936-bdd7-f5beb2045373,Prada,Saint Levant,0.45000002,2,2,2,1.0,4,3,True,False,31.1,0.3333,1.0,0.223,0.6,0.4846,True,keep,S3_high,88
+34d8e4e9-1e26-45af-9f5e-b71e46c97059,Taiwan,the China Coast Guard,0.45000002,2,2,2,1.0,261,3,True,True,3.3,0.3333,1.0,0.223,1.0,0.5446,True,keep,S3_high,89
+37e191d3-f25d-49ff-8f9d-fccbbc130c90,Capitol,Senate,0.45000002,2,2,2,1.0,11,214,True,False,5.1,0.3333,1.0,0.3997,0.6,0.5199,True,keep,S3_high,90
+3e7109ff-6934-4afc-886d-6ea3432c1ace,IRNA,Mohsin Naqvi,0.6,2,2,5,2.5,1190,20,True,False,13.1,0.3333,1.0,0.4897,0.6,0.5379,True,keep,S3_high,91
+42e27f65-7add-4768-89c1-0fd1f46dd5b6,Dubna,Russia,0.5,2,2,3,1.5,7,6403,True,False,34.2,0.3333,1.0,0.3345,0.6,0.5069,True,keep,S3_high,92
+456cbc3c-3d7c-4b2b-b62d-46979def97ee,Dulles International Airport,Trump,0.45000002,2,2,2,1.0,3,450,True,False,4.8,0.3333,1.0,0.223,0.6,0.4846,True,keep,S3_high,93
+478e526c-ba1e-4990-b378-7bb03e5d06e9,France,UEFA Champions League,0.45000002,2,2,2,1.0,1932,3,True,True,6.2,0.3333,1.0,0.223,1.0,0.5446,True,keep,S3_high,94
+4db98e5a-fda5-4e7a-88aa-c6793339d467,Stade,Turkey,0.45000002,2,2,2,1.0,17,132,True,False,34.9,0.3333,1.0,0.4649,0.6,0.533,True,keep,S3_high,95
+5283aad3-f07e-4ea1-a1c5-8a8ef4580efd,Reform,Restore,0.45000002,2,2,2,1.0,35,2,True,False,0.1,0.3333,1.0,0.1767,0.6,0.4753,True,keep,S3_high,96
+52cf89d7-508f-4596-8ca1-0c28a90157d1,Montenegro,the Islamic Republic of Iran,0.45000002,2,2,2,1.0,7,115,True,False,3.7,0.3333,1.0,0.3345,0.6,0.5069,True,keep,S3_high,97
+53caaebb-8e43-4f10-b75a-ffa8f7959001,Malaysia,Pakatan Harapan,0.6,2,2,5,2.5,134,12,True,False,0.5,0.3333,1.0,0.4126,0.6,0.5225,True,keep,S3_high,98
+57fd6c20-7fe5-4f8e-893b-05128d5c19c7,Belgium,Jasper Philipsen,0.45000002,2,2,2,1.0,282,2,True,False,12.0,0.3333,1.0,0.1767,0.6,0.4753,True,keep,S3_high,99
+58ca0500-7d59-45d3-8b29-47ae30bfdc61,North Africa,Tunisia,0.45000002,2,2,2,1.0,29,121,False,False,3.1,0.3333,1.0,0.5471,0.0,0.4594,True,keep,S3_high,100
+58d2ec95-2817-486b-b816-0d0bb5dd3359,Iran,two weeks ago,0.45000002,2,2,2,1.0,6645,2,True,True,6.2,0.3333,1.0,0.1767,1.0,0.5353,True,keep,S3_high,101
+67e3735c-056e-4586-bee4-b0fc87ff57e4,Brownsville,Saronic,0.45000002,2,2,2,1.0,8,7,True,False,16.9,0.3333,1.0,0.3345,0.6,0.5069,True,keep,S3_high,102
+7404961a-a2e8-49f9-a572-90d47728eb7c,International Red Cross Committee,Russia,0.45000002,2,2,2,1.0,3,6403,True,False,33.1,0.3333,1.0,0.223,0.6,0.4846,True,keep,S3_high,103
+7d6f1250-f817-42e4-bdf7-e070d0fdbfc7,Identity and Democracy,National Rally,0.45000002,2,2,2,1.0,3,22,True,False,33.9,0.3333,1.0,0.223,0.6,0.4846,True,keep,S3_high,104
+7df920ba-8077-4e8c-affe-18af3e8df9dd,IRNA,Ministry of Commerce,0.45000002,2,2,2,1.0,1190,9,True,False,0.1,0.3333,1.0,0.3704,0.6,0.5141,True,keep,S3_high,105
+7e3c9a64-395a-4ea7-8465-bafae0cc0a68,Ivan Mazepa,Mazepa,0.45000002,2,2,2,1.0,4,3,True,False,4.4,0.3333,1.0,0.223,0.6,0.4846,True,keep,S3_high,106
+8354f278-3dbc-405d-b1a4-408504fc9d18,Domodedovo,Russia,0.6,2,2,4,2.0,15,6403,True,False,4.3,0.3333,1.0,0.446,0.6,0.5292,True,keep,S3_high,107
+88060751-bbe8-4c5f-947f-ad58d86f18e9,Spain,Western Sahara,0.45000002,2,2,2,1.0,1292,12,False,False,13.9,0.3333,1.0,0.4126,0.0,0.4325,True,keep,S3_high,108
+8fb08259-d81b-4b8e-b1ac-21015c4e18a0,Iraq,pro - Iranian,0.5,2,2,3,1.5,688,5,True,False,3.5,0.3333,1.0,0.2882,0.6,0.4976,True,keep,S3_high,109
+92b32b38-37ec-4379-80e4-86ceb85e59dc,Cotonou,Istanbul,0.45000002,2,2,2,1.0,3,66,True,False,0.2,0.3333,1.0,0.223,0.6,0.4846,True,keep,S3_high,110
+96617614-ee81-420b-bb0e-d788793ce269,Stade,the Luneburg Police Directorate,0.45000002,2,2,2,1.0,17,2,True,False,34.9,0.3333,1.0,0.1767,0.6,0.4753,True,keep,S3_high,111
+9b1213bc-2ae5-4bdb-b238-2dfc535d83c5,Hanson,Pauline Hanson,0.5,2,2,3,1.5,6,11,True,False,3.6,0.3333,1.0,0.313,0.6,0.5026,True,keep,S3_high,112
+a0a3a964-8328-4e28-b15d-40fecbb59d98,Bubiyan Island,Kuwait,0.45000002,2,2,2,1.0,2,290,True,False,2.3,0.3333,1.0,0.1767,0.6,0.4753,True,keep,S3_high,113
+a4ce7411-6e13-48fc-aa9d-56e01949886f,Anapa,Krasnodar Region,0.45000002,2,2,2,1.0,11,23,True,False,30.2,0.3333,1.0,0.3997,0.6,0.5199,True,keep,S3_high,114
+a83218c2-2980-4d99-91b5-9dfcea004bb5,Damascus,Jordan,0.45000002,2,2,2,1.0,201,313,False,False,27.0,0.3333,1.0,0.8539,0.0,0.5208,True,keep,S3_high,115
+a8a708a9-fb9f-4377-85e6-08134e8f4743,Gholam - Ali Haddad - Adel,IRNA,0.45000002,2,2,2,1.0,4,1190,True,False,13.2,0.3333,1.0,0.2589,0.6,0.4918,True,keep,S3_high,116
+a9311214-1a4a-47a2-a599-82a6bb223cac,Bab al -,Houthi,0.45000002,2,2,2,1.0,5,184,True,False,5.2,0.3333,1.0,0.2882,0.6,0.4976,True,keep,S3_high,117
+ae039087-2c39-43b3-9bc8-bd0ee62b5f1a,Ansarullah,Sana'a,0.45000002,2,2,2,1.0,18,13,True,False,2.9,0.3333,1.0,0.4245,0.6,0.5249,True,keep,S3_high,118
+b448210c-9596-4ad3-a1c5-9ba2bd355cd8,Croatia,the World Cup,0.45000002,2,2,2,1.0,102,228,False,False,31.9,0.3333,1.0,0.7455,0.0,0.4991,True,keep,S3_high,119
+b4d1c2d4-dfb1-41ad-939f-78c1536932e4,HOCC,Houthis,0.45000002,2,2,2,1.0,2,209,True,False,2.6,0.3333,1.0,0.1767,0.6,0.4753,True,keep,S3_high,120
+b7b065b1-1f13-4e0d-8d98-b970ba0aa96b,Caine,Donald Trump,0.45000002,2,2,2,1.0,7,1492,True,False,8.5,0.3333,1.0,0.3345,0.6,0.5069,True,keep,S3_high,121
+b7d25fcd-b723-475e-a84d-5aac2b7293ea,Trump,irans,0.45000002,2,2,2,1.0,450,7,True,False,4.4,0.3333,1.0,0.3345,0.6,0.5069,True,keep,S3_high,122
+b8514476-6da2-4d47-a30a-066ee5d637a7,Muneo Suzuki,Russia,0.45000002,2,2,2,1.0,3,6403,True,False,9.1,0.3333,1.0,0.223,0.6,0.4846,True,keep,S3_high,123
+bb729fc0-9097-45fc-bdc8-437130b0eaae,Benjamin Netanyahu,the Abraham Accords,0.45000002,2,2,2,1.0,241,8,True,False,6.3,0.3333,1.0,0.3534,0.6,0.5107,True,keep,S3_high,124
+bdb7b44c-a5f0-4112-8d2b-8bc9c04dae2c,Kathmandu,all - Nepalese,0.45000002,2,2,2,1.0,8,2,True,False,1.7,0.3333,1.0,0.1767,0.6,0.4753,True,keep,S3_high,125
+bf0e333c-40f5-426a-8120-70985c900e48,Red Crescent,the Iranian Red Crescent Society,0.45000002,2,2,2,1.0,12,16,True,False,16.1,0.3333,1.0,0.4126,0.6,0.5225,True,keep,S3_high,126
+c1c21ea5-61f4-4268-abe9-93b15443ad5c,Bundibugyo,DR Congo,0.55,2,2,2,1.0,16,185,False,False,2.9,0.3333,1.0,0.4557,0.0,0.4411,True,keep,S3_high,127
+c2e0de12-4243-45ab-92f4-3ce7c28c8be3,FSB,Five Eyes,0.45000002,2,2,2,1.0,92,2,True,False,6.6,0.3333,1.0,0.1767,0.6,0.4753,True,keep,S3_high,128
+c70a4c34-755e-4eb9-9936-82c4f198bdb0,Alexey Kondratyev,Kiev,0.45000002,2,2,2,1.0,2,669,True,False,16.1,0.3333,1.0,0.1767,0.6,0.4753,True,keep,S3_high,129
+cd3cab30-5c92-49f6-88cc-49091f0f9ef1,London,the British Museum,0.5,2,2,3,1.5,267,3,True,False,11.1,0.3333,1.0,0.223,0.6,0.4846,True,keep,S3_high,130
+d29a3495-d5f8-4772-adeb-9559a7db85dc,Bastille Day,Paris,0.45000002,2,2,2,1.0,7,313,True,False,20.0,0.3333,1.0,0.3345,0.6,0.5069,True,keep,S3_high,131
+d3c4661a-a91e-49dc-880e-7fd197207af8,Remco Evenepoel,Tour de France,0.5,2,2,3,1.5,4,46,True,False,13.0,0.3333,1.0,0.2589,0.6,0.4918,True,keep,S3_high,132
+e74852f4-2cad-4ffe-a293-9fb4d83127fe,Nazism,USSR,0.45000002,2,2,2,1.0,22,25,True,False,5.2,0.3333,1.0,0.5044,0.6,0.5409,True,keep,S3_high,133
+e7f9e8d9-4057-407a-a8d7-8d6a7b6e8e12,European Championships,France,0.45000002,2,2,2,1.0,2,1932,True,True,3.1,0.3333,1.0,0.1767,1.0,0.5353,True,keep,S3_high,134
+e8e57aa0-88fc-4216-be8d-7d7b7361ecfa,Baresi,Milan,0.55,2,2,4,2.0,7,16,True,False,1.0,0.3333,1.0,0.3345,0.6,0.5069,True,keep,S3_high,135
+ebcd122d-8c29-477d-a998-1870096566bd,Andrea Pirlo,Pirlo,0.45000002,2,2,2,1.0,5,11,True,False,6.1,0.3333,1.0,0.2882,0.6,0.4976,True,keep,S3_high,136
+f427a913-e09e-434c-8ca3-11511f25b21f,BTS,IShowSpeed,0.45000002,2,2,2,1.0,42,9,False,False,14.3,0.3333,1.0,0.3704,0.0,0.4241,True,keep,S3_high,137
+f8a4dd9c-7cd2-4ddc-b8bd-2d9c8b9496a0,Japan,NYK Line,0.45000002,2,2,2,1.0,708,3,True,True,35.5,0.3333,1.0,0.223,1.0,0.5446,True,keep,S3_high,138
+fdce1321-5b0c-4b06-8078-a48ae47fb42f,Russia,The United Nations Security Council,0.45000002,2,2,2,1.0,6403,18,False,False,8.0,0.3333,1.0,0.4736,0.0,0.4447,True,keep,S3_high,139
+05f7724b-a889-4ebc-b07e-15eec9ad9150,FIFA World Cup 2026,Mbappe,0.45000002,2,2,2,1.0,60,81,True,False,24.7,0.3333,1.0,0.6613,0.6,0.5723,True,keep,S4_top,140
+0e536967-fc62-40f0-b908-1ee8df8dda9c,Asia,Beijing,0.55,3,3,4,1.33,232,274,True,False,11.2,0.6667,1.0,0.8769,0.6,0.7654,True,keep,S4_top,141
+157032d9-624a-4f38-bd6e-7dacccaad6f6,Donbass,European Union,0.5,2,2,3,1.5,51,1151,True,False,7.1,0.3333,1.0,0.6356,0.6,0.5671,True,keep,S4_top,142
+15b5bd40-2596-4883-8bb8-9d6953f20bc1,Germany,Porsche,0.45000002,2,2,2,1.0,913,6,True,True,4.1,0.3333,1.0,0.313,1.0,0.5626,True,keep,S4_top,143
+1647a6a3-2c9c-4650-b8ea-b431fd3bba70,Donald Trump,Zohran Mamdani,0.5,2,2,3,1.5,1492,54,True,False,30.9,0.3333,1.0,0.6446,0.6,0.5689,True,keep,S4_top,144
+184bdd87-4a78-435d-8bc3-c8ab40115b95,Australia,Lyon,0.45000002,2,2,2,1.0,476,6,True,True,13.3,0.3333,1.0,0.313,1.0,0.5626,True,keep,S4_top,145
+18775a77-9139-4f4c-98ee-c1c367c26dbb,Christian,IRNA,0.55,2,2,4,2.0,39,1190,True,False,15.4,0.3333,1.0,0.5934,0.6,0.5587,True,keep,S4_top,146
+190486b4-3fa7-4daa-8347-95f053896008,Georgia,Masoud Pezeshkian,0.5,2,2,3,1.5,89,175,True,False,25.2,0.3333,1.0,0.7238,0.6,0.5848,True,keep,S4_top,147
+190a355b-660a-42f9-9590-5c1408e4bcdf,Nepal,Oman,0.55,3,3,4,1.33,68,296,True,False,2.1,0.6667,1.0,0.6811,0.6,0.7262,True,keep,S4_top,148
+195bd121-86da-49d2-a326-083617198462,Americas,Europe,0.5,3,3,3,1.0,24,1613,True,True,3.3,0.6667,1.0,0.5178,1.0,0.7536,True,keep,S4_top,149
+1ae53837-372d-40b9-a3bf-f9da024d5d9b,Coca - Cola,Italy,0.45000002,2,2,2,1.0,5,470,True,True,4.0,0.3333,1.0,0.2882,1.0,0.5576,True,keep,S4_top,150
+25d5de91-c41b-4289-9788-8fa38631d3a6,Donald Trump,Volodymyr Zelenskyy,0.6,5,5,5,1.0,1492,72,True,False,1.9,1.0,1.0,0.6902,0.6,0.878,True,keep,S4_top,151
+2a7856ae-14cc-4d79-9e51-4806de1f2811,Ishaq Dar,Islamabad,0.55,2,2,4,2.0,31,207,True,False,0.0,0.3333,1.0,0.5575,0.6,0.5515,True,keep,S4_top,152
+3030eaf8-4aa6-48f7-9c52-255094de6082,PLA,United States,0.45000002,2,2,2,1.0,14,9204,True,True,24.5,0.3333,1.0,0.4356,1.0,0.5871,True,keep,S4_top,153
+31b76322-cd81-41e7-ac92-dcbea3476eed,Rome,Spain,0.5,3,3,3,1.0,69,1292,True,False,0.0,0.6667,1.0,0.6834,0.6,0.7267,True,keep,S4_top,154
+3224bb81-099c-4144-964d-30eeac0b8040,France,Rafale,0.45000002,2,2,2,1.0,1932,4,True,True,20.9,0.3333,1.0,0.2589,1.0,0.5518,True,keep,S4_top,155
+38ac6c62-572d-47b3-bb57-ba3698d6aaaf,Qatar,the Islamic Republic of Iran,0.45000002,2,2,2,1.0,478,115,True,False,22.0,0.3333,1.0,0.7647,0.6,0.5929,True,keep,S4_top,156
+40b17f3c-575a-45b0-ac11-b18f0890cce2,Italy,Maldini,0.55,4,4,4,1.0,470,7,True,True,6.0,1.0,1.0,0.3345,1.0,0.8669,True,keep,S4_top,157
+45f0c233-6cff-451e-909f-bff86f481807,Taiwan,United Kingdom,0.45000002,2,2,2,1.0,261,1339,True,True,6.3,0.3333,1.0,0.8957,1.0,0.6791,True,keep,S4_top,158
+4735d30b-bf95-4f81-90b0-9a6fecb0fd70,Basra,PMF,0.55,3,3,4,1.33,10,23,True,False,3.6,0.6667,1.0,0.3857,0.6,0.6671,True,keep,S4_top,159
+519680db-55e2-4f3a-afc6-69a87f27cdaf,Bastille Day,Europe,0.5,2,2,3,1.5,7,1613,True,True,20.0,0.3333,1.0,0.3345,1.0,0.5669,True,keep,S4_top,160
+552f1d66-d679-4f26-bb0c-24bfc905c012,Europe,National Rally,0.45000002,2,2,2,1.0,1613,22,True,True,33.9,0.3333,1.0,0.5044,1.0,0.6009,True,keep,S4_top,161
+5867d868-6441-4305-8775-8f1fd4434485,Axios,Doha,0.55,4,3,4,1.0,56,100,True,False,34.4,1.0,0.75,0.6504,0.6,0.8201,True,keep,S4_top,162
+63cf63fb-8600-4e90-a3d0-58f288abe069,AFP,Hezbollah,0.45000002,2,2,2,1.0,152,164,True,False,5.6,0.3333,1.0,0.8092,0.6,0.6018,True,keep,S4_top,163
+6b136605-0539-4e1f-8e98-852c8de394ab,Association of Southeast Asian Nations,India,0.45000002,2,2,2,1.0,17,1003,True,True,12.3,0.3333,1.0,0.4649,1.0,0.593,True,keep,S4_top,164
+744bfae6-5a46-40dc-b46b-6af500d4cbaf,ICE,Moscow,0.45000002,2,2,2,1.0,123,1120,True,False,0.7,0.3333,1.0,0.7754,0.6,0.5951,True,keep,S4_top,165
+7e958dc7-c267-4d4b-b5cd-22acee7fce1d,India,Myanmar,0.55,2,2,3,1.5,1003,188,True,True,10.7,0.3333,1.0,0.8432,1.0,0.6686,True,keep,S4_top,166
+82744eb1-2218-4615-983e-1ceb393ef607,Ankara,Italy,0.55,2,2,3,1.5,377,470,True,True,26.1,0.3333,1.0,0.9547,1.0,0.6909,True,keep,S4_top,167
+82f2233f-dc63-4a71-8b10-dd6815a423c4,Citizen Lab,Europe,0.45000002,2,2,2,1.0,4,1613,True,True,28.1,0.3333,1.0,0.2589,1.0,0.5518,True,keep,S4_top,168
+8a0a7a34-8b0f-4158-a10c-e221d7f82f26,Colombia,Donald Trump,0.6,2,2,4,2.0,221,1492,True,False,0.1,0.3333,1.0,0.8691,0.6,0.6138,True,keep,S4_top,169
+94296f54-5c17-4551-ba39-5d13af0ff051,Mark Carney,Saudi Arabia,0.55,2,2,4,2.0,33,809,True,True,24.7,0.3333,1.0,0.5672,1.0,0.6134,True,keep,S4_top,170
+975f4adc-5142-4256-bcf0-808fcc362793,Brussels,Giorgia Meloni,0.5,2,2,3,1.5,115,41,True,False,0.0,0.3333,1.0,0.6012,0.6,0.5602,True,keep,S4_top,171
+a350f668-57a2-42de-86cb-7678b06de980,Argentina,Atlantic,0.5,2,2,3,1.5,676,25,True,True,12.8,0.3333,1.0,0.5241,1.0,0.6048,True,keep,S4_top,172
+acbf3b76-04c1-4444-9111-8eea2d69ad64,Indian Ocean,SpaceX,0.5,3,3,3,1.0,5,82,True,False,3.6,0.6667,1.0,0.2882,0.6,0.6476,True,keep,S4_top,173
+ad74b9c2-4aec-45a8-9020-1d3ca7fc8244,Cameroon,Ghana,0.55,3,3,3,1.0,27,183,True,False,0.5,0.6667,1.0,0.536,0.6,0.6972,True,keep,S4_top,174
+b7bfdef6-3b51-45e6-b810-dbcce3afcd3f,Bloomberg,Germany,0.45000002,2,2,2,1.0,78,913,True,True,4.8,0.3333,1.0,0.7029,1.0,0.6406,True,keep,S4_top,175
+b9b23c8d-381f-4be6-bd6a-6a21020bb560,NATO,North Atlantic,0.5,3,3,3,1.0,953,5,True,False,2.7,0.6667,1.0,0.2882,0.6,0.6476,True,keep,S4_top,176
+b9e3d369-6e24-4e7f-9d5e-61acf361ac44,Ariana Grande,United States,0.45000002,2,2,2,1.0,7,9204,True,True,0.2,0.3333,1.0,0.3345,1.0,0.5669,True,keep,S4_top,177
+bc3b0e2e-c416-4925-a32b-82ed39c6386e,Algeria,Muslims,0.45000002,2,2,2,1.0,194,49,True,False,17.0,0.3333,1.0,0.6293,0.6,0.5659,True,keep,S4_top,178
+c4798df4-8a9a-4ef3-97c7-8c3f6616cdd9,Donald Trump,Philippines,0.45000002,2,2,2,1.0,1492,144,True,False,1.8,0.3333,1.0,0.8006,0.6,0.6001,True,keep,S4_top,179
+c8010838-d479-45fd-9735-2c8d993c0f2a,Pentagon,Persian Gulf,0.45000002,2,2,2,1.0,191,114,True,False,4.8,0.3333,1.0,0.7633,0.6,0.5927,True,keep,S4_top,180
+cbb77c3c-cdbb-41bf-8a87-2543d5a36a47,Mediterranean,Middle East,0.45000002,2,2,2,1.0,64,411,True,False,4.0,0.3333,1.0,0.6715,0.6,0.5743,True,keep,S4_top,181
+cd071f8e-cd69-42b6-9f0d-c2e317011b50,Donald Trump,Mark Carney,0.5,2,2,3,1.5,1492,33,True,False,12.9,0.3333,1.0,0.5672,0.6,0.5534,True,keep,S4_top,182
+cd503599-8b60-4b34-8c87-4c263d5ba832,Saudi Arabia,United Nations,0.6,3,3,5,1.67,809,844,True,True,0.2,0.6667,1.0,1.0,1.0,0.85,True,keep,S4_top,183
+d28b682c-3483-4e30-bbd9-77bc40acd425,Israel,the Israeli Army,0.5,3,2,3,1.0,2982,4,True,True,20.9,0.6667,0.6667,0.2589,1.0,0.6351,True,keep,S4_top,184
+d35b5d61-aae4-4f5b-b7f5-969f9ffee5b8,Genoa,Morandi,0.5,3,3,3,1.0,8,3,True,False,18.0,0.6667,1.0,0.223,0.6,0.6346,True,keep,S4_top,185
+d6b1535e-a263-4a02-bcc0-00204a8b64b1,Europe,Serbia,0.55,3,3,4,1.33,1613,68,True,True,0.0,0.6667,1.0,0.6811,1.0,0.7862,True,keep,S4_top,186
+d981487d-e0c5-4760-87a2-6660c4cd26fe,Masoud Pezeshkian,Modi,0.5,2,2,2,1.0,175,106,True,False,31.6,0.3333,1.0,0.7517,0.6,0.5903,True,keep,S4_top,187
+dadf2619-787f-410a-a8f3-ecf62a57c7fd,India,Scotland,0.5,2,2,3,1.5,1003,66,True,True,0.4,0.3333,1.0,0.6764,1.0,0.6353,True,keep,S4_top,188
+e04747a6-e149-4750-888d-295c376612b8,Judit Polgar,Peter Magyar,0.5,3,3,3,1.0,3,34,True,False,14.3,0.6667,1.0,0.223,0.6,0.6346,True,keep,S4_top,189
+e1e3a3de-46b0-4a4c-a5eb-56645edec07b,Europe,Yamal,0.45000002,2,2,2,1.0,1613,21,False,True,17.2,0.3333,1.0,0.4972,1.0,0.5994,True,keep,S4_top,190
+e3b9783c-0ca2-4198-8951-2a8ef82de086,Iran,Senate Appropriations Committee,0.45000002,2,2,2,1.0,6645,5,True,True,11.9,0.3333,1.0,0.2882,1.0,0.5576,True,keep,S4_top,191
+e4db116d-ba51-4dde-9b31-d207c9aa6b4a,CENTCOM,Navy,0.6,3,3,4,1.33,175,158,True,False,3.8,0.6667,1.0,0.8154,0.6,0.7531,True,keep,S4_top,192
+e916f3fd-1aa1-4b2b-96fa-cbe30dc29ac5,Finland,Zelensky,0.45000002,2,2,2,1.0,66,527,True,False,4.9,0.3333,1.0,0.6764,0.6,0.5753,True,keep,S4_top,193
+e98482af-a1f6-47a0-83b8-3156fda4a433,United States,earlier this month,0.5,2,2,3,1.5,9204,12,True,True,11.8,0.3333,1.0,0.4126,1.0,0.5825,True,keep,S4_top,194
+ea01bf7c-f89b-4b5c-9fd8-5c1742ebbda9,Amboseli,Kenya,0.55,4,4,4,1.0,4,313,False,False,3.3,1.0,1.0,0.2589,0.0,0.7018,True,keep,S4_top,195
+ecbf7df6-34e9-47d5-ae2a-b2c7f94ca6da,Khuzestan Province,Mohammad Reza Mavalizadeh,0.55,3,3,3,1.0,13,4,True,False,1.4,0.6667,1.0,0.2589,0.6,0.6418,True,keep,S4_top,196
+f383ad19-6c9e-4bdf-8d29-2d2d4906ffe2,Boris Nadezhdin,France,0.5,2,2,3,1.5,20,1932,True,True,0.0,0.3333,1.0,0.4897,1.0,0.5979,True,keep,S4_top,197
+f4489593-8dfc-4301-a435-c934effe8e0d,Hong Kong,United Kingdom,0.45000002,2,2,2,1.0,60,1339,True,True,12.1,0.3333,1.0,0.6613,1.0,0.6323,True,keep,S4_top,198
+f713848c-30ef-46da-8f87-f618384530f7,Israel,Slovenia,0.5,2,2,3,1.5,2982,27,True,True,3.6,0.3333,1.0,0.536,1.0,0.6072,True,keep,S4_top,199

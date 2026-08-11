@@ -140,6 +140,83 @@ def test_no_citation_marker_is_floor_exempt():
     assert report.faithfulness_score == pytest.approx(1.0)
 
 
+def test_no_citation_exemption_survives_the_marker_spellings_the_model_uses():
+    """R-tail: the exemption keyed on ONE spelling while the core plane emits
+    several. Measured over the live corpus, 218 findings carry a non-digit
+    lenticular bracket — `assessed` (36), `assessment` (25), `not_observed`
+    (25), `none` (23) — and the ASCII `[no_citation]` underscore form appears
+    too. Every one of those was an honestly-annotated un-citable clause being
+    counted as an uncited fact assertion and demoted for it.
+
+    The rewrite is floor-side only: the JUDGE still grades the clause, so this
+    opens no hiding place for a fabricated absence.
+    """
+    stem = "Tehran's posture is best read as steady in our synthesis "
+    for marker in (
+        "[no citation]",          # the canonical spelling (regression anchor)
+        "[no_citation]",          # ASCII underscore drift, live
+        "【none】",                 # lenticular, the R-tail headline case
+        "【not_observed】",
+        "【assessed】",
+        "［assessment］",           # full-width brackets
+    ):
+        report = _deterministic_floor(stem + marker, [])
+        assert report.checkable_claims == 0, f"{marker} was not floor-exempt"
+        assert report.faithfulness_score == pytest.approx(1.0), marker
+
+
+def test_range_citation_resolves_through_variant_brackets_too():
+    """R-tail: 93 live findings carry a RANGE citation inside variant brackets
+    (`【1-92】`). The bare-integer rule skipped them, so `_CLAIM_RANGE_RE` never
+    saw them and an honest survey clause citing the whole enumerated corpus
+    floored as UNCITED — the range parser's own bug, one glyph out of reach.
+
+    The dash class is wide because the corpus uses ASCII `-`, en dash `–` and
+    the non-breaking hyphen `‑` interchangeably.
+    """
+    citations = [{"marker": "[5]", "signal_id": "sig-5"}]
+    for marker in ("[1-92]", "【1-92】", "【1‑92】", "［1–92］"):
+        body = f"The signals concern floods, sports fixtures, and trade {marker}."
+        report = _deterministic_floor(body, citations)
+        assert report.faithfulness_score == pytest.approx(1.0), marker
+        assert report.supported_claims == 1, marker
+
+
+def test_the_three_remaining_marker_syntaxes_resolve_on_the_verify_side():
+    """V-I3 — recommendation #5 of the round-4 panel, at the place it costs:
+    the FLOOR. A cited claim graded as uncited is a free precision loss, and all
+    three of these have a named live specimen — the bare-parenthesis `(ref:N)`
+    (S2, `country_composition`/cn), the compound `[[ref:N,M]]` (08-04 §6.2), and
+    the dagger form `【N†L1-L2】` (§6.8, Brazil `military_posture`).
+
+    Graded through ``_deterministic_floor``, which is the arm that stamped
+    ``markers=[]`` on a fully cited claim.
+    """
+    sub = [{"marker": "[[ref:2]]", "signal_id": "sub-2"}]
+    for body in (
+        "Unremarkable reads: economic_coercion (ref:2); the desk read is steady.",
+        "The regional picture rests on [[ref:2,6]] and holds.",
+    ):
+        report = _deterministic_floor(body, sub)
+        assert report.faithfulness_score == pytest.approx(1.0), body
+        assert report.supported_claims == 1, body
+    unit = [{"marker": "[2]", "signal_id": "sig-2"}]
+    report = _deterministic_floor(
+        "Brazilian procurement continued through the quarter 【2†L1-L2】.", unit
+    )
+    assert report.faithfulness_score == pytest.approx(1.0)
+    assert report.supported_claims == 1
+
+
+def test_unrecognised_bracketed_prose_is_still_a_checkable_claim():
+    """The exemption list is an ALLOWLIST. Arbitrary bracketed prose must NOT
+    buy a floor exemption, or the model could opt out of citing anything by
+    inventing an annotation."""
+    line = "Iran resumed uranium enrichment at Natanz 【emergency powers】"
+    assert _is_fact_asserting(line) is True
+    assert _deterministic_floor(line, []).checkable_claims == 1
+
+
 def test_null_result_finding_detected_and_positive_not():
     null_body = (
         "None of the 78 signals reference political unrest concerning Romania's "
@@ -218,6 +295,58 @@ def test_cross_target_leak_common_word_slug_desks_are_not_inert():
         body="India's ruling coalition remains stable in the interim.",
         target_id="country_g20_in",
     ) is None
+
+
+def test_cross_target_leak_sees_the_bare_us_the_08_05_h6_specimen():
+    """V-I2. The round-4 H6 finding, condensed: a `country_g20_us` narrative desk
+    that says "US" six times and was flagged — HARD — as naming only Iran. 100%
+    of that day's `cross_target_leak` class, and the second round in which
+    08-04 recommendation #4 went unshipped."""
+    body = (
+        "An imminent US-Iran-Oman agreement is being framed identically across "
+        "US-focused outlets. A record-high US stock market followed, and a US "
+        "State Department briefing set out the terms of the US-Iran conflict "
+        "de-escalation. Iran's foreign ministry called the reports premature."
+    )
+    assert cross_target_leak_span(
+        title="Narrative coordination", body=body, target_id="country_g20_us"
+    ) is None
+
+
+def test_cross_target_leak_us_short_forms_are_case_sensitive():
+    """The reason bare "US" could never join the casefolded gazetteer: lowered,
+    it is the English pronoun. A finding whose only "us" is a pronoun, about
+    another country, is STILL a leak — or the fix would disable the guard for
+    the one desk it was written for."""
+    span = cross_target_leak_span(
+        title="Posture read",
+        body="The evidence tells us that Iran expanded its missile arsenal.",
+        target_id="country_g20_us",
+    )
+    assert span is not None and "iran" in span.text.lower()
+    # …while every real spelling of the country counts.
+    for form in ("US", "U.S.", "USA", "American officials", "the United States"):
+        assert cross_target_leak_span(
+            title="Posture read",
+            body=f"{form} responded to Iran's announcement.",
+            target_id="country_g20_us",
+        ) is None
+
+
+def test_cross_target_leak_reads_demonyms_on_both_arms():
+    """A desk naming its own country ONLY by demonym is on target; the tolerance
+    is applied symmetrically, so it cannot skew the decision one way."""
+    assert cross_target_leak_span(
+        title="Naval activity",
+        body="Chinese vessels transited the strait; Japan protested.",
+        target_id="country_g20_cn",
+    ) is None
+    span = cross_target_leak_span(
+        title="Internal stability read",
+        body="Romanian officials confirmed the emergency decree.",
+        target_id="country_g20_tr",
+    )
+    assert span is not None and "romania" in span.text.lower()
 
 
 def test_cross_target_leak_none_when_on_target_or_generic():

@@ -160,6 +160,38 @@ async def test_dispatch_workflow_timeout_yields_observable_result(monkeypatch) -
 # ---------------------------------------------------------------------------
 
 
+#: K-3 — pin the parent prompt to a module that actually imports.
+#:
+#: ``optimizer.py`` used to derive the parent path by convention as
+#: ``legba.prompts.{analyzed_analyst_id}.v1``, and the synthetic analyst id
+#: below (``inline_target.india_energy``) yielded
+#: ``legba.prompts.inline_target.india_energy.v1`` — a module that has never
+#: existed. The tests that drive the full loop still passed, because
+#: ``_load_parent_prompt_text`` returned a ``<<missing prompt module>>`` marker
+#: at ``logger.debug`` and the optimizer went on to score and mutate *that
+#: marker*: every "the loop produced a candidate" assertion was being made
+#: against a placeholder. That path raises now, which is what surfaced it.
+#:
+#: Passed explicitly rather than by renaming the synthetic analyst to a real
+#: one, because a real analyst id also changes which descriptor the parent-text
+#: fork looks up — these tests are about the loop's control flow, not about
+#: descriptor resolution. ``predictor.v1`` is the cheapest real prompt package
+#: to build (~0.01s).
+_REAL_PARENT_PROMPT = {"parent_prompt_module_path": "legba.prompts.predictor.v1"}
+
+#: The analyzed analyst's KIND — what the corrected convention builds from.
+#:
+#: Prompt PACKAGES are named by kind (``legba/prompts/inline_target/v1.py``),
+#: not by analyst id, so the synthetic ``inline_target.india_energy`` /
+#: ``inline_target.brazil`` units below resolve to the REAL
+#: ``legba.prompts.inline_target.v1``. In production the actor plumbs this key
+#: from the analyzed analyst's head descriptor
+#: (``dapr_actors._inject_optimizer_prompt_options``); a run that can supply
+#: NEITHER a declared path nor a kind now emits a loud no-op instead of
+#: inventing a module path.
+_ANALYZED_KIND = {"analyzed_analyst_kind": "inline_target"}
+
+
 def _trace_critique_row(
     *,
     analyst_id: str = "inline_target.india_energy",
@@ -372,6 +404,7 @@ async def test_run_method_dispatches_workflow_with_correct_shape() -> None:
     options = {
         "analyst_id": "optimizer.brazil",
         "run_id": uuid4(),
+        **_ANALYZED_KIND,
     }
 
     result = await run_method(inputs, options, deps)
@@ -380,7 +413,11 @@ async def test_run_method_dispatches_workflow_with_correct_shape() -> None:
     call = stub_client.calls[0]
     wf_input: OptimizerWorkflowInput = call["workflow_input"]
     assert wf_input.analyst_id == "inline_target.brazil"
-    assert wf_input.parent_prompt_module_path == "legba.prompts.inline_target.brazil.v1"
+    # The CONVENTION path, derived from the analyzed analyst's KIND. Deriving
+    # it from the analyst ID (the old behaviour) produced
+    # `legba.prompts.inline_target.brazil.v1`, which has never existed —
+    # prompt packages are named by kind.
+    assert wf_input.parent_prompt_module_path == "legba.prompts.inline_target.v1"
     assert wf_input.max_generations == 4
     # _StubTemporalClient models the DURABLE (Dapr) client, so the 7 joined rows
     # pass BY REFERENCE (the 4 MB gRPC-cap fix, #86): the inline training_set is
@@ -427,7 +464,7 @@ async def test_run_method_surfaces_workflow_token_usage() -> None:
     deps = OptimizerDeps(temporal_client=stub_client)
     inputs = [_trace_critique_row() for _ in range(6)]
 
-    result = await run_method(inputs, {"analyst_id": "optimizer.x"}, deps)
+    result = await run_method(inputs, {"analyst_id": "optimizer.x", **_ANALYZED_KIND}, deps)
 
     # The cap accrues on prompt+completion+reasoning — all must propagate.
     assert result.usage, "optimizer must NOT report empty usage on a real run"
@@ -457,7 +494,7 @@ async def test_run_method_usage_zero_when_no_llm_calls() -> None:
     deps = OptimizerDeps(temporal_client=stub_client)
     inputs = [_trace_critique_row() for _ in range(6)]
 
-    result = await run_method(inputs, {"analyst_id": "optimizer.x"}, deps)
+    result = await run_method(inputs, {"analyst_id": "optimizer.x", **_ANALYZED_KIND}, deps)
     assert result.usage["prompt_tokens"] == 0
     assert result.usage["total_tokens"] == 0
 
@@ -478,7 +515,7 @@ async def test_run_method_usage_defaults_when_diagnostics_lack_usage() -> None:
     deps = OptimizerDeps(temporal_client=stub_client)
     inputs = [_trace_critique_row() for _ in range(6)]
 
-    result = await run_method(inputs, {"analyst_id": "optimizer.x"}, deps)
+    result = await run_method(inputs, {"analyst_id": "optimizer.x", **_ANALYZED_KIND}, deps)
     assert result.usage == {
         "prompt_tokens": 0, "completion_tokens": 0,
         "reasoning_tokens": 0, "total_tokens": 0,
@@ -491,7 +528,7 @@ async def test_run_method_no_analyzed_analyst_short_circuits() -> None:
     stub_client = _StubTemporalClient()
     deps = OptimizerDeps(temporal_client=stub_client)
     # Bare options + empty inputs — nothing to resolve.
-    result = await run_method([], {"analyst_id": "optimizer.x"}, deps)
+    result = await run_method([], {"analyst_id": "optimizer.x", **_ANALYZED_KIND}, deps)
     assert stub_client.calls == [], "should not dispatch a workflow with no target"
     assert "noop" in result.finding.tags
     assert result.derived_from == []
@@ -511,7 +548,7 @@ async def test_run_method_derived_from_is_produced_rows_traces_in_data() -> None
         _trace_critique_row(run_id=t, critique_id=c, output_row_refs=[p])
         for t, c, p in zip(trace_ids, critique_ids, produced_ids)
     ]
-    result = await run_method(inputs, {"analyst_id": "optimizer.x"}, deps)
+    result = await run_method(inputs, {"analyst_id": "optimizer.x", **_ANALYZED_KIND}, deps)
     derived = set(result.derived_from)
     # derived_from = produced substrate rows (real lineage roots).
     assert set(produced_ids).issubset(derived)
@@ -536,6 +573,7 @@ async def test_run_method_promotion_policy_round_trips() -> None:
     options = {
         "analyst_id": "optimizer.x",
         "promotion_policy": "auto_with_threshold",
+        **_ANALYZED_KIND,
     }
     result = await run_method(inputs, options, deps)
     candidate = PromptModuleCandidatePayload(**result.finding.data["candidate"])
@@ -561,7 +599,7 @@ async def test_run_method_eval_score_delta_is_candidate_minus_parent() -> None:
     stub_client = _StubTemporalClient(canned_result=canned)
     deps = OptimizerDeps(temporal_client=stub_client)
     inputs = [_trace_critique_row()]
-    result = await run_method(inputs, {"analyst_id": "optimizer.x"}, deps)
+    result = await run_method(inputs, {"analyst_id": "optimizer.x", **_ANALYZED_KIND}, deps)
     candidate = PromptModuleCandidatePayload(**result.finding.data["candidate"])
     assert candidate.eval_score == pytest.approx(0.83)
     assert candidate.eval_score_delta == pytest.approx(0.21)
@@ -588,7 +626,7 @@ async def test_run_method_propagates_real_method_not_hardcoded() -> None:
     stub_client = _StubTemporalClient(canned_result=canned)
     deps = OptimizerDeps(temporal_client=stub_client)
     result = await run_method(
-        [_trace_critique_row()], {"analyst_id": "optimizer.x"}, deps,
+        [_trace_critique_row()], {"analyst_id": "optimizer.x", **_ANALYZED_KIND}, deps,
     )
     # Both the finding envelope AND the candidate's data bag carry the REAL
     # method — never the hardcoded 'dspy_gepa'.
@@ -617,7 +655,7 @@ async def test_run_method_snapshots_parent_prompt_text() -> None:
     stub_client = _StubTemporalClient(canned_result=canned)
     deps = OptimizerDeps(temporal_client=stub_client)
     result = await run_method(
-        [_trace_critique_row()], {"analyst_id": "optimizer.x"}, deps,
+        [_trace_critique_row()], {"analyst_id": "optimizer.x", **_ANALYZED_KIND}, deps,
     )
     candidate = PromptModuleCandidatePayload(**result.finding.data["candidate"])
     assert candidate.parent_prompt_module_text == (
@@ -644,7 +682,7 @@ async def test_in_process_client_enforces_min_traces_required() -> None:
         min_traces_required=10,   # require 10, we'll supply 3
     )
     inputs = [_trace_critique_row() for _ in range(3)]
-    result = await run_method(inputs, {"analyst_id": "optimizer.x"}, deps)
+    result = await run_method(inputs, {"analyst_id": "optimizer.x", **_ANALYZED_KIND}, deps)
     candidate = PromptModuleCandidatePayload(**result.finding.data["candidate"])
     # Validation failed → text starts with the skip marker, delta is 0.
     assert candidate.candidate_prompt_module_text.startswith("<<skipped:")
@@ -663,7 +701,9 @@ async def test_in_process_client_runs_loop_when_enough_traces() -> None:
     inputs = [
         _trace_critique_row(critique_score=0.5 + (i % 3) * 0.1) for i in range(5)
     ]
-    result = await run_method(inputs, {"analyst_id": "optimizer.x"}, deps)
+    result = await run_method(
+        inputs, {"analyst_id": "optimizer.x", **_REAL_PARENT_PROMPT}, deps,
+    )
     candidate = PromptModuleCandidatePayload(**result.finding.data["candidate"])
     # Loop produced *something* — the candidate text is non-empty and
     # the loop ran for between 0 and max_generations generations.
@@ -696,7 +736,9 @@ async def test_naive_fallback_respects_max_generations_bound() -> None:
         max_generations=1,
     )
     inputs = [_trace_critique_row() for _ in range(3)]
-    result = await run_method(inputs, {"analyst_id": "optimizer.x"}, deps)
+    result = await run_method(
+        inputs, {"analyst_id": "optimizer.x", **_REAL_PARENT_PROMPT}, deps,
+    )
     candidate = PromptModuleCandidatePayload(**result.finding.data["candidate"])
     diagnostics = candidate.data.get("diagnostics") or {}
     # Either the dspy.GEPA path ran (rare in test env) OR the naive

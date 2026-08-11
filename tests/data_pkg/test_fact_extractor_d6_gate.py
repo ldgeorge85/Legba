@@ -273,3 +273,93 @@ def test_reject_sports_topic_defaults_on():
     assert cfg.reject_sports_topic is True
     cfg2 = FactExtractorConfig(reject_sports_topic=False)
     assert cfg2.reject_sports_topic is False
+
+
+# ---------------------------------------------------------------------------
+# CW-6 — CAPITAL-AS-GOVERNMENT METONYMY
+#
+# Every triple in the first table was read VERBATIM off the live substrate on
+# 2026-08-03 (`SELECT subject, predicate, value FROM facts WHERE subject =
+# 'Madrid'` and the K-4 R3 contention groups). News writes governments as
+# their capitals — "tensions between Madrid and Rabat", "Kyiv says",
+# "Washington's allies" — and the extractor was minting the capital as a
+# geographic SUBJECT of a state-level relation.
+#
+# The second table is the point of the gate: the city's REAL facts, which sat
+# in the same live cluster and must survive untouched.
+# ---------------------------------------------------------------------------
+
+_LIVE_METONYMY = [
+    ("Madrid", "border with", "France"),
+    ("Madrid", "border with", "Spain"),
+    ("Madrid", "border with", "Italy"),
+    ("Madrid", "border with", "Ceuta"),
+    ("Madrid", "border with", "Schengen"),
+    ("Madrid", "border with", "Europe"),
+    ("Madrid", "member of", "EU"),
+    ("Madrid", "member of", "European Union"),
+    ("Madrid", "member of", "Europe"),
+    ("Madrid", "conflict with", "France"),
+    ("Kiev", "conflict with", "the Middle East"),
+    ("Washington", "ally of", "Jordan"),
+    ("Kremlin", "spokesperson for", "Moscow"),
+]
+
+
+@pytest.mark.parametrize("subject, predicate, value", _LIVE_METONYMY)
+def test_a_capital_standing_in_for_its_government_is_dropped(
+    subject, predicate, value
+):
+    assert _d6(subject, predicate, value) == "capital_metonymy"
+
+
+_LIVE_REAL_CITY_FACTS = [
+    ("Madrid", "located in", "Spain"),
+    ("Madrid", "capital of", "Spain"),
+    ("Madrid", "part of", "Spain"),
+    ("Paris", "headquartered in", "France"),
+    ("Brussels", "located in", "Belgium"),
+]
+
+
+@pytest.mark.parametrize("subject, predicate, value", _LIVE_REAL_CITY_FACTS)
+def test_the_citys_real_facts_survive(subject, predicate, value):
+    """Containment and location predicates are absent from the state-only set
+    BY DESIGN. They are the relations a city genuinely takes, and they are
+    exactly the legitimate rows that sat beside the junk in the live Madrid
+    cluster. A wrong VALUE under one of them ("Madrid capital of France") is a
+    direction/truth defect for a different gate — widening this one to catch
+    it would take the real city facts with it."""
+    assert _d6(subject, predicate, value) != "capital_metonymy"
+
+
+@pytest.mark.parametrize(
+    "subject, predicate, value",
+    [
+        ("Singapore", "member of", "ASEAN"),
+        ("Monaco", "signed agreement with", "France"),
+        ("Vatican City", "diplomatic relations with", "Italy"),
+    ],
+)
+def test_a_city_state_keeps_its_inter_state_relations(subject, predicate, value):
+    """There the city IS the state, so these are real facts. Dropping them
+    would be the guard inventing a metonymy that is not there."""
+    assert _d6(subject, predicate, value) != "capital_metonymy"
+
+
+@pytest.mark.parametrize(
+    "subject, predicate, value",
+    [
+        ("Spain", "border with", "France"),
+        ("France", "member of", "EU"),
+        ("Ukraine", "conflict with", "Russia"),
+    ],
+)
+def test_a_state_subject_is_untouched(subject, predicate, value):
+    assert _d6(subject, predicate, value) is None
+
+
+def test_an_unlisted_city_flows_through():
+    """The gazetteer is curated and conservative — an unknown city is not
+    silently reclassified as somebody's government."""
+    assert _d6("Bordeaux", "border with", "Spain") is None

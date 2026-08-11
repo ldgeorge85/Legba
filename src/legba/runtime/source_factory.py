@@ -50,7 +50,6 @@ so a missing optional package never crashes the runtime bring-up.
 
 from __future__ import annotations
 
-import importlib
 import inspect
 import logging
 from typing import Any, Awaitable, Callable, ClassVar, Mapping, Protocol, cast
@@ -175,63 +174,91 @@ def discover_source_kinds() -> dict[str, type[SourceHandler]]:
     """Walk the ``legba.data.sources`` package and return a kind -> class map.
 
     Each handler module exposes a class with ``kind: ClassVar[str]`` and
-    ``config_schema: ClassVar[type[BaseModel]]`` (per L-102 §2).  Import
-    failures (missing optional packages, mid-wave merges) are logged
-    + skipped — same defensive shape :func:`discover_analyst_kinds`
-    uses in :mod:`legba.data.analysts`.
+    ``config_schema: ClassVar[type[BaseModel]]`` (per L-102 §2).
 
     Returns a dict keyed by the handler's ``.kind`` string mapping to
     the handler class (NOT an instance).  Callers construct an instance
     via :func:`build_source_handler`.
+
+    K-3: the table names BOTH a module and a class, so it can be wrong in two
+    ways, and both used to be a warning-and-skip. The consequence is worse
+    here than for analysts because the *key* is the class's ``kind``
+    attribute, not the module name — three handlers already dispatch under a
+    kind that differs from their filename (``discord`` →
+    ``discord_webhook``, ``common_crawl`` → ``common_crawl_news``,
+    ``telegram`` → ``telegram_channel``). A skipped module removes a source
+    kind, and every descriptor naming it fails to build a handler with no
+    boot-time explanation. Note the optional-dependency worry does not apply:
+    every handler that needs an optional package (``intelmq``, GDELT's
+    BigQuery client) imports it lazily inside a method, so all 16 modules
+    import with the base dependency set.
+
+    Raises
+    ------
+    KindDiscoveryError
+        Any declared module failed to import, lacks the named handler class,
+        or that class has no non-empty ``kind``.
     """
+    from ..data.kind_discovery import (
+        DiscoveryFailure, import_declared_module, raise_if_failed,
+    )
+
     registry: dict[str, type[SourceHandler]] = {}
+    failures: list[DiscoveryFailure] = []
     for mod_name, cls_name in _SOURCE_MODULE_TABLE:
-        try:
-            module = importlib.import_module(
-                f"legba.data.sources.{mod_name}",
-            )
-        except Exception as exc:                                # pragma: no cover
-            logger.warning(
-                "sources.discover.import_failed module=%s err=%s",
-                mod_name, exc,
-            )
+        dotted = f"legba.data.sources.{mod_name}"
+        module = import_declared_module("sources", dotted, failures)
+        if module is None:
             continue
 
         cls = getattr(module, cls_name, None)
-        if cls is None:                                         # pragma: no cover
-            logger.warning(
-                "sources.discover.skip module=%s reason=missing_class "
-                "expected=%s",
-                mod_name, cls_name,
-            )
+        if cls is None:
+            failures.append(DiscoveryFailure(
+                registry="sources",
+                module=dotted,
+                reason="missing_contract",
+                detail=f"module has no handler class {cls_name!r}",
+            ))
             continue
 
         kind = getattr(cls, "kind", None)
-        if not isinstance(kind, str) or not kind:               # pragma: no cover
-            logger.warning(
-                "sources.discover.skip module=%s reason=missing_kind cls=%s",
-                mod_name, cls_name,
-            )
+        if not isinstance(kind, str) or not kind:
+            failures.append(DiscoveryFailure(
+                registry="sources",
+                module=dotted,
+                reason="missing_contract",
+                detail=f"{cls_name}.kind is absent or not a non-empty str",
+            ))
             continue
 
-        if not hasattr(cls, "config_schema"):                   # pragma: no cover
-            logger.warning(
-                "sources.discover.skip module=%s reason=missing_config_schema "
-                "cls=%s",
-                mod_name, cls_name,
-            )
+        if not hasattr(cls, "config_schema"):
+            failures.append(DiscoveryFailure(
+                registry="sources",
+                module=dotted,
+                reason="missing_contract",
+                detail=f"{cls_name} has no config_schema",
+            ))
             continue
 
-        if kind in registry:                                    # pragma: no cover
-            logger.warning(
-                "sources.discover.duplicate_kind kind=%s "
-                "existing=%s new=%s — keeping the first registration",
-                kind, registry[kind].__name__, cls.__name__,
-            )
+        if kind in registry:
+            # Two classes claiming one kind is ambiguous, not degraded:
+            # "keeping the first registration" made the winner depend on
+            # tuple order, so a reorder would silently swap which handler
+            # every descriptor of that kind runs.
+            failures.append(DiscoveryFailure(
+                registry="sources",
+                module=dotted,
+                reason="duplicate_kind",
+                detail=(
+                    f"kind={kind!r} already registered by "
+                    f"{registry[kind].__name__}; {cls.__name__} collides"
+                ),
+            ))
             continue
 
         registry[kind] = cast(type[SourceHandler], cls)
 
+    raise_if_failed(failures)
     return registry
 
 

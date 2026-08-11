@@ -72,6 +72,14 @@ method:
   kind: deterministic
   impl: legba.data.analysts.deterministic:run_method
   sub_handler: signal_embedder
+  # Re-embed drain (operator, 2026-08-03): 36,775 sub-floor vectors released for
+  # re-embedding after the B-4 length-floor fix; the default 200/tick cap put the
+  # drain at ~28 days. 1000/tick cuts it to days. batch_limit stays at the
+  # default 200 — the embedding SERVICE call size is unchanged; only the number
+  # of batches per tick grows. Revert to default by deleting this block once the
+  # drain completes.
+  options:
+    max_embeds: 1000
   # Deterministic kind, NO LLM block: this sweep uses the Qdrant vector plane +
   # the hosted embedding service, not an LLM. The runtime deps-builder connects a
   # QdrantStore into deps.extras["signal_embedder_qdrant"] and threads the process-

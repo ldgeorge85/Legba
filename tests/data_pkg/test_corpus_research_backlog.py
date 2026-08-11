@@ -850,3 +850,57 @@ async def test_run_method_backlog_wiring_does_not_affect_other_analysts():
         deps,
     )
     assert "addressed_question" not in (result.finding.data or {})
+
+
+# ---------------------------------------------------------------------------
+# W1-C2 — the FORWARD consumption stamp (the review-flag plane's missing seed)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolved_question_is_stamped_as_a_consumption_edge():
+    """``derived_from`` answers "what did this finding read?"; ``claim_watch``
+    asks the inverse and walks ``output_consumption`` FORWARD from the question
+    id. Until this stamp existed no producer wrote such a row (verified live
+    2026-08-03: 0 rows where ``output_consumption.consumed_id`` joins
+    ``hypotheses``, at any status, ever), so ``review_flags`` was 0 rows
+    all-time — a wired write path whose precondition nothing satisfied."""
+    from legba.data.provenance.consumption import CONSUMPTION_CONTEXT_QUESTION
+
+    llm = _ScriptedLLM({
+        "title": "Answered", "body": "The corpus confirms it. [1]",
+        "confidence": 0.6, "evidence": ["sig-1"], "tags": ["severity:low"],
+        "addressed_question": "Q1",
+    })
+    deps = InlineTargetDeps(
+        llm=llm,
+        grounding_hook=_make_hook(block=_STANDING_BLOCK, sink_fill=_QUESTION_SINK_FILL),
+    )
+    result = await run_method(
+        [{"id": uuid4(), "title": "a signal",
+          "produced_at": "2026-07-27T00:00:00+00:00"}],
+        {"analyst_id": "corpus_researcher"},
+        deps,
+    )
+    assert result.consumed_edges == [(_QID, CONSUMPTION_CONTEXT_QUESTION)]
+
+
+@pytest.mark.asyncio
+async def test_no_resolved_question_stamps_no_consumption_edge():
+    """A run that resolves no question stamps nothing — the forward index must
+    never claim a product rests on a question it was merely shown."""
+    llm = _ScriptedLLM({
+        "title": "Self-selected", "body": "Something else. [1]",
+        "confidence": 0.5, "evidence": ["sig-1"], "tags": ["severity:low"],
+    })
+    deps = InlineTargetDeps(
+        llm=llm,
+        grounding_hook=_make_hook(block=_STANDING_BLOCK, sink_fill=_QUESTION_SINK_FILL),
+    )
+    result = await run_method(
+        [{"id": uuid4(), "title": "a signal",
+          "produced_at": "2026-07-27T00:00:00+00:00"}],
+        {"analyst_id": "corpus_researcher"},
+        deps,
+    )
+    assert result.consumed_edges == []

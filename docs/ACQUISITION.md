@@ -135,7 +135,15 @@ deadline, a 180s whole-cycle cap (per-channel budgets clamp to it), a
 `FLOOD_WAIT` abort that persists the server-imposed deadline across polls
 (honored on the next cycle rather than hammered), and a stale poll-lock
 force-clear (single-flight lock, cleared past 300s) — so one slow or
-rate-limited channel can never wedge the cycle or the actor.
+rate-limited channel can never wedge the cycle or the actor. Since 2026-07-31
+polls also **rotate** through the channel list with a write-ahead resume
+pointer (the generic poll budget had been truncating the walk before its tail
+— the newest channels had produced one signal ever; post-fix they produced
+dozens in hours at a 0% poll-cap rate), handlers advertise their own poll
+bounds, and chat text is a first-class corpus field so what arrives is
+searchable. A `config.classes` per-channel override lets individual channels
+carry their honest `source_class` (two Ansar Allah channels are pinned
+`state_media`) without a second Telegram session.
 
 The 3-feed RSS set (BBC, Deutsche Welle, Al Jazeera) is the **minimal
 cold-start verification set** — the smallest loop that proves the path from
@@ -143,15 +151,16 @@ empty volumes. It is *not* the deployed scope. A fresh instance reaches
 **current/full scope** by running `scripts/bringup_register_source_catalog.py`,
 which registers the **46-entry** source catalog (43 `rss` + 3 `geojson`
 handler integrations); the standalone state-media feeds (IRNA / PressTV /
-Ukrinform) and the UCDP GED adapter (currently **paused pending an access
-token**) are registered as separate descriptor files, and each source now
+Ukrinform) and the UCDP GED adapter (**retired** pending an operator-held
+access token) are registered as separate descriptor files, and each source now
 carries a `source_class` taxonomy tag (`reporting` / `analysis` / `official` /
-`state_media`). A representative running deployment has **~53 distinct
-sources actively producing signals** (the 46 catalog integrations plus the
-state-media feeds and seed / world-baseline curated sources) over a substrate on
-the order of tens of thousands of signals → thousands of findings / facts /
-nexuses. See `DATA_SOURCES.md` for the full catalog (the
-three-tier 3 / 46 / ~53 scope model, the per-source table, and the
+`state_media`). A representative running deployment has **over a hundred
+distinct sources producing signals** (the 46 catalog integrations plus the
+state-media feeds, the activated breadth batches, and seed / world-baseline
+curated sources — the active-registered count is generated: `RELEASE_STATE.md`)
+over a substrate on the order of a hundred thousand signals → tens of
+thousands of findings / facts / nexuses. See `DATA_SOURCES.md` for the full
+catalog (the tiered scope model, the per-source table, and the
 handler-kind detail), and `SETUP.md` for the from-zero
 cold-start-to-current-scope deploy commands.
 

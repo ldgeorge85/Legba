@@ -1,0 +1,62 @@
+[
+  {
+    "N": 1,
+    "recovered": 40,
+    "calls": 40,
+    "call_parse_ok_rate": 1.0,
+    "calls_truncated": 0,
+    "prompt_tokens_per_candidate": 1462.5,
+    "completion_tokens_per_verdict": 494.4,
+    "tokens_per_edge": 1956.8,
+    "wall_per_edge": 3.437,
+    "accepted": 16
+  },
+  {
+    "N": 6,
+    "recovered": 40,
+    "calls": 7,
+    "call_parse_ok_rate": 1.0,
+    "calls_truncated": 0,
+    "prompt_tokens_per_candidate": 394.1,
+    "completion_tokens_per_verdict": 327.3,
+    "tokens_per_edge": 721.4,
+    "wall_per_edge": 2.246,
+    "accepted": 15
+  },
+  {
+    "N": 12,
+    "recovered": 40,
+    "calls": 4,
+    "call_parse_ok_rate": 1.0,
+    "calls_truncated": 0,
+    "prompt_tokens_per_candidate": 297.0,
+    "completion_tokens_per_verdict": 295.2,
+    "tokens_per_edge": 592.2,
+    "wall_per_edge": 2.062,
+    "accepted": 19
+  },
+  {
+    "N": 24,
+    "recovered": 40,
+    "calls": 2,
+    "call_parse_ok_rate": 1.0,
+    "calls_truncated": 0,
+    "prompt_tokens_per_candidate": 232.2,
+    "completion_tokens_per_verdict": 238.7,
+    "tokens_per_edge": 470.9,
+    "wall_per_edge": 2.347,
+    "accepted": 19
+  },
+  {
+    "N": 40,
+    "recovered": 40,
+    "calls": 1,
+    "call_parse_ok_rate": 1.0,
+    "calls_truncated": 0,
+    "prompt_tokens_per_candidate": 199.8,
+    "completion_tokens_per_verdict": 136.3,
+    "tokens_per_edge": 336.1,
+    "wall_per_edge": 1.45,
+    "accepted": 14
+  }
+]

@@ -1,0 +1,73 @@
+# W1-E BIND — Common Crawl CC-NEWS source descriptor (L-138;
+# src/legba/data/sources/common_crawl.py).
+#
+# Free, anonymous, no credentials: pulls WARC dumps from the public
+# `commoncrawl` S3 bucket (crawl-data/CC-NEWS/<YYYY>/<MM>/), ~1000 news sites
+# per file, daily refresh. Its own docstring states the primary use case:
+# HISTORICAL BACKFILL when a new target/domain lights up — replay a window of
+# WARCs and let the standard filter pipeline (language detect, geocode, NER)
+# re-emit the relevant slice. That is directly the multi-domain-scale need
+# (instant backfill for a newly-added country/domain, zero cost, zero
+# operator credential setup) — the lowest-friction bind of the 5 adapters in
+# this pass.
+#
+# ⚠ CORRECTION vs the source CODE_CLEANUP_ANALYSIS_2026-08-02.md list: that
+# doc's "Never-bound source adapters" table used the MODULE filename
+# (`common_crawl`) as if it were the dispatch kind. It is not.
+# `source_factory.discover_source_kinds()` keys its registry by the handler
+# CLASS's `kind: ClassVar[str]` attribute, which for
+# `CommonCrawlNewsSourceHandler` is `"common_crawl_news"`, not
+# `"common_crawl"`. `identity.kind` below reflects the real value — a
+# descriptor using `kind: common_crawl` would fail to resolve at
+# actor-construction time.
+#
+# State: draft — registration + the operator's activate flip are deploy
+# steps out of this pass's no-deploy remit. All config fields below are the
+# handler's stated defaults (already point at the real public bucket) —
+# nothing here is placeholder/fabricated data.
+
+identity:
+  id: source.common_crawl.news
+  name: Common Crawl CC-NEWS (historical backfill)
+  kind: common_crawl_news
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: w1e_built_but_unbound
+  created: "2026-08-03T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [backfill, news, historical, global]
+  source_class: analysis
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "0 7 * * *"        # CC-NEWS publishes daily; one daily poll is enough
+  cooldown_seconds: 3600
+  jitter_seconds: 120
+
+config: {}
+  # All CommonCrawlNewsConfig fields have working defaults (public bucket,
+  # us-east-1, crawl-data/CC-NEWS prefix). An operator scoping a real backfill
+  # run would set host_filter / language_filter / lookback_days here.
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1
+      config: {}
+    - kind: dedupe_tier_2
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: geocode
+      config: {}
+
+subscription_policy: open

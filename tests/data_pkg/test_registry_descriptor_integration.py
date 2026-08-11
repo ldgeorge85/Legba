@@ -1074,3 +1074,137 @@ async def test_consult_on_demand_now_registrable(
     desc = _draft_analyst(descriptor_id=desc_id, kind=AnalystKind.CONSULT_ON_DEMAND)
     row = await registry_no_nats.register(desc, actor="lewis@local")
     assert row.kind == "consult_on_demand"
+
+
+# ---------------------------------------------------------------------------
+# K-3 — descriptor string references are resolved at registration
+# ---------------------------------------------------------------------------
+
+
+def _analyst_with_prompt_module(
+    *,
+    descriptor_id: str,
+    prompt_module: str,
+    state: LifecycleState = LifecycleState.DRAFT,
+) -> AnalystDescriptor:
+    """Same shape as `_draft_analyst`, with the prompt reference under test."""
+    identity = AnalystIdentity(
+        id=descriptor_id,
+        name=f"Analyst {descriptor_id}",
+        schema_uri="legba/analyst/2.0.0",
+        version="0" * 16,
+        kind=AnalystKind.INLINE_TARGET,
+        state=state,
+        type_signature=TypeSignature(
+            input_type="legba.x.In",
+            output_type="legba.x.Out",
+        ),
+        owner="lewis@local",
+    )
+    return AnalystDescriptor(
+        identity=identity,
+        subscription=SubscriptionBlock(),
+        method=MethodBlock(kind="llm_planner", prompt_module=prompt_module),
+        cadence=CadenceBlock(),
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_active_analyst_naming_a_dead_prompt_module_is_refused(
+    registry_no_nats: DescriptorRegistry,
+):
+    """K-3 — the registry now resolves what a descriptor names.
+
+    Nothing checked these strings before: pydantic asserts `prompt_module` is
+    a non-empty string and never resolves it, so a descriptor naming a renamed
+    module registered cleanly, went active, and surfaced later as an analyst
+    reasoning with the wrong prompt. This drives the real `register()` path,
+    not the resolver in isolation.
+    """
+    desc_id = f"a_deadref_{uuid4().hex[:8]}"
+    bad = _analyst_with_prompt_module(
+        descriptor_id=desc_id,
+        prompt_module="legba.prompts.renamed_away_by_a_moves_wave.v1",
+        state=LifecycleState.ACTIVE,
+    )
+    with pytest.raises(DescriptorValidationError) as exc_info:
+        await registry_no_nats.register(bad, actor="lewis@local")
+
+    assert "renamed_away_by_a_moves_wave" in str(exc_info.value)
+    assert exc_info.value.dead_letter_id is not None
+    unresolved = exc_info.value.validation_error["unresolved"]
+    assert unresolved[0]["field"] == "method.prompt_module"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_active_analyst_naming_a_live_prompt_module_registers(
+    registry_no_nats: DescriptorRegistry,
+):
+    """The gate must not reject a descriptor whose reference is real."""
+    desc_id = f"a_liveref_{uuid4().hex[:8]}"
+    good = _analyst_with_prompt_module(
+        descriptor_id=desc_id,
+        prompt_module="legba.prompts.inline_target.v1",
+        state=LifecycleState.ACTIVE,
+    )
+    row = await registry_no_nats.register(good, actor="lewis@local")
+    assert row.descriptor_id == desc_id
+    assert row.state == "active"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_dead_reference_on_a_non_binding_state_warns_but_stores(
+    registry_no_nats: DescriptorRegistry,
+):
+    """A draft may name something that is not there yet.
+
+    Fatal-in-every-state would block the act of parking or retiring a
+    descriptor whose module has already been deleted — so the check is fatal
+    only where the runtime will actually bind and follow the reference.
+    """
+    desc_id = f"a_draftref_{uuid4().hex[:8]}"
+    draft = _analyst_with_prompt_module(
+        descriptor_id=desc_id,
+        prompt_module="legba.prompts.not_written_yet.v1",
+        state=LifecycleState.DRAFT,
+    )
+    row = await registry_no_nats.register(draft, actor="lewis@local")
+    assert row.descriptor_id == desc_id
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_activating_a_descriptor_with_a_dead_reference_is_refused(
+    registry_no_nats: DescriptorRegistry,
+):
+    """The lifecycle transition is the moment the reference starts mattering.
+
+    `POST /transition` re-stamps `identity.state` and goes through
+    `registry.update()`, so the same check that lets a draft through must stop
+    it at the activation boundary.
+    """
+    desc_id = f"a_activate_{uuid4().hex[:8]}"
+
+    def _at(state: LifecycleState) -> AnalystDescriptor:
+        return _analyst_with_prompt_module(
+            descriptor_id=desc_id,
+            prompt_module="legba.prompts.not_written_yet.v1",
+            state=state,
+        )
+
+    # draft -> configured is legal and both are non-binding, so the dead
+    # reference rides along as a warning.
+    await registry_no_nats.register(_at(LifecycleState.DRAFT), actor="lewis@local")
+    await registry_no_nats.update(
+        desc_id, _at(LifecycleState.CONFIGURED), actor="lewis@local",
+    )
+
+    # configured -> active is where the runtime starts following the string.
+    with pytest.raises(DescriptorValidationError) as exc_info:
+        await registry_no_nats.update(
+            desc_id, _at(LifecycleState.ACTIVE), actor="lewis@local",
+        )
+    assert "not_written_yet" in str(exc_info.value)

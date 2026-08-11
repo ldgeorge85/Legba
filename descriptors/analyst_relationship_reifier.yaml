@@ -46,16 +46,62 @@ method:
   # (relationship_reifier). llm_planner matches the single-turn chat_complete
   # typing shape the kind uses (same as the other LLM-bearing kinds).
   kind: llm_planner
-  prompt_module: "legba.prompts.relationship_reifier.v1"
+  # K-3: this named `legba.prompts.relationship_reifier.v1`, which has never
+  # existed — the kind has no DSPy module (no `build_prompt_module`), its
+  # prompt is the module-level `_SYSTEM_PROMPT` constant, and
+  # `_build_relationship_reifier` never sets `ReifierDeps.system_prompt`, so
+  # nothing ever read the string and nothing ever complained. Repointed at the
+  # constant the kind actually runs on: behaviour is unchanged (this field is
+  # not consumed on this kind's path) and the reference is now true, which is
+  # what the registry reference check and the descriptor drift guard require.
+  prompt_module: "legba.data.analysts.relationship_reifier:_SYSTEM_PROMPT"
   llm:
     primary:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
       expected_family: llm_provider
-    max_tokens: 384            # one tiny typed JSON object per pair (8B path)
+    # ONE typer, on the $0 self-hosted core plane. No failover tier and no
+    # escalation ladder: K-G2 measured that gpt-oss-120b agrees with ITSELF on
+    # only 79.6% of candidates (Cohen's kappa = 0.589), so no difficulty signal
+    # exists to route on and any second model would re-roll ~20% of the graph's
+    # edges for nothing. See SINGLE_TYPER_RATIONALE in the kind module.
+    max_tokens: 384            # the single-candidate RETRY path's budget; the
+                               # batch path computes its own (280/verdict, measured)
     temperature: 0.1
-    max_candidates: 40         # hard per-run cap on pairs typed (budget bound)
   budget_tokens_per_day: 1000000
+
+  # ── K-G2 throughput + quality dials ──────────────────────────────────────
+  # Validated against handler_options.ANALYST_KIND_OPTIONS['relationship_reifier'];
+  # anything rejected lands on the run trace rather than failing silently.
+  #
+  # THE ARITHMETIC (docs/TYPING_BAKEOFF_2026-08-03.md §5, §7.5). Cadence is
+  # unchanged at twice daily, so per-run × 2 = per-day:
+  #
+  #   candidates typed/day   600 × 2                = 1,200
+  #   LLM calls/day          1,200 ÷ 12             = 100
+  #   accept rate            measured, core 120B    = 46.8%
+  #   new edges/day (drain)  1,200 × 0.468          ≈ 562
+  #   ai1 GPU/day            1,200 × 2.538 s/edge   ≈ 51 min
+  #   tokens/day             1,200 × 557 tok/edge   ≈ 670k  (budget 1,000,000,
+  #                                                          33% headroom — NO
+  #                                                          budget increase)
+  #
+  # STEADY STATE is arrival-bound, not cap-bound. Measured qualifying arrivals
+  # are ~450/day against ~9,000-12,500 raw:
+  #
+  #   steady edges/day       450 × 0.468            ≈ 205   ← the target
+  #
+  # So the cap is sized for the DRAIN and steady state falls out of it: the
+  # 12,005-candidate qualifying backlog clears at (1,200 typed − 450 arriving)
+  # = 750/day, i.e. ~16 days, after which throughput settles at ~205 edges/day.
+  # That is 17× today's measured ~12/day, and the backlog shrinks instead of
+  # growing. Today's 80 calls/day produce ZERO edges — every one lands on a dead
+  # row (§1) — so the comparison is 205 against 12, not against 80.
+  options:
+    max_candidates: 600        # per RUN; ×2 runs/day = 1,200 candidates/day
+    batch_size: 12             # measured optimum — see §7.2/§7.3
+    qualification_bar: 0.42    # ~12,005 qualifying of ~176,000 pending (6.9%)
+    min_independent_sources: 2 # hard floor; 92.1% of the pool rests on one
   retry:
     budget:
       strategy: pause_until_next_window
@@ -63,6 +109,13 @@ method:
 cadence:
   # Twice daily, OFFSET after entity_resolution / the assessors so a fresh
   # proposed_edges sweep is present. Reify is the next hop after resolution.
+  #
+  # UNCHANGED by K-G2 on purpose. The throughput deficit was never cadence — it
+  # was that every run's window contained zero typeable rows (§1). With the queue
+  # fixed and the cap raised, two runs a day carry 1,200 candidates on ~51 min of
+  # GPU; running more often would add scheduling surface for no additional work,
+  # because steady-state throughput is bounded by ~450 qualifying ARRIVALS/day,
+  # not by how often the sweep looks.
   fallback_schedule: "45 */12 * * *"
   cooldown_seconds: 39600        # 11h (below the 12h interval)
 

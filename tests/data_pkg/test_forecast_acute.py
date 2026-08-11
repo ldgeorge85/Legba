@@ -13,6 +13,8 @@ Pure-logic coverage (no DB) for the pieces that earn the word "forecast":
 """
 from __future__ import annotations
 
+import inspect
+import logging
 import math
 from datetime import datetime, timedelta, timezone
 
@@ -258,3 +260,187 @@ def test_class_k_definition_frozen():
     assert "source.usgs.earthquakes_m45" in fa.HAZARD_SEVERE_SOURCES
     assert "source.nasa.eonet_events" in fa.HAZARD_SEVERE_SOURCES
     assert "source.nws.active_alerts" not in fa.HAZARD_SEVERE_SOURCES
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-02 — the resolve leg is OBSERVABLE.
+#
+# Diagnosed shape: the pilot had "resolved 0 of 38 forecasts, ever", and a daily
+# `resolved=0 resolved_total=0` receipt read as a leg that had been dead its
+# whole life. It was not. Read-only against the live DB, the resolver's own
+# open-row query returns ZERO rows: 19 forecasts are `voided:pre_clamp_degenerate`
+# (withdrawn from grading BY DESIGN by the P7-F6 guard, so permanently unresolved
+# and correctly skipped) and the other 19 have a window that has not closed yet.
+# `_count_class_k` never even ran — no per-row exception existed to find, and the
+# counting SQL executes cleanly against live data.
+#
+# So the defect is not arithmetic, it is ATTRIBUTION: `resolved=0` could not be
+# told apart from "every due row threw". These pin the reason + the counters, and
+# that the two swallowed skip paths now speak.
+# ---------------------------------------------------------------------------
+
+
+class _ResolveConn:
+    """Drives the REAL resolver. ``due`` rows come back from the open-row scan;
+    the class-K count is whatever ``count`` says (or raises)."""
+
+    def __init__(self, *, due=(), count=1, geo=("US",), stale=(0, 0)):
+        self._due = list(due)
+        self._count = count
+        self._geo = list(geo)
+        self._stale = stale
+        self.updates: list[tuple] = []
+
+    async def fetch(self, sql, *args):
+        if "resolved_outcome IS NULL" in sql:
+            return self._due
+        raise AssertionError(f"unexpected fetch SQL: {sql[:80]}")
+
+    async def fetchrow(self, sql, *args):
+        if "AS oldest_days" in sql:  # the backlog self-check
+            return {"n": self._stale[0], "oldest_days": self._stale[1]}
+        if "FROM target_descriptors" in sql:  # _region_geo
+            return {"geo": self._geo}
+        if "AS cnt" in sql:  # _count_class_k
+            if isinstance(self._count, Exception):
+                raise self._count
+            return {"cnt": self._count}
+        raise AssertionError(f"unexpected fetchrow SQL: {sql[:80]}")
+
+    async def execute(self, sql, *args):
+        self.updates.append(args)
+        return "UPDATE 1"
+
+
+class _ResolveCtx:
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self._conn
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _ResolvePool:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def acquire(self):
+        return _ResolveCtx(self._conn)
+
+
+class _ResolveDeps:
+    def __init__(self, pool):
+        self.pg_pool = pool
+
+
+def _due_row(region="country_g20_us"):
+    t1 = datetime.now(timezone.utc) - timedelta(days=10)
+    return {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "region": region,
+        "window_start": t1 - timedelta(days=7),
+        "window_end": t1,
+    }
+
+
+def _resolver_deps(conn):
+    return _ResolveDeps(_ResolvePool(conn))
+
+
+async def test_resolve_nothing_due_is_reported_as_idle_not_failure():
+    """THE live case: every overdue row is voided, so the scan returns nothing.
+
+    That is an IDLE leg, and the receipt must say so in a way that cannot be
+    confused with a leg whose every row died."""
+    conn = _ResolveConn(due=[])
+    receipt: dict = {}
+    n = await fa.resolve_open_acute_forecasts(_resolver_deps(conn), {}, receipt=receipt)
+
+    assert n == 0
+    assert receipt["reason"] == "nothing_due"
+    assert receipt["due"] == 0
+    assert receipt["count_failed"] == 0
+    assert receipt["skipped_no_geo"] == 0
+    # Nothing was graded, so nothing was written.
+    assert conn.updates == []
+
+
+async def test_resolve_grades_a_due_row_and_says_resolved():
+    conn = _ResolveConn(due=[_due_row()], count=3)
+    receipt: dict = {}
+    n = await fa.resolve_open_acute_forecasts(_resolver_deps(conn), {}, receipt=receipt)
+
+    assert n == 1
+    assert receipt["reason"] == "resolved"
+    assert receipt["due"] == 1
+    # o = 1 (>=1 class-K event), actual_value carries the raw count.
+    assert conn.updates[0][1] == 1
+    assert conn.updates[0][2] == 3
+    assert conn.updates[0][3] == fa.RESOLVED_BY
+
+
+async def test_per_row_count_failure_warns_with_error_class_and_id(caplog):
+    """The swallow that hid a per-row death: was logger.debug, invisible at INFO."""
+    boom = ValueError("invalid input syntax for type double precision")
+    conn = _ResolveConn(due=[_due_row()], count=boom)
+    receipt: dict = {}
+    with caplog.at_level(logging.WARNING, logger=fa.logger.name):
+        n = await fa.resolve_open_acute_forecasts(
+            _resolver_deps(conn), {}, receipt=receipt
+        )
+
+    assert n == 0
+    assert conn.updates == []  # never graded on a failed count
+    assert receipt["count_failed"] == 1
+    # due>0 with resolved=0 must NOT read as "nothing_due".
+    assert receipt["reason"] == "all_due_rows_skipped"
+
+    rec = [r for r in caplog.records if "resolve_count_failed" in r.getMessage()]
+    assert rec, caplog.text
+    msg = rec[0].getMessage()
+    assert rec[0].levelno == logging.WARNING
+    assert "err_class=ValueError" in msg          # the exception CLASS
+    assert "11111111-1111-1111-1111-111111111111" in msg  # the forecast id
+
+
+async def test_unmappable_region_is_no_longer_a_silent_skip(caplog):
+    """`if not geo: continue` used to carry NO log at all — the quietest path."""
+    conn = _ResolveConn(due=[_due_row(region="bloc_nato")], geo=[])
+    receipt: dict = {}
+    with caplog.at_level(logging.WARNING, logger=fa.logger.name):
+        n = await fa.resolve_open_acute_forecasts(
+            _resolver_deps(conn), {}, receipt=receipt
+        )
+
+    assert n == 0
+    assert receipt["skipped_no_geo"] == 1
+    assert receipt["reason"] == "all_due_rows_skipped"
+    assert any("resolve_skipped_no_geo" in r.getMessage() for r in caplog.records)
+
+
+async def test_backlog_selfcheck_reports_stale_gradeable_rows(caplog):
+    """The counter that would have surfaced a real death months earlier.
+
+    It counts only GRADEABLE rows — voided ones are unresolved by design and
+    would otherwise pin it above zero forever."""
+    conn = _ResolveConn(due=[], stale=(7, 26))
+    receipt: dict = {}
+    with caplog.at_level(logging.WARNING, logger=fa.logger.name):
+        await fa.resolve_open_acute_forecasts(_resolver_deps(conn), {}, receipt=receipt)
+
+    assert receipt["stale_unresolved"] == 7
+    assert receipt["stale_oldest_days"] == 26
+    assert any("resolve_stale_backlog" in r.getMessage() for r in caplog.records)
+
+
+def test_voided_rows_are_excluded_by_the_open_row_scan():
+    """Pin the P7-F6 guard IN THE SQL — this clause is the whole reason the live
+    pilot shows 19 permanently-unresolved rows, and removing it would silently
+    re-admit the known-degenerate batch."""
+    src = inspect.getsource(fa.resolve_open_acute_forecasts)
+    assert "NOT LIKE 'voided:%'" in src
+    # ...and in the backlog self-check, so the counter is not pinned forever.
+    assert src.count("NOT LIKE 'voided:%'") == 2

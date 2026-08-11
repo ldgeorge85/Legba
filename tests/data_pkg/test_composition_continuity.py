@@ -723,9 +723,12 @@ def test_continuity_clause_is_in_every_composition_prompt(prompt):
 def test_continuity_clause_is_lettered_into_each_prompt_rule_sequence():
     """The clause is generated, not pasted, so every composition floor states it
     identically while still slotting into its own rule lettering."""
+    # Phase-V: region and world each gained a COVERAGE rule (D6 — the unit
+    # roll-call became a footer), which pushed their continuity slot down one
+    # letter. The country and thematic sequences are unchanged.
     assert "(i) CONTINUITY —" in synth._COMPOSITION_SYSTEM
-    assert "(i) CONTINUITY —" in synth._REGION_COMPOSITION_SYSTEM
-    assert "(j) CONTINUITY —" in synth._WORLD_OVER_REGIONS_SYSTEM
+    assert "(j) CONTINUITY —" in synth._REGION_COMPOSITION_SYSTEM
+    assert "(k) CONTINUITY —" in synth._WORLD_OVER_REGIONS_SYSTEM
     assert "(j) CONTINUITY —" in synth._THEMATIC_COMPOSITION_SYSTEM
     # Still ahead of the JSON-shape instruction in every prompt.
     for prompt in _COMPOSITION_PROMPTS:

@@ -93,7 +93,7 @@ A stack of cited, grounding-verified reports, built bottom-up:
    This is *not* the old single-shot "world verdict from nowhere" — that framing was
    retired; `world_assessor` graduated into the composition.
 5. **A banded scorecard** (`scorecard_producer`, deterministic) writes one banded row per
-   active `g20`/`watch`-tagged desk (the 25) from high-precision rules over already-verified
+   active `g20`/`watch`-tagged desk (the 32) from high-precision rules over already-verified
    claims in a **14-day band window** — every band names the verified-claim id it rests on,
    and a dimension with no qualifying verified claim reads *insufficient-evidence* with an
    explicit reason rather than a fabricated band.
@@ -106,19 +106,22 @@ Two deterministic **I&W** analysts run alongside the tower: `indicator_tracker`
 (which desk × dimension cells are starved of evidence).
 
 ### What is the faithfulness verify pass?
-Every cited finding is scored for **faithfulness** in `[0,1]` by an LLM judge —
-currently the same core reasoning model (`llm.primary.openai_compat`, gpt-oss-120B)
-that wrote the finding, **not** cross-family — plus a deterministic citation-presence floor:
-*does each claim actually follow from the evidence it cites?* `effective_confidence =
-min(confidence, faithfulness_score)` is folded at **read time** and gates a visible
-low-confidence tier — it **never hard-deletes**. A planted fabrication is flagged
-unsupported. This is a mandatory pass, not an optional lint. Running the judge on
-the same model that wrote the prose is a deliberate, temporary choice — the earlier
-8B cross-family judge (`llm.verify.slm_8b`, "legba-slm", Llama-3.1-8B) proved too
-weak (harsh + mis-aimed) — and a **known limitation**: a model verifying its own
-family shares its blind spots, so the faithfulness signal is weaker than an
-independent cross-family judge; the citation-presence floor and the signed
-provenance chain still backstop it, and a dedicated reasoning judge is planned.
+Every cited finding is scored for **faithfulness** in `[0,1]` by an LLM judge
+plus a deterministic citation-presence floor: *does each claim actually follow
+from the evidence it cites?* `effective_confidence = min(confidence,
+faithfulness_score)` is folded at **read time** and gates a visible
+low-confidence tier — it **never hard-deletes**. A planted fabrication is
+flagged unsupported. This is a mandatory pass, not an optional lint. The judge
+resolves through its own repointable route: the shipped descriptor default is
+the same core model that wrote the prose (self-hostable, and a known
+limitation — a model verifying its own family shares its blind spots), while
+the reference deployment repoints every judge call **cross-family** at a
+hosted Gemma endpoint (Cerebras) with one env var (`LEGBA_JUDGE_STACK_REF`).
+If the judge is unreachable the pass degrades to the deterministic floor and
+says so (`judge_status='deterministic'`, published PROVISIONAL under a
+ceiling) — it never fabricates a pass. Every critique stamps a
+`judge_pipeline_version` so scores from different judge revisions are never
+pooled.
 
 ### Does it measure truth?
 **No — and that distinction is the whole thesis.** The verify pass measures
@@ -211,14 +214,15 @@ capabilities:
 
 - **GEPA self-optimizer** — scoped to ONE unit (`leadership_transition`) as a `unit_optimizer`
   descriptor. Every candidate carries a *real before/after paired faithfulness delta* measured
-  on the same faithfulness judge (currently the core model, not cross-family; a recent live run: parent `0.34` → candidate `0.29`, delta `−0.05`),
+  on the same faithfulness judge the verify pass uses (a recent live run: parent `0.34` → candidate `0.29`, delta `−0.05`),
   stays `promotion_gate=human_gated`, and can **never** auto-promote on a degenerate / absent /
   non-positive delta. The old monolithic `country_optimizer` stays **cadence-frozen** (descriptor
   still `state=active`, but its cadence is nulled — no reminder-flood regression).
 - **Forecasting** — only the `acute_forecasts` Brier/BSS scoreboard described above; reports
   **no proven skill** today.
-- **Correctness-vs-reference** — a gold set that is currently **tiny (n=1)** and reported as
-  *insufficient-sample*, not a score.
+- **Correctness-vs-reference** — a weekly-labeled gold set whose first cohort (2026-W31,
+  n=8) feeds a separate correctness axis with honest tiny-n labeling; the deterministic
+  reference leg is still n=1 and reported *insufficient-sample*, not a score.
 - **Exogenous calibration Brier** — real rows, honest-null where unmeasured.
 
 **Retired / frozen** (all documented in [SEAMS.md](SEAMS.md)): the monolithic `country_assessor`
@@ -229,7 +233,7 @@ remain); and the monolithic `country_optimizer` is **cadence-frozen**. (The jour
 frozen — it still runs on cadence as an off-chain introspective instrument, see above.)
 
 ### What is the scorecard, and why does the US read "insufficient"?
-`scorecard_producer` writes one banded row per active `g20`/`watch`-tagged desk (the 24) from
+`scorecard_producer` writes one banded row per active `g20`/`watch`-tagged desk (the 32) from
 high-precision rules over already-verified claims in a 14-day band window (severity tag ×
 `effective_confidence`, **demote-never-promote**; a
 per-claim faithfulness below a floor demotes to "low-faithfulness"). The **live scorecard is a
@@ -281,7 +285,7 @@ brought up with a one-command `deploy/deploy.sh`. It is **clean-slate only** —
 migration from pre-pivot Legba. You stand up a fresh empty substrate, register a **stack**, then
 register the **cold-start verification set** (3 RSS feeds + the G20 targets + analysts + packs)
 via `bringup_register_p17_workingset.py` and verify the whole loop from empty — see
-[SETUP.md](SETUP.md) §7. Scaling to the full ~50-source catalog is a separate, deliberate step
+[SETUP.md](SETUP.md) §7. Scaling to the full source catalog is a separate, deliberate step
 (`bringup_register_source_catalog.py`, §8). One gotcha: if the registry is empty at boot,
 enrichment's NLP client stays null and silently does nothing — **register first**.
 

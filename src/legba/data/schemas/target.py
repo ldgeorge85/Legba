@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .lifecycle import AbstractionLevel, LifecycleState
+from .lifecycle import AbstractionLevel, LifecycleState, WireEnumCoercion
 from .properties import Cron, FactoryValue
 from .source import SourceRef
 from .action_pack import ActionPackRef
@@ -29,7 +29,9 @@ TargetId = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=128)]
 AnalystId = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=128)]
 
 
-class TargetIdentity(BaseModel):
+class TargetIdentity(WireEnumCoercion):
+    # strict=True + enum fields ⇒ the wire's bare strings need the mixin's
+    # ``mode='before'`` coercers; see :class:`WireEnumCoercion`.
     model_config = ConfigDict(strict=True, extra="forbid")
 
     id: TargetId

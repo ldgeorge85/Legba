@@ -13,6 +13,7 @@ module exposes the helpers L-110/L-111 use to declare them.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any
@@ -173,6 +174,15 @@ class NatsStore:
         self._cfg = cfg
         self._nc: NATSClient | None = None
         self._js: JetStreamContext | None = None
+        #: The event loop `connect()` ran on. nats-py connections are LOOP
+        #: BOUND — their read loop, futures and flush PONGs all belong to the
+        #: loop that opened them — but the client object does not expose which
+        #: loop that is, so callers that need to know cannot ask it. Recorded
+        #: here because the alternative is guessing: see
+        #: `legba.data.registry.api`'s WebSocket endpoint, which guessed via a
+        #: `nc._loop` attribute that no longer exists on any supported nats-py
+        #: and therefore silently never fired.
+        self._loop: Any | None = None
 
     @classmethod
     def from_env(cls) -> "NatsStore":
@@ -212,6 +222,7 @@ class NatsStore:
             connect_kwargs["token"] = self._cfg.token
         self._nc = await nats.connect(**connect_kwargs)
         self._js = self._nc.jetstream()
+        self._loop = asyncio.get_running_loop()
 
     async def close(self) -> None:
         if self._nc is not None:

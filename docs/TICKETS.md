@@ -22,7 +22,7 @@ ledger document.
 | Prefix | Reads as | Denotes | Notes / where to look |
 |--------|----------|---------|------------------------|
 | `L-NNN` | **L**edger / **L**esson | A numbered design-ledger entry or recorded lesson. By far the most common (~1200 refs). Often cited with a section, e.g. `L-107 §7`, `L-102 §5`. | The design ledger; the section index lives inside each ledger entry. Range roughly `L-1`..`L-248`. |
-| `P-NN` | **P**ivot **P**hase | A phase / sub-section of the source-first **PIVOT** (`docs/PIVOT_PROPOSAL.md`, `docs/PIVOT_BUILD_PLAN.md`). Frequently paired with a PIVOT section, e.g. `P-07 / PIVOT §4.6`. | `PIVOT §x.y` cross-refs. Range `P-1`..`P-17`. |
+| `P-NN` | **P**ivot **P**hase | A phase / sub-section of the source-first **PIVOT** (the pivot proposal / build-plan documents, which live in the project planning history, not this repo). Frequently paired with a PIVOT section, e.g. `P-07 / PIVOT §4.6`. | `PIVOT §x.y` cross-refs. Range `P-1`..`P-17`. |
 | `A-N` | **A**gency | Agency / action-pack work items (the agentic tool-binding plane, media-loop closure, budget gating). e.g. `A-2` media-loop close, `A-3` `AgencyToolBinding`, `A-5` budget check. | Agency build notes. |
 | `B-N` | **B**earer / substrate-auth | Substrate authentication & authorization hardening (bearer-token gating, fail-closed 503s). e.g. `B-1` stop publishing tokens, `B-2` `require_bearer`. | Auth-hardening notes. |
 | `C-N` | **C**leanup / reaper | Resource-lifecycle and reaper/zombie-cleanup decisions. e.g. `C-3` released-zombie reaping, `C-1` prediction stopgap. | Cleanup-pass notes. |

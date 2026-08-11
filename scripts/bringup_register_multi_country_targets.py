@@ -23,25 +23,17 @@ Env:
 """
 from __future__ import annotations
 
-import os
 import sys
-from pathlib import Path
 
 import httpx
 
-import sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from _bringup_http import load_yaml, registry_base, registry_client  # noqa: E402
 from _token import resolve_token  # noqa: E402
-import yaml
 
 
-BASE = os.environ.get(
-    "LEGBA_REGISTRY_URL",
-    "http://127.0.0.1:8090/api/v1/registry",
-)
+BASE = registry_base()
 TOKEN = resolve_token()
-
-DESCRIPTORS_DIR = Path(__file__).resolve().parent.parent / "descriptors"
 
 # (family, file, descriptor_id)
 TO_REGISTER = [
@@ -51,24 +43,6 @@ TO_REGISTER = [
     ("target", "target_mexico_news.yaml",  "mexico_news"),
     ("target", "target_turkey_news.yaml",  "turkey_news"),
 ]
-
-
-def _client() -> httpx.Client:
-    return httpx.Client(
-        base_url=BASE,
-        headers={"Authorization": f"Bearer {TOKEN}"},
-        timeout=30,
-    )
-
-
-def _load_yaml(name: str) -> dict:
-    with open(DESCRIPTORS_DIR / name) as f:
-        body = yaml.safe_load(f)
-    # YAML carries a placeholder 16-hex version; the registry stamps the
-    # real content hash. The schema's pydantic pattern still requires the
-    # field to match [a-f0-9]{16,64} on the way in, so we leave the
-    # placeholder alone — it was written into the YAML in that shape.
-    return body
 
 
 def _get_head(client: httpx.Client, family: str, descriptor_id: str) -> dict | None:
@@ -84,7 +58,7 @@ def _get_head(client: httpx.Client, family: str, descriptor_id: str) -> dict | N
 
 
 def main() -> int:
-    with _client() as client:
+    with registry_client(BASE, TOKEN) as client:
         results: list[tuple[str, str, str, str]] = []  # (action, family, id, version)
         failures: list[str] = []
 
@@ -95,7 +69,10 @@ def main() -> int:
                 failures.append(f"{family}/{desc_id}: pre-check {exc}")
                 continue
 
-            body = _load_yaml(fname)
+            # This family's YAML already carries a placeholder in the
+            # [a-f0-9]{16,64} shape the schema requires, so it is posted
+            # untouched — the registry stamps the real content hash.
+            body = load_yaml(fname, stamp_version=False)
 
             if head is None:
                 r = client.post(f"/descriptors/{family}", json=body)

@@ -27,14 +27,16 @@ outputs (**findings**, **situations**, hypotheses, critiques) with full
 provenance. It fires on a **coalescing trigger** and/or a **cadence**
 heartbeat.
 
-**bounded reasoning unit / unit** — One of eight narrow, single-question
+**bounded reasoning unit / unit** — One of nine narrow, single-question
 `inline_target` analysts. Seven broad ones — **leadership_transition**, **energy_security**,
 **escalation**, **narrative_coordination**, **internal_stability**,
-**military_posture**, **economic_coercion** — fan out to all 25 country desks
-(19 G20 + the 6-desk **watch** tier) by a `has_tag("g20") or has_tag("watch")`
+**military_posture**, **economic_coercion** — fan out to all 32 country desks
+(19 G20 + the 13-desk **watch** tier) by a `has_tag("g20") or has_tag("watch")`
 predicate. An eighth, narrower unit, **proliferation_watch**, instead fans out
 to only the ~8 nuclear-relevant desks via a `has_tag("nuclear_watch")`
-predicate. Each run assembles a cited 72h signal slice plus a **grounding
+predicate. A ninth, **disruption_status**, is tag-scoped the same way but off
+the country plane entirely — `has_tag("supply_chain")`, the thematic lane/flow
+desks, on a 24h window. Each run assembles a cited 72h signal slice plus a **grounding
 preamble**, synthesizes one strict-JSON finding whose prose carries `[N]`
 citation markers, then runs the mandatory **faithfulness verify**. Skill is
 reported per unit, never as a platform-wide claim.
@@ -334,7 +336,7 @@ annotated, never adjudicated into the facts table.
 dated "authoritative current context" preamble of currently-valid facts,
 nexuses, and situations from the substrate, correcting the LLM's stale
 training cutoff. Restricted to still-valid facts of **seed/curated**
-provenance only; all eight **bounded reasoning units** opt in. The Tier-2 vector
+provenance only; all nine **bounded reasoning units** opt in. The Tier-2 vector
 `world_context` RAG source is a **guarded, measured pilot** on the
 `internal_stability` unit only — retrieved from a curated, re-embedded Qdrant
 corpus through the stack embedder port (bge-m3 1024-dim) with a focused
@@ -545,11 +547,14 @@ live and always-on is the mandatory **faithfulness verify**, which folds
 **faithfulness verify** — The mandatory pass scoring whether each cited claim
 follows from its cited evidence — **groundedness, not truth**. A deterministic
 citation-presence floor (always on) marks any claim with no `[N]` marker, or
-one resolving to no real signal, as UNSUPPORTED; an optional LLM judge —
-currently the same core model that produced the finding, **not** cross-family
-(a deliberate, temporary choice; same-model judging shares blind spots) —
-refines the verdicts, degrading to the floor labelled `judge-unavailable`
-when unreachable. The verdict persists as a `critique` and folds
+one resolving to no real signal, as UNSUPPORTED; an LLM judge refines the
+verdicts through its own repointable route — the shipped descriptor default is
+the same core model that produced the finding (same-model judging shares
+blind spots, which is why the reference deployment repoints the route
+cross-family at a hosted judge via `LEGBA_JUDGE_STACK_REF`) — degrading to
+the floor labelled `judge-unavailable` (PROVISIONAL, under a ceiling) when
+unreachable. Every critique stamps a `judge_pipeline_version` so verdicts
+from different judge revisions never pool. The verdict persists as a `critique` and folds
 `effective_confidence = min(confidence, overall_score)`.
 
 **forecast_scoreboard** — The deterministic weekly driver of the
@@ -568,7 +573,7 @@ resolvable against outcomes.
 **inline_target** — The per-target LLM analyst kind: it reads one target's
 recent signal slice, prepends the **grounding preamble**, produces one
 first-order cited finding whose prose carries `[N]` markers, then runs the
-**faithfulness verify** pass. It is the kind behind the four **bounded
+**faithfulness verify** pass. It is the kind behind the nine **bounded
 reasoning units**, and the kind that opts into grounding and **agency** tools.
 
 **JDL data-fusion model (L0–L5)** — The Joint Directors of Laboratories

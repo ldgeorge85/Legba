@@ -32,6 +32,7 @@ from legba.data.provenance.models import CritiquePayload
 from legba.data.provenance.verify import (
     FaithfulnessReport,
     UnsupportedSpan,
+    PROVISIONAL_SCORE_CEILING,
     build_faithfulness_critique_payload,
     verify_finding_faithfulness,
     _canon_ref,
@@ -482,6 +483,134 @@ def test_marker_to_evidence_combines_title_and_snippet():
     assert ev[3] == "Title only"  # title-only preserved
 
 
+def test_plain_section_label_is_a_heading_and_its_watch_bullets_drop():
+    """V-H2: the undecorated ``Indicators to watch:`` label.
+
+    The producer already treats it as a heading and mines its bullets as
+    forward-looking indicator rows; verify required markdown, so the same bullets
+    were graded on citation support a watch item can never carry.
+    """
+    from legba.data.provenance.verify import _segment_claims
+
+    body = (
+        "**BLUF:** Pressure is elevated [1].\n"
+        "\n"
+        "Key points:\n"
+        "- The excise relief ended at midnight [2].\n"
+        "\n"
+        "Indicators to watch:\n"
+        "- Unplanned outage at an LNG terminal.\n"
+        "- Escalated interdiction risk on a maritime chokepoint.\n"
+        "\n"
+        "Open questions:\n"
+        "- Will the review curtail exports? [3]\n"
+    )
+    spans = _segment_claims(body)
+    assert not any("Unplanned outage" in s for s in spans), spans
+    assert not any("interdiction risk" in s for s in spans), spans
+    # The sections either side of the watch block are untouched.
+    assert any("excise relief" in s for s in spans), spans
+    assert any("curtail exports" in s for s in spans), spans
+
+
+def test_plain_heading_requires_a_trailing_colon_and_heading_shape():
+    """V-H2 safety: without the colon requirement a prose sentence opening
+    "Watch for …" would be read as a section label and the skip would swallow the
+    rest of the finding — the expensive error."""
+    from legba.data.provenance.verify import _is_plain_heading
+
+    assert _is_plain_heading("Indicators to watch:")
+    assert _is_plain_heading("  What to watch:  ")
+    # No colon -> prose, never a label.
+    assert not _is_plain_heading("Watch for a second tanker strike on the lane")
+    # A bullet is CONTENT, never a label (the producer's own rule).
+    assert not _is_plain_heading("- Escalated interdiction risk on a chokepoint:")
+    # A finite verb makes it an assertion, not a label.
+    assert not _is_plain_heading("The interdiction risk is elevated:")
+    # Too long / too many words to be a section label.
+    assert not _is_plain_heading(
+        "Developments the desk would treat as confirming this read next week:"
+    )
+
+
+def test_marker_to_evidence_exposes_the_outlet():
+    """V-H1: the OUTLET ref reaches the judge, so an ATTRIBUTION claim is
+    checkable at all.
+
+    The 08-03 panel's ``soft_fail#2`` named six outlets, verified all six by hand
+    against the citation list, and the claim was graded unsupported anyway — the
+    judge's evidence view carried title / snippet / source-URL and never the
+    outlet, so the class was unverifiable by construction.
+    """
+    from legba.data.provenance.verify import _marker_to_evidence
+
+    ev = _marker_to_evidence(
+        [
+            {
+                "marker": "[1]",
+                "signal_id": "s-1",
+                "source_id": "source.cbc.world",
+                "title": "Indonesia protest coverage",
+            },
+            {"marker": "[2]", "signal_id": "s-2", "title": "No outlet on this one"},
+        ]
+    )
+    assert ev[1] == "OUTLET: source.cbc.world\nIndonesia protest coverage"
+    # A citation with no outlet is byte-identical to the pre-V-H1 rendering.
+    assert ev[2] == "No outlet on this one"
+
+
+def test_marker_to_evidence_outlet_survives_the_evidence_cap():
+    """V-H1: the outlet line rides OUTSIDE the cap.
+
+    Inside it, whether an attribution claim is checkable would depend on how long
+    the cited article happens to be — an intermittent defect, which is the worst
+    shape for a calibration read.
+    """
+    from legba.data.provenance.verify import _EVIDENCE_LEGACY_CHARS, _marker_to_evidence
+
+    ev = _marker_to_evidence(
+        [
+            {
+                "marker": "[1]",
+                "signal_id": "s-1",
+                "source_id": "source.bbc.world",
+                "title": "T",
+                "snippet": "x" * (_EVIDENCE_LEGACY_CHARS * 2),
+            }
+        ]
+    )
+    prefix = "OUTLET: source.bbc.world\n"
+    assert ev[1].startswith(prefix)
+    assert len(ev[1]) == len(prefix) + _EVIDENCE_LEGACY_CHARS
+
+
+def test_citation_entry_carries_the_outlet_from_the_slice_row():
+    """V-H1 production leg: the evidence-view change is inert unless the citation
+    BUILDER puts ``signals.source_id`` on the citation. Traverses the real
+    builder, not a hand-made dict (the binding-path rule)."""
+    from legba.data.analysts.inline_target import (
+        _build_citation_index,
+        _citation_from_index_entry,
+    )
+
+    sid = "11111111-2222-3333-4444-555555555555"
+    index = _build_citation_index(
+        [
+            {
+                "id": sid,
+                "source_id": "source.aljazeera.world",
+                "title": "Indonesia protest coverage",
+                "source_url": "https://example.invalid/a",
+                "data": {"text": "Protesters gathered in Jakarta."},
+            },
+            {"id": sid, "title": "No outlet", "source_url": None, "data": {}},
+        ]
+    )
+    assert _citation_from_index_entry(1, index[1])["source_id"] == "source.aljazeera.world"
+    assert "source_id" not in _citation_from_index_entry(2, index[2])
+
+
 def test_marker_to_evidence_grounds_on_raw_source_not_distilled_summary():
     """TRUST BOUNDARY: when a citation carries ``source_text`` (the RAW article),
     the judge evidence LABELS it authoritative and rides the analyst's distilled
@@ -855,7 +984,15 @@ async def test_composition_missing_eff_no_ceiling_no_hedge_flag():
     assert not any(s.reason == "hedge_laundering" for s in rep.unsupported_spans)
     fid = uuid4()
     payload = build_faithfulness_critique_payload(rep, analyzed_output_id=fid)
-    assert payload["overall_score"] == pytest.approx(rep.faithfulness_score)
+    # Q-1(c): no EVIDENCE ceiling was fabricated (that is what this test guards),
+    # but this report is floor-only — no judge ran — so the PROVISIONAL ceiling
+    # applies. The two caps are independent: ``confidence_ceiling is None`` above
+    # is the assertion about fabrication; this is the assertion about adjudication.
+    assert rep.provisional is True
+    assert payload["overall_score"] == pytest.approx(
+        min(rep.faithfulness_score, PROVISIONAL_SCORE_CEILING)
+    )
+    assert payload["data"]["verification"]["provisional"] is True
 
 
 async def test_unit_path_byte_identical_when_finding_confidence_passed():

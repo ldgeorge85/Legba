@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import signal as signalmod
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -39,6 +40,13 @@ from dapr.actor import ActorRuntime
 from dapr.ext.fastapi import DaprActor
 from fastapi import FastAPI
 
+from .actor_turn import (
+    HealBreaker,
+    TurnBudgetExceeded,
+    bounded_turn_op,
+    heal_breaker_trips,
+    heal_timeout_seconds,
+)
 from .dapr_actors import AnalystActor, TargetActor
 
 logger = logging.getLogger(__name__)
@@ -184,6 +192,13 @@ async def _write_observed_state(
         )
 
 
+#: S-6 — process-wide breaker for the reconciler's per-actor durability heal.
+#: Module-level because the reconcile loop is a singleton (leader-gated in
+#: multi-node) and the streak must survive across resync passes; a breaker
+#: rebuilt per action would count to one forever.
+_HEAL_BREAKER = HealBreaker()
+
+
 async def execute_reconcile_action(
     action: Any,
     *,
@@ -194,6 +209,7 @@ async def execute_reconcile_action(
     register_a2a_skills: Any | None = None,
     unregister_a2a_skills: Any | None = None,
     unregister_triggers: Any | None = None,
+    breaker: HealBreaker | None = None,
 ) -> None:
     """Apply one :class:`ReconcileAction` to the actor runtime.
 
@@ -201,17 +217,55 @@ async def execute_reconcile_action(
     injected so tests can assert the exact calls without daprd. All hook
     params are optional; production wires them in
     :func:`bring_up_production_runtime`'s thin closure.
+
+    S-6: every proxy lifecycle call runs under
+    :func:`~legba.runtime.actor_turn.heal_timeout_seconds`, well below the 90 s
+    ``run_once`` bound. On 2026-08-01 a hung ``activate()`` consumed that whole
+    bound per descriptor and, because the reconcile loop is strictly serial,
+    dragged the queue to one descriptor per 90 s while the actor plane
+    turn-poisoned itself behind it. A timed-out call here is now a short,
+    logged SKIP: the observed-state row is deliberately NOT written (the
+    lifecycle was never confirmed, and recording it as confirmed is how the
+    reconciler goes blind), and the next resync retries — reconcile is
+    idempotent. Repeated timeouts on the same actor open ``breaker`` so a
+    wedged fleet stops costing the queue anything at all.
     """
     from .reconcile import ActionKind
 
     detail = action.detail or {}
     actor_kind = detail.get("descriptor_kind") or action.actor_id.split("::", 1)[0]
     descriptor_id = detail.get("descriptor_id", "")
+    brk = breaker if breaker is not None else _HEAL_BREAKER
     try:
         proxy = proxy_for(actor_kind, action.actor_id)
     except ValueError as exc:
         logger.warning("action_executor.unknown_kind %s", exc)
         return
+
+    async def _call(method: str) -> bool:
+        """One bounded proxy lifecycle call. True = the actor confirmed it.
+
+        False means the deadline blew. Callers MUST treat that as "did not
+        happen" and skip both the observed-state write and the live-set hooks —
+        a heal we only *attempted* must not be recorded as a heal that landed.
+        """
+        try:
+            await bounded_turn_op(
+                getattr(proxy, method)(),
+                op=f"reconcile.{method}",
+                actor_id=action.actor_id,
+                timeout=heal_timeout_seconds(),
+            )
+        except TurnBudgetExceeded:
+            count = brk.record_timeout(action.actor_id)
+            logger.warning(
+                "action_executor.deadline kind=%s method=%s actor_id=%s "
+                "consecutive=%d — skipped, retried next resync",
+                action.kind.name, method, action.actor_id, count,
+            )
+            return False
+        brk.record_success(action.actor_id)
+        return True
 
     # ENSURE_ACTIVE fires for every active analyst/source on every periodic
     # resync (the durability heal) — keep it at debug so it doesn't flood.
@@ -274,7 +328,8 @@ async def execute_reconcile_action(
                 from .dapr_actors import evict_analyst_deps_for_descriptor
 
                 evict_analyst_deps_for_descriptor(descriptor_id)
-            await proxy.activate()
+            if not await _call("activate"):
+                return
             await _analyst_went_live()
             if actor_kind == "analyst" and register_a2a_skills is not None:
                 await register_a2a_skills(
@@ -285,7 +340,8 @@ async def execute_reconcile_action(
             # Dapr runs _on_activate before any method (creating the
             # actor's own record); pause() then parks it and (post-A-1)
             # unregisters its reminder. Never activate().
-            await proxy.pause()
+            if not await _call("pause"):
+                return
             await _analyst_paused()
             await _write_observed_state(state_store, action, "paused")
         elif target_lc == "retired":
@@ -306,7 +362,25 @@ async def execute_reconcile_action(
         # the actor if it idled out (Dapr activates it to deliver the call).
         # activate() is idempotent on analysts AND sources: deps are cached
         # and the reminder re-anchors to the next cron boundary.
-        await proxy.activate()
+        #
+        # S-6: the breaker is consulted ONLY here. ENSURE_ACTIVE is re-emitted
+        # for every active analyst and source on every resync, so an actor that
+        # is not answering would otherwise be re-poked forever — at 217 active
+        # actors a fleet-wide wedge burns 217 x the deadline per cycle, every
+        # cycle, which is the sum the per-call deadline alone does not bound.
+        # Skipping is safe precisely because this action re-runs next resync.
+        # CREATE / RETIRE / TRANSITION are NOT breaker-gated: those are one-shot
+        # convergence steps, and skipping one means a descriptor never reaching
+        # its declared state.
+        if brk.should_skip(action.actor_id):
+            logger.warning(
+                "action_executor.heal_suppressed actor_id=%s — %d consecutive "
+                "deadline misses; retrying after the cooloff",
+                action.actor_id, heal_breaker_trips(),
+            )
+            return
+        if not await _call("activate"):
+            return
         await _analyst_went_live()
         # Re-populate a2a skills after a restart: the resync re-asserts active
         # analysts via ENSURE_ACTIVE (not CREATE), so without this the in-memory
@@ -318,7 +392,11 @@ async def execute_reconcile_action(
             )
         await _write_observed_state(state_store, action, "active")
     elif action.kind == ActionKind.RETIRE_ACTOR:
-        await proxy.retire()
+        if not await _call("retire"):
+            return
+        # The actor is gone — stop tracking it, so a retired wedge cannot keep
+        # an entry alive in the breaker forever.
+        brk.forget(action.actor_id)
         await _analyst_retired()
         await _write_observed_state(state_store, action, "retired")
     elif action.kind == ActionKind.RESTART_ACTOR:
@@ -326,7 +404,8 @@ async def execute_reconcile_action(
         # again is idempotent and re-reads the descriptor body. A
         # full retire-then-activate would lose source cursors, so
         # restart-on-content-hash-change is a soft restart only.
-        await proxy.activate()
+        if not await _call("activate"):
+            return
         await _write_observed_state(state_store, action, "active")
     elif action.kind == ActionKind.TRANSITION_LIFECYCLE:
         target_lc = (detail.get("to") or "").lower()
@@ -337,10 +416,8 @@ async def execute_reconcile_action(
             # routes through activate(), which re-runs _on_activate and
             # resurrects a parked record to active.
             from_lc = (detail.get("from") or "").lower()
-            if from_lc == "paused":
-                await proxy.resume()
-            else:
-                await proxy.activate()
+            if not await _call("resume" if from_lc == "paused" else "activate"):
+                return
             await _analyst_went_live()
             if actor_kind == "analyst" and register_a2a_skills is not None:
                 await register_a2a_skills(
@@ -348,11 +425,14 @@ async def execute_reconcile_action(
                 )
             await _write_observed_state(state_store, action, "active")
         elif target_lc == "paused":
-            await proxy.pause()
+            if not await _call("pause"):
+                return
             await _analyst_paused()
             await _write_observed_state(state_store, action, "paused")
         elif target_lc == "retired":
-            await proxy.retire()
+            if not await _call("retire"):
+                return
+            brk.forget(action.actor_id)
             await _analyst_retired()
             await _write_observed_state(state_store, action, "retired")
         else:
@@ -545,6 +625,21 @@ class _RuntimeHandles:
             await self.informer.stop()
         except Exception as exc:                                # pragma: no cover
             logger.warning("informer.stop err=%s", exc)
+        # S-2: the stack-component informer + its cache registration. Stored
+        # via getattr (added incrementally — not a formal field), and
+        # unregistered so the module-level sweep set doesn't retain a dict
+        # belonging to a runtime that has shut down.
+        stack_informer = getattr(self, "stack_informer", None)
+        if stack_informer is not None:
+            try:
+                await stack_informer.stop()
+            except Exception as exc:                            # pragma: no cover
+                logger.warning("stack_informer.stop err=%s", exc)
+        handler_cache = getattr(self, "llm_handler_cache", None)
+        if handler_cache is not None:
+            from .llm_handler_cache import unregister_handler_cache
+
+            unregister_handler_cache(handler_cache)
         # P-CUT: stop the source-first planes (trigger engine + job worker
         # pool) before tearing down the reconcile loop + closing NATS/PG.
         # Stored via getattr (added incrementally — not a formal field).
@@ -648,7 +743,7 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     from ..data.nats import NatsStore
     from ..data.postgres import PostgresStore
     from .dapr_actors import AnalystActorInterface, TargetActorInterface
-    from .nats_informer import NatsReconcileInformer
+    from .nats_informer import NatsReconcileInformer, NatsStackComponentInformer
     from .reconcile import (
         AnalystReconciler,
         DesiredState,
@@ -935,6 +1030,11 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     )
     from .deps import StandardDeps
     from .embedding_factory import EmbeddingFactoryError
+    from .llm_handler_cache import (
+        evict_llm_handler,
+        register_handler_cache,
+        registered_cache_labels,
+    )
     from .nlp_client_factory import (
         DEFAULT_NLP_COMPONENT_ID,
         LazyNlpClient,
@@ -1019,7 +1119,18 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     # Cache per-component-id so an analyst's repeat run_method calls
     # reuse one configured handler (httpx client opens only on the
     # actor's on_activate per L-102).
+    #
+    # S-2: the cache is REGISTERED with legba.runtime.llm_handler_cache so the
+    # stack-component informer (below) can evict a component_id when the
+    # registry publishes a change for it. Before that wiring the cache keyed by
+    # component_id alone, never by version and never invalidated, so a
+    # stack-component PUT changing timeout/endpoint/model/max_tokens was
+    # invisible until a container recreate — 3.5 h of the 2026-08-01 incident
+    # went to exactly that (timeout 60→240 PUT at 16:00Z, live at the 19:31Z
+    # recreate). The caching win is untouched: with no event, this is still a
+    # plain dict hit.
     _llm_handler_cache: dict[str, Any] = {}
+    register_handler_cache("dapr_host.llm_handler", _llm_handler_cache)
 
     async def _llm_handler_factory(component_id: str) -> Any:
         existing = _llm_handler_cache.get(component_id)
@@ -2312,8 +2423,19 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
         )
         source_first = None
 
-    # ---------- the NATS informer (built now, started by the leader) ----
+    # ---------- the NATS informers (built now, started by the leader) ---
     informer = NatsReconcileInformer(nats_store, reconcile_loop)
+    # S-2 — the stack-component twin. Bound to LEGBA_STACK_EVENTS
+    # (``stack.component.>``) with its OWN durable, it evicts the built-handler
+    # caches for a component the operator just PUT so the next LLM call rebuilds
+    # from the live row. Not leader-gated in principle — every replica holds its
+    # own handler cache and each would need its own eviction — but it is started
+    # alongside the descriptor informer below because today's deployment is
+    # single-replica and the multi-replica story (per-replica durables, see
+    # C-9) is one decision, not two.
+    stack_informer = NatsStackComponentInformer(
+        nats_store, evict=evict_llm_handler,
+    )
 
     # ---------- singleton control-plane loops — LEADER ONLY -------------
     #
@@ -2337,6 +2459,26 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             "dapr_host.informer.started (leader) consumer=%s",
             informer.consumer_name,
         )
+        # S-2: never let a stack-informer bind failure take the control plane
+        # down with it. Its absence degrades to the pre-fix behaviour (config
+        # PUTs need a recreate) and says so LOUDLY — it does not stop the
+        # reconcile loop, which is the thing that keeps the engine running.
+        try:
+            await stack_informer.start()
+            logger.info(
+                "dapr_host.stack_informer.started (leader) consumer=%s "
+                "caches=%s",
+                stack_informer.consumer_name,
+                ",".join(registered_cache_labels()) or "none",
+            )
+        except Exception as exc:  # pragma: no cover — bind failure is rig-level
+            logger.error(
+                "dapr_host.stack_informer.start_failed err=%s — stack-component "
+                "PUTs will NOT invalidate cached LLM handlers in this process; "
+                "a config change needs a container recreate until this binds. "
+                "Check the LEGBA_STACK_EVENTS stream exists (the registry "
+                "provisions it via ensure_runtime_event_streams).", exc,
+            )
         # Initial resync — enqueue every active descriptor so its actor gets
         # activated. Idempotent (reconcile converges), so a standby that later
         # promotes re-runs this cleanly on acquire.
@@ -2373,6 +2515,10 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             await informer.stop()
         except Exception as exc:                                # pragma: no cover
             logger.warning("dapr_host.demote.informer_stop err=%s", exc)
+        try:
+            await stack_informer.stop()
+        except Exception as exc:                                # pragma: no cover
+            logger.warning("dapr_host.demote.stack_informer_stop err=%s", exc)
         try:
             await reconcile_loop.stop()
         except Exception as exc:                                # pragma: no cover
@@ -2424,6 +2570,11 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     # P-CUT source-first planes — stopped before the substrate closes (the
     # _RuntimeHandles.stop() path tears them down first via getattr lookup).
     handles.source_first = source_first  # type: ignore[attr-defined]
+    # S-2 stack-component informer + the cache it evicts through. Stopped and
+    # UNREGISTERED on shutdown so a second bring-up in the same process (the
+    # test rig) never evicts through a torn-down runtime's dict.
+    handles.stack_informer = stack_informer  # type: ignore[attr-defined]
+    handles.llm_handler_cache = _llm_handler_cache  # type: ignore[attr-defined]
     return handles
 
 

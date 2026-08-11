@@ -89,7 +89,10 @@ RETIRED_TABLES: tuple[str, ...] = (
     # by P5-6 Watchlist v2 (migration 0105, operator-defined standing
     # watches) — the same re-landing shape as `nexuses` above, so it left
     # this list.
-    "events", "signal_event_links", "event_entity_links", "situation_events",
+    # `situation_events` left this list 2026-08-05: G-2 (mig 0184) UN-retired
+    # the name for the trajectory ledger — a deliberate re-landing, same
+    # pattern as `nexuses` above.
+    "events", "signal_event_links", "event_entity_links",
     "goals", "watch_triggers", "discovered_urls", "users",
 )
 

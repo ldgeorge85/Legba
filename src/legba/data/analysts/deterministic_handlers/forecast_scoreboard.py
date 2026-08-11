@@ -163,12 +163,31 @@ async def handle(
 
     # RESOLVE — grade every forecast whose forward window has closed + settled,
     # exogenously (UPSTREAM event time). Never overwrites an already-resolved row.
+    # 2026-08-02 — receipt sink, same treatment as the issue leg above: a bare
+    # `resolved=0` could not distinguish "nothing was due" from "every due row
+    # was skipped or threw", and a review reading the daily line concluded the
+    # leg was dead when it had simply never been handed a gradeable row.
     resolved = 0
+    resolve_receipt: dict[str, Any] = {}
     try:
-        resolved = await forecast_acute.resolve_open_acute_forecasts(deps, options)
+        resolved = await forecast_acute.resolve_open_acute_forecasts(
+            deps, options, receipt=resolve_receipt
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("forecast_scoreboard.resolve_failed err=%s", exc)
         warnings.append("forecast_scoreboard.resolve_failed")
+    _rreason = str(resolve_receipt.get("reason") or "")
+    if resolved == 0 and _rreason not in ("", "nothing_due"):
+        warnings.append(f"forecast_scoreboard.resolved_0_{_rreason}")
+    # The backlog self-check is INDEPENDENT of this tick's outcome: gradeable
+    # rows left unresolved after a pass mean the leg is failing, and one honest
+    # counter here is what would have surfaced that months ago.
+    if int(resolve_receipt.get("stale_unresolved") or 0) > 0:
+        warnings.append(
+            "forecast_scoreboard.resolve_backlog"
+            f"(n={resolve_receipt.get('stale_unresolved')},"
+            f"oldest_days={resolve_receipt.get('stale_oldest_days')})"
+        )
 
     # PULL — receipt-only count of resolved pilot calls (read-only). The
     # segregated Brier / Brier-skill-score itself is computed DOWNSTREAM by

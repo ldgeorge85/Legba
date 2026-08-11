@@ -43,7 +43,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -52,12 +51,10 @@ from pathlib import Path
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _bringup_http import registry_base, registry_client  # noqa: E402
 from _token import resolve_token  # noqa: E402
 
-BASE = os.environ.get(
-    "LEGBA_REGISTRY_URL",
-    "http://127.0.0.1:8090/api/v1/registry",
-)
+BASE = registry_base()
 FAMILY = "target"
 
 # ---------------------------------------------------------------------------
@@ -359,14 +356,6 @@ def print_results(results: list[DeskResult], *, dry_run: bool) -> int:
     return bad
 
 
-def _client(base: str, token: str) -> httpx.Client:
-    return httpx.Client(
-        base_url=base,
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=30,
-    )
-
-
 def _make_io(client: httpx.Client):
     """Bind ``get_body`` / ``put_body`` over a live httpx registry client."""
 
@@ -396,7 +385,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     token = resolve_token()
-    with _client(BASE, token) as client:
+    with registry_client(BASE, token) as client:
         get_body, put_body = _make_io(client)
         results = run(get_body=get_body, put_body=put_body, dry_run=args.dry_run)
     bad = print_results(results, dry_run=args.dry_run)

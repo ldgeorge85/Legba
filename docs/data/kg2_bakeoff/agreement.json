@@ -1,0 +1,245 @@
+{
+  "tag": "main",
+  "models": [
+    "core120b",
+    "slm8b",
+    "nemotron",
+    "gptoss"
+  ],
+  "reference": "core120b",
+  "common_candidates": 186,
+  "sample_size": 200,
+  "exact_rel_type_matrix": {
+    "core120b": {
+      "core120b": 1.0,
+      "slm8b": 0.4032,
+      "nemotron": 0.4086,
+      "gptoss": 0.6935
+    },
+    "slm8b": {
+      "core120b": 0.4032,
+      "slm8b": 1.0,
+      "nemotron": 0.371,
+      "gptoss": 0.4462
+    },
+    "nemotron": {
+      "core120b": 0.4086,
+      "slm8b": 0.371,
+      "nemotron": 1.0,
+      "gptoss": 0.4462
+    },
+    "gptoss": {
+      "core120b": 0.6935,
+      "slm8b": 0.4462,
+      "nemotron": 0.4462,
+      "gptoss": 1.0
+    }
+  },
+  "edge_vs_reject_matrix": {
+    "core120b": {
+      "core120b": 1.0,
+      "slm8b": 0.6075,
+      "nemotron": 0.6129,
+      "gptoss": 0.7957
+    },
+    "slm8b": {
+      "core120b": 0.6075,
+      "slm8b": 1.0,
+      "nemotron": 0.6505,
+      "gptoss": 0.6183
+    },
+    "nemotron": {
+      "core120b": 0.6129,
+      "slm8b": 0.6505,
+      "nemotron": 1.0,
+      "gptoss": 0.6129
+    },
+    "gptoss": {
+      "core120b": 0.7957,
+      "slm8b": 0.6183,
+      "nemotron": 0.6129,
+      "gptoss": 1.0
+    }
+  },
+  "edge_vs_reject_kappa_matrix": {
+    "core120b": {
+      "core120b": 1.0,
+      "slm8b": 0.2199,
+      "nemotron": 0.2477,
+      "gptoss": 0.5885
+    },
+    "slm8b": {
+      "core120b": 0.2199,
+      "slm8b": 1.0,
+      "nemotron": 0.2691,
+      "gptoss": 0.2444
+    },
+    "nemotron": {
+      "core120b": 0.2477,
+      "slm8b": 0.2691,
+      "nemotron": 1.0,
+      "gptoss": 0.2617
+    },
+    "gptoss": {
+      "core120b": 0.5885,
+      "slm8b": 0.2444,
+      "nemotron": 0.2617,
+      "gptoss": 1.0
+    }
+  },
+  "vs_reference": {
+    "core120b": {
+      "exact_rel_type_agreement": 1.0,
+      "edge_vs_reject_agreement": 1.0,
+      "edge_vs_reject_kappa": 1.0
+    },
+    "slm8b": {
+      "exact_rel_type_agreement": 0.4032,
+      "edge_vs_reject_agreement": 0.6075,
+      "edge_vs_reject_kappa": 0.2199
+    },
+    "nemotron": {
+      "exact_rel_type_agreement": 0.4086,
+      "edge_vs_reject_agreement": 0.6129,
+      "edge_vs_reject_kappa": 0.2477
+    },
+    "gptoss": {
+      "exact_rel_type_agreement": 0.6935,
+      "edge_vs_reject_agreement": 0.7957,
+      "edge_vs_reject_kappa": 0.5885
+    }
+  },
+  "behaviour": {
+    "core120b": {
+      "accept_rate": 0.4677,
+      "reject_rate": 0.5323,
+      "rel_type_vocabulary": {
+        "InvolvedIn": 19,
+        "LocatedIn": 14,
+        "HostileTo": 11,
+        "AffiliatedWith": 11,
+        "PartOf": 10,
+        "AlliedWith": 7,
+        "OperatesIn": 6,
+        "MemberOf": 4,
+        "LeaderOf": 3,
+        "ConductedVia": 2
+      }
+    },
+    "slm8b": {
+      "accept_rate": 0.5484,
+      "reject_rate": 0.4516,
+      "rel_type_vocabulary": {
+        "LocatedIn": 29,
+        "HostileTo": 15,
+        "MemberOf": 13,
+        "AffiliatedWith": 9,
+        "OperatesIn": 7,
+        "LeaderOf": 6,
+        "AlliedWith": 5,
+        "PartOf": 4,
+        "Targets": 4,
+        "PartyTo": 3,
+        "InvolvedIn": 3,
+        "SuppliesWeaponsTo": 2,
+        "CoOccursWith": 2
+      }
+    },
+    "nemotron": {
+      "accept_rate": 0.7258,
+      "reject_rate": 0.2742,
+      "rel_type_vocabulary": {
+        "AffiliatedWith": 37,
+        "LocatedIn": 28,
+        "HostileTo": 17,
+        "OperatesIn": 11,
+        "PartOf": 9,
+        "LeaderOf": 6,
+        "ConductedVia": 5,
+        "SuppliesWeaponsTo": 5,
+        "InvolvedIn": 5,
+        "CoOccursWith": 4,
+        "AlliedWith": 4,
+        "PartyTo": 3,
+        "Targets": 1
+      }
+    },
+    "gptoss": {
+      "accept_rate": 0.4462,
+      "reject_rate": 0.5538,
+      "rel_type_vocabulary": {
+        "LocatedIn": 15,
+        "HostileTo": 14,
+        "InvolvedIn": 14,
+        "AffiliatedWith": 11,
+        "PartOf": 9,
+        "OperatesIn": 7,
+        "AlliedWith": 6,
+        "LeaderOf": 4,
+        "MemberOf": 1,
+        "ConductedVia": 1,
+        "CoOccursWith": 1
+      }
+    }
+  },
+  "accept_rate_by_stratum": {
+    "S0_floor": {
+      "n": 15,
+      "core120b": 7,
+      "slm8b": 5,
+      "nemotron": 9,
+      "gptoss": 6,
+      "core120b_accept_rate": 0.467,
+      "slm8b_accept_rate": 0.333,
+      "nemotron_accept_rate": 0.6,
+      "gptoss_accept_rate": 0.4
+    },
+    "S1_low": {
+      "n": 25,
+      "core120b": 14,
+      "slm8b": 4,
+      "nemotron": 21,
+      "gptoss": 13,
+      "core120b_accept_rate": 0.56,
+      "slm8b_accept_rate": 0.16,
+      "nemotron_accept_rate": 0.84,
+      "gptoss_accept_rate": 0.52
+    },
+    "S2_mid": {
+      "n": 32,
+      "core120b": 14,
+      "slm8b": 19,
+      "nemotron": 20,
+      "gptoss": 15,
+      "core120b_accept_rate": 0.438,
+      "slm8b_accept_rate": 0.594,
+      "nemotron_accept_rate": 0.625,
+      "gptoss_accept_rate": 0.469
+    },
+    "S3_high": {
+      "n": 56,
+      "core120b": 31,
+      "slm8b": 39,
+      "nemotron": 44,
+      "gptoss": 32,
+      "core120b_accept_rate": 0.554,
+      "slm8b_accept_rate": 0.696,
+      "nemotron_accept_rate": 0.786,
+      "gptoss_accept_rate": 0.571
+    },
+    "S4_top": {
+      "n": 58,
+      "core120b": 21,
+      "slm8b": 35,
+      "nemotron": 41,
+      "gptoss": 17,
+      "core120b_accept_rate": 0.362,
+      "slm8b_accept_rate": 0.603,
+      "nemotron_accept_rate": 0.707,
+      "gptoss_accept_rate": 0.293
+    }
+  },
+  "split_cases_total": 116,
+  "split_cases_even_2_2": 43,
+  "handcheck_rows": 40
+}

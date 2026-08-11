@@ -225,6 +225,53 @@ def _collapse_structure_items(
     return list(grouped.values())[:limit]
 
 
+#: Slice window used when a descriptor declares none — the pre-2026-05-29
+#: default, kept so an un-updated descriptor reads what it always read.
+DEFAULT_SLICE_WINDOW_HOURS: int = 24
+
+
+def resolve_slice_window_hours(descriptor: AnalystDescriptor) -> int:
+    """The descriptor's slice window in hours (default 24).
+
+    The field is declared on ``subscription.targets``
+    (``SubscriptionTargets.time_window``, e.g. ``"336h"``); earlier code read it
+    off the block, which has no such attribute, so EVERY analyst silently fell
+    back to 24h regardless of its descriptor — fatal for the predictor, which
+    needs a multi-day daily series to forecast at all. Honors
+    ``subscription.targets.time_window`` first, then the legacy flat attrs.
+
+    EXTRACTED from ``_read_substrate_slice`` (Phase-V D8a) because the value now
+    has a SECOND consumer: the actor stamps it into ``options`` so the unit's
+    rendered slice header can state the window it was actually cut with. The
+    defect that motivated the extraction was ``narrative_coordination``'s prompt
+    asserting a "last-24h signal slice" while its descriptor declared 72h — the
+    unit read three days and told the operator it read one, for weeks, on a
+    question (synchrony) where the window IS the measurement. One resolver,
+    two consumers, no way for the prose and the query to disagree again.
+    """
+    sub = getattr(descriptor, "subscription", None)
+    if sub is None:
+        return DEFAULT_SLICE_WINDOW_HOURS
+    _targets = getattr(sub, "targets", None)
+    cand = (
+        (getattr(_targets, "time_window", None) if _targets is not None else None)
+        or getattr(sub, "time_window", None)
+        or getattr(sub, "time_window_hours", None)
+    )
+    if isinstance(cand, bool):
+        return DEFAULT_SLICE_WINDOW_HOURS
+    if isinstance(cand, int) and cand > 0:
+        return cand
+    if isinstance(cand, str) and cand.endswith("h"):
+        try:
+            parsed = int(cand[:-1])
+        except ValueError:
+            return DEFAULT_SLICE_WINDOW_HOURS
+        if parsed > 0:
+            return parsed
+    return DEFAULT_SLICE_WINDOW_HOURS
+
+
 async def _read_substrate_slice(
     conn: asyncpg.Connection,
     *,
@@ -253,28 +300,7 @@ async def _read_substrate_slice(
     if (getattr(_sub, "substrate", {}) or {}).get("gather_only"):
         return []
 
-    # Read time_window off the descriptor (default 24h). The field is declared
-    # on subscription.targets (SubscriptionTargets.time_window, e.g. "336h");
-    # earlier code read it off the block, which has no such attribute, so EVERY
-    # analyst silently fell back to 24h regardless of its descriptor — fatal for
-    # the predictor (needs a multi-day daily series to forecast at all). Honor
-    # subscription.targets.time_window first, then legacy flat attrs.
-    window_hours = 24
-    sub = getattr(descriptor, "subscription", None)
-    if sub is not None:
-        _targets = getattr(sub, "targets", None)
-        cand = (
-            (getattr(_targets, "time_window", None) if _targets is not None else None)
-            or getattr(sub, "time_window", None)
-            or getattr(sub, "time_window_hours", None)
-        )
-        if isinstance(cand, int) and cand > 0:
-            window_hours = cand
-        elif isinstance(cand, str) and cand.endswith("h"):
-            try:
-                window_hours = int(cand[:-1])
-            except ValueError:
-                pass
+    window_hours = resolve_slice_window_hours(descriptor)
 
     # Source-first (pivot §4): signals are TARGET-AGNOSTIC — there is no
     # ``target_id`` column. A target's slice is the union of signals from its

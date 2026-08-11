@@ -1930,6 +1930,8 @@ async def _seed_traces_and_critiques(
     derived_from intersection on the resulting candidate row.
     """
     import hashlib
+    from uuid import uuid4
+
     seeded: list[UUID] = []
     async with pg_pool.acquire() as conn:
         for i in range(n_rows):

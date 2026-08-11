@@ -66,7 +66,22 @@ RUN pip install --prefix=/install \
         # — pulls limits + Deprecated. Absent => the limiter degrades to a
         # loud-warn no-op (rate limiting INERT), so it MUST be listed here
         # (the explicit list, not pyproject, is what the registry installs).
-        "slowapi>=0.1.9"
+        "slowapi>=0.1.9" \
+        # pycountry: the 2026-08-04 outage, and the reason this list is
+        # dangerous. It is in pyproject.toml and in Dockerfile.runtime, and it
+        # was NOT here — so the registry process alone could not import
+        # `legba.data.filters.geocode`, which `legba.data.analysts.
+        # deterministic_handlers` pulls in via entity_resolution when the
+        # options catalog loads. Result: GET /descriptors/analyst/*/typed
+        # answered 500 for every OPTIONS-BEARING DETERMINISTIC analyst, and
+        # only for those — claim_watch and signal_embedder were silent for 14h
+        # while every health probe stayed green, and a descriptor PUT came back
+        # 422. The three env-degrade fixes (warn-only dead-options, the
+        # `_env_limited_dep` classifier, the catalog-unimportable skip) stop
+        # that MODE from taking the registry down again; this line stops the
+        # specific GAP existing at all. ~10 MB, no transitive deps.
+        # docker/Dockerfile.runtime carries the same pin — bump in lockstep.
+        "pycountry>=24.6"
 
 # Install the legba source tree without its declared deps (we already
 # pulled the subset we want). Using --no-deps + editable build wires

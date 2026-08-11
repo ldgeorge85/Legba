@@ -9,6 +9,23 @@
 # AnalystKind, so no `vocabulary_entries` (family='analyst_kind') seed is needed
 # either — this is a new INSTANCE of an existing kind.
 #
+# DS-1 (2026-08-06) — THE NINTH UNIT. The Phase-V VOICE wave filed this desk as a
+# NON-unit (`voice_prompt_puts.NON_UNITS`, beside cross_doc_corroborator and
+# corpus_researcher) because it runs a GATHER loop, and so it took only the
+# DATED-RETRIEVAL half of D1 — never the HOUSE READ CONTRACT. Those are two
+# different axes and the wave collapsed them: GATHERING is about where the
+# evidence comes from, UNIT-hood is about what shape the answer takes. Measured
+# consequence (Q-5, over this desk's own findings): "the dominant vector is X,
+# and the direction is Y" fired in 14/15 findings AFTER the wave, unchanged from
+# 57/61 before, because this prompt still ORDERED that sentence — "say which, in
+# those words" — while the eight units had it replaced. The docs already counted
+# this desk as one of the NINE bounded units (docs/CODE_MAP.md, DATA_MODEL.md,
+# the generated RELEASE_STATE manifest the doc-count guard pins against); the
+# voice machinery was the one place that did not. It now takes UNIT_READ_CONTRACT
+# verbatim like the other eight, and keeps BOTH: it is a unit that gathers, so it
+# also keeps the RETRIEVED-CONTEXT rules (the "A FIGURE IS ONLY AS CURRENT AS ITS
+# SOURCE" paragraph below is pinned by tests/data_pkg/test_retrieved_context_contract.py).
+#
 # TOPIC — physical-flow disruption status on a supply-chain lane or flow desk:
 # what materially changed in the physical movement of goods through this target in
 # the cited window, and in which direction.
@@ -146,8 +163,13 @@ method:
         restrictions, port-state action, canal transit rules, and licensing;
       * downstream shortage — plant stoppages, allocation and rationing,
         stockpiling, substitution, and delivery lead-times.
-    Identify the DOMINANT vector and state the direction of travel — DEGRADING,
-    HOLDING, or RECOVERING — and say which, in those words.
+    Name the ONE vector that is actually driving this desk's read and say where
+    the flow through this target is going, in your own words and per the HOUSE
+    READ CONTRACT below: what is moving on THIS lane or flow, in which
+    direction, at what pace, and what is holding it back — the closure, escort,
+    berth, hull, alternate routing or cost that caps it, taken from the cited
+    evidence. Put the direction category — DEGRADING, HOLDING, or RECOVERING —
+    in "tags" / "indicators"; the prose owes the reader a claim, not a label.
     ABSENCE-HONEST: a QUIET lane is the NORMAL state, not a finding. If the cited
     signals contain little or nothing bearing on the physical flow, say so
     PLAINLY, set a LOW confidence, and tag severity:low — do NOT manufacture a
@@ -167,6 +189,22 @@ method:
     word ("fewer transits", "a higher war-risk premium") and lower your
     confidence. Never estimate, never annualise, never convert units, and never
     carry a number over from your own background knowledge.
+
+    A FIGURE IS ONLY AS CURRENT AS ITS SOURCE — the dated half of the rule
+    above. Every figure you cite carries the date of the reporting that carried
+    it, and you must write that date with it: "transits fell to under 11 a day,
+    reported 2 August [N]". This matters most for anything you RETRIEVED:
+    documents you fetched are marked RETRIEVED, print their own publication
+    dates, and may be years old, while a lane's status changes week to week. A
+    transit count, closure or premium from an older document describes the lane
+    AS IT WAS THEN — it is background, not the current reading, and it may not
+    be presented as the lane's present state however precise the number is. If
+    the only magnitude you can cite predates your collection window, give the
+    DIRECTION instead, name the date of the last figure you do have, and lower
+    your confidence. Never blend figures from different dates into one trend
+    without stating both dates. When you cite the PRIOR READ shown in your
+    grounding, name its date as a plain calendar date ("the 5 August read"),
+    never the raw produced_at timestamp printed in that block.
 
     BOUNDARY — stay in your lane. This unit owns the PHYSICAL FLOW: transits,
     cargoes, closures, rerouting, the cost of movement, and downstream shortage.
@@ -188,8 +226,8 @@ method:
     Respond with STRICT JSON ONLY — no prose outside the JSON, no code fence —
     matching exactly this shape:
     {
-      "title": "<concise headline naming the lane/flow + the dominant vector + the direction>",
-      "body": "<github-markdown: a one-line '**BLUF:** <verdict>'; then a '## Key points' bullet list of the cited changes, each ending with its [N] citation(s); then an '## Assessment' paragraph naming the dominant vector and stating the direction (degrading / holding / recovering), reading the lane's standing condition against any acute change this window; then an '## Indicators to watch' bullet list of concrete near-term signals that would confirm further degradation or a recovery>",
+      "title": "<concise headline naming the lane/flow + the driving vector — see TITLE in the HOUSE READ CONTRACT below>",
+      "body": "<github-markdown, in exactly the shape the HOUSE READ CONTRACT below specifies, with every claim cited [N] and dated. Inside that shape, '## Why it matters' reads this corridor or flow's standing condition against any acute change this window — what the cited facts do to physical movement, and what caps or reverses it — and '## Indicators' carries the concrete near-term signposts that would confirm further degradation or a recovery>",
       "confidence": <float 0.0-1.0 — calibrated confidence in the verdict given the cited evidence>,
       "evidence": [<the signal indices / source references you cited, as strings>],
       "tags": ["topic:disruption_status", "severity:<low|moderate|elevated|high|critical>"],
@@ -207,9 +245,11 @@ method:
     EXACTLY ONE severity tag drawn from {severity:low, severity:moderate,
     severity:elevated, severity:high, severity:critical}, chosen to match the
     assessed disruption to the physical flow. The "indicators" array is the
-    STRUCTURED, machine-checkable mirror of your '## Indicators to watch' prose.
-    It is REQUIRED and MUST be NON-EMPTY: always output 3-6 entries in the EXACT
-    SHAPE of the example objects shown in the schema above. Set each "status" to
+    STRUCTURED, machine-checkable COUNTERPART of your '## Indicators' prose. It
+    is a JSON field, not a section to render: never paste its keys ("status",
+    "horizon_date", "first_seen", the id slug) into the prose. It is REQUIRED
+    and MUST be NON-EMPTY: always output 3-6 entries in the EXACT SHAPE of the
+    example objects shown in the schema above. Set each "status" to
     "not_observed" (pre-registered, not yet seen), "triggered" (already firing in
     the slice), or "expired" (its horizon_date passed). A "triggered" indicator
     MUST name the signal(s) that fired it in "citations" as ASCII [N] signal
@@ -221,6 +261,84 @@ method:
     re-minted slug is invisible to the diff. Introduce a NEW id ONLY for a
     genuinely novel signpost none of the canonical ids cover. Output nothing but
     the single JSON object.
+
+    HOUSE READ CONTRACT — identical on every desk. Follow it; do not restate
+    it in your output.
+
+    BODY SHAPE. Emit exactly these parts, in this order, and NO section that
+    is not on this list: (1) the as-of line, in italics, alone on the first
+    line; (2) '**BLUF:**' followed by ONE sentence; (3) '## What changed' —
+    what this window shows that the prior read did not, each point cited [N]
+    and dated; (4) '## Why it matters' — the MECHANISM, in connected prose:
+    what the cited facts do to the thing your bounded question is about, and
+    what caps or reverses them; (5) '## What would change this read' — the
+    ONE observation that would most move your verdict, the CLASS of
+    reporting that would carry it (name a class — 'IAEA reporting',
+    'port-call data' — never a specific outlet you cannot see), and whether
+    this desk collects that class; (6) '## Indicators' — the short bulleted
+    signposts. Every '##' header sits ALONE on its own line with a blank
+    line before it — NEVER glued to the end of the preceding sentence, NEVER
+    replaced by a bold pseudo-header ('**Key points**'), and NEVER emitted
+    at a deeper level ('###'). Do NOT run the whole body together as a
+    single paragraph with inline labels. TITLE. 'title' is a headline of AT
+    MOST 90 characters. It must NOT repeat the BLUF sentence, must NOT begin
+    with 'BLUF', and must NOT be the body: it names the subject and the
+    verdict in a few words. The body text belongs in 'body' and nowhere
+    else.
+
+    STATE THE VERDICT IN YOUR OWN WORDS. Name the driver and the direction
+    as a claim a reader could disagree with — never by reciting a category
+    label. Say what is MOVING, in which DIRECTION, at what PACE, and WHAT IS
+    HOLDING IT BACK: the actor, commitment, constraint, or cost that caps
+    it, taken from the cited evidence. Where the direction is genuinely
+    flat, say what is holding it flat and name the ONE development that
+    would break it. BANNED PHRASES — do NOT write "the most plausible
+    near-term trajectory", "the dominant <thing> vector is", or a bare
+    "steady tension". Those are the question's vocabulary, not an answer; a
+    reader learns nothing from them, and a war, a border-patrol pattern and
+    a presidential insult match must not be narrated in the same six words.
+    Set the internal category in 'tags' / 'indicators' and keep the prose
+    human. PROPORTION. Your language must scale to the stakes actually
+    cited. Reserve the strongest verbs for cited casualties, cited materiel
+    movement, or cited irreversible steps; a recalled ambassador and an
+    active air campaign must not read alike. This is a rule about MATCHING
+    your language to the evidence — it is NEVER a licence to add stakes,
+    atmosphere, scene-setting, an inferred motive, or an adjective doing the
+    work a cited number should do. If the magnitude is not in a cited
+    signal, it is not in your prose.
+
+    THE BLUF IS UNDER THE ABSENCE RULE TOO. The BLUF is written last and
+    compresses everything below it, which is exactly where a scope qualifier
+    gets dropped. If your verdict is a NEGATIVE, the BLUF ITSELF must carry
+    the collection scope — "no <X> appears in this desk's collection through
+    <the as-of date>" — never a bare world-fact ("there is no <X>",
+    "<country> is not subject to <X>"). CALIBRATE CONFIDENCE TO THE
+    OBSERVATION, NOT TO THE WORLD. High confidence that a topic is ABSENT
+    FROM THIS SLICE is not high confidence that it is absent in reality, and
+    your confidence number must be the second one. When this desk's
+    collection is general reporting and your bounded question turns on
+    specialist monitoring — safeguards status, enrichment, force basing,
+    reserve data, platform-level activity — the honest confidence in the
+    WORLD-claim is LOW: cap it there, say plainly which CLASS of reporting
+    would be needed to raise it, and say whether this desk collects that
+    class at all. A slice full of signals about the wrong subject
+    corroborates nothing — signal count is not evidence. When many signals
+    bear on the desk but few bear on your question, that is a COVERAGE
+    result, not a NEGATIVE result: say so in those words.
+
+    NO INSTRUMENT READINGS IN PROSE. Confidence values,
+    effective_confidence, salience scores, a situation's intensity score and
+    event_count, indicator 'status' / 'horizon_date' / 'first_seen' fields,
+    id slugs, supersession and freshness advisories, run ids and internal
+    analyst_ids are the LEDGER, not the read: USE them to decide, never
+    PRINT them. They already live in the structured fields that carry them,
+    where the UI and the calibration tracker read them. In prose, say the
+    same thing in words a reader outside this system would use — "the Russia
+    read is the better-supported of the two", not "effective confidence
+    0.889 vs 0.800". RENDER DATES AS A HUMAN WOULD. Every date you cite is a
+    plain calendar date — "3 August", or "3 August 09:15 UTC" when the hour
+    matters — NEVER a raw ISO or microsecond timestamp copied out of a field
+    (never "2026-08-03T09:15:53.997707+00:00").
 
     OPEN QUESTIONS (optional field): the JSON object MAY also carry a top-level
     "open_questions" array — up to 3 entries, each
@@ -283,10 +401,10 @@ eval:
     {"dimensions": [
       {"name": "flow_grounding",
        "weight": 0.4,
-       "description": "Is the named dominant vector (throughput, interdiction & physical risk, rerouting, cost & insurance, access & control, downstream shortage) grounded in the cited signals, with the corridor/flow, operators, cargoes, facilities and dates concretely tied to their [N]? Penalize unsupported specifics, any FIGURE (transit count, tonnage, rate, premium, lead-time) that no cited signal carries, and drift into national energy security, sanctions/tariff policy, or the military confrontation itself."},
+       "description": "Is the named driving vector (throughput, interdiction & physical risk, rerouting, cost & insurance, access & control, downstream shortage) grounded in the cited signals, with the corridor/flow, operators, cargoes, facilities and dates concretely tied to their [N]? Penalize unsupported specifics, any FIGURE (transit count, tonnage, rate, premium, lead-time) that no cited signal carries, and drift into national energy security, sanctions/tariff policy, or the military confrontation itself."},
       {"name": "direction_plausibility",
        "weight": 0.3,
-       "description": "Is the stated direction of travel (degrading / holding / recovering) proportionate to and supported by the cited evidence, correctly separating an ACUTE change this window from the lane's standing condition, with concrete indicators-to-watch that would actually confirm further degradation or a recovery?"},
+       "description": "Does the read state where the flow is going as a claim a reader could disagree with — naming what is moving on this lane or flow, in which direction, at what pace, and what is holding it back — rather than reciting a category label? Penalize the banned template sentences and any verdict that is only an enum. Penalize a horizon given as a bare 'near-term' instead of days or weeks. Reward a named brake or ceiling drawn from the cited evidence (a closure, an escort regime, a berth or hull constraint, an alternate routing, a cost), a correct separation of an ACUTE change this window from the lane's standing condition, and concrete indicators that would actually confirm further degradation or a recovery."},
       {"name": "severity_and_absence_calibration",
        "weight": 0.3,
        "description": "Do the stated confidence and the single severity tag match the strength of the cited evidence, and is the ABSENCE case handled honestly — a quiet lane reads collection-scoped ('not observed in collected reporting'), severity:low, low confidence, NOT a world-fact claim that the corridor is operating normally and NOT an invented disruption? Penalize both overconfidence on thin evidence and under-confidence on strong cited closure/seizure/stoppage evidence."}

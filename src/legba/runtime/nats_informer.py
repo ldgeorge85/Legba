@@ -34,6 +34,19 @@ Consumer name format: ``legba-runtime-reconcile-{consumer_label}`` where
 when running multiple runtime instances against the same NATS cluster
 (each instance gets its own durable so messages fan out across consumers
 under interest retention).
+
+S-2 — the STACK-COMPONENT twin
+------------------------------
+
+The registry publishes a second lifecycle event class the runtime never
+consumed: ``stack.component.>`` on ``LEGBA_STACK_EVENTS`` (see
+:mod:`legba.data.registry.stack_events`). :class:`NatsStackComponentInformer`
+binds it with the same durable-pull machinery and evicts the process-lifetime
+LLM handler caches, so an operator's stack-component PUT takes effect on the
+next call instead of the next container recreate. Both informers share
+:class:`_NatsSubjectInformer` — the fetch loop's re-bind/backoff self-heal is
+hard-won incident logic (the 2026-06-11 dropped-consumer outage) and must not
+be duplicated per subject family.
 """
 
 from __future__ import annotations
@@ -41,10 +54,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from ..data.nats import NatsStore
-from ..data.registry.streams import DESCRIPTOR_EVENTS_STREAM
+from ..data.registry.streams import (
+    DESCRIPTOR_EVENTS_STREAM,
+    STACK_EVENTS_STREAM,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from .reconcile import ReconcileLoop
@@ -54,6 +70,23 @@ logger = logging.getLogger(__name__)
 DEFAULT_CONSUMER_LABEL = "informer"
 DEFAULT_CONSUMER_DURABLE_PREFIX = "legba-runtime-reconcile"
 DESCRIPTOR_SUBJECT_FILTER = "descriptor.>"
+
+#: S-2 — the stack-component informer's durable prefix + subject filter. A
+#: SEPARATE durable from the descriptor informer's: the two bind different
+#: streams, and one wedged consumer must not stall the other.
+DEFAULT_STACK_CONSUMER_DURABLE_PREFIX = "legba-runtime-stack"
+STACK_SUBJECT_FILTER = "stack.component.>"
+
+#: Stack actions that CANNOT change a component's body, and so must not evict.
+#: ``health_changed`` is published by the latching health prober on every
+#: transition — it carries a liveness verdict, never config. Evicting on it
+#: would let a flapping endpoint churn the handler cache (rebuilding an
+#: httpx client + re-resolving vault credentials) for no config delta, which
+#: is exactly the kind of self-inflicted load a cache exists to prevent.
+#: Every OTHER action (registered/updated/configured/activated/paused/
+#: resumed/retired/promoted/rolled_back) either changes the body or changes
+#: whether the component should be served at all, so all of them evict.
+_NON_EVICTING_STACK_ACTIONS = frozenset({"health_changed"})
 
 # Fetch-loop tuning. The pull consumer fetches in batches; a small
 # batch keeps latency down (we want events processed within ~1s of the
@@ -71,6 +104,7 @@ class InformerStats:
     * ``enqueued`` — successful ``ReconcileLoop.enqueue`` calls.
     * ``parse_errors`` — subject parse failures (skipped + acked).
     * ``ack_errors`` — ack call failures (logged, not retried).
+    * ``evicted`` — S-2 stack informer only: cache entries dropped.
     """
 
     messages_received: int = 0
@@ -79,42 +113,35 @@ class InformerStats:
     ack_errors: int = 0
     fetch_errors: int = 0
     rebinds: int = 0
+    evicted: int = 0
     last_subject: str | None = field(default=None)
 
 
-class NatsReconcileInformer:
-    """Pull-consumer informer that bridges NATS events → ReconcileLoop.
+class _NatsSubjectInformer:
+    """Durable-pull consumer over ONE subject family, with self-healing binds.
 
-    Usage::
+    The shared half of both informers: consumer creation, the fetch loop, the
+    re-bind/backoff self-heal, ack, and the stats counters. Subclasses supply
+    the durable prefix (:attr:`_durable_prefix`) and the per-message action
+    (:meth:`_dispatch`); everything above the message is identical because the
+    failure modes are identical.
 
-        store = NatsStore.from_env()
-        await store.connect()
-        loop = ReconcileLoop(...)
-        await loop.start()
-        informer = NatsReconcileInformer(store, loop)
-        await informer.start()
-        ...
-        await informer.stop()
-        await loop.stop()
-
-    The caller owns the :class:`NatsStore` lifecycle (connect / close).
-    The informer creates its own durable consumer on the
-    ``LEGBA_DESCRIPTOR_EVENTS`` stream; the stream itself must be
-    provisioned out-of-band (the registry server does this on startup —
-    see :func:`legba.data.registry.streams.ensure_runtime_event_streams`).
+    Not exported — construct :class:`NatsReconcileInformer` or
+    :class:`NatsStackComponentInformer`.
     """
+
+    #: Durable-name prefix, joined to the consumer label with a ``-``.
+    _durable_prefix: str = DEFAULT_CONSUMER_DURABLE_PREFIX
 
     def __init__(
         self,
         nats_store: NatsStore,
-        reconcile_loop: "ReconcileLoop",
         *,
+        stream: str,
+        subject_filter: str,
         consumer_label: str = DEFAULT_CONSUMER_LABEL,
-        stream: str = DESCRIPTOR_EVENTS_STREAM,
-        subject_filter: str = DESCRIPTOR_SUBJECT_FILTER,
     ) -> None:
         self._store = nats_store
-        self._loop = reconcile_loop
         self._consumer_label = consumer_label
         self._stream = stream
         self._subject_filter = subject_filter
@@ -127,10 +154,20 @@ class NatsReconcileInformer:
         self._fetch_error_backoff: tuple[float, float] = (1.0, 30.0)
         self.stats = InformerStats()
 
+    # ---- subclass hook ---------------------------------------------------
+
+    def _dispatch(self, subject: str) -> bool:
+        """Act on one message's subject. ``True`` = handled, ``False`` = parse
+        failure (counted in ``stats.parse_errors``; the message is still
+        acked, since replaying an unparseable subject cannot help)."""
+        raise NotImplementedError
+
+    # ---- shared consumer machinery ---------------------------------------
+
     @property
     def consumer_name(self) -> str:
         """Durable consumer name — stable across restarts, inspectable via ``nats``."""
-        return f"{DEFAULT_CONSUMER_DURABLE_PREFIX}-{self._consumer_label}"
+        return f"{self._durable_prefix}-{self._consumer_label}"
 
     async def start(self) -> None:
         """Bind the durable pull consumer and start the fetch loop.
@@ -148,7 +185,7 @@ class NatsReconcileInformer:
             self._stream, self._subject_filter, self.consumer_name,
         )
         self._task = asyncio.create_task(
-            self._fetch_loop(), name="legba-runtime-nats-informer",
+            self._fetch_loop(), name=f"legba-runtime-nats-{self._consumer_label}",
         )
 
     async def _bind(self, *, rebind: bool = False) -> None:
@@ -273,22 +310,18 @@ class NatsReconcileInformer:
         self.stats.messages_received += 1
         subject = getattr(msg, "subject", "") or ""
         self.stats.last_subject = subject
-        descriptor_id = _parse_descriptor_id_from_subject(subject)
-        if descriptor_id is None:
-            self.stats.parse_errors += 1
+        try:
+            handled = self._dispatch(subject)
+        except Exception as exc:  # noqa: BLE001 — one bad message must not
+            # kill the fetch loop; that would silently stop ALL propagation
+            # on this subject family (the exact silent-failure class S-2 and
+            # S-1 exist to remove). Count it as a parse error and ack on.
+            handled = False
             logger.warning(
-                "nats_informer.parse.skip subject=%s (could not extract descriptor_id)",
-                subject,
+                "nats_informer.dispatch.error subject=%s err=%s", subject, exc,
             )
-        else:
-            self._loop.enqueue(
-                descriptor_id, reason=f"nats_event:{subject}",
-            )
-            self.stats.enqueued += 1
-            logger.debug(
-                "nats_informer.enqueued subject=%s descriptor_id=%s",
-                subject, descriptor_id,
-            )
+        if not handled:
+            self.stats.parse_errors += 1
         # Ack regardless — even if we failed to parse, replaying it
         # won't help. Interest retention will then drop the message.
         try:
@@ -299,6 +332,157 @@ class NatsReconcileInformer:
                 "nats_informer.ack.error subject=%s err=%s",
                 subject, exc,
             )
+
+
+class NatsReconcileInformer(_NatsSubjectInformer):
+    """Pull-consumer informer that bridges NATS events → ReconcileLoop.
+
+    Usage::
+
+        store = NatsStore.from_env()
+        await store.connect()
+        loop = ReconcileLoop(...)
+        await loop.start()
+        informer = NatsReconcileInformer(store, loop)
+        await informer.start()
+        ...
+        await informer.stop()
+        await loop.stop()
+
+    The caller owns the :class:`NatsStore` lifecycle (connect / close).
+    The informer creates its own durable consumer on the
+    ``LEGBA_DESCRIPTOR_EVENTS`` stream; the stream itself must be
+    provisioned out-of-band (the registry server does this on startup —
+    see :func:`legba.data.registry.streams.ensure_runtime_event_streams`).
+    """
+
+    _durable_prefix = DEFAULT_CONSUMER_DURABLE_PREFIX
+
+    def __init__(
+        self,
+        nats_store: NatsStore,
+        reconcile_loop: "ReconcileLoop",
+        *,
+        consumer_label: str = DEFAULT_CONSUMER_LABEL,
+        stream: str = DESCRIPTOR_EVENTS_STREAM,
+        subject_filter: str = DESCRIPTOR_SUBJECT_FILTER,
+    ) -> None:
+        super().__init__(
+            nats_store,
+            stream=stream,
+            subject_filter=subject_filter,
+            consumer_label=consumer_label,
+        )
+        self._loop = reconcile_loop
+
+    def _dispatch(self, subject: str) -> bool:
+        descriptor_id = _parse_descriptor_id_from_subject(subject)
+        if descriptor_id is None:
+            logger.warning(
+                "nats_informer.parse.skip subject=%s (could not extract descriptor_id)",
+                subject,
+            )
+            return False
+        self._loop.enqueue(descriptor_id, reason=f"nats_event:{subject}")
+        self.stats.enqueued += 1
+        logger.debug(
+            "nats_informer.enqueued subject=%s descriptor_id=%s",
+            subject, descriptor_id,
+        )
+        return True
+
+
+class NatsStackComponentInformer(_NatsSubjectInformer):
+    """S-2 — ``stack.component.>`` → LLM handler-cache eviction.
+
+    The twin of :class:`NatsReconcileInformer` for the OTHER lifecycle event
+    class the registry publishes. Where the descriptor informer propagates a
+    descriptor edit into actor state, this one propagates a stack-component
+    edit into the process's built-handler caches: the cached handler for the
+    changed component is dropped, and the next call rebuilds it from the live
+    component row.
+
+    Why it exists: ``_llm_handler_cache`` keys by ``component_id`` with no
+    version and had no invalidation, so the operator's 2026-08-01 timeout PUT
+    (60→240s, mid-incident) stayed inert for 3.5 h until a container recreate.
+    See :mod:`legba.runtime.llm_handler_cache` for the eviction contract (and
+    for why eviction drops rather than closes).
+
+    ``evict`` is injected — production passes
+    :func:`legba.runtime.llm_handler_cache.evict_llm_handler`; tests pass a
+    spy. It returns the number of cache entries dropped, which is what the
+    informer logs (0 is the ordinary case for a component this process never
+    built a handler for, and is NOT an error).
+    """
+
+    _durable_prefix = DEFAULT_STACK_CONSUMER_DURABLE_PREFIX
+
+    def __init__(
+        self,
+        nats_store: NatsStore,
+        *,
+        evict: Callable[[str], int],
+        consumer_label: str = DEFAULT_CONSUMER_LABEL,
+        stream: str = STACK_EVENTS_STREAM,
+        subject_filter: str = STACK_SUBJECT_FILTER,
+    ) -> None:
+        super().__init__(
+            nats_store,
+            stream=stream,
+            subject_filter=subject_filter,
+            consumer_label=consumer_label,
+        )
+        self._evict = evict
+
+    def _dispatch(self, subject: str) -> bool:
+        parsed = parse_stack_subject(subject)
+        if parsed is None:
+            logger.warning(
+                "stack_informer.parse.skip subject=%s (could not extract "
+                "action/component_id)", subject,
+            )
+            return False
+        action, component_id = parsed
+        if action in _NON_EVICTING_STACK_ACTIONS:
+            logger.debug(
+                "stack_informer.skip subject=%s action=%s (no body change)",
+                subject, action,
+            )
+            return True
+        evicted = self._evict(component_id)
+        self.stats.enqueued += 1
+        self.stats.evicted += evicted
+        if evicted:
+            logger.info(
+                "stack_informer.evicted subject=%s component_id=%s action=%s "
+                "handlers=%d — the next LLM call rebuilds from the live "
+                "component", subject, component_id, action, evicted,
+            )
+        else:
+            logger.debug(
+                "stack_informer.no_cached_handler subject=%s component_id=%s",
+                subject, component_id,
+            )
+        return True
+
+
+def parse_stack_subject(subject: str) -> tuple[str, str] | None:
+    """``(action, component_id)`` from ``stack.component.<action>.<kind>.<id>``.
+
+    Returns ``None`` if the subject doesn't match the grammar. Component ids
+    ARE dotted (``llm.primary.openai_compat``), so everything past the 5th
+    token rejoins into the id — the reason this can't be a naive ``split``.
+    """
+    if not subject:
+        return None
+    tokens = subject.split(".")
+    if len(tokens) < 5 or tokens[0] != "stack" or tokens[1] != "component":
+        return None
+    action = tokens[2]
+    component_id = ".".join(tokens[4:])
+    if not action or not component_id:
+        return None
+    return action, component_id
 
 
 def _parse_descriptor_id_from_subject(subject: str) -> str | None:
@@ -320,7 +504,11 @@ def _parse_descriptor_id_from_subject(subject: str) -> str | None:
 
 __all__ = [
     "DEFAULT_CONSUMER_LABEL",
+    "DEFAULT_STACK_CONSUMER_DURABLE_PREFIX",
     "DESCRIPTOR_SUBJECT_FILTER",
+    "STACK_SUBJECT_FILTER",
     "InformerStats",
     "NatsReconcileInformer",
+    "NatsStackComponentInformer",
+    "parse_stack_subject",
 ]

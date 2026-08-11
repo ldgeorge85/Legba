@@ -73,6 +73,12 @@ export type PanelKind =
   // Entity knowledge-graph (UI-3 — source-first analogue of v2's entity KG)
   | 'system.entities'
   | 'system.entity_graph'
+  // K-G4 — the graph WALK: anchored ego expansion over the reified
+  // `entity_edges` store, one interactive hop per click, with per-edge
+  // evidence. Distinct from system.entity_graph (the older `proposed_edges`
+  // top-N subgraph projection); this is the surface under the operator's
+  // "walking the world graph" vision.
+  | 'system.graph_walk'
   // Notable-structure overlay (#99 — ranked interesting graph-structure shortlist)
   | 'system.notable_structure'
   // Source-first surfaces (UI-2 / Tier C — pivot)

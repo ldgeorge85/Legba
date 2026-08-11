@@ -1,33 +1,58 @@
-# unit_correctness_scorer — the P2-T5 per-unit correctness-vs-reference scorer.
+# unit_correctness_scorer — the per-unit CORRECTNESS scorer (P2-T5, rewired M-1).
 #
-# A `deterministic`-kind META analyst (sub_handler=unit_correctness_scorer) —
-# Phase 2 measures each small reasoning UNIT individually, and "is the unit's read
-# RIGHT?" needs a labeled reference answer to score against (distinct from
-# faithfulness, "is the prose faithful to its cites?"). This wires the BUILT
-# handler that, per bounded unit (leadership_transition / energy_security /
-# escalation / narrative_coordination), compares the unit's LATEST head finding
-# grounding against the operator-authored gold rows in `unit_reference_labels`
-# (migration 0057).
+# A `deterministic`-kind META analyst (sub_handler=unit_correctness_scorer).
+# Phase 2 measures each small reasoning UNIT individually, and "was the unit's
+# read RIGHT?" is a different question from faithfulness ("is the prose faithful
+# to its own cites?"). A finding can be scrupulously faithful to citations that
+# do not support the conclusion it drew from them; measuring only faithfulness
+# cannot see that, and the 2026-07-28 gold-set round measured exactly it —
+# operator correctness ~0.625 against a same-window faithfulness ~0.92.
 #
-# The metric is Source-ID Overlap — canonical-source RECALL (best-label disjunctive
-# max per target, simple per-unit mean over scored targets), deterministic + LLM-
-# free + $0. It is the HONEST DETERMINISTIC FLOOR beneath a later semantic
-# correctness judge — exactly as calibration's exogenous Brier is the floor beneath
-# the segregated forecast pilot. Companion Jaccard + citations-only recall ride
-# along as DIAGNOSTICS, never the headline.
+# TWO AXES, and M-1 (2026-08-03) moved the headline between them.
 #
-# HONESTY (the T5 done-criterion): with the gold table empty (its state today),
-# every unit reports `correctness_vs_reference = None` with a status string — never
-# a fabricated or default number. A real 0.0 arises ONLY when a finding cited NONE
-# of the canonical evidence for its best label.
+# PRIMARY — the OPERATOR gold set (`correctness_labels`, migration 0096): the
+# weekly labeling loop's per-finding semantic verdicts. Judge-independent, and
+# the table the operator actually writes to. Weighted correct=1.0 /
+# partially_correct=0.5 / incorrect=0.0, `unresolvable` excluded from BOTH
+# numerator and denominator. The arithmetic and the tiny-n rules live once, in
+# legba.data.correctness_axis, shared with the /eval/scores overlay, the
+# scorecard eval fold, GET /v3/eval/correctness and the GEPA promotion record.
 #
-# Each per-run FindingPayload carries, per unit, {unit, faithfulness,
-# correctness_vs_reference, n_labeled, n_findings} (+ the diagnostics + per_target).
+# SECONDARY (diagnostic) — Source-ID Overlap recall vs `unit_reference_labels`
+# (migration 0057): best-label disjunctive max per target, simple per-unit mean,
+# deterministic + LLM-free + $0, with companion Jaccard and citations-only recall
+# alongside. KEPT, not retired — the math is correct and it becomes live the
+# instant a reference label is written for a live unit. But it was the headline
+# for a year while the table held ONE row, for a RETIRED analyst, with zero
+# canonical_source_ids, so the axis reported None every day of its life. Leading
+# with it was what kept this analyst silent.
 #
-# META analyst: no subscription.targets => single global sweep per tick; reads the
-# analyst_outputs (findings + faithfulness critiques) + unit_reference_labels tables
-# directly via deps.pg_pool. Pure SQL, NO LLM — staggered off the other
-# deterministic maintenance analysts so they don't co-fire.
+# The two axes are NEVER pooled or averaged: different tables, different
+# evidence, different n, and either may be null while the other is not.
+#
+# HONESTY: no number is ever fabricated on either axis. The gold set is
+# hand-labelled and does not scale by construction (n=8 fleet-wide today, n=1 for
+# most units), so the operator mean is REPORTED below the floor — hiding it is
+# how it stayed invisible — but always with its n, its full verdict mix, a
+# `sufficient` flag and a status sentence, plus a
+# `unit_correctness_operator_tiny_n` tag on the finding. On the secondary axis a
+# real 0.0 arises ONLY when a finding cited NONE of the canonical evidence for
+# its best label.
+#
+# Each per-run FindingPayload carries, per unit: {unit, faithfulness,
+# faithfulness_population, correctness_operator, n_operator_labels,
+# n_operator_scored, operator_sufficient, operator_mix, operator_status,
+# correctness_vs_reference, n_labeled, n_findings} (+ diagnostics + per_target),
+# and at the top level the fleet-wide operator aggregate.
+#
+# M-2: the faithfulness mean is scoped to ONE judge_pipeline_version, with prior
+# pipelines ANNOTATED beside it (their own n, their own mean) and never averaged
+# in — a mean across a judge swap describes a population that never existed.
+#
+# META analyst: no subscription.targets => single global sweep per tick; reads
+# analyst_outputs (findings + faithfulness critiques) + correctness_labels +
+# unit_reference_labels directly via deps.pg_pool. Pure SQL, NO LLM — staggered
+# off the other deterministic maintenance analysts so they don't co-fire.
 
 identity:
   id: unit_correctness_scorer
@@ -58,8 +83,9 @@ method:
   kind: deterministic
   impl: legba.data.analysts.deterministic:run_method
   sub_handler: unit_correctness_scorer
-  # No LLM block, no token budget — pure SQL set-overlap over the gold labels +
-  # the units' findings.
+  # No LLM block, no token budget — pure SQL over the two gold tables + the
+  # units' findings and faithfulness critiques. Correctness is measured by an
+  # operator and by set overlap; neither axis costs a token.
 
 cadence:
   # Once daily, OFFSET from the other deterministic maintenance analysts

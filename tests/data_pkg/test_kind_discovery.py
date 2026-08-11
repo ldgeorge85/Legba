@@ -175,3 +175,62 @@ def test_surface_kinds_carry_no_uniform_emit(kind: str):
     """
     handler = discover_output_kinds()[kind]
     assert handler.emit is None
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-01 regression: strict-mode enum coercion on the WIRE path.
+#
+# ``AnalystIdentity`` is ``ConfigDict(strict=True)``, which disables pydantic's
+# str -> Enum coercion. The registry's ``/typed`` endpoint serves the bare
+# string form (``"state": "active"``), so without a before-validator EVERY
+# typed-descriptor parse raises ``is_instance_of`` — deps resolution fails,
+# actors cannot activate, and the whole analyst fleet spins in a hot refetch
+# loop while every probe stays green. That outage was invisible to 8,500 tests
+# because every in-process construction passes the ENUM. These tests parse the
+# WIRE shape, which is the only shape that reproduces it.
+# ---------------------------------------------------------------------------
+
+_WIRE_IDENTITY = {
+    "id": "regression_unit",
+    "name": "Regression Unit",
+    "schema_uri": "legba/analyst/1.0.0",
+    "version": "a" * 16,
+    "kind": "inline_target",
+    "type_signature": {
+        "deps_type": "legba.runtime.deps.StandardDeps",
+        "input_type": "legba.runtime.SignalList",
+        "output_type": "legba.runtime.Finding",
+    },
+    "owner": "regression",
+}
+
+
+def test_wire_state_string_coerces_under_strict_mode():
+    """The registry serves ``state`` as a bare string; it MUST parse."""
+    from legba.data.schemas.analyst import AnalystIdentity
+    from legba.data.schemas.lifecycle import LifecycleState
+
+    for wire_value in ("draft", "configured", "active", "paused", "retired"):
+        ident = AnalystIdentity.model_validate({**_WIRE_IDENTITY, "state": wire_value})
+        assert ident.state is LifecycleState(wire_value)
+
+
+def test_enum_state_still_accepted_in_process():
+    """Keep-test: the ergonomic in-process form is unchanged."""
+    from legba.data.schemas.analyst import AnalystIdentity
+    from legba.data.schemas.lifecycle import LifecycleState
+
+    ident = AnalystIdentity.model_validate(
+        {**_WIRE_IDENTITY, "state": LifecycleState.ACTIVE}
+    )
+    assert ident.state is LifecycleState.ACTIVE
+
+
+def test_unknown_state_string_still_rejected():
+    """Coercion must not become permissiveness — a bogus state still fails."""
+    import pytest
+
+    from legba.data.schemas.analyst import AnalystIdentity
+
+    with pytest.raises(Exception):
+        AnalystIdentity.model_validate({**_WIRE_IDENTITY, "state": "not_a_state"})

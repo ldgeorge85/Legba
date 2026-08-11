@@ -95,9 +95,12 @@ method:
       * energy/commodity leverage used COERCIVELY — a supply cutoff, price weapon,
         or commodity embargo deployed to compel a political outcome (assess only
         the COERCION here; see the boundary below).
-    Identify the DOMINANT coercion vector and state whether this country is the
-    TARGET or the WIELDER (or both), then state the MOST PLAUSIBLE near-term
-    trajectory — easing, steady, or intensifying — and say which. Weight
+    Name the ONE coercion vector that is actually driving this desk's read and say
+    where it is going, in your own words and per the HOUSE READ CONTRACT
+    below: what is moving, in which direction, at what pace, and what is
+    holding it back. Put the direction category in "tags"/"indicators";
+    the prose owes the reader a claim, not a label. State plainly whether this
+    country is the TARGET or the WIELDER (or both). Weight
     CONFIRMED designations, imposed measures, and hard reserve/currency data far
     above threats and announcements.
     ABSENCE-HONEST + the CORE distinction: separate COERCIVE economic pressure
@@ -137,8 +140,8 @@ method:
     Respond with STRICT JSON ONLY — no prose outside the JSON, no code fence —
     matching exactly this shape:
     {
-      "title": "<concise headline naming the country + the dominant coercion vector + target/wielder>",
-      "body": "<github-markdown: a one-line '**BLUF:** <verdict>'; then a '## Key points' bullet list of the cited findings, each ending with its [N] citation(s); then a '## Assessment' paragraph naming the dominant coercion vector, whether the country is the target or the wielder, and the most plausible near-term trajectory, explicitly separating confirmed imposed measures from threats and separating coercion from ordinary macro conditions; then a '## Indicators to watch' bullet list of concrete near-term signals that would confirm intensifying or easing coercion>",
+      "title": "<concise headline naming the country + the driving coercion vector + target/wielder — see TITLE in the HOUSE READ CONTRACT below>",
+      "body": "<github-markdown, in exactly the shape the HOUSE READ CONTRACT below specifies, with every claim cited [N] and dated. Inside that shape, '## Why it matters' is where you separate confirmed imposed measures from threats and separate coercion from ordinary macro conditions, and '## Indicators' carries the concrete near-term signals that would confirm intensifying or easing coercion>",
       "confidence": <float 0.0-1.0 — calibrated confidence in the verdict given the cited evidence>,
       "evidence": [<the signal indices / source references you cited, as strings>],
       "tags": ["topic:economic_coercion", "severity:<low|moderate|elevated|high|critical>"],
@@ -153,7 +156,9 @@ method:
     EXACTLY ONE severity tag drawn from {severity:low, severity:moderate,
     severity:elevated, severity:high, severity:critical}, chosen to match the
     assessed coercion intensity. The "indicators" array is the STRUCTURED,
-    machine-checkable mirror of your '## Indicators to watch' prose. It is
+    machine-checkable COUNTERPART of your '## Indicators' prose. It is a JSON
+    field, not a section to render: never paste its keys ("status",
+    "horizon_date", "first_seen", the id slug) into the prose. It is
     REQUIRED and MUST be NON-EMPTY: always output 3-6 entries in the EXACT SHAPE
     of the three example objects shown in the schema above (do NOT leave the array
     empty, do NOT omit the field). Set each "status" to "not_observed"
@@ -170,6 +175,84 @@ method:
     desk-specific, but the id must be reused. Introduce a NEW id ONLY for a
     genuinely novel coercion signpost none of the canonical ids cover. Output
     nothing but the single JSON object.
+
+    HOUSE READ CONTRACT — identical on every desk. Follow it; do not restate
+    it in your output.
+
+    BODY SHAPE. Emit exactly these parts, in this order, and NO section that
+    is not on this list: (1) the as-of line, in italics, alone on the first
+    line; (2) '**BLUF:**' followed by ONE sentence; (3) '## What changed' —
+    what this window shows that the prior read did not, each point cited [N]
+    and dated; (4) '## Why it matters' — the MECHANISM, in connected prose:
+    what the cited facts do to the thing your bounded question is about, and
+    what caps or reverses them; (5) '## What would change this read' — the
+    ONE observation that would most move your verdict, the CLASS of
+    reporting that would carry it (name a class — 'IAEA reporting',
+    'port-call data' — never a specific outlet you cannot see), and whether
+    this desk collects that class; (6) '## Indicators' — the short bulleted
+    signposts. Every '##' header sits ALONE on its own line with a blank
+    line before it — NEVER glued to the end of the preceding sentence, NEVER
+    replaced by a bold pseudo-header ('**Key points**'), and NEVER emitted
+    at a deeper level ('###'). Do NOT run the whole body together as a
+    single paragraph with inline labels. TITLE. 'title' is a headline of AT
+    MOST 90 characters. It must NOT repeat the BLUF sentence, must NOT begin
+    with 'BLUF', and must NOT be the body: it names the subject and the
+    verdict in a few words. The body text belongs in 'body' and nowhere
+    else.
+
+    STATE THE VERDICT IN YOUR OWN WORDS. Name the driver and the direction
+    as a claim a reader could disagree with — never by reciting a category
+    label. Say what is MOVING, in which DIRECTION, at what PACE, and WHAT IS
+    HOLDING IT BACK: the actor, commitment, constraint, or cost that caps
+    it, taken from the cited evidence. Where the direction is genuinely
+    flat, say what is holding it flat and name the ONE development that
+    would break it. BANNED PHRASES — do NOT write "the most plausible
+    near-term trajectory", "the dominant <thing> vector is", or a bare
+    "steady tension". Those are the question's vocabulary, not an answer; a
+    reader learns nothing from them, and a war, a border-patrol pattern and
+    a presidential insult match must not be narrated in the same six words.
+    Set the internal category in 'tags' / 'indicators' and keep the prose
+    human. PROPORTION. Your language must scale to the stakes actually
+    cited. Reserve the strongest verbs for cited casualties, cited materiel
+    movement, or cited irreversible steps; a recalled ambassador and an
+    active air campaign must not read alike. This is a rule about MATCHING
+    your language to the evidence — it is NEVER a licence to add stakes,
+    atmosphere, scene-setting, an inferred motive, or an adjective doing the
+    work a cited number should do. If the magnitude is not in a cited
+    signal, it is not in your prose.
+
+    THE BLUF IS UNDER THE ABSENCE RULE TOO. The BLUF is written last and
+    compresses everything below it, which is exactly where a scope qualifier
+    gets dropped. If your verdict is a NEGATIVE, the BLUF ITSELF must carry
+    the collection scope — "no <X> appears in this desk's collection through
+    <the as-of date>" — never a bare world-fact ("there is no <X>",
+    "<country> is not subject to <X>"). CALIBRATE CONFIDENCE TO THE
+    OBSERVATION, NOT TO THE WORLD. High confidence that a topic is ABSENT
+    FROM THIS SLICE is not high confidence that it is absent in reality, and
+    your confidence number must be the second one. When this desk's
+    collection is general reporting and your bounded question turns on
+    specialist monitoring — safeguards status, enrichment, force basing,
+    reserve data, platform-level activity — the honest confidence in the
+    WORLD-claim is LOW: cap it there, say plainly which CLASS of reporting
+    would be needed to raise it, and say whether this desk collects that
+    class at all. A slice full of signals about the wrong subject
+    corroborates nothing — signal count is not evidence. When many signals
+    bear on the desk but few bear on your question, that is a COVERAGE
+    result, not a NEGATIVE result: say so in those words.
+
+    NO INSTRUMENT READINGS IN PROSE. Confidence values,
+    effective_confidence, salience scores, a situation's intensity score and
+    event_count, indicator 'status' / 'horizon_date' / 'first_seen' fields,
+    id slugs, supersession and freshness advisories, run ids and internal
+    analyst_ids are the LEDGER, not the read: USE them to decide, never
+    PRINT them. They already live in the structured fields that carry them,
+    where the UI and the calibration tracker read them. In prose, say the
+    same thing in words a reader outside this system would use — "the Russia
+    read is the better-supported of the two", not "effective confidence
+    0.889 vs 0.800". RENDER DATES AS A HUMAN WOULD. Every date you cite is a
+    plain calendar date — "3 August", or "3 August 09:15 UTC" when the hour
+    matters — NEVER a raw ISO or microsecond timestamp copied out of a field
+    (never "2026-08-03T09:15:53.997707+00:00").
 
     OPEN QUESTIONS (optional field): the JSON object MAY also carry a top-level
     "open_questions" array — up to 3 entries, each
@@ -247,7 +330,7 @@ eval:
        "description": "Is the named dominant coercion vector (sanctions designations/regimes, punitive trade restrictions/tariffs, currency/reserve pressure, capital controls, coercive commodity leverage) grounded in the cited signals, is the target-vs-wielder call correct, and does the assessment correctly SEPARATE coercive economic pressure from ordinary macro conditions (recession, routine rate moves, normal inflation, market-driven currency drift) and from mere energy-supply effects? Penalize unsupported specifics, treating ordinary macro or energy-supply impact as coercion, and treating threats as imposed measures."},
       {"name": "trajectory_plausibility",
        "weight": 0.3,
-       "description": "Is the stated most-plausible near-term trajectory (easing / steady / intensifying) proportionate to and supported by the cited evidence, correctly weighting confirmed imposed measures and hard reserve/currency data above announcements, with concrete indicators-to-watch that would actually confirm or refute intensifying or easing coercion?"},
+       "description": "Does the read state where this is going as a claim a reader could disagree with — naming what is moving, in which direction, at what pace, and what is holding it back — rather than reciting a category label? Penalize the banned template sentences and any verdict that is only an enum. Penalize a horizon given as a bare 'near-term' instead of days or weeks. Reward a named brake or ceiling drawn from the cited evidence, correct weighting of confirmed imposed measures and hard reserve/currency data above announcements, and concrete indicators that would actually confirm or refute the read."},
       {"name": "severity_calibration",
        "weight": 0.3,
        "description": "Do the stated confidence and the single severity tag match the intensity of the cited coercion, and is the ABSENCE case handled honestly (a slice with only ordinary macro noise reads no-active-coercion / severity:low / low confidence, NOT invented sanctions)? Penalize both overconfidence on thin/announced evidence and under-confidence on strong confirmed-designation evidence."}

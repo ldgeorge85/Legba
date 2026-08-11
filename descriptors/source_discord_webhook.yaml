@@ -1,0 +1,69 @@
+# W1-E BIND — Discord webhook source descriptor (L-137;
+# src/legba/data/sources/discord.py). An INBOUND push source: Discord POSTs
+# signed interaction/event webhooks to /api/v1/webhooks/<source_id>; the
+# handler verifies the Ed25519 signature (X-Signature-Ed25519 +
+# X-Signature-Timestamp) against the application's public key and emits a
+# Signal per accepted event. Real OSINT relevance: conflict-monitoring /
+# journalist / open-source communities coordinate over Discord servers this
+# would let the fleet ingest directly, complementing the RSS-skewed
+# collection surface as domains expand.
+#
+# ⚠ CORRECTION vs the source CODE_CLEANUP_ANALYSIS_2026-08-02.md list: it
+# used the module filename (`discord`) as the presumed dispatch kind.
+# `source_factory.discover_source_kinds()` actually keys its registry by the
+# handler CLASS's `kind: ClassVar[str]` attribute, which for
+# `DiscordWebhookSourceHandler` is `"discord_webhook"`, not `"discord"`.
+# `identity.kind` below reflects the real value.
+#
+# KEYED — gated by TWO things this pass cannot provide, neither of which is
+# a code change:
+#   1. `application_id` / the public key are issued by Discord's own
+#      developer portal for a real registered application — there is no
+#      vault secret or repo value that substitutes for "register an app".
+#   2. Once registered, the operator must set the app's Interactions
+#      Endpoint URL to this deploy's /api/v1/webhooks/source.discord.default
+#      — Discord's own PING/PONG handshake has to succeed before it will
+#      accept the endpoint.
+# The placeholders below are NOT real credentials — this descriptor is
+# state: draft (no live actor, no mounted route) specifically so a
+# placeholder value is harmless. OPERATOR FLIP: replace application_id,
+# load the real hex Ed25519 public key at the public_key_secret vault id via
+# scripts/bringup_vault_load.py or the vault REST API, register the app +
+# endpoint URL with Discord, THEN transition draft -> configured -> active.
+
+identity:
+  id: source.discord.default
+  name: Discord Webhook (KEYED — needs a real registered Discord app)
+  kind: discord_webhook
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: w1e_built_but_unbound
+  created: "2026-08-03T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [push, discord, osint, community]
+  source_class: analysis
+
+acquisition: push
+
+config:
+  application_id: "REPLACE_WITH_REAL_DISCORD_APPLICATION_ID"
+  public_key_secret: "source.discord.public_key"   # vault credential id, not a literal secret
+  allowed_event_types: null
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1
+      config: {}
+    - kind: dedupe_tier_2
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+
+subscription_policy: open

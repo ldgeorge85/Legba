@@ -51,6 +51,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 from uuid import UUID
 
+from ...runtime.substrate_query_port import _ASSESSMENT_PRODUCER_ANALYSTS
 from ..provenance.consumption import CONSUMPTION_CONTEXT_JOURNAL
 from ..provenance.kinds import OutputKind
 from ..provenance.models import JournalClaim, JournalPayload
@@ -1016,6 +1017,22 @@ def _render_user_prompt(
         "least one concrete example (which desk, which product excluded what "
         "the other cites). Two top products disagreeing in silence is exactly "
         "the dishonesty this journal exists to surface.",
+        # B-8 (2026-08-03): the entry that day claimed "the assessment engine
+        # produced no country-level rows and identified no disagreements in the
+        # last 48 hours" on a day with 1,562 successful runs and 131 fresh
+        # country_composition findings. Nothing lied to it — it asked for a
+        # retired analyst by name, got an honest zero, and reported the zero as a
+        # fact about the engine. This is the rule that makes that sentence
+        # unwritable.
+        "DISCIPLINE — an empty read is a fact about your QUESTION first: when "
+        "get_assessments (or any instrument) comes back empty, you have learned "
+        "that THAT query returned nothing — NOT that the engine produced "
+        "nothing. Before writing any sentence of the form 'the platform produced "
+        "no X', re-read WITHOUT narrowing arguments (no analyst_id, wider "
+        "since_hours). If the result carries an `unavailable` note, it is telling "
+        "you the question was malformed: fix the question, do not narrate the "
+        "answer. And a `disagreements` value of null means NOT MEASURED — never "
+        "write it up as 'no disagreements', which is a finding you did not make.",
         # T-2 attribution guard (j7 Rubio-inversion): a raw non-Latin title + a
         # transliterated NER fragment is how "Rubio" became "Iran's foreign
         # minister" with inverted polarity. A row marked [untranslated:<lang>]
@@ -1406,7 +1423,11 @@ class NarrateToolCallLeakError(RuntimeError):
 # sibling shapes different providers use for the same intent (``name`` /
 # ``function`` / ``parameters`` / an OpenAI-style ``tool_calls`` envelope).
 _TOOL_CALL_LEAK_KEYS = frozenset(
-    {"tool", "name", "args", "arguments", "function", "parameters", "tool_calls"}
+    {"tool", "name", "args", "arguments", "function", "parameters", "tool_calls",
+     # 2026-08-10 08:30Z: the leaked transcript interleaves the calls with the
+     # apparatus's OWN error echo ({"error": "Invalid arguments for tool …"}).
+     # An "entry" that is one bare error object is exhaust, not prose.
+     "error"}
 )
 # Below this many characters, a successfully-whole-string-JSON-parsed
 # "entry" reads as apparatus exhaust, not prose, EVEN if its keys fall
@@ -1461,10 +1482,6 @@ def _is_tool_call_leak(content: str) -> bool:
     candidate = _strip_code_fence(content)
     if not candidate:
         return False
-    try:
-        parsed = json.loads(candidate)
-    except (json.JSONDecodeError, ValueError):
-        return False  # not whole-string JSON at all — ordinary prose
 
     def _is_tool_call_object(obj: Any) -> bool:
         return (
@@ -1472,6 +1489,27 @@ def _is_tool_call_leak(content: str) -> bool:
             and bool(obj)
             and set(obj.keys()) <= _TOOL_CALL_LEAK_KEYS
         )
+
+    try:
+        parsed = json.loads(candidate)
+    except (json.JSONDecodeError, ValueError):
+        # Not whole-string JSON. One more shape before calling it prose —
+        # JSON LINES (the 2026-08-10 08:30Z leak): one tool-call object per
+        # line, which whole-string json.loads rejects as "extra data" and the
+        # original predicate therefore published verbatim. Fires only when
+        # EVERY non-empty line parses as a leak-shaped object — a single line
+        # of prose anywhere keeps the never-fire-on-analysis property.
+        lines = [ln.strip() for ln in candidate.splitlines() if ln.strip()]
+        if len(lines) < 2:
+            return False
+        for ln in lines:
+            try:
+                obj = json.loads(ln)
+            except (json.JSONDecodeError, ValueError):
+                return False
+            if not _is_tool_call_object(obj):
+                return False
+        return True
 
     shaped = _is_tool_call_object(parsed) or (
         isinstance(parsed, list) and bool(parsed)
@@ -1608,6 +1646,240 @@ _CONSOLIDATION_SHAPE_RETRY_INSTRUCTION = (
     "as plain markdown prose — no JSON, no tool syntax — reflecting over your "
     "inner landscape and the tower's verified output."
 )
+
+
+# ---------------------------------------------------------------------------
+# PROPOSE (§7 Wave 4) — the phase the propose pack never had (W1-C)
+# ---------------------------------------------------------------------------
+# THE DEFECT THIS FIXES (engine-review p5, 2026-08-02): ``journal_propose`` was
+# granted to two analysts, registered active, bound end-to-end by dapr_host +
+# the actor's ``_gather_write_bindings_for_target`` META self-allow, and
+# catalogued in the GATHER prompt since 0875b7d — with **0 invocations EVER**.
+# Live proof at diagnosis (read-only psql): ``action_pack_invocations`` carried
+# only journal_read/substrate_read/escalate_finding; ``governor_events`` had
+# not ONE row for the pack under any decision — so the model never named a
+# propose tool and got blocked, it never named one at all; ``journal_proposals``
+# = 0; no journal trace mentions "propose". The wiring was never the problem.
+#
+# THE CAUSE IS PHASE PLACEMENT, and it cuts both ways:
+#   * Propose was offered ONLY in GATHER — a phase framed "Before you write the
+#     entry you may FIRST query the substrate … Do not write the entry yet". At
+#     GATHER the model has read nothing and formed no judgment, so it has
+#     nothing to propose; we asked before the reasoning happened.
+#   * At NARRATE — the one phase where it HAS reasoned and would know "that
+#     leader fact is stale" — propose is absent from the catalog,
+#     ``_narrate_with_tools`` dispatches ``JOURNAL_READ_TOOLS`` and nothing
+#     else, and propose-shaped JSON is caught by
+#     :func:`_guard_against_tool_call_leak` as a LEAK: hard "prose only" retry,
+#     then :class:`NarrateToolCallLeakError` — a FAILED run. The model was
+#     structurally punished for proposing at the only moment it could.
+#
+# So: a third phase, AFTER the body is final and REFLECT has bound its
+# citations, showing the model its own entry + resolved refs + the pack's
+# guidance, and asking the question no other phase asks — with a cheap no.
+#
+# THE INVARIANT IS UNCHANGED (§7.5): a propose_* call writes ONE ``pending``
+# ``journal_proposals`` row and nothing else. This adds a *moment*, never a
+# permission — every call still goes through ``binding.run_tool`` →
+# ``Agency.run_pack_tool`` → resolve ∩ allow ∩ applicability → governor → the
+# ``action_pack_invocations`` ledger, on the actor's per-run WritebackContext.
+# The journal SUGGESTS; a human CAUSES.
+
+#: Turns the PROPOSE phase may spend. Each is one LLM call that names a propose
+#: tool or declines; a decline (or anything unparsable) ends the phase. Small by
+#: intent — a coda, not a second ReAct loop.
+_PROPOSE_MAX_ROUNDS = 3
+
+#: Hard ceiling on proposals ONE run may queue. The pack governor's 60/hour is
+#: the fleet-wide bound; this is the per-entry one. "Do NOT propose lightly"
+#: (the pack's own rule) needs an enforcer that is not a sentence in a prompt.
+_PROPOSE_MAX_PER_RUN = 2
+
+#: Cap on refs echoed into the propose prompt as the legal warrant vocabulary.
+_PROPOSE_REF_ECHO_CAP = 25
+
+_PROPOSE_DECLINE_INSTRUCTION = (
+    "\n\nIf nothing further warrants a proposal, reply with exactly: "
+    '{"propose": false}'
+)
+
+
+def _propose_phase_prompt(
+    *, body: str, cited_refs: list[UUID], write_fragments: Any,
+) -> str:
+    """Build the PROPOSE turn's user prompt: the entry just written, the pack's
+    operator-authored guidance, the tool schemas, and the legal warrant
+    vocabulary — this entry's OWN resolved refs. The pack rule is "cite only
+    UUIDs your read tools returned"; handing the model exactly those is the
+    anti-fabrication anchor."""
+    lines = [
+        "YOU HAVE JUST WRITTEN THIS ENTRY:",
+        "",
+        body.strip(),
+        "",
+        "Now — and only now, having reasoned it through — consider whether "
+        "anything in it warrants a PROPOSAL. A proposal is a suggestion "
+        "queued for a human to review; it changes NOTHING by itself, and it "
+        "is never a fact write.",
+    ]
+    frags = [str(f).strip() for f in (write_fragments or []) if str(f).strip()]
+    if frags:
+        lines.append("")
+        lines.extend(frags)
+    lines += ["", "Available proposal tools:"] + [
+        "  - " + _JOURNAL_PROPOSE_TOOL_SCHEMAS.get(
+            name, f"{name}(...) — journal propose tool (see persona)."
+        )
+        for name in JOURNAL_PROPOSE_TOOLS
+    ]
+    if cited_refs:
+        lines += ["", (
+            "Refs this entry actually resolved (the ONLY UUIDs you may put in "
+            "cited_substrate_refs — never invent one): "
+            + ", ".join(str(r) for r in cited_refs[:_PROPOSE_REF_ECHO_CAP])
+        )]
+    lines += ["", (
+        "Reply with EITHER a single strict-JSON tool call — "
+        '{"tool": "<name>", "args": {"rationale": "...", "diff": {...}, '
+        '"cited_substrate_refs": ["..."]}} — OR, if nothing warrants one, '
+        'exactly {"propose": false}. Most entries warrant nothing; declining '
+        "is the normal answer and costs you nothing."
+    )]
+    return "\n".join(lines)
+
+
+async def _propose_phase(
+    deps: InlineTargetDeps,
+    *,
+    body: str,
+    cited_refs: list[UUID],
+    analyst_id: str | None,
+    tool_bindings: Mapping[str, Any],
+    write_fragments: Any,
+    steps: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Offer the journal_propose pack at the ONE moment the model has a formed
+    judgment: right after its entry is final and its citations are bound.
+
+    Every admitted call runs through the pack's OWN per-run binding out of
+    ``options['gather_tool_bindings']`` — the object the actor built via
+    ``_gather_write_bindings_for_target`` (META self-allow + WritebackContext),
+    the same one GATHER routes write tools through. No second dispatch path, no
+    hand-built allow: an unbound propose tool is a LOUD no-op, never an
+    ungoverned write. DEGRADE-NOT-DROP throughout — an LLM error, unparsable
+    reply, or blocked/failing tool must never fail a run whose entry is already
+    written. Returns the phase's token usage for the caller to fold.
+    """
+    usage_total = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0}
+    from .inline_target import _extract_json
+
+    messages: list[Mapping[str, Any]] = [
+        {
+            "role": "user",
+            "content": _propose_phase_prompt(
+                body=body, cited_refs=cited_refs, write_fragments=write_fragments
+            ),
+        }
+    ]
+    queued = 0
+    for round_idx in range(_PROPOSE_MAX_ROUNDS):
+        try:
+            content, usage = await _reason_via_llm(
+                deps.llm,
+                user_prompt="",
+                max_tokens=deps.max_tokens,
+                temperature=deps.temperature,
+                system_prompt=deps.system_prompt,
+                messages=messages,
+            )
+        except Exception as exc:  # degrade-not-drop — the entry is already written
+            logger.warning(
+                "journal_assessor.propose.llm_failed analyst_id=%s round=%d err=%s",
+                analyst_id, round_idx + 1, exc,
+            )
+            steps.append({"phase": "propose", "kind": "llm_error", "round": round_idx + 1})
+            break
+        for k in usage_total:
+            usage_total[k] += usage.get(k, 0)
+        parsed = _extract_json(content or "")
+        tool_name = str(parsed.get("tool")) if isinstance(parsed, dict) else ""
+        if tool_name not in JOURNAL_PROPOSE_TOOLS:
+            # The normal, expected ending: nothing warranted a proposal (or the
+            # model said something that is not a proposal, which means the same).
+            steps.append({
+                "phase": "propose",
+                "kind": "declined",
+                "round": round_idx + 1,
+                "queued": queued,
+            })
+            break
+        binding = tool_bindings.get(tool_name)
+        if binding is None:
+            # Granted-and-catalogued but unbound: the pack was shown and cannot
+            # be called. Loud, because it means the host/actor binding legs
+            # disagree with the prompt surface — the exact silent-bypass shape
+            # this whole phase exists to stop being invisible.
+            logger.warning(
+                "journal_assessor.propose.unbound analyst_id=%s tool=%s — the "
+                "propose catalog was shown but no binding was wired for it",
+                analyst_id, tool_name,
+            )
+            steps.append({
+                "phase": "propose", "kind": "unbound", "tool": tool_name,
+                "round": round_idx + 1,
+            })
+            break
+        tool_args = parsed.get("args") or {}
+        if not isinstance(tool_args, Mapping):
+            tool_args = {}
+        admitted = False
+        detail: str = ""
+        try:
+            outcome = await binding.run_tool(tool_name, dict(tool_args))
+            admitted = bool(outcome.admitted)
+            if not admitted:
+                detail = f"blocked: {outcome.block_cause}"
+            elif outcome.tool_result is None or outcome.tool_result.status == "failed":
+                admitted = False
+                detail = (
+                    f"failed: {outcome.tool_result.error}"
+                    if outcome.tool_result is not None
+                    else "failed: tool produced no result"
+                )
+        except Exception as exc:  # degrade-not-drop
+            detail = f"failed: {exc!s}"
+        steps.append({
+            "phase": "propose",
+            "kind": "tool_call",
+            "round": round_idx + 1,
+            "tool": tool_name,
+            "admitted": admitted,
+            **({"detail": detail} if detail else {}),
+        })
+        if admitted:
+            queued += 1
+            logger.info(
+                "journal_assessor.propose.queued analyst_id=%s tool=%s queued=%d "
+                "(pending human review — no live write)",
+                analyst_id, tool_name, queued,
+            )
+        if queued >= _PROPOSE_MAX_PER_RUN:
+            steps.append({"phase": "propose", "kind": "per_run_cap", "queued": queued})
+            break
+        messages = messages + [
+            {"role": "assistant", "content": content or ""},
+            {
+                "role": "tool",
+                "name": tool_name,
+                "content": json.dumps(
+                    {"queued": admitted, "detail": detail or "pending human review"}
+                ),
+            },
+            {"role": "user", "content": _PROPOSE_DECLINE_INSTRUCTION.strip()},
+        ]
+    else:
+        steps.append({"phase": "propose", "kind": "rounds_exhausted", "queued": queued})
+    return usage_total
 
 
 async def _narrate_with_tools(
@@ -2231,11 +2503,22 @@ _JOURNAL_READ_TOOL_SCHEMAS: dict[str, str] = {
         "get_timeline(subject, [limit]) — time-ordered facts ∪ signals for "
         "one subject."
     ),
+    # B-8: the producer list is DERIVED, never typed here. On 2026-08-03 this
+    # line read "recent country_assessor/world_assessor reads" — naming an
+    # analyst that has been state='draft' and silent for months. The planner did
+    # exactly as told, passed analyst_id='country_assessor', got zero rows, and
+    # the entry narrated "the assessment engine produced no country-level rows in
+    # the last 48 hours" on a day with 1,562 successful runs and 131 fresh
+    # country_composition findings. A hand-typed roster in a prompt is a fact
+    # about the fleet with no mechanism keeping it true; derived, it cannot rot.
     "get_assessments": (
         "get_assessments([analyst_id], [target_id], [since_hours=48], "
-        "[limit=20]) — recent country_assessor/world_assessor reads, incl. a "
-        "`disagreements` block where a banded scorecard excluded a dimension "
-        "the live composition still cites."
+        "[limit=20]) — recent LIVE assessment reads. Omit analyst_id to see "
+        "the whole live surface (that is almost always what you want); the "
+        "live producers are: " + ", ".join(_ASSESSMENT_PRODUCER_ANALYSTS) + ". "
+        "Also carries a `disagreements` block where a banded scorecard excluded "
+        "a dimension the live composition still cites — null there means NOT "
+        "MEASURED, which is not the same as agreement."
     ),
     "get_graph_structure": (
         "get_graph_structure([limit=20]) — graph_mining communities/"
@@ -2638,6 +2921,27 @@ async def run_method(
         "cited_refs": len(cited_refs),
         "flags": list(reflect_flags),
     })
+
+    # --- PROPOSE (§7 Wave 4) — the human-gated write-back coda ---------------
+    # Engaged iff the journal_propose pack is EFFECTIVE for this class (the SAME
+    # ``gather_write_prompt_fragments`` signal the GATHER catalog gates on —
+    # entry + consolidation today; chronicle/lens grant no propose pack) AND
+    # there is an entry to reason over. See the ``_propose_phase`` block above
+    # for why it lives here, not in GATHER/NARRATE. It can never fail the run.
+    if write_fragments is not None and body and not consolidation_shape_rejected:
+        _fold(
+            await _propose_phase(
+                deps,
+                body=body,
+                cited_refs=cited_refs,
+                analyst_id=analyst_id,
+                tool_bindings=options.get("gather_tool_bindings") or {},
+                write_fragments=write_fragments,
+                steps=steps,
+            )
+        )
+    elif write_fragments is None:
+        steps.append({"phase": "propose", "kind": "pack_not_effective"})
 
     # --- HONESTY (§10) — DETERMINISTIC honesty_flags forced from substrate ----
     honesty_flags = await _forced_honesty_flags(active_binding, steps=steps)

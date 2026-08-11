@@ -49,7 +49,18 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Mapping, Protocol, runtime_checkable
 
+from ...data import correctness_axis
+
 logger = logging.getLogger(__name__)
+
+
+class PromptModuleImportError(RuntimeError):
+    """The descriptor's ``prompt_module`` path does not import.
+
+    A dead reference, not a shape surprise: the optimizer must not build a
+    generation on top of a placeholder, because a promoted candidate becomes
+    a live analyst's system prompt.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -479,12 +490,31 @@ async def validate_training_set_activity(
 #
 # A degenerate / insufficient-sample / judge-unavailable / empty-arm delta is
 # HONEST-NULL (means + delta = None, degenerate=True, promotable=False) — NEVER
-# 0.0-faked. ``correctness_vs_reference`` stays ``{status:insufficient_sample,
-# brier:null}`` (unit_reference_labels is n≈1). No candidate can promote without
-# a positive, non-degenerate, sufficiently-sampled MEASURED delta.
+# 0.0-faked. No candidate can promote without a positive, non-degenerate,
+# sufficiently-sampled MEASURED delta.
+#
+# THE CORRECTNESS SIDE-CHANNEL (M-1, 2026-08-03). This eval carries a correctness
+# block beside the faithfulness delta. Until now it counted `unit_reference_labels`
+# — a table holding ONE row, for a retired analyst, with zero source ids — so the
+# block read `insufficient_sample, n_labels=0` for every candidate ever evaluated
+# and would have gone on doing so forever. That is not a strict gate, it is a
+# DEAD one: it can never change state, so it can never inform a promotion either
+# way, and calling it "insufficient sample" implied a sample that was accruing.
+#
+# It now reads `correctness_labels` — the weekly gold-set loop's operator
+# verdicts, the table that actually gets fed. The block is still honest-null
+# below its floor (today: n=1 for most units), but it is now a gate that CAN
+# open, tracking a population that grows every time the operator labels a week.
+# The deterministic source-overlap count rides along in its own sub-block so the
+# older signal is not lost if reference labels are ever written.
+#
+# Correctness NEVER enters the promotion arithmetic. `promotable` is decided by
+# `_delta_gates_ok` on the paired faithfulness delta alone; the correctness block
+# is reported beside it, never averaged in (labels_api P2-5, the standing
+# never-pool rule).
 
 _FAITHFULNESS_FITNESS = "faithfulness"
-_MIN_REFERENCE_LABELS = 20  # correctness_vs_reference floor (kept honest-null below it)
+_MIN_REFERENCE_LABELS = 20  # the SECONDARY source-overlap floor (unit_reference_labels)
 
 
 def _delta_gates_ok(
@@ -538,17 +568,64 @@ def _mean(values: Any) -> float | None:
 
 
 def _correctness_vs_reference(n_labels: int) -> dict[str, Any]:
-    """The honest-null correctness sub-block.
+    """The SECONDARY (deterministic source-overlap) correctness sub-block.
 
-    ``unit_reference_labels`` is n≈1 (degenerate), so correctness-vs-reference is
-    permanently insufficient-sample for now — reported in its OWN key with
-    ``brier:null`` (NEVER 0.0-faked, NEVER pooled into the headline faithfulness).
+    ``unit_reference_labels`` is n≈1 and has never held a scorable row for a
+    live unit, so this stays insufficient-sample — reported in its OWN key
+    (NEVER 0.0-faked, NEVER pooled into the headline faithfulness). Kept because
+    it costs nothing and becomes real the moment a reference label is written.
+
+    ``brier`` is retained as an always-``None`` key for back-compatibility with
+    records written before M-1; it was always a misnomer (this axis is a
+    set-overlap recall, not a probabilistic score) and nothing reads it.
     """
     return {
         "status": "insufficient_sample",
         "n_labels": int(n_labels),
         "brier": None,
         "min_labels_required": _MIN_REFERENCE_LABELS,
+    }
+
+
+def _correctness_operator(operator: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The PRIMARY correctness sub-block — the OPERATOR gold set (M-1).
+
+    ``operator`` is a :func:`legba.data.correctness_axis.score` record for the
+    analyzed unit, or ``None`` when the pull failed / the table is absent (which
+    degrades to the honest no-labels state, never a fabricated score).
+
+    Unlike its predecessor this gate is LIVE: the table it counts is the one the
+    weekly labeling loop writes to, so ``status`` moves from ``no_labels`` to
+    ``insufficient_sample`` to ``scored`` as verdicts accrue. Below the floor the
+    measured value is still reported — it is the only judge-independent signal
+    there is — but ``sufficient`` is False and the mix travels with it, so a
+    single verdict can never be read as a rate.
+    """
+    if not operator or int(operator.get("n_labels") or 0) == 0:
+        return {
+            "status": "no_labels",
+            "correctness": None,
+            "n_labels": 0,
+            "n_scored": 0,
+            "mix": {},
+            "sufficient": False,
+            "min_labels_required": correctness_axis.MIN_UNIT_LABELS,
+            "source_table": "correctness_labels",
+        }
+    n_scored = int(operator.get("n_scored") or 0)
+    sufficient = bool(operator.get("sufficient"))
+    return {
+        "status": (
+            "scored" if sufficient
+            else ("insufficient_sample" if n_scored else "all_unresolvable")
+        ),
+        "correctness": operator.get("correctness"),
+        "n_labels": int(operator.get("n_labels") or 0),
+        "n_scored": n_scored,
+        "mix": dict(operator.get("mix") or {}),
+        "sufficient": sufficient,
+        "min_labels_required": correctness_axis.MIN_UNIT_LABELS,
+        "source_table": "correctness_labels",
     }
 
 
@@ -561,6 +638,7 @@ def _honest_null_eval(
     degenerate_reason: str,
     n_paired: int = 0,
     n_labels: int = 0,
+    operator: Mapping[str, Any] | None = None,
     parent_mean: float | None = None,
     parent_judge_regime: str | None = None,
     candidate_judge_regime: str | None = None,
@@ -592,6 +670,10 @@ def _honest_null_eval(
         "degenerate": True,
         "degenerate_reason": degenerate_reason,
         "promotable": False,
+        # PRIMARY correctness axis (operator gold set) — reported, never pooled
+        # into the faithfulness delta or the promotion decision.
+        "correctness_operator": _correctness_operator(operator),
+        # SECONDARY (deterministic source-overlap) axis.
         "correctness_vs_reference": _correctness_vs_reference(n_labels),
     }
 
@@ -604,6 +686,7 @@ def _pair_faithfulness(
     min_delta: float,
     judge_model: str,
     n_labels: int,
+    operator: Mapping[str, Any] | None = None,
     parent_regimes: Mapping[str, str] | None = None,
     candidate_regime: str = "llm",
 ) -> dict[str, Any]:
@@ -639,6 +722,7 @@ def _pair_faithfulness(
         return _honest_null_eval(
             min_paired=min_paired, min_delta=min_delta, judge_model=judge_model,
             judge_available=True, n_paired=n_paired, n_labels=n_labels,
+            operator=operator,
             parent_mean=parent_mean_all,
             candidate_judge_regime=candidate_regime,
             n_mixed_regime_excluded=n_mixed_regime_excluded,
@@ -669,6 +753,9 @@ def _pair_faithfulness(
         "degenerate": False,
         "degenerate_reason": None,
         "promotable": bool(promotable),
+        # Reported beside the delta, never inside it: `promotable` above was
+        # decided by `_delta_gates_ok` on faithfulness alone.
+        "correctness_operator": _correctness_operator(operator),
         "correctness_vs_reference": _correctness_vs_reference(n_labels),
     }
 
@@ -835,9 +922,17 @@ _PARENT_FAITHFULNESS_SQL = """
      LIMIT $2
 """
 
+# SECONDARY axis — the deterministic source-overlap gold table. Kept for the
+# sub-block; it has never held a scorable row for a live unit.
 _REFERENCE_LABEL_COUNT_SQL = """
     SELECT COUNT(*)::int AS n FROM unit_reference_labels WHERE unit_analyst_id = $1
 """
+
+# PRIMARY axis — the OPERATOR gold set, the table the weekly labeling loop
+# actually writes to (M-1). Raw verdicts; the weighting and the tiny-n rules are
+# applied by `legba.data.correctness_axis`, the one definition the scorer, the
+# eval scoreboard and the v3 route share.
+_OPERATOR_LABEL_SQL = correctness_axis.ONE_UNIT_LABELS_SQL
 
 
 async def _paired_faithfulness_eval(
@@ -881,6 +976,12 @@ async def _paired_faithfulness_eval(
                 )
             except Exception:  # noqa: BLE001 — labels table optional / empty
                 n_labels = 0
+            try:
+                operator = correctness_axis.score_unit_rows(
+                    await conn.fetch(_OPERATOR_LABEL_SQL, analyzed)
+                )
+            except Exception:  # noqa: BLE001 — gold table optional / empty
+                operator = None
 
         parent_scores: dict[str, float] = {}
         parent_regimes: dict[str, str] = {}
@@ -900,7 +1001,7 @@ async def _paired_faithfulness_eval(
         if not parent_scores:
             return _honest_null_eval(
                 min_paired=min_paired, min_delta=min_delta, judge_model=judge_model,
-                judge_available=False, n_labels=n_labels,
+                judge_available=False, n_labels=n_labels, operator=operator,
                 degenerate_reason="no_parent_faithfulness",
             )
 
@@ -912,7 +1013,7 @@ async def _paired_faithfulness_eval(
         if arm is None:
             return _honest_null_eval(
                 min_paired=min_paired, min_delta=min_delta, judge_model=judge_model,
-                judge_available=False, n_labels=n_labels,
+                judge_available=False, n_labels=n_labels, operator=operator,
                 parent_mean=_mean(parent_scores.values()),
                 degenerate_reason="faithfulness_judge_unavailable",
             )
@@ -939,7 +1040,7 @@ async def _paired_faithfulness_eval(
         if not candidate_scores:
             return _honest_null_eval(
                 min_paired=min_paired, min_delta=min_delta, judge_model=judge_model,
-                judge_available=True, n_labels=n_labels,
+                judge_available=True, n_labels=n_labels, operator=operator,
                 parent_mean=_mean(parent_scores.values()),
                 degenerate_reason="candidate_arm_empty",
             )
@@ -947,7 +1048,7 @@ async def _paired_faithfulness_eval(
         return _pair_faithfulness(
             parent_scores, candidate_scores,
             min_paired=min_paired, min_delta=min_delta,
-            judge_model=judge_model, n_labels=n_labels,
+            judge_model=judge_model, n_labels=n_labels, operator=operator,
             # Candidate rows here are all judge-scored ('llm') — a floor-fallback
             # row was already dropped in _candidate_faithfulness_for_finding — so
             # pair ONLY against 'llm'-regime parents (mixed excluded).
@@ -1608,7 +1709,23 @@ def _try_dspy_gepa(
     # without a base module to evolve.
     try:
         student = _import_prompt_module(workflow_input.parent_prompt_module_path)
+    except ImportError as exc:
+        # K-3: a dead reference must not degrade quietly into the naive
+        # search. Returning None here made "the descriptor names a module that
+        # does not exist" indistinguishable from "dspy could not build the
+        # student", and the run continued either way.
+        logger.error(
+            "optimizer.gepa.dead_reference path=%s err=%s",
+            workflow_input.parent_prompt_module_path, exc,
+        )
+        raise PromptModuleImportError(
+            f"optimizer parent prompt module "
+            f"{workflow_input.parent_prompt_module_path!r} does not import: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
     except Exception as exc:
+        # A real shape/dspy problem — the documented graceful degrade to the
+        # naive candidate search still applies.
         logger.warning(
             "optimizer.gepa.parent_load_failed path=%s err=%s",
             workflow_input.parent_prompt_module_path, exc,
@@ -1819,24 +1936,41 @@ async def _load_parent_prompt_text(prompt_module_path: str) -> str:
       2. Read the resulting object's ``signature.instructions`` field if
          present (dspy.Module shape).
       3. Fall back to ``str(obj)``.
-      4. On any failure, return a synthetic stub so the loop can still
-         compute a sensible delta — degrading gracefully is the right
-         shape here, the alternative is the optimizer crashing whenever
-         a prompt module has a slightly different shape.
+      4. On an unexpected *shape*, return a synthetic stub so the loop
+         can still compute a sensible delta — degrading gracefully is
+         the right shape there.
 
-    Declared seam (docs/SEAMS.md #12): the ``<<missing prompt module>>``
-    / ``<<no prompt text found>>`` marker strings are unmistakable in
-    any audit of optimizer runs — never passed off as a real prompt.
+    Declared seam (docs/SEAMS.md #12): the ``<<no prompt text found>>``
+    marker string is unmistakable in any audit of optimizer runs — never
+    passed off as a real prompt.
+
+    K-3 narrows that seam. A module that cannot be IMPORTED is a dead
+    reference, not an unexpected shape, and the old behaviour was the
+    worst available: return ``<<missing prompt module: ...>>`` at
+    ``logger.debug`` (invisible in production) and then hand that marker
+    to GEPA as the parent text — so the optimizer scored, mutated and
+    could promote a candidate evolved from a placeholder. That is exactly
+    the "deploy green and change what the system reasons with" failure the
+    descriptor-reference work exists to prevent, so it now raises.
+
+    Raises
+    ------
+    PromptModuleImportError
+        ``prompt_module_path`` does not import.
     """
     try:
         import importlib
         mod = importlib.import_module(prompt_module_path)
     except Exception as exc:
-        logger.debug(
-            "optimizer.parent_load.import_failed path=%s err=%s",
+        logger.error(
+            "optimizer.parent_load.dead_reference path=%s err=%s — refusing to "
+            "optimize a placeholder; fix the descriptor's prompt_module",
             prompt_module_path, exc,
         )
-        return f"<<missing prompt module: {prompt_module_path}>>"
+        raise PromptModuleImportError(
+            f"optimizer parent prompt module {prompt_module_path!r} does not "
+            f"import: {type(exc).__name__}: {exc}"
+        ) from exc
 
     # Try the convention build() entry first.
     if hasattr(mod, "build"):

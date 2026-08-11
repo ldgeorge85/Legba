@@ -84,6 +84,46 @@ method:
                                   # Raise it (a PUT, no rebuild) to drain the
                                   # collision backlog faster — the cost is ~1 LLM
                                   # batch per 10 extra gray pairs.
+    # R-tail (2026-08-04) — VERDICT: BIND. Values stay 0/0 here because the
+    # flip is an OPERATOR gate, not a code change; the evidence is recorded so
+    # the flip is one edit away rather than another investigation.
+    #
+    # THE PROBE HAS NEVER FIRED. `pg_stat_user_indexes.idx_scan` for
+    # `idx_entity_profiles_name_trgm` reads 0 all-time (pg_stat_database
+    # stats_reset IS NULL, so that zero is not a truncated window) and no
+    # analyst_trace in 187,550 carries a `trgm:` signal. We are paying the GIN
+    # index's write cost for zero reads.
+    #
+    # BIND rather than RETIRE on cost: deleting costs MORE (5 source files, 2
+    # descriptor keys, ~12 tests, plus dropping the index) and forecloses the
+    # only channel that can propose a duplicate whose block keys DIFFER.
+    #
+    # MEASURED read-only against the live graph, min_trgm 0.55 / floor 25:
+    # 992 hubs, one run in 655 ms (NOT the ~61s unbounded shape), 100 candidate
+    # pairs — including exactly the class the exact-block-key probe can never
+    # see: Keiko Fujimori/Fujimori, Steve Witkoff/Witkoff, Jared
+    # Kushner/Kushner, Dmitry Medvedev/Medvedev, New Delhi/Delhi, Islamic
+    # Revolutionary Guard Corps/Revolutionary Guard. So `trgm_limit: 400`,
+    # `trgm_min_degree: 25` is the measured, bounded setting to flip to.
+    #
+    # WHY IT IS NOT FLIPPED HERE. `merge_mode` below is `apply`, so enabling a
+    # never-run candidate channel changes LIVE, IRREVERSIBLE graph behavior.
+    # `tests/data_pkg/test_entity_researcher_wiring_e4d.py` codifies that as a
+    # ship-gate ("the unbounded probe must ship disabled"), which is the E5
+    # gate the `apply` flip itself went through, written down. An agent editing
+    # the guard to let its own change through would be granting itself the
+    # approval the guard exists to withhold.
+    #
+    # TO FLIP (operator): set the two values below, run once at
+    # `merge_mode: dry_run` and eyeball the gray set — the probe also surfaces
+    # near-miss noise (Niger/Nigeria, North Africa/North America, Jackson
+    # MS/Jackson KY) that the adjudicator must reject — then restore `apply`
+    # and update the ship-gate assertion in the test above to match.
+    #
+    # Safety note for that review: trigram pairs are emitted GRAY
+    # unconditionally, so every one goes to the LLM adjudicator and is gated by
+    # `same_min_confidence` below — the probe cannot auto-merge anything, and
+    # `max_pairs: 80` still bounds the whole run.
     trgm_limit: 0                 # 0 => exact-block-key ONLY. Positive enables the
                                   # trigram probe — the ONLY channel that can
                                   # propose a duplicate whose block keys DIFFER
@@ -96,6 +136,8 @@ method:
                                   # set, which is small AND is where the
                                   # cross-block-key duplicates actually are.
                                   # Meaningless while trgm_limit is 0.
+                                  # 25 is the measured floor (see above); raise
+                                  # it if a run gets slow, lower to buy recall.
     same_min_confidence: 0.75     # a 'same' verdict below this is not merged
     batch_size: 10                # pairs per LLM adjudication call
     # --- E6c reclassify pass (the person-skew fix) --------------------------

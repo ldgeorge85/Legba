@@ -17,6 +17,7 @@ Covers (planning/SEEDING_SKETCH.md "flavor a"):
 from __future__ import annotations
 
 import importlib.util
+import re
 from pathlib import Path
 
 import asyncpg
@@ -26,6 +27,11 @@ import pytest_asyncio
 from legba.data.config import PostgresConfig
 from legba.data.seed import run_seed_source
 from legba.data.seed.adapters.world_baseline import WorldBaselineSeedSource
+
+# The AGE vertex key contract: entity_profiles.id, never a display name (K-G3).
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 _SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 
@@ -139,16 +145,27 @@ async def test_round_trip_rehome_and_idempotent(pg_pool, tmp_path, monkeypatch):
         )
     )
 
-    # Snapshot open seed-triple counts BEFORE the re-home.
+    # Snapshot the open seed triples BEFORE the re-home — as ROW SETS, not
+    # counts. The 2026-08-09 shuffled nightly failed the old `of1 == of0` at
+    # `48 != 49` and the counts could not say WHICH row the re-home closed;
+    # it took a live-DB autopsy to find a sibling's standing two-holder
+    # 'leader of' dispute that the OFF-flag import's office-keyed supersession
+    # had collapsed. Set equality is the same no-op statement with the
+    # diagnosis built in: a recurrence prints the collapsed rows by name,
+    # pointing at the polluter that left the standing dispute.
+    _OPEN_FACTS_SQL = (
+        "SELECT subject, predicate, value, valid_from FROM facts "
+        "WHERE source_type='seed' "
+        "AND valid_until IS NULL AND superseded_by IS NULL"
+    )
+    _OPEN_NEXUSES_SQL = (
+        "SELECT subject, intermediary, object, rel_type, valid_from "
+        "FROM nexuses WHERE source_type='seed' "
+        "AND valid_until IS NULL AND superseded_by IS NULL"
+    )
     async with pg_pool.acquire() as conn:
-        of0 = await conn.fetchval(
-            "SELECT count(*) FROM facts WHERE source_type='seed' "
-            "AND valid_until IS NULL AND superseded_by IS NULL"
-        )
-        on0 = await conn.fetchval(
-            "SELECT count(*) FROM nexuses WHERE source_type='seed' "
-            "AND valid_until IS NULL AND superseded_by IS NULL"
-        )
+        of0 = {tuple(r) for r in await conn.fetch(_OPEN_FACTS_SQL)}
+        on0 = {tuple(r) for r in await conn.fetch(_OPEN_NEXUSES_SQL)}
         france0 = await conn.fetchval(
             "SELECT count(*) FROM entity_profiles WHERE lower(canonical_name)='france'"
         )
@@ -166,14 +183,8 @@ async def test_round_trip_rehome_and_idempotent(pg_pool, tmp_path, monkeypatch):
     assert int(counts["skipped"]) == 0 or counts["facts"] > 0
 
     async with pg_pool.acquire() as conn:
-        of1 = await conn.fetchval(
-            "SELECT count(*) FROM facts WHERE source_type='seed' "
-            "AND valid_until IS NULL AND superseded_by IS NULL"
-        )
-        on1 = await conn.fetchval(
-            "SELECT count(*) FROM nexuses WHERE source_type='seed' "
-            "AND valid_until IS NULL AND superseded_by IS NULL"
-        )
+        of1 = {tuple(r) for r in await conn.fetch(_OPEN_FACTS_SQL)}
+        on1 = {tuple(r) for r in await conn.fetch(_OPEN_NEXUSES_SQL)}
         france1 = await conn.fetchval(
             "SELECT count(*) FROM entity_profiles WHERE lower(canonical_name)='france'"
         )
@@ -182,8 +193,14 @@ async def test_round_trip_rehome_and_idempotent(pg_pool, tmp_path, monkeypatch):
             "WHERE source='seed_import' ORDER BY imported_at DESC LIMIT 1"
         )
 
-    assert of1 == of0, "re-home must not add open fact rows (upsert no-op)"
-    assert on1 == on0, "re-home must not add open nexus rows (upsert no-op)"
+    assert of1 == of0, (
+        "re-home must be a no-op on the open seed facts (upsert, no dup, no "
+        f"collapse); closed={list(of0 - of1)[:6]} appeared={list(of1 - of0)[:6]}"
+    )
+    assert on1 == on0, (
+        "re-home must be a no-op on the open seed nexuses; "
+        f"closed={list(on0 - on1)[:6]} appeared={list(on1 - on0)[:6]}"
+    )
     assert france1 == france0 == 1, "re-home must not spawn a duplicate entity"
     assert batch is not None and batch["source"] == "seed_import"
 
@@ -249,5 +266,20 @@ async def test_import_rebuilds_age_edges_from_rows(migrated_pg, tmp_path):
                 "$$ MATCH (p:Person) RETURN p $$) AS (p agtype)"
             )
         assert len(rows) >= 1, "no Person vertex MERGEd by the AGE rebuild"
+
+        # K-G3: and it is keyed on the ENTITY UUID, which is what every reader
+        # filters on. A name-keyed vertex would satisfy the assertion above and
+        # still be invisible to graph_paths / graph_mining / structural_balance
+        # — that gap is exactly how 27 unreachable fixtures happened.
+        async with store.pool.acquire() as conn:
+            keyed = await conn.fetch(
+                "SELECT * FROM cypher('legba_graph', "
+                "$$ MATCH (p:Person) WHERE p.id IS NOT NULL RETURN p.id $$) "
+                "AS (id agtype)"
+            )
+        assert len(keyed) >= 1, "AGE rebuild wrote Person vertices with no .id key"
+        assert all(
+            _UUID_RE.match(str(r["id"]).strip('"')) for r in keyed
+        ), f"vertex .id is not an entity uuid: {[r['id'] for r in keyed][:3]}"
     finally:
         await store.close()

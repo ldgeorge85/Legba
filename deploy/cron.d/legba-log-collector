@@ -1,0 +1,26 @@
+# Legba container-log collector (S-5). Ships every compose container's log to
+# rotated files under /var/log/legba/containers/ so a `--force-recreate` stops
+# destroying the evidence. Docs: docs/RUNBOOK.md 24.2.
+#
+# INSTALL (operator, one step):
+#   cp /usr/local/deployments/active/legba/deploy/cron.d/legba-log-collector \
+#      /etc/cron.d/legba-log-collector
+#   chmod 0644 /etc/cron.d/legba-log-collector
+#
+# Disable during maintenance: touch /etc/legba-watchdog.disabled
+# Verify it is actually running:
+#   stat -c %y /var/lib/legba-logship/heartbeat
+#   /usr/local/deployments/active/legba/scripts/host_log_collector.sh status
+#
+# The path below is ABSOLUTE and so is every path inside the script. A relative
+# path here is how scripts/loop_healthcheck.sh failed 7,834 out of 7,834 runs
+# over 54 days without executing one line of its body: cron runs from $HOME.
+#
+# Every minute is deliberate. The supervisor is a handful of `docker inspect`s
+# when everything is healthy (it exits silent), and the tick interval is the
+# worst-case window between a recreate and the new container being followed.
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+* * * * * root /usr/local/deployments/active/legba/scripts/host_log_collector.sh >> /var/log/legba_log_collector.log 2>&1

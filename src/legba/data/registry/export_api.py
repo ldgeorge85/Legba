@@ -117,11 +117,50 @@ JOURNAL_TIER_LABELS: dict[str, str] = {
 # ``[N]`` (the full-width-bracket trap, 2026-06-30).
 _VARIANT_CITATION_RE = re.compile(r"[【［〔〖](\s*\d+\s*)[】］〕〗]")
 
+# R-tail (2026-08-04) — the non-numeric half of the same drift, so an EXPORT
+# never publishes a raw ``【none】`` / ``【ref:2】``. Same allowlist + rationale
+# as ``inline_target._UNCITABLE_ANNOTATIONS`` (local mirror for the same reason
+# the regex above is one).
+_VARIANT_REF_CITATION_RE = re.compile(
+    r"[【［〔〖]\s*\[?\s*ref:\s*(\d+)\s*\]?\s*[】］〕〗]", re.IGNORECASE
+)
+_VARIANT_RANGE_CITATION_RE = re.compile(
+    r"[【［〔〖]\s*(\d+)\s*[-–—‑]\s*(\d+)\s*[】］〕〗]"
+)
+_VARIANT_ANNOTATION_RE = re.compile(r"[【［〔〖]([^】］〕〗]{1,40})[】］〕〗]")
+_UNCITABLE_ANNOTATIONS: frozenset[str] = frozenset(
+    {
+        "none",
+        "no citation",
+        "not observed",
+        "assessed",
+        "assessment",
+        "assessed situation",
+        "assessed situations",
+        "assessed structure",
+        "system assessed",
+        "derived structure",
+        "authoritative current context",
+    }
+)
+
+
+def _canonical_annotation(token: str) -> str | None:
+    flat = re.sub(r"[_\-\s]+", " ", token).strip().casefold()
+    return "[no citation]" if flat in _UNCITABLE_ANNOTATIONS else None
+
 
 def _normalize_citation_markers(text: str) -> str:
     if not text:
         return text
-    return _VARIANT_CITATION_RE.sub(lambda m: f"[{m.group(1).strip()}]", text)
+    text = _VARIANT_CITATION_RE.sub(lambda m: f"[{m.group(1).strip()}]", text)
+    text = _VARIANT_RANGE_CITATION_RE.sub(
+        lambda m: f"[{m.group(1)}-{m.group(2)}]", text
+    )
+    text = _VARIANT_REF_CITATION_RE.sub(lambda m: f"[[ref:{m.group(1)}]]", text)
+    return _VARIANT_ANNOTATION_RE.sub(
+        lambda m: _canonical_annotation(m.group(1)) or m.group(0), text
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -257,8 +296,20 @@ def _finding_verify(
     structural verify-exemption stated as its own honest reason."""
     if verification is not None:
         score = verification.get("faithfulness_score")
-        if isinstance(score, (int, float)) and not isinstance(score, bool):
-            return verify_state_from_score(score), _fail_flag_counts(verification)
+        # Q-1: an UNASSESSABLE block still returns here — the pass ran, and saying
+        # "no faithfulness verdict recorded" about it would be false. The state
+        # string carries the distinction; the fail-flag counts are unchanged.
+        if verification.get("score_state") == "unassessable" or (
+            isinstance(score, (int, float)) and not isinstance(score, bool)
+        ):
+            return (
+                verify_state_from_score(
+                    score,
+                    score_state=verification.get("score_state"),
+                    provisional=verification.get("provisional"),
+                ),
+                _fail_flag_counts(verification),
+            )
     exempt = verify_exempt_reason(analyst_id)
     if exempt is not None:
         return (

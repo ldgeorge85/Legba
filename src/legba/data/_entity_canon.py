@@ -10,8 +10,9 @@ ingestion, the analyst resolver (``entity_resolution``), the reifier, and
 shared ``data`` layer) deliberately: a canon under
 ``legba.data.analysts.deterministic_handlers`` would force ingestion / the
 reifier into a layering violation to reach it. The OLD path
-(``legba.data.analysts.deterministic_handlers._entity_canon``) is a thin
-re-export shim so existing imports keep working unchanged.
+(``legba.data.analysts.deterministic_handlers._entity_canon``) carried a thin
+re-export shim through the migration; it was DELETED 2026-08-02 once every
+importer pointed here. This module is the ONE canon — there is no second path.
 
 Hard layering rule: this module MUST NOT import from ``legba.data.analysts.*``
 (that would re-introduce the violation + a circular import). It depends only on
@@ -1646,6 +1647,117 @@ _COMMON_GIVEN_NAMES: frozenset[str] = frozenset({
 
 
 # ---------------------------------------------------------------------------
+# W3-C (2026-08-04) — COMPASS / POSITIONAL DIRECTION tokens.
+#
+# THE MEASUREMENT. The W3-C transliteration audit sampled the V-G6 phonetic
+# alias predicate (`entity_resolution._TRANSLIT_PROBE_SQL`) and ran a full
+# population census over the live person table. Of the 726 pairs the predicate
+# accepts, 30 differ ONLY by an opposing compass direction — "East Germany" /
+# "West Germany", "Eastern Pendleton" / "Western Pendleton", "Northeast El
+# Paso" / "Northwest El Paso", "East Slopes" / "West Slopes". Every one is a
+# guaranteed-wrong merge: the direction IS the distinction, not a spelling of
+# it. V-G6's own header had warned that "Southwest Asian" / "Southeast Asian"
+# was a residual false positive inside the person set; the census found that
+# warning thirty times over, at 100% wrongness and zero measured cost.
+#
+# The same tokens are a NON-PERSON signal in their own right. Live census of
+# ACTIVE person rows whose FIRST token is one of these: 431 rows, and a full
+# read of all 431 found ZERO people — they are NWS forecast zones ("Eastern
+# Pendleton"), regions ("West Texas", "South Ossetia"), infrastructure ("Nord
+# Stream"), commands and mastheads ("Central Command", "Middle East Eye"). A
+# personal name does not begin with a compass bearing.
+#
+# EXACT WHOLE-TOKEN MATCHING IS LOAD-BEARING, not fastidiousness. The labeled
+# sample contains the genuine transliteration pair "Mosaab Gharbi" / "Mossab
+# Gharbi" — one man, an Ennahdha member arrested in Mannouba. A prefix or stem
+# test would read "Gharbi" as the Arabic "gharb" (west) and refuse the only
+# kind of pair this predicate exists to find. Membership is by whole token.
+#
+# MEMBERSHIP. The English compass + positional set the audit named, plus the
+# non-English equivalents that ACTUALLY APPEAR in the live person table
+# (measured: nord 10, sud 3, sur 6, norte 2, este 1, gharb 1) and, for each of
+# those, its opposing counterpart — a direction gate that knows "norte" but not
+# "sur" is a gate with a hole in exactly the shape it is meant to close.
+# ---------------------------------------------------------------------------
+
+#: Compass + positional tokens, lower-cased, matched as WHOLE tokens only.
+#: Shared by the V-G6 phonetic-alias gate (SQL, passed as a parameter so the
+#: live probe and the backlog measurement can never drift) and by the NER
+#: person gate. Adding a token here can only ever REFUSE a fold or REFUSE a
+#: person classification — both of which degrade to today's behaviour — so the
+#: set is allowed to be generous where the evidence supports it.
+DIRECTIONAL_TOKENS: frozenset[str] = frozenset({
+    # English compass — bare, adjectival, and the four diagonals in the three
+    # spellings the live table carries ("northeast", "north-east", "northeastern").
+    "north", "south", "east", "west",
+    "northern", "southern", "eastern", "western",
+    "northeast", "northwest", "southeast", "southwest",
+    "north-east", "north-west", "south-east", "south-west",
+    "northeastern", "northwestern", "southeastern", "southwestern",
+    # English POSITIONAL — the audit named Upper / Lower / Central explicitly
+    # ("Upper Swat", "Lower Shabelle", "Central Russia").
+    "upper", "lower", "central", "mid", "middle", "inner", "outer",
+    # French / German (observed: nord, sud) + counterparts.
+    "nord", "sud", "est", "ouest", "ost", "sued", "süd",
+    # Spanish / Portuguese (observed: sur, norte, este) + counterpart.
+    "norte", "sur", "oeste",
+    # Arabic romanization (observed: gharb) + counterpart.
+    "gharb", "sharq",
+})
+
+
+def _direction_probe_tokens(name: str) -> list[str]:
+    """Whitespace tokens of ``name``, lower-cased and punctuation-stripped.
+
+    Mirrors the SQL side's ``regexp_split_to_array(lower(btrim(...)), '\\s+')``
+    so the Python gate and the indexed probe agree on what a "token" is.
+    """
+    lo = _WHITESPACE_RE.sub(" ", str(name or "").strip().lower())
+    return [t for t in (tok.strip(_ORG_TOKEN_STRIP) for tok in lo.split()) if t]
+
+
+def differs_by_direction(name_a: str, name_b: str) -> bool:
+    """True when the two surfaces are distinguished by a DIRECTION token.
+
+    The gate the W3-C census earned: 30 of the 726 pairs the V-G6 phonetic
+    predicate accepts are opposing compass directions on an identical stem, and
+    all 30 are guaranteed-wrong merges.
+
+    Positional when the two token vectors are the same length — which is the
+    only case the V-G6 predicate can produce, since it requires equal token
+    counts — so a differing token is compared against the token that actually
+    stands opposite it. For unequal lengths (a caller outside that predicate)
+    it falls back to comparing the multiset of direction tokens each surface
+    carries, which is the same question asked without an alignment.
+
+    Never raises; a blank surface simply carries no direction tokens.
+    """
+    ta = _direction_probe_tokens(name_a)
+    tb = _direction_probe_tokens(name_b)
+    if len(ta) == len(tb):
+        return any(
+            x != y and (x in DIRECTIONAL_TOKENS or y in DIRECTIONAL_TOKENS)
+            for x, y in zip(ta, tb)
+        )
+    return sorted(t for t in ta if t in DIRECTIONAL_TOKENS) != sorted(
+        t for t in tb if t in DIRECTIONAL_TOKENS
+    )
+
+
+def leads_with_direction(name: str) -> bool:
+    """True when the surface's FIRST token is a compass / positional direction.
+
+    A non-person signal, measured: 431 active ``person`` rows begin with one of
+    :data:`DIRECTIONAL_TOKENS` and a full read of all 431 found no people.
+    Deliberately FIRST-token only — "Oliver North" and "Veronica Lake" are real
+    people whose direction-shaped token is the SURNAME, and a
+    direction-anywhere rule would refuse them.
+    """
+    tokens = _direction_probe_tokens(name)
+    return bool(tokens) and tokens[0] in DIRECTIONAL_TOKENS
+
+
+# ---------------------------------------------------------------------------
 # PLACE / LOCATION surface gazetteer — geographic / built-environment surfaces
 # the live review (D7) found mis-typed as PERSON ("Robertson Quay", "CITIC
 # Tower", "Yerevan", "Earth"). A surface ending in a geographic-feature token,
@@ -1683,8 +1795,27 @@ _PLACE_SUFFIX_TOKENS: frozenset[str] = frozenset({
 #: Place HEADS — a surface LEADING with one of these + a following token is a
 #: geographic / built-environment place ("Temple of Apollo", "Mount Erciyes",
 #: "Fort Bragg", "Palace of Westminster"), never a person.
+#:
+#: W3-C (2026-08-04) extends the head set with the SETTLEMENT heads the audit
+#: found sitting in the person table. "Kfar Shoba" — a village in Hasbaya
+#: District, Lebanon — was one of the nine non-people in a 60-pair sample of the
+#: phonetic-alias backlog, and it reached ``person`` for the ordinary reason:
+#: two capitalised tokens, no cue, no gazetteer hit. The additions are the
+#: Levantine / Arabic settlement heads (kfar, kafr, beit, bayt, deir, dayr,
+#: wadi, jabal, jebel, khirbet, umm, tel, ain, bir) and the English feature
+#: heads that were only ever recognised TRAILING (port, cape, camp, lake,
+#: river, gulf, strait, valley, mountain, island, city, district) — every one
+#: read off the live table, every leading occurrence a place.
+#:
+#: Deliberately EXCLUDED after reading the live rows: "ras" ("Ras Baraka" is
+#: the mayor of Newark), "ayn" ("Ayn Rand"), "bay" ("BAY ISMOYO", a wire
+#: photographer) and "khan" (a surname before it is ever a caravanserai).
+#: Those four are the reason this list is evidenced rather than enumerated.
 _PLACE_HEAD_RE = re.compile(
-    r"^\s*(?:temple|mount|mt|fort|palace|mosque|cathedral|basilica|shrine)\b\s+\S",
+    r"^\s*(?:temple|mount|mt|fort|palace|mosque|cathedral|basilica|shrine"
+    r"|kfar|kafr|beit|bayt|deir|dayr|wadi|jabal|jebel|khirbet|umm|tel|ain|bir"
+    r"|port|cape|camp|lake|river|gulf|strait|valley|mountain|island"
+    r"|city|district)\b\s+\S",
     re.IGNORECASE,
 )
 
@@ -1703,6 +1834,10 @@ _KNOWN_PLACES: frozenset[str] = frozenset({
     "north america", "south america",
     "eurasia", "oceania", "arctic", "scandinavia", "balkans", "caucasus",
     "patagonia", "siberia", "kashmir", "tibet", "sahara", "amazon",
+    # W3-C — the South Atlantic island group, live in the person table under
+    # BOTH "Tristan da Cunha" and the misspelling "Tristan de Cunha". It has a
+    # given-name shape and no feature token, so only the gazetteer can catch it.
+    "tristan da cunha", "tristan de cunha",
     # world cities NER mis-types (curated, non-exhaustive)
     "yerevan", "tbilisi", "baku", "astana", "tashkent", "bishkek",
     "ashgabat", "dushanbe", "kyiv", "kiev", "minsk", "chisinau",
@@ -2103,6 +2238,9 @@ __all__ = [
     "is_region_surface",
     "is_sports_team_surface",
     "is_known_org_surface",
+    "DIRECTIONAL_TOKENS",
+    "differs_by_direction",
+    "leads_with_direction",
     "COUNTRY_CLASS",
     "ORGANIZATION_CLASS",
     "LOCATION_CLASS",

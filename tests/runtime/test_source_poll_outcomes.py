@@ -108,7 +108,7 @@ class _CapturingPool:
         cols = (
             "source_id", "source_version", "owner_tenant", "outcome",
             "health_state", "capped", "signals_written", "error",
-            "newest_entry_ts",
+            "newest_entry_ts", "reserve_unchanged",
         )
         rows = []
         for query, args in self.executes:
@@ -337,15 +337,22 @@ async def test_partial_failure_after_writing_is_success_but_keeps_the_error() ->
 
 @pytest.mark.asyncio
 async def test_dedup_collapsed_poll_is_success_not_empty() -> None:
-    # S-4: 0 rows written but >=1 intra-source duplicate collapsed — the poll
-    # saw current content and bumped recency. It is productive, so it records
-    # 'success' with a 0 count; recording 'empty' would let a hazard feed that
-    # healthily re-serves active events trip the empty-streak degradation.
+    # S-4: 0 rows written but >=1 intra-source duplicate collapsed — the source
+    # answered with real content. It is productive, so it records 'success' with
+    # a 0 count; recording 'empty' would let a hazard feed that healthily
+    # re-serves active events trip the empty-streak degradation.
+    #
+    # B-1 additionally RECORDS the count: `signals_written=0 AND
+    # reserve_unchanged>0` is the serve-stale signature. Before it, a frozen feed
+    # and a healthy hazard feed wrote byte-identical ledger rows, which is why
+    # the 5 AP feeds sat frozen for six days behind a wall of green successes.
     core, pool, _store, _sid = _build(_StubHandler([_entry("source.test")]))
 
     async def _collapse(conn, ctx, raw, *, dedup_stats=None):
         if dedup_stats is not None:
-            dedup_stats["deduped"] = dedup_stats.get("deduped", 0) + 1
+            dedup_stats["reserve_unchanged"] = (
+                dedup_stats.get("reserve_unchanged", 0) + 1
+            )
         return None
 
     core._process_one = _collapse  # type: ignore[method-assign]
@@ -354,8 +361,9 @@ async def test_dedup_collapsed_poll_is_success_not_empty() -> None:
     assert result["signals_written"] == 0
 
     row = pool.outcome_writes[0]
-    assert row["outcome"] == "success"
+    assert row["outcome"] == "success"      # rollup UNCHANGED by B-1
     assert row["signals_written"] == 0
+    assert row["reserve_unchanged"] == 1    # ... and now the evidence is on the row
 
 
 @pytest.mark.asyncio

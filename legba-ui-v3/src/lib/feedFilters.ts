@@ -18,7 +18,7 @@
  * no router — the S7-T2 shareable-state pattern).
  */
 
-import type { UnifiedRow } from './findingsViews'
+import { surfacedConfidence, type UnifiedRow } from './findingsViews'
 import { buildVerdict, type VerdictInput, type Verdict, type VerificationBlock } from './verdictModel'
 
 // ---------------------------------------------------------------------------
@@ -35,6 +35,7 @@ export const FACET_KEYS = [
   'kind',
   'analyst',
   'since',
+  'minconf',
 ] as const
 export type FacetKey = (typeof FACET_KEYS)[number]
 
@@ -50,12 +51,21 @@ const FACET_ALIASES: Record<string, FacetKey> = {
   target: 'target',
   target_id: 'target',
   country: 'target',
+  desk: 'target',
   kind: 'kind',
   analyst: 'analyst',
   analyst_id: 'analyst',
+  unit: 'analyst',
+  producer: 'analyst',
   since: 'since',
   last: 'since',
   within: 'since',
+  // The surfaced-confidence BAND gate (`minconf:0.5` — "only rows whose
+  // effective confidence clears the 0.50 floor").
+  minconf: 'minconf',
+  min_confidence: 'minconf',
+  mineff: 'minconf',
+  floor: 'minconf',
 }
 
 /** One typed facet chip. `value` is always lower-cased. */
@@ -91,6 +101,7 @@ const SINGLE_VALUED: ReadonlySet<FacetKey> = new Set<FacetKey>([
   'target',
   'kind',
   'analyst',
+  'minconf',
 ])
 
 export function mergeChips(existing: FeedChip[], incoming: FeedChip[]): FeedChip[] {
@@ -252,6 +263,17 @@ function matchChip(row: UnifiedRow, verdict: Verdict, chip: FeedChip, now: numbe
       const t = Date.parse(row.produced_at)
       return Number.isFinite(t) && t >= now - windowMs
     }
+    case 'minconf': {
+      const min = Number(v)
+      if (!Number.isFinite(min)) return true // garbage threshold never over-filters
+      // The SURFACED confidence — the critic-folded `effective_confidence` when
+      // the row has one, else the raw `confidence` (findingsViews is the single
+      // source of that rule). A row that was never graded has NO surfaced
+      // confidence and therefore cannot clear a floor: it fails the gate rather
+      // than being fabricated over it.
+      const c = surfacedConfidence(row)
+      return c !== null && c >= min
+    }
     default:
       return true
   }
@@ -296,6 +318,91 @@ export function matchesFilter(
     }
   }
   return true
+}
+
+// ---------------------------------------------------------------------------
+// Server-side push — which facets the REST routes can answer themselves
+// ---------------------------------------------------------------------------
+
+/**
+ * The query params `GET /findings` accepts that map onto a feed facet
+ * (`substrate_reads_api.list_findings`). `q` is deliberately ABSENT: the route's
+ * `plainto_tsquery('simple', …)` matches whole TOKENS, so pushing the free-text
+ * box server-side would blank the list on every partial word the operator types
+ * ("cou" → 0 rows). Free text therefore stays a client-side substring match over
+ * the loaded page, exactly as before.
+ */
+export const FINDINGS_SERVER_FACETS: readonly string[] = [
+  'target_id',
+  'analyst_id',
+  'severity',
+  'since',
+]
+
+/** The subset `GET /signals` accepts (no analyst/severity columns on a signal). */
+export const SIGNALS_SERVER_FACETS: readonly string[] = ['target_id', 'since']
+
+/** The four real severities the route's `Severity` enum accepts. `severity:none`
+ *  ("has no severity") has no server equivalent and stays client-side. */
+const SERVER_SEVERITIES: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'critical'])
+
+export interface ServerFilterOptions {
+  /** Which params the target route accepts — {@link FINDINGS_SERVER_FACETS} or
+   *  {@link SIGNALS_SERVER_FACETS}. */
+  supports: readonly string[]
+  /**
+   * Target ids the feed KNOWS exist verbatim (the desk roster + every
+   * `target_id` in view). `target:` is a client-side SUBSTRING match, but the
+   * route's `target_id=` is exact — pushing a hand-typed partial would return
+   * an empty page and read as "no results" when the truth is "not an id". So a
+   * value is only pushed when it is a known-exact id.
+   */
+  exactTargets?: ReadonlySet<string>
+  /** Same contract for `analyst:` — see `feedProducers.exactProducerIds`. */
+  exactAnalysts?: ReadonlySet<string>
+  now?: number
+}
+
+/**
+ * The server-side half of a filter: the facets the REST route can answer over
+ * the WHOLE corpus instead of the 50-row page the client can see.
+ *
+ * Every param returned here is a strict NARROWING that `matchesFilter` also
+ * enforces client-side, so the two passes can never disagree — the server pass
+ * is a pure optimization that makes a facet reach past the current page, and
+ * dropping any param (unknown id, unparseable window) only ever widens the
+ * query, never hides a row.
+ */
+export function serverFilterParams(
+  filter: ParsedFilter,
+  opts: ServerFilterOptions,
+): Record<string, string> {
+  const supports = new Set(opts.supports)
+  const now = opts.now ?? Date.now()
+  const out: Record<string, string> = {}
+
+  const target = chipValue(filter.chips, 'target')
+  if (supports.has('target_id') && target && opts.exactTargets?.has(target)) {
+    out.target_id = target
+  }
+
+  const analyst = chipValue(filter.chips, 'analyst')
+  if (supports.has('analyst_id') && analyst && opts.exactAnalysts?.has(analyst)) {
+    out.analyst_id = analyst
+  }
+
+  const severity = chipValue(filter.chips, 'severity')
+  if (supports.has('severity') && SERVER_SEVERITIES.has(severity)) {
+    out.severity = severity
+  }
+
+  const since = chipValue(filter.chips, 'since')
+  if (supports.has('since') && since) {
+    const windowMs = parseSince(since)
+    if (windowMs != null) out.since = new Date(now - windowMs).toISOString()
+  }
+
+  return out
 }
 
 // ---------------------------------------------------------------------------

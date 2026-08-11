@@ -50,6 +50,20 @@ _MAX_NODES = 5_000
 # a larger one (see :func:`build_shortest_path_cypher`).
 _MAX_PATH_LEN = 6
 
+# Every reason a path lookup can come back without a path. Exactly one of these
+# is present in ``result["warnings"]`` whenever ``found`` is False. Only
+# ``no_path`` is a statement about the two actors; the rest are statements
+# about the SUBSTRATE and callers must surface them as errors, not as answers.
+GRAPH_MISS_WARNINGS = (
+    "no_pool",
+    "engine_unreachable",
+    "graph_unpopulated",
+    "degenerate_path",
+    "no_path",
+)
+# The subset that means "the question was never actually asked".
+GRAPH_UNAVAILABLE_WARNINGS = ("no_pool", "engine_unreachable", "graph_unpopulated")
+
 
 # ---------------------------------------------------------------------------
 # Cypher builders
@@ -98,6 +112,26 @@ def build_shortest_path_cypher(
         "length(p) AS path_len "
         "ORDER BY path_len ASC LIMIT 1"
     )
+
+
+def build_population_probe_cypher() -> str:
+    """Build the cheapest "does this graph hold id-keyed vertices?" probe.
+
+    ``LIMIT 1`` short-circuits, so the cost is one row on a populated graph and
+    a scan of an empty label table otherwise. It exists to tell three states
+    apart that the path query alone collapses into one silent ``found=False``:
+
+    * the graph is **unpopulated** — no vertex carries an ``id`` at all
+    * the engine is **unreachable** — the query itself raised
+    * there is genuinely **no path** between these two actors within the cap
+
+    The probe deliberately requires ``n.id IS NOT NULL`` rather than merely
+    counting vertices: a graph holding only name-keyed vertices (the write-path
+    contract this module's readers do NOT speak — see
+    ``_fact_graph.upsert_fact_edge``) is unpopulated *as far as every reader
+    here is concerned*, and saying so out loud is the whole point.
+    """
+    return "MATCH (n) WHERE n.id IS NOT NULL RETURN n.id LIMIT 1"
 
 
 def build_path_neighbourhood_cypher(
@@ -179,6 +213,29 @@ def _strip_agtype(value: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
+async def graph_is_populated(pool: Any) -> bool | None:
+    """Return True/False for "the graph holds id-keyed vertices", None on error.
+
+    ``None`` means the engine could not be reached or the probe raised — a
+    third state that must NOT be reported as "the graph is empty".
+    """
+    if pool is None:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute("LOAD 'age'")
+            await conn.execute('SET search_path = ag_catalog, "$user", public')
+            rows = await conn.fetch(
+                "SELECT * FROM cypher('legba_graph', $$"
+                + build_population_probe_cypher()
+                + "$$) AS (id agtype)"
+            )
+        return bool(rows)
+    except Exception as exc:
+        logger.warning("graph_paths.population_probe_failed err=%s", exc)
+        return None
+
+
 async def shortest_path_with_broker(
     pool: Any,
     src_id: str,
@@ -201,6 +258,12 @@ async def shortest_path_with_broker(
           "max_len": int,                   # the clamped cap actually used
           "warnings": [str, ...],
         }
+
+    ``warnings`` is now LOAD-BEARING on the miss path — one of ``no_pool``,
+    ``engine_unreachable``, ``graph_unpopulated``, ``degenerate_path`` or
+    ``no_path`` is always present when ``found`` is False, so a caller can
+    never mistake "the graph has nothing in it" for "these two are not
+    connected". ``GRAPH_MISS_WARNINGS`` names the set.
 
     The broker is the path INTERMEDIARY with the highest betweenness, computed
     over the bounded path neighbourhood (``build_path_neighbourhood_cypher``).
@@ -235,11 +298,24 @@ async def shortest_path_with_broker(
             )
     except Exception as exc:
         logger.warning("graph_mining.path.query_failed err=%s", exc)
-        result["warnings"].append("path_query_failed")
+        result["warnings"].extend(("engine_unreachable", "path_query_failed"))
         return result
 
     if not rows:
-        return result  # no path within the length cap
+        # A miss is THREE different facts and they must not be conflated: the
+        # graph is unpopulated, the engine is unreachable, or these two actors
+        # genuinely have no path within the cap. Until 2026-08-03 all three
+        # returned found=False with an EMPTY warnings list, which the API
+        # rendered as a confident detail="no path" — over a graph holding 27
+        # smoke-test fixtures (JUDGE_SYNTHESIS §4.3 item 2/3, defect #2).
+        populated = await graph_is_populated(pool)
+        if populated is None:
+            result["warnings"].append("engine_unreachable")
+        elif not populated:
+            result["warnings"].append("graph_unpopulated")
+        else:
+            result["warnings"].append("no_path")
+        return result
 
     vertices = _parse_age_entities(rows[0]["path_nodes"])
     rels = _parse_age_entities(rows[0]["path_rels"])
@@ -346,8 +422,12 @@ async def _broker_on_path(
 
 __all__ = [
     "shortest_path_with_broker",
+    "graph_is_populated",
     "build_shortest_path_cypher",
     "build_path_neighbourhood_cypher",
+    "build_population_probe_cypher",
+    "GRAPH_MISS_WARNINGS",
+    "GRAPH_UNAVAILABLE_WARNINGS",
     "_broker_on_path",
     "_cypher_quote",
     "_parse_age_entities",

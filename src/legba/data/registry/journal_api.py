@@ -650,7 +650,12 @@ def build_journal_router(deps: RegistryAPIDeps) -> APIRouter:
         # `= ANY(...)` replaces the old hardcoded `IN ('entry','chronicle')`.
         # The open consolidation stays its own slot below (never a stream row).
         args.append(stream_kinds)
-        where = ["entry_kind = ANY($1::text[])"]
+        # 2026-08-02 — the stream honours the soft-close the consolidation slot
+        # below has always honoured. Migration 0120 closed the tool-JSON
+        # envelopes + empty stubs; without this they keep rendering as Voices
+        # cards. The row stays fetchable by id (`/journal/{id}` is a permalink
+        # and deliberately unfiltered) — closed, not erased.
+        where = ["entry_kind = ANY($1::text[])", "valid_until IS NULL"]
         if cursor is not None:
             cur_at, cur_id = _decode_cursor(cursor)
             args.append(cur_at)

@@ -318,6 +318,53 @@ async def _insert_nexus(
     return nid
 
 
+async def _insert_edge(
+    pool,
+    *,
+    subject: str,
+    object_: str,
+    rel_type: str,
+    intermediary: str | None = None,
+    polarity: int = 0,
+    confidence: float = 0.9,
+    edge_family: str = "relation",
+) -> UUID:
+    """Insert an id-keyed ``entity_edges`` row (migration 0143), minting the
+    endpoint ``entity_profiles`` on demand.
+
+    W3-A: the path/broker walks read `entity_edges`, not `nexuses`. Seeding a
+    bare nexus row no longer reaches them — which is the point of the cutover,
+    since the walk now traverses foreign keys rather than name strings.
+    """
+    async def _entity(conn, name: str) -> UUID:
+        eid = await conn.fetchval(
+            "SELECT id FROM entity_profiles WHERE lower(canonical_name)=lower($1)"
+            " AND merged_into IS NULL LIMIT 1", name)
+        if eid is None:
+            eid = await conn.fetchval(
+                """INSERT INTO entity_profiles
+                     (canonical_name, entity_class, entity_type, data)
+                   VALUES ($1, 'organization', 'organization', '{}'::jsonb)
+                   RETURNING id""", name)
+        return eid
+
+    async with pool.acquire() as conn:
+        src = await _entity(conn, subject)
+        dst = await _entity(conn, object_)
+        via = await _entity(conn, intermediary) if intermediary else None
+        return await conn.fetchval(
+            """
+            INSERT INTO entity_edges
+                (src_id, dst_id, intermediary_id, edge_type, edge_family,
+                 polarity, confidence)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING id
+            """,
+            src, dst, via, rel_type, edge_family, int(polarity),
+            float(confidence),
+        )
+
+
 async def _insert_hypothesis(
     pool,
     *,
@@ -1377,15 +1424,15 @@ async def test_query_paths_polarity_filter_in_sql(port, pg_pool):
     non-matching ones (the old Python post-filter only saw what survived the
     fetch cutoff). Graph: wt6m5_a -> wt6m5_b direct (+1, 1 hop — ranks
     first) and wt6m5_a -> wt6m5_c -> wt6m5_b (net -1, 2 hops)."""
-    await _insert_nexus(
+    await _insert_edge(
         pg_pool, subject="wt6m5_a", object_="wt6m5_b",
         rel_type="supports", polarity=1,
     )
-    await _insert_nexus(
+    await _insert_edge(
         pg_pool, subject="wt6m5_a", object_="wt6m5_c",
         rel_type="opposes", polarity=-1,
     )
-    await _insert_nexus(
+    await _insert_edge(
         pg_pool, subject="wt6m5_c", object_="wt6m5_b",
         rel_type="supports", polarity=1,
     )
@@ -1412,6 +1459,50 @@ async def test_query_paths_polarity_filter_in_sql(port, pg_pool):
     assert len(pos["paths"]) == 1
     assert pos["paths"][0]["polarity_product"] == 1
     assert pos["paths"][0]["hops"] == 1
+
+
+@pytest.mark.asyncio
+async def test_query_paths_walk_advances_from_the_object(port, pg_pool):
+    """The recursive seed must hand hop 2 the first edge's OBJECT. Seeding
+    with the subject made every later hop re-expand from the origin — on live
+    data that fabricated 64,136 "paths" where 1,517 exist. The W2-T6 test
+    above never caught it because its triangle topology let origin-re-expansion
+    produce a chain with the same node sequence and polarity product.
+
+    Two topologies where the bug flips the ANSWER, not just the edge ids:
+
+    * a chain ``qpw_a -> qpw_c -> qpw_b`` with NO direct edge: under the bug
+      hop 2 re-expands from ``qpw_a`` (whose only edge is visited-blocked) and
+      finds NOTHING — the real 2-hop path vanishes;
+    * a fork ``qpf_a -> qpf_c`` + ``qpf_a -> qpf_b`` with no ``c -> b`` edge:
+      under the bug hop 2 walks the second origin edge and reports a 2-hop
+      ``a -> c -> b`` chain that NO edge sequence supports.
+    """
+    # Chain: the genuine 2-hop path must be found.
+    await _insert_edge(
+        pg_pool, subject="qpw_a", object_="qpw_c",
+        rel_type="supports", polarity=1,
+    )
+    await _insert_edge(
+        pg_pool, subject="qpw_c", object_="qpw_b",
+        rel_type="supports", polarity=1,
+    )
+    chain = await port.query_paths(subject="qpw_a", obj="qpw_b")
+    assert len(chain["paths"]) == 1
+    assert chain["paths"][0]["hops"] == 2
+
+    # Fork: no path a->..->b of length 2 exists beyond the direct edge; a
+    # 2-hop result here is a fabricated chain.
+    await _insert_edge(
+        pg_pool, subject="qpf_a", object_="qpf_c",
+        rel_type="supports", polarity=1,
+    )
+    await _insert_edge(
+        pg_pool, subject="qpf_a", object_="qpf_b",
+        rel_type="supports", polarity=1,
+    )
+    fork = await port.query_paths(subject="qpf_a", obj="qpf_b")
+    assert [p["hops"] for p in fork["paths"]] == [1]
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,115 @@
+# situation_tracker — continuity Phase 2's ONE trajectory-ledger writer.
+#
+# A global META analyst kind (no subscription.targets => a single global sweep
+# per tick, the signal_salience / entity_researcher precedent). Each tick it:
+#   1. LOADS its per-situation watermarks from `alert_trigger_watermarks`
+#      (trigger_class='situation_tracker' — the generic cursor store claim_watch
+#      already rides; plan D2 asks for that idiom rather than a second table),
+#   2. SELECTS the open situations (superseded_by IS NULL, not closed, still
+#      valid) worst-first, and for each pulls the NEW attached findings since its
+#      own watermark, gated at the house floor: an INNER join onto the
+#      faithfulness critique with LEAST(confidence, faithfulness) >= 0.50, so
+#      only VERIFIED evidence can move a situation,
+#   3. ADJUDICATES each situation-with-news on the LLM provider plane (the $0
+#      core plane, gpt-oss-120b; NEVER Anthropic) in small batches — escalates /
+#      de_escalates / broadens / unchanged_checkpoint, one sentence why, citing
+#      which numbered items — with an ECHO-BOUND parse (the model echoes the
+#      situation handle) and NO positional fallback,
+#   4. WRITES one `situation_update` finding (kind #13, through the FULL
+#      faithfulness verify gate) plus one append-only `situation_events` ledger
+#      row per adjudicated situation (migration 0184).
+#
+# FIRST RUN SEEDS SILENTLY: it records where every open situation stands, writes
+# no deltas, and says so at WARNING. Without that, hour one would emit a delta
+# for the entire backlog at once.
+#
+# state: draft — the write-sentinel / new-kind ACTIVATION checklist runs before
+# this goes configured->active (rebuild the REGISTRY first: a new OutputKind is a
+# shared-schema change; grep the boot log for reconcile.failed; confirm EVERY
+# kind still activates 200). Then a probe run, then read the ledger back.
+
+identity:
+  id: situation_tracker
+  name: Situation Tracker (trajectory ledger)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: situation_tracker
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: continuity_phase2
+
+subscription:
+  # No `targets` block => META analyst (single global sweep; _cadence_targets
+  # returns None). The tracker reads situations / analyst_outputs and writes
+  # situation_events directly via deps.pg_pool; it does NOT consume a per-target
+  # materialized slice.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  # method.kind is a constrained Literal; runtime dispatch is on identity.kind
+  # (situation_tracker). llm_planner matches the single-turn chat_complete
+  # adjudication shape the kind uses (same as signal_salience).
+  kind: llm_planner
+  # The OPERATIVE prompt is _TRACKER_SYSTEM in situation_tracker.py (run_method
+  # hardcodes it, so the two never drift); this block documents the task and
+  # satisfies the schema's "llm_planner requires system_prompt" guard.
+  system_prompt: |
+    SITUATION TRAJECTORY. Given situations already being watched, each with its
+    current state, its dates and the NEW verified items attached since the last
+    check, decide for each whether the items ESCALATE / DE_ESCALATE / BROADEN it
+    or leave it UNCHANGED — one sentence why, citing which numbered items.
+    "unchanged_checkpoint" is the expected answer most of the time; any other
+    delta MUST cite that situation's own items. Echo the handle so the verdict
+    binds to the right situation. (The authoritative prompt lives in code as
+    _TRACKER_SYSTEM.)
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # Plan D3 — the situation_update finding goes through the SAME faithfulness
+    # verify pass the compositions do, over the SAME sub-claim citation bridge
+    # (ref_kind='finding' + [[ref:N]] ordinals). Declaring `verify` is the opt-in
+    # the host keys on to wire deps.verify_judge; the deterministic floor runs
+    # regardless and soft-fails honestly if the judge is unresolved. Known
+    # limitation inherited from the compositions: same-family judging shares
+    # blind spots. Model stays a switchable stack_ref.
+    verify:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 1600           # one batched verdict array per ~4 situations
+    temperature: 0.0           # deterministic adjudication
+    # --- kind-specific options (read by _build_situation_tracker) ------------
+    max_situations: 12         # open situations examined per tick, worst-first
+    max_evidence: 6            # new items shown per situation
+    batch_size: 4              # situations per adjudication call
+    window_hours: 168          # backstop lookback for a situation with no watermark
+    floor: 0.50                # the house consumption floor on cited evidence
+    dormancy_days: 14          # quiet horizon before a dormancy checkpoint row
+    snippet_chars: 700         # per-item body excerpt in the prompt
+  budget_tokens_per_day: 2000000
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # Hourly at :41 past — the plan's slot (D2), offset well clear of
+  # situation_clustering ("5-59/20": :05/:25/:45) so the member sets the tracker
+  # reads are the ones this cycle's clustering already refreshed, and clear of
+  # the signal sweeps at :07.
+  fallback_schedule: "41 * * * *"
+  cooldown_seconds: 3000       # 50m (below the 1h interval)
+
+# No extra output sinks: the runtime's output path writes the situation_update
+# row, and the trajectory rows land directly in `situation_events`.
+outputs: []

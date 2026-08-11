@@ -34,6 +34,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from .. import correctness_axis
 from ..schemas import AnalystDescriptor
 from . import source_freshness
 from .api import RegistryAPIDeps, require_bearer
@@ -110,6 +111,14 @@ class ScorecardRow(BaseModel):
 
     ``analyst_id`` is the ANALYZED analyst (whose quality is graded), not the
     judge — recovered from the dual-sink critique payload.
+
+    M-2: ``judge_pipeline_version`` names WHICH judge produced ``overall_score``.
+    The UI rolls these rows into per-analyst means and trends, so without the
+    stamp a trend line silently spans a judge swap (the 07-30 change moved mean
+    faithfulness +7pp on its own) and reads as an analyst that improved
+    overnight. ``None`` = graded before the split key existed — a real
+    population, not a gap, and it must be shown as its own series rather than
+    merged into the current one.
     """
     id: str
     analyst_id: str
@@ -118,6 +127,7 @@ class ScorecardRow(BaseModel):
     overall_score: float
     ground_truth_accuracy: float | None = None
     produced_at: str
+    judge_pipeline_version: str | None = None
 
 
 class BandCalibrationSection(BaseModel):
@@ -149,6 +159,65 @@ class BandCalibrationSection(BaseModel):
     no_brier: bool = True
     honesty_note: str | None = None
     refs: list[str] = Field(default_factory=list)
+
+
+class UnitCorrectnessRow(BaseModel):
+    """One bounded unit's OPERATOR correctness — the judge-independent axis.
+
+    Deliberately NOT a section of :class:`CalibrationScoreboard`. Correctness is
+    a human's read of whether the finding was RIGHT; calibration and
+    faithfulness are machine aggregates over the pipeline's own judge. The
+    standing rule (``labels_api`` P2-5) is that they are never pooled, and
+    giving this axis its own route is that rule made structural rather than
+    documented.
+
+    TINY-n: ``correctness`` is reported even when ``sufficient`` is False,
+    because it is the only judge-independent signal that exists and hiding it
+    is how it stayed invisible for a week. It NEVER travels alone —
+    ``n_scored``, ``mix`` and ``status`` are always beside it, so a reader sees
+    "one verdict, 'correct'", not "1.00".
+    """
+    unit: str
+    correctness: float | None = None
+    n_labels: int = 0
+    n_scored: int = 0
+    n_unresolvable: int = 0
+    mix: dict[str, int] = Field(default_factory=dict)
+    sufficient: bool = False
+    min_labels: int = 0
+    status: str
+    display: str
+    # The DIAGNOSTIC second axis, from the latest scorer run (source-id overlap
+    # vs `unit_reference_labels`). Segregated: never averaged with the above.
+    correctness_vs_reference: float | None = None
+    n_reference_labels: int = 0
+    reference_status: str | None = None
+    # The unit's faithfulness from the same scorer run, carried for CONTRAST —
+    # the gap between the two is the finding the gold-set round produced. Named
+    # with its judge population so it is never read as a pooled number.
+    faithfulness: float | None = None
+    judge_pipeline_version: str | None = None
+
+
+class UnitCorrectnessBoard(BaseModel):
+    """``GET /v3/eval/correctness`` — the operator gold-set axis, surfaced.
+
+    The 2026-08-02 engine review found this number (0.625 over n=8, against a
+    same-window faithfulness of 0.92) computed, stored, and displayed nowhere a
+    reader would meet it. This route is where it lives.
+
+    ``fleet`` pools every verdict ONCE rather than averaging per-unit means:
+    with n=1 on most units a mean of means weights a single verdict as heavily
+    as a fully-labelled unit. ``labeling`` reports the loop's own health (how
+    many weeks are pinned, how many of this week's samples are judged) so a
+    stalled labeling loop is visible next to the number it starves.
+    """
+    available: bool
+    fleet: UnitCorrectnessRow | None = None
+    units: list[UnitCorrectnessRow] = Field(default_factory=list)
+    scored_at: str | None = None
+    labeling: dict[str, Any] = Field(default_factory=dict)
+    honesty_note: str
 
 
 class CalibrationScoreboard(BaseModel):
@@ -1759,7 +1828,11 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                        data->>'analyzed_analyst_version' AS analyst_version,
                        COALESCE(data->'scores', '{}'::jsonb) AS scores,
                        COALESCE((data->>'overall_score')::float8, 0.0) AS overall_score,
-                       created_at AS produced_at
+                       created_at AS produced_at,
+                       -- M-2: the population split key, so the UI's per-analyst
+                       -- means and trends never span a judge swap unlabelled.
+                       data->'data'->'verification'->>'judge_pipeline_version'
+                           AS judge_pipeline_version
                   FROM public.analyst_outputs
                  WHERE kind = 'critique'
                    AND data->>'analyzed_analyst_id' IS NOT NULL
@@ -1791,6 +1864,7 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                         if hasattr(produced, "isoformat")
                         else str(produced)
                     ),
+                    judge_pipeline_version=r["judge_pipeline_version"],
                 )
             )
         return out
@@ -1891,6 +1965,142 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
             calibration_thin=calibration_thin,
             refs=[str(row["id"])],
             band_calibration=band_calibration,
+        )
+
+    @router.get("/eval/correctness", response_model=UnitCorrectnessBoard)
+    async def eval_correctness(
+        principal: str = Depends(require_bearer),
+    ) -> UnitCorrectnessBoard:
+        """The OPERATOR gold-set correctness axis (M-1) — judge-independent.
+
+        Its OWN route, not a section of ``/eval/calibration``: correctness is a
+        human's read of whether a finding was right, calibration and
+        faithfulness are aggregates over the pipeline's own judge, and the
+        standing rule is that they never pool. Separate routes make that
+        structural.
+
+        The verdict counts are read LIVE from ``correctness_labels`` (n grows
+        the moment a label lands, never gated on the scorer's daily cadence);
+        the diagnostic source-overlap axis and the faithfulness contrast come
+        from the latest ``unit_correctness_scorer`` finding. Both reads are
+        defensive — a missing table or an absent scorer run degrades to the
+        honest empty board, never a fabricated row.
+        """
+        op_rows: list[Any] = []
+        scorer_row: Any = None
+        weeks: list[Any] = []
+        async with deps.descriptor_registry.pg.acquire() as conn:
+            try:
+                op_rows = list(await conn.fetch(correctness_axis.UNIT_LABELS_SQL))
+            except Exception:  # noqa: BLE001 — honest empty, never a broken board
+                op_rows = []
+            try:
+                scorer_row = await conn.fetchrow(
+                    "SELECT data, produced_at FROM public.analyst_outputs "
+                    "WHERE analyst_id = 'unit_correctness_scorer' "
+                    "AND kind = 'finding' AND superseded_by IS NULL "
+                    "ORDER BY produced_at DESC, id DESC LIMIT 1"
+                )
+            except Exception:  # noqa: BLE001
+                scorer_row = None
+            try:
+                # The LOOP's health, beside the number it feeds: a sampler that
+                # stopped pinning weeks is why n stops growing, and that has to
+                # be visible or a flat 0.625 reads as a stable measurement
+                # rather than a stalled one.
+                weeks = list(await conn.fetch(
+                    "SELECT s.week, count(*)::int AS sampled, "
+                    "count(l.finding_id)::int AS labeled "
+                    "FROM goldset_week_samples s "
+                    "LEFT JOIN correctness_labels l "
+                    "  ON l.finding_id = s.finding_id "
+                    "GROUP BY s.week ORDER BY s.week DESC LIMIT 8"
+                ))
+            except Exception:  # noqa: BLE001
+                weeks = []
+
+        by_unit, fleet = correctness_axis.score_by_unit(op_rows)
+
+        scorer_units: dict[str, Any] = {}
+        scored_at: str | None = None
+        if scorer_row is not None:
+            raw = scorer_row["data"]
+            payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            nested = payload.get("data") if isinstance(payload, dict) else None
+            found = nested.get("units") if isinstance(nested, dict) else None
+            if isinstance(found, dict):
+                scorer_units = found
+            produced = scorer_row["produced_at"]
+            scored_at = (
+                produced.isoformat()
+                if hasattr(produced, "isoformat")
+                else str(produced)
+            )
+
+        def _row(unit: str, record: dict[str, Any]) -> UnitCorrectnessRow:
+            rec = scorer_units.get(unit)
+            rec = rec if isinstance(rec, dict) else {}
+            pop = rec.get("faithfulness_population")
+            pop = pop if isinstance(pop, dict) else {}
+            faith = rec.get("faithfulness")
+            corr_ref = rec.get("correctness_vs_reference")
+            return UnitCorrectnessRow(
+                unit=unit,
+                correctness=record.get("correctness"),
+                n_labels=int(record.get("n_labels") or 0),
+                n_scored=int(record.get("n_scored") or 0),
+                n_unresolvable=int(record.get("n_unresolvable") or 0),
+                mix=dict(record.get("mix") or {}),
+                sufficient=bool(record.get("sufficient")),
+                min_labels=int(record.get("min_labels") or 0),
+                status=str(record.get("status")),
+                display=correctness_axis.describe(record),
+                correctness_vs_reference=(
+                    float(corr_ref) if isinstance(corr_ref, (int, float))
+                    and not isinstance(corr_ref, bool) else None
+                ),
+                n_reference_labels=int(rec.get("n_labeled") or 0),
+                reference_status=rec.get("status"),
+                faithfulness=(
+                    float(faith) if isinstance(faith, (int, float))
+                    and not isinstance(faith, bool) else None
+                ),
+                judge_pipeline_version=pop.get("judge_pipeline_version"),
+            )
+
+        # Every unit the gold set knows about, plus every unit the scorer
+        # reported — a unit with verdicts but no scorer run must still appear,
+        # and vice versa. Absence of one axis is never absence of the row.
+        all_units = sorted(set(by_unit) | set(scorer_units))
+        rows = [_row(u, by_unit.get(u) or correctness_axis.score(())) for u in all_units]
+
+        return UnitCorrectnessBoard(
+            available=bool(rows),
+            fleet=_row("__fleet__", fleet) if op_rows else None,
+            units=rows,
+            scored_at=scored_at,
+            labeling={
+                "weeks": [
+                    {
+                        "week": w["week"],
+                        "sampled": int(w["sampled"] or 0),
+                        "labeled": int(w["labeled"] or 0),
+                    }
+                    for w in weeks
+                ],
+                "weeks_pinned": len(weeks),
+            },
+            honesty_note=(
+                "Operator gold-set correctness is JUDGE-INDEPENDENT and is "
+                "never pooled with faithfulness, the Brier plane, or the "
+                "deterministic source-overlap axis. The gold set is "
+                "hand-labelled and does not scale by construction: below "
+                f"{correctness_axis.MIN_UNIT_LABELS} scored verdicts per unit "
+                f"({correctness_axis.MIN_FLEET_LABELS} fleet-wide) the mean is "
+                "reported as INDICATIVE and never as a measured rate. "
+                "'unresolvable' verdicts are excluded from both numerator and "
+                "denominator and reported in the mix."
+            ),
         )
 
     @router.get("/eval/desk_baselines", response_model=DeskBaselineBoard)

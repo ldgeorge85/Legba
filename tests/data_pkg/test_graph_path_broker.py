@@ -24,11 +24,15 @@ from __future__ import annotations
 import pytest
 
 from legba.data.graph_paths import (
+    GRAPH_MISS_WARNINGS,
+    GRAPH_UNAVAILABLE_WARNINGS,
     _MAX_NODES,
     _MAX_PATH_LEN,
     _cypher_quote,
     build_path_neighbourhood_cypher,
+    build_population_probe_cypher,
     build_shortest_path_cypher,
+    graph_is_populated,
     shortest_path_with_broker,
 )
 
@@ -110,9 +114,11 @@ class _Acq:
 
 
 class _FakeConn:
-    def __init__(self, path_rows, nbr_rows):
+    def __init__(self, path_rows, nbr_rows, *, populated: bool = True, probe_raises=False):
         self._path_rows = path_rows
         self._nbr_rows = nbr_rows
+        self._populated = populated
+        self._probe_raises = probe_raises
         self.fetched: list[str] = []
 
     async def execute(self, sql, *args):
@@ -124,6 +130,11 @@ class _FakeConn:
             return self._path_rows
         if "src agtype" in sql:
             return self._nbr_rows
+        # The population probe — the only other cypher this module issues.
+        if "n.id IS NOT NULL" in sql:
+            if self._probe_raises:
+                raise RuntimeError("engine down")
+            return [{"id": '"some-uuid"'}] if self._populated else []
         return []
 
 
@@ -177,11 +188,77 @@ async def test_orchestrator_parses_path_and_picks_betweenness_broker():
 
 
 async def test_orchestrator_no_path():
-    pool = _FakePool(_FakeConn(path_rows=[], nbr_rows=[]))
+    pool = _FakePool(_FakeConn(path_rows=[], nbr_rows=[], populated=True))
     res = await shortest_path_with_broker(pool, "A", "B")
     assert res["found"] is False
     assert res["path"] == []
     assert res["broker"] is None
+    # A POPULATED graph with no route between these two actors is the only case
+    # that is genuinely an answer — and it says so rather than staying silent.
+    assert res["warnings"] == ["no_path"]
+
+
+# ---------------------------------------------------------------------------
+# Fail-loud: an empty graph is NOT "no path" (JUDGE_SYNTHESIS §4.3 item 2/3)
+# ---------------------------------------------------------------------------
+
+
+def test_population_probe_requires_an_id_key():
+    cy = build_population_probe_cypher()
+    # Vertices without an `id` do not count as population: every reader in the
+    # codebase filters on `.id`, so a name-keyed graph is unreadable to them.
+    assert "n.id IS NOT NULL" in cy
+    assert "LIMIT 1" in cy
+
+
+async def test_unpopulated_graph_reports_graph_unpopulated_not_no_path():
+    """The defect this closes: 27 smoke fixtures answering as if they were the world.
+
+    Before 2026-08-03 an empty graph and a genuine miss BOTH returned
+    ``found=False`` with an empty ``warnings`` list, which the API rendered as
+    ``detail="no path"`` — a confident negative about a graph that had never
+    held a production row.
+    """
+    pool = _FakePool(_FakeConn(path_rows=[], nbr_rows=[], populated=False))
+    res = await shortest_path_with_broker(pool, "A", "B")
+    assert res["found"] is False
+    assert res["warnings"] == ["graph_unpopulated"]
+    assert "no_path" not in res["warnings"]
+
+
+async def test_engine_failure_reports_engine_unreachable():
+    pool = _FakePool(_FakeConn(path_rows=[], nbr_rows=[], probe_raises=True))
+    res = await shortest_path_with_broker(pool, "A", "B")
+    assert res["found"] is False
+    assert "engine_unreachable" in res["warnings"]
+    assert "graph_unpopulated" not in res["warnings"]
+
+
+async def test_graph_is_populated_returns_none_on_error_not_false():
+    """None (unknown) and False (empty) are different facts and must not merge."""
+    assert await graph_is_populated(None) is None
+    assert await graph_is_populated(
+        _FakePool(_FakeConn([], [], probe_raises=True))
+    ) is None
+    assert await graph_is_populated(_FakePool(_FakeConn([], [], populated=False))) is False
+    assert await graph_is_populated(_FakePool(_FakeConn([], [], populated=True))) is True
+
+
+async def test_every_miss_carries_exactly_one_reason():
+    """No path lookup may ever return found=False with an empty warnings list."""
+    cases = [
+        _FakePool(_FakeConn([], [], populated=True)),
+        _FakePool(_FakeConn([], [], populated=False)),
+        _FakePool(_FakeConn([], [], probe_raises=True)),
+        None,
+    ]
+    for pool in cases:
+        res = await shortest_path_with_broker(pool, "A", "B")
+        assert res["found"] is False
+        reasons = [w for w in res["warnings"] if w in GRAPH_MISS_WARNINGS]
+        assert len(reasons) == 1, res["warnings"]
+    # And the three "we could not ask" reasons are a strict subset of them.
+    assert set(GRAPH_UNAVAILABLE_WARNINGS) < set(GRAPH_MISS_WARNINGS)
 
 
 async def test_orchestrator_direct_edge_has_no_broker():
@@ -200,6 +277,97 @@ async def test_orchestrator_no_pool_soft_fails():
     res = await shortest_path_with_broker(None, "A", "B")
     assert res["found"] is False
     assert "no_pool" in res["warnings"]
+
+
+# ---------------------------------------------------------------------------
+# The HTTP surface: /graph/path must FAIL, not answer, on an unfed graph
+# ---------------------------------------------------------------------------
+
+
+def _path_app(pool):
+    """A minimal app carrying only the graph-structure router + a stub pool."""
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+
+    from legba.data.registry.api import require_bearer
+    from legba.data.registry.graph_structure_api import build_graph_structure_router
+
+    deps = SimpleNamespace(descriptor_registry=SimpleNamespace(pg=pool))
+    app = FastAPI()
+    app.include_router(build_graph_structure_router(deps))
+    app.dependency_overrides[require_bearer] = lambda: "test-principal"
+    return app
+
+
+async def _get_path(app, **params):
+    from httpx import ASGITransport, AsyncClient
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as client:
+        return await client.get("/graph/path", params=params)
+
+
+async def test_route_503s_when_the_graph_is_unpopulated():
+    """`/graph/path` over an unfed graph must be an ERROR, never a 200 "no path".
+
+    This is the live-defect fix: the route used to render a confident
+    ``detail="no path"`` from a graph holding 27 June-2026 smoke fixtures, so
+    every answer it gave was a statement about a test island.
+    """
+    app = _path_app(_FakePool(_FakeConn([], [], populated=False)))
+    resp = await _get_path(app, source="Iran", target="Hezbollah")
+    assert resp.status_code == 503, resp.text
+    body = resp.json()["detail"]
+    assert body["error"] == "graph_unpopulated"
+    assert body["source"] == "Iran" and body["target"] == "Hezbollah"
+    # It is an ERROR envelope, not a GraphPath answer — no `found`, no verdict.
+    assert "found" not in resp.json()
+    assert body.get("message")
+
+
+async def test_route_503s_when_the_engine_is_unreachable():
+    app = _path_app(_FakePool(_FakeConn([], [], probe_raises=True)))
+    resp = await _get_path(app, source="A", target="B")
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["error"] == "engine_unreachable"
+
+
+async def test_route_503s_when_no_pool_is_bound():
+    app = _path_app(None)
+    resp = await _get_path(app, source="A", target="B")
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["error"] == "no_pool"
+
+
+async def test_route_200s_with_a_reason_on_a_genuine_miss():
+    """A POPULATED graph with no route is a real answer — 200, with the reason."""
+    app = _path_app(_FakePool(_FakeConn([], [], populated=True)))
+    resp = await _get_path(app, source="A", target="B")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["found"] is False
+    assert body["warnings"] == ["no_path"]
+    assert body["detail"] == "no path within the hop cap"
+
+
+async def test_route_200s_and_carries_the_path_on_a_hit():
+    nodes = "[" + ", ".join(
+        _vrow(g, b) for g, b in ((1, "A"), (2, "M"), (3, "B"))
+    ) + "]"
+    rels = "[" + ", ".join(
+        _erow(g, s, e, "AlliedWith") for g, s, e in ((10, 1, 2), (11, 2, 3))
+    ) + "]"
+    app = _path_app(_FakePool(
+        _FakeConn([{"path_nodes": nodes, "path_rels": rels, "path_len": "2"}], [])
+    ))
+    resp = await _get_path(app, source="A", target="B")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["found"] is True
+    assert body["path"] == ["A", "M", "B"]
+    assert body["warnings"] == []
 
 
 # ---------------------------------------------------------------------------

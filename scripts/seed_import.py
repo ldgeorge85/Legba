@@ -132,6 +132,10 @@ async def _rehome(
     actx = _import_ctx()
     # canonical_name.lower() -> entity_class (for the AGE rebuild vertex labels).
     entity_class_by_name: dict[str, str] = {}
+    # canonical_name.lower() -> entity_profiles.id. The AGE rebuild keys
+    # vertices on the entity uuid (never the name), so the id resolved when the
+    # entity was re-homed is carried forward to the edge write.
+    entity_id_by_name: dict[str, str] = {}
 
     async with pool.acquire() as conn:
         batch_id = await conn.fetchval(
@@ -158,7 +162,7 @@ async def _rehome(
                 counts["skipped"] += 1
                 continue
             try:
-                await _resolve_entity(
+                resolved_id = await _resolve_entity(
                     conn,
                     canonical_name=name,
                     entity_class=cls,
@@ -168,6 +172,7 @@ async def _rehome(
                     data=ent.get("data") or {},
                 )
                 entity_class_by_name[name.lower()] = cls
+                entity_id_by_name[name.lower()] = str(resolved_id)
                 counts["entities"] += 1
             except Exception as exc:  # degrade-not-drop
                 counts["skipped"] += 1
@@ -188,7 +193,9 @@ async def _rehome(
             for name in (subject, value):
                 if name.lower() not in entity_class_by_name:
                     try:
-                        await _resolve_entity(conn, canonical_name=name)
+                        entity_id_by_name[name.lower()] = str(
+                            await _resolve_entity(conn, canonical_name=name)
+                        )
                         entity_class_by_name[name.lower()] = "entity"
                     except Exception:
                         pass
@@ -237,9 +244,11 @@ async def _rehome(
                         emitted = await _emit_fact_edge(
                             pool,
                             subject=subject,
+                            subject_id=entity_id_by_name.get(subject.lower()),
                             subject_class=subj_cls,
                             predicate=predicate,
                             value=value,
+                            value_id=entity_id_by_name.get(value.lower()),
                             value_class=val_cls,
                             fact_id=str(out.id),
                         )
@@ -311,9 +320,11 @@ async def _emit_fact_edge(
     pool: asyncpg.Pool,
     *,
     subject: str,
+    subject_id: str | None,
     subject_class: str | None,
     predicate: str,
     value: str,
+    value_id: str | None,
     value_class: str | None,
     fact_id: str,
 ) -> bool:
@@ -336,9 +347,11 @@ async def _emit_fact_edge(
     return await upsert_fact_edge(
         _Shim(),
         subject=subject,
+        subject_id=subject_id,
         subject_class=subject_class,
         predicate=predicate,
         value=value,
+        value_id=value_id,
         value_class=value_class,
         fact_id=fact_id,
         graph="legba_graph",

@@ -5,8 +5,10 @@
 The SCHEMA FOUNDATION for the `entity_researcher` (E2b + E5 of
 planning/MASTER_PLAN_2026-07-10.md):
 
-  * entity_alias / entity_judgement tables (write-time canonicalization surface
-    + pairwise verdict cache) — constraints + UNIQUE-key dedupe hold.
+  * entity_judgement (the pairwise verdict cache) — constraints + UNIQUE-key
+    dedupe hold. Its sibling `entity_alias` (the write-time canonicalization
+    surface) never got a writer and is dropped by 0119; the check here is now
+    that it is GONE.
   * entity_profiles.merged_into tombstone+redirect column.
   * resolve_entity(uuid) — a cycle-safe recursive redirect chaser: a 2-hop
     chain resolves to the terminal survivor, and a corrupt cycle terminates
@@ -58,8 +60,9 @@ async def test_0086_objects_present(migrated_pg: PostgresConfig):
     and 0086 is recorded in the ledger."""
     conn = await asyncpg.connect(migrated_pg.dsn)
     try:
-        # tables
-        for tbl in ("entity_alias", "entity_judgement"):
+        # tables (entity_alias also landed here, but 0119 drops it — see
+        # test_entity_alias_dropped_by_0119)
+        for tbl in ("entity_judgement",):
             reg = await conn.fetchval("SELECT to_regclass($1)", f"public.{tbl}")
             assert reg is not None, f"missing table public.{tbl}"
 
@@ -185,65 +188,24 @@ async def test_resolve_entity_cycle_safe(migrated_pg: PostgresConfig):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_entity_alias_constraints(migrated_pg: PostgresConfig):
+async def test_entity_alias_dropped_by_0119(migrated_pg: PostgresConfig):
+    """`entity_alias` is GONE on a fully-migrated DB.
+
+    0086 landed it as the write-time canonicalization surface; the code that
+    was to write it never followed, so it sat at zero rows with zero
+    references in `src/` or `scripts/`, and 0119 drops it. Its former
+    constraint tests (alias_kind / decided_by CHECKs, the
+    UNIQUE (alias_norm, canonical_id) dedupe, the ON DELETE CASCADE) went
+    with it — 0086's DDL block is still the specification if the E2b probe is
+    ever built, and it should re-land alongside the code that writes it.
+    """
     conn = await asyncpg.connect(migrated_pg.dsn)
     try:
-        async with conn.transaction():
-            ent = await _insert_entity(conn, "alias-owner")
-
-            # a valid alias inserts
-            await conn.execute(
-                """
-                INSERT INTO public.entity_alias (alias_norm, canonical_id, alias_kind, decided_by)
-                VALUES ('snsc', $1, 'acronym', 'rule')
-                """,
-                ent,
-            )
-
-            # bad alias_kind rejected by CHECK
-            with pytest.raises(asyncpg.CheckViolationError):
-                async with conn.transaction():
-                    await conn.execute(
-                        """
-                        INSERT INTO public.entity_alias (alias_norm, canonical_id, alias_kind)
-                        VALUES ('x', $1, 'not_a_kind')
-                        """,
-                        ent,
-                    )
-
-            # bad decided_by rejected by CHECK
-            with pytest.raises(asyncpg.CheckViolationError):
-                async with conn.transaction():
-                    await conn.execute(
-                        """
-                        INSERT INTO public.entity_alias (alias_norm, canonical_id, decided_by)
-                        VALUES ('y', $1, 'guesswork')
-                        """,
-                        ent,
-                    )
-
-            # UNIQUE (alias_norm, canonical_id) dedupes a re-insert
-            with pytest.raises(asyncpg.UniqueViolationError):
-                async with conn.transaction():
-                    await conn.execute(
-                        """
-                        INSERT INTO public.entity_alias (alias_norm, canonical_id, alias_kind)
-                        VALUES ('snsc', $1, 'exact')
-                        """,
-                        ent,
-                    )
-
-            # ON DELETE CASCADE: deleting the entity removes its aliases
-            await conn.execute("DELETE FROM public.entity_profiles WHERE id=$1", ent)
-            remaining = await conn.fetchval(
-                "SELECT count(*) FROM public.entity_alias WHERE canonical_id=$1", ent
-            )
-            assert remaining == 0
-
-            raise asyncpg.PostgresError("_rollback_")
-    except asyncpg.PostgresError as exc:  # pragma: no cover - control flow
-        if str(exc) != "_rollback_":
-            raise
+        reg = await conn.fetchval("SELECT to_regclass('public.entity_alias')")
+        assert reg is None, (
+            "public.entity_alias still exists — migration 0119 drops it; "
+            "if it came back, it needs a writer this time"
+        )
     finally:
         await conn.close()
 

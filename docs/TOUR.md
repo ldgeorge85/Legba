@@ -58,7 +58,9 @@ Either path lands you on the desk's **findings** — the atoms of the product:
 one bounded question (leadership transition, energy security, escalation,
 narrative coordination, internal stability, military posture, economic
 coercion — seven per desk, plus an eighth, proliferation_watch, on the ~8
-nuclear-relevant desks only), answered from cited evidence over a rolling
+nuclear-relevant desks only; a ninth unit, disruption_status, works the
+thematic supply-chain lane/flow desks rather than countries), answered from
+cited evidence over a rolling
 window plus accumulated context. A finding's body reads like a miniature
 intelligence note: a BLUF ("bottom line up front"), the supporting claims with
 inline `[N]` citation markers, and — for the reasoning units — forward-looking

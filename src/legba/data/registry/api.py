@@ -21,7 +21,9 @@ Design notes:
     "service misconfigured", UNLESS `LEGBA_DEV_MODE=1` is explicitly set
     in the environment (development mode: any token, or no token,
     accepted). Real DID-bearer + OAuth2 = Phase 8/10 follow-up per the
-    L-113 brief.
+    L-113 brief. The gate itself — plus `sunset_headers` and the
+    `RegistryAPIDeps` bundle — now lives in the leaf module `_deps`
+    (K-2) and is re-exported here; see the import block for why.
 
   * WebSocket multiplexing: each connection opens its own NATS subscription
     against the supplied filter (default = all registry subjects). A 30s
@@ -39,13 +41,10 @@ Design notes:
 from __future__ import annotations
 
 import asyncio
-import hmac
 import json
 import logging
-import os
-from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Literal
+from typing import Any, Awaitable, Literal
 from uuid import UUID
 
 import asyncpg
@@ -56,8 +55,6 @@ from fastapi import (
     HTTPException,
     Header,
     Query,
-    Request,
-    Response,
     WebSocket,
     WebSocketDisconnect,
     status,
@@ -74,14 +71,12 @@ from ..schemas import (
     TargetDescriptor,
 )
 from .audit import AuditLogger
-from .credentials import CredentialResolverProtocol, CredentialVault
+from .credentials import CredentialResolverProtocol
 from .descriptor import (
     DescriptorPredicate,
-    DescriptorRegistry,
     DescriptorRow,
     Family,
 )
-from .dlq import DescriptorDeadLetter
 from .errors import (
     AuditChainError,
     DescriptorNotFound,
@@ -92,8 +87,33 @@ from .errors import (
     VersionConflict,
 )
 from .signing import SigningIdentity, verify_audit_payload
-from .stack import StackRegistry, StackValidationError, kind_from_schema_uri
-from .vocabulary_cache import VocabularyCache
+from .stack import StackValidationError, kind_from_schema_uri
+# K-2 (2026-08-03) — the API KERNEL (bearer gate, deprecation stamp, deps
+# bundle) lives in the sibling leaf ``_deps``: 26 of this package's 50 modules
+# imported THIS 2,500-line module to get four of those names, which made it an
+# import hub and a standing circular-import hazard. Imported ONE WAY (``_deps``
+# imports nothing from here) and RE-EXPORTED, so every existing reference —
+# ``api.RegistryAPIDeps``, ``api.require_bearer``, ``api.API_TOKEN_ENV``,
+# ``api._authorize_ws_token`` — resolves exactly as before and not one importer
+# changes. Rewriting those call sites onto ``_deps`` is K-5, operator-gated.
+from ._deps import (  # noqa: F401 — re-exported registry-API kernel
+    API_TOKEN_ENV,
+    DEPRECATION_SUNSET_HTTP_DATE,
+    DEV_MODE_ENV,
+    MISCONFIGURED_AUTH_DETAIL,
+    WS_BEARER_SUBPROTOCOL,
+    RegistryAPIDeps,
+    _authorize_ws_token,
+    _bearer_from_header,
+    _bearer_from_subprotocol,
+    _current_token,
+    _dev_mode,
+    _get_deps,
+    _offers_bearer_subprotocol,
+    _token_matches,
+    require_bearer,
+    sunset_headers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -124,11 +144,8 @@ except ImportError:  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
-# Auth
+# First-run config-status contract
 # ---------------------------------------------------------------------------
-
-API_TOKEN_ENV = "LEGBA_REGISTRY_API_TOKEN"
-DEV_MODE_ENV = "LEGBA_DEV_MODE"
 
 # The model-serving stack-component kinds a deployment MUST configure before
 # the analysis layer can run: the LLM provider, the embedding service, and the
@@ -141,191 +158,6 @@ REQUIRED_MODEL_COMPONENT_KINDS: tuple[str, ...] = (
     "embedding",
     "nlp_service",
 )
-
-# Returned on every guarded request when the gate is misconfigured (B-2).
-MISCONFIGURED_AUTH_DETAIL = (
-    f"registry API misconfigured: {API_TOKEN_ENV} is unset/empty and "
-    f"{DEV_MODE_ENV}=1 is not set; refusing all guarded requests. "
-    f"Set a bearer token, or set {DEV_MODE_ENV}=1 explicitly for local "
-    "development."
-)
-
-
-def _current_token() -> str | None:
-    raw = os.getenv(API_TOKEN_ENV, "").strip()
-    return raw or None
-
-
-def _dev_mode() -> bool:
-    """Explicit development-mode opt-in (`LEGBA_DEV_MODE=1`).
-
-    Only consulted when `LEGBA_REGISTRY_API_TOKEN` is unset/empty — a
-    configured token is ALWAYS enforced, dev flag or not.
-    """
-    return os.getenv(DEV_MODE_ENV, "").strip() == "1"
-
-
-def _token_matches(presented: str, configured: str) -> bool:
-    """Constant-time bearer comparison (B-2)."""
-    return hmac.compare_digest(
-        presented.encode("utf-8"), configured.encode("utf-8"),
-    )
-
-
-def require_bearer(
-    authorization: str | None = Header(default=None),
-) -> str:
-    """Bearer-token gate for the HTTP endpoints (B-2: fail-closed).
-
-      * `LEGBA_REGISTRY_API_TOKEN` set → require `Authorization: Bearer
-        <token>`; missing header → 401, mismatch → 403 (constant-time
-        compare via `hmac.compare_digest`).
-      * Unset/empty AND `LEGBA_DEV_MODE=1` → development mode: any
-        bearer (and a missing header) accepted.
-      * Unset/empty otherwise → 503 "service misconfigured" on EVERY
-        guarded request. A deploy that forgot the token must not expose
-        an open admin API.
-
-    Returns the supplied principal token (or `"anonymous"` in dev mode) so
-    handlers can stamp it as `actor` on audit-log rows.
-    """
-    configured = _current_token()
-    if configured is None:
-        if not _dev_mode():
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=MISCONFIGURED_AUTH_DETAIL,
-            )
-        if not authorization:
-            return "anonymous"
-        if not authorization.lower().startswith("bearer "):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authorization must be 'Bearer <token>'",
-            )
-        return authorization[7:].strip() or "anonymous"
-    if not authorization:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="missing Authorization: Bearer <token>",
-        )
-    if not authorization.lower().startswith("bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authorization must be 'Bearer <token>'",
-        )
-    presented = authorization[7:].strip()
-    if not _token_matches(presented, configured):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="invalid bearer token",
-        )
-    return presented
-
-
-#: End of the C3 deprecation window for the routes the source-quality ledger
-#: merges (``/source_credibility`` reads + ``/sources/{id}/assurance``). They
-#: KEEP SERVING their original wire shape until then — a 3xx would silently
-#: hand callers a DIFFERENT response body, which is worse than a header they
-#: can see. Removal is a later, deliberate commit, not a side effect of this
-#: one (`docs/SEAMS.md`, the C3 entry).
-DEPRECATION_SUNSET_HTTP_DATE = "Tue, 27 Oct 2026 00:00:00 GMT"
-
-
-def sunset_headers(successor: str) -> Callable[[Response], None]:
-    """A FastAPI dependency that marks a route deprecated, per RFC 8594/9745.
-
-    Stamps ``Deprecation: true``, ``Sunset: <date>`` and a
-    ``Link: <successor>; rel="successor-version"`` on the response. The route
-    keeps serving its original body unchanged — this advertises the window, it
-    does not shorten it. Attach per-route (``dependencies=[Depends(
-    sunset_headers("/api/v1/v3/..."))]``) so a module's WRITE routes, which
-    have no successor, are not swept up with its reads.
-    """
-
-    def _stamp(response: Response) -> None:
-        response.headers["Deprecation"] = "true"
-        response.headers["Sunset"] = DEPRECATION_SUNSET_HTTP_DATE
-        response.headers["Link"] = f'<{successor}>; rel="successor-version"'
-
-    return _stamp
-
-
-def _bearer_from_header(authorization: str | None) -> str | None:
-    """Extract the raw token from an `Authorization: Bearer <token>` header.
-
-    Returns the stripped token, or `None` when the header is absent or not a
-    well-formed `Bearer` credential (the caller then falls back to `?token=`).
-    """
-    if not authorization or not authorization.lower().startswith("bearer "):
-        return None
-    return authorization[7:].strip() or None
-
-
-def _authorize_ws_token(
-    token: str | None,
-    authorization: str | None = None,
-) -> str:
-    """WebSocket auth: the credential may arrive two ways —
-
-      * `?token=` query-string — browsers can't set custom headers on the
-        upgrade request, so the SPA passes the token here.
-      * `Authorization: Bearer <token>` header — injected by the Caddy
-        reverse proxy on the proxied WS upgrade for the canonical
-        deployment (the operator's browser never sees it), so a header
-        bearer also authenticates (ITEM 2.5).
-
-    The query token is preferred when present; otherwise the header bearer
-    is used. Returns the principal or raises HTTPException for the
-    connection handler to convert to a WebSocket close frame.
-
-    Mirrors `require_bearer` exactly (B-2): fail-closed 503 when the token
-    is unconfigured and `LEGBA_DEV_MODE=1` is not set; constant-time
-    comparison when configured."""
-    presented = token or _bearer_from_header(authorization)
-    configured = _current_token()
-    if configured is None:
-        if not _dev_mode():
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=MISCONFIGURED_AUTH_DETAIL,
-            )
-        return presented or "anonymous"
-    if not presented or not _token_matches(presented, configured):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="invalid token",
-        )
-    return presented
-
-
-# ---------------------------------------------------------------------------
-# Dependency bundle
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class RegistryAPIDeps:
-    """Injected at app-construction time; all routes resolve via this."""
-
-    descriptor_registry: DescriptorRegistry
-    stack_registry: StackRegistry
-    vault: CredentialVault
-    dlq: DescriptorDeadLetter
-    audit_logger: AuditLogger
-    vocabulary_cache: VocabularyCache
-    nats_store: Any | None = None  # for WebSocket multiplexing
-    conversion_registry: Any | None = None  # ConversionWebhookRegistry | None
-
-
-def _get_deps(request: Request) -> RegistryAPIDeps:
-    deps = getattr(request.app.state, "registry_deps", None)
-    if deps is None:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="registry api not configured (missing RegistryAPIDeps)",
-        )
-    return deps
 
 
 # ---------------------------------------------------------------------------
@@ -2005,6 +1837,7 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
         websocket: WebSocket,
         token: str | None = Query(default=None),
         authorization: str | None = Header(default=None),
+        sec_websocket_protocol: str | None = Header(default=None),
         filter: str = Query(
             default=">",
             description="NATS subject pattern. Default = all subjects (`>`). "
@@ -2012,8 +1845,16 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
                         "`stack.component.>`, `legba.dlq.>`.",
         ),
     ) -> None:
+        # Credential precedence: `legba.bearer.v1` subprotocol (the browser
+        # path — keeps the token out of the URL, and therefore out of console
+        # warnings and access logs) > Caddy-injected `Authorization` bearer >
+        # the DEPRECATED `?token=` query param, which still works during the
+        # rollout window so a stale SPA build doesn't hard-break, and logs a
+        # warning every time it is used.
         try:
-            principal = _authorize_ws_token(token, authorization)
+            principal = _authorize_ws_token(
+                token, authorization, sec_websocket_protocol,
+            )
         except HTTPException as exc:
             # 503 (gate misconfigured, B-2) maps to 1011 internal-error;
             # auth rejections map to 1008 policy-violation. Close-frame
@@ -2034,9 +1875,21 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
                 reason="NATS store not configured",
             )
             return
-        await websocket.accept()
+        # RFC 6455: when the client OFFERS subprotocols the server must echo
+        # back exactly one of them, or the browser aborts the connection. Echo
+        # the SCHEME NAME only — never the credential half of the offer.
+        negotiated = (
+            WS_BEARER_SUBPROTOCOL
+            if _offers_bearer_subprotocol(sec_websocket_protocol)
+            else None
+        )
+        await websocket.accept(subprotocol=negotiated)
         logger.info(
-            "ws connected principal=%s filter=%s", principal, filter,
+            "ws connected principal=%s filter=%s auth=%s",
+            principal, filter,
+            "subprotocol" if negotiated else (
+                "query_token" if token else "header_bearer"
+            ),
         )
 
         loop = asyncio.get_event_loop()
@@ -2054,10 +1907,25 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
         # TestClient runs each WS handler on its own thread-local loop,
         # so we open a per-connection NATS client here using the same
         # config when the cached one is bound to a different loop.
+        #
+        # THE LOOP IS READ OFF THE STORE, NOT OFF THE CLIENT. This used to ask
+        # `deps_.nats_store.nc._loop`, a private attribute that no supported
+        # nats-py exposes any more — so it read None, the guard below was never
+        # true, and this fallback had been DEAD code while reading as live. The
+        # effect was invisible in production (one loop; the branch is a no-op
+        # there by design) and quietly wrong under TestClient, where every WS
+        # subscription was being made on a connection belonging to a different
+        # loop. That is the actual mechanism behind the shuffled nightly's
+        # `test_websocket_receives_descriptor_registered_event` flake, and it
+        # is why simply flushing after subscribe made things WORSE rather than
+        # better: a flush awaits a PONG future on the connection's own loop, so
+        # cross-loop it does not just fail, it hangs for the full timeout.
+        # `NatsStore` now records its loop at connect() precisely so this
+        # question can be answered instead of guessed.
         nats_for_ws = deps_.nats_store
         local_nats_owner = False
         try:
-            existing_loop = getattr(deps_.nats_store.nc, "_loop", None)
+            existing_loop = getattr(deps_.nats_store, "_loop", None)
             if existing_loop is not None and existing_loop is not loop:
                 fresh = NatsStore(deps_.nats_store.cfg)
                 await fresh.connect()
@@ -2067,6 +1935,23 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
             logger.debug("ws-local nats fallback skipped: %s", exc)
 
         sub = await nats_for_ws.nc.subscribe(filter, cb=_cb)
+        # FLUSH before announcing. `subscribe()` only queues the SUB protocol
+        # line into the client's write buffer — it returns long before the
+        # BROKER has registered the subscription. NATS core delivery is
+        # fire-and-forget, so anything published in that window is not delayed,
+        # it is LOST. The hello frame below is the only readiness signal a
+        # client gets, and without this flush it means "I intend to subscribe"
+        # while every client reasonably reads it as "I am receiving".
+        #
+        # The nightly's shuffled pass is what surfaced it
+        # (test_websocket_receives_descriptor_registered_event: connect, read
+        # hello, publish, receive nothing): under load the round trip lengthens
+        # and the window opens wide enough to swallow the event. The ordered
+        # pass hid it because a quiet host closes the window faster than the
+        # test can publish. Same race for any real subscriber that acts on the
+        # hello frame — a browser subscribing to a descriptor it is about to
+        # register would silently miss its own event.
+        await nats_for_ws.nc.flush()
         heartbeat_task: asyncio.Task | None = None
         try:
             async def _heartbeat() -> None:

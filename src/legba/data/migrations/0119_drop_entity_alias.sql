@@ -1,0 +1,34 @@
+-- SPDX-FileCopyrightText: 2026 Lewis George
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- 0119_drop_entity_alias.sql
+--
+-- DEAD SCHEMA REMOVAL (CODE_CLEANUP_ANALYSIS_2026-08-02, phase 1C).
+--
+-- `entity_alias` was created by 0086_entity_researcher_schema.sql as "the
+-- write-time canonicalization surface" — a real, indexable, provenance-carrying
+-- promotion of the ad-hoc `data->'merged_aliases'` JSON array. Its own header
+-- sentence starts "Today folded surface forms are stashed ad-hoc in the keeper
+-- row's `data->'merged_aliases'`…" and that is still true: the code to write
+-- this table was never built. Three weeks on the table has:
+--
+--   * ZERO rows on the live substrate (verified 2026-08-02);
+--   * ZERO references in `src/` or `scripts/` — no INSERT, no SELECT, no
+--     probe. `grep -rn entity_alias src/ scripts/` returns only this file's
+--     parent migration;
+--   * ZERO descriptor bodies naming it (checked against the descriptor rows
+--     in the database, not just the yaml tree).
+--
+-- The alias surface that IS live remains `entity_profiles.data->'merged_aliases'`
+-- (probed by `entity_resolution.py` / `_entity_resolve.py` via jsonb containment)
+-- plus the `signal_aliases` table. Its sibling from the same migration,
+-- `entity_judgement`, is fully live (`entity_researcher.py`) and is untouched
+-- here — as is `entity_profiles`, which `entity_alias` merely referenced.
+--
+-- REVERSIBILITY: dropping an empty table loses no data. If the E2b write-time
+-- probe is ever built, 0086's DDL block is the specification — re-land it as a
+-- forward migration alongside the code that writes it, which is the order this
+-- table should have arrived in.
+
+-- `idx_entity_alias_norm` and the `entity_profiles` FK go with the table.
+DROP TABLE IF EXISTS public.entity_alias;

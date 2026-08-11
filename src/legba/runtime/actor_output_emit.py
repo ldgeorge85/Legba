@@ -59,16 +59,21 @@ _OUTPUT_KIND_HANDLERS: dict[str, Any] | None = None
 
 
 def _output_kind_handlers() -> dict[str, Any]:
-    """Cached kind→OutputHandler map (discovery is a filesystem walk)."""
+    """Cached kind→OutputHandler map (discovery is a filesystem walk).
+
+    K-3: the old ``except Exception → {}`` turned a broken output package into
+    an empty registry, and the dispatch loop below then ``continue``\\ d past
+    every binding — so a failed import silently stopped ALL exports (alerts,
+    NATS, STIX, webhooks) and left one warning line behind. ``discover_output_kinds``
+    now raises :class:`~legba.data.kind_discovery.KindDiscoveryError` and this
+    caches nothing on failure: the error propagates, and the next call retries
+    rather than pinning an empty map for the life of the process.
+    """
     global _OUTPUT_KIND_HANDLERS
     if _OUTPUT_KIND_HANDLERS is None:
-        try:
-            from ..data.outputs import discover_output_kinds
+        from ..data.outputs import discover_output_kinds
 
-            _OUTPUT_KIND_HANDLERS = discover_output_kinds()
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("dapr_actors.output_kinds.discover_failed err=%s", exc)
-            _OUTPUT_KIND_HANDLERS = {}
+        _OUTPUT_KIND_HANDLERS = discover_output_kinds()
     return _OUTPUT_KIND_HANDLERS
 
 
@@ -174,6 +179,20 @@ async def _emit_output_bindings(
     for binding in bindings:
         kind = getattr(binding, "kind", None)
         handler = handlers.get(kind) if kind else None
+        # K-3: an unresolvable kind used to share one bare ``continue`` with the
+        # entirely normal "this kind has no emit slot" case (substrate,
+        # a2a_skill and mcp_tool are surface-oriented and carry ``emit = None``
+        # by design). The two are now distinguished: a binding naming a kind no
+        # module registers is a dead reference and says so at ERROR, naming the
+        # kind and the kinds that DO exist.
+        if kind and handler is None:
+            logger.error(
+                "dapr_actors.output_emit.unknown_kind kind=%s output_id=%s "
+                "known=%s — the target descriptor binds an output kind no module "
+                "registers; nothing was exported for it",
+                kind, output_id, sorted(handlers),
+            )
+            continue
         emit = getattr(handler, "emit", None) if handler is not None else None
         if emit is None:
             continue
@@ -281,9 +300,17 @@ async def _maybe_escalate_finding(
     # critique payload's ``overall_score = min(faithfulness_score,
     # confidence_ceiling)`` and the read-path ``effective_confidence`` — both
     # keys live on ``verification_block`` (FaithfulnessReport.as_dict).
+    # Q-1: ``overall_score`` is in the tuple, and it is the one that matters. It
+    # is the PUBLISHED number — the raw tally after the T7 evidence ceiling, the
+    # unassessable floor and the provisional ceiling. Capping on
+    # ``faithfulness_score`` alone meant a finding whose claims were never
+    # segmented carried a raw 1.0 into this gate and escalated on its unmodified
+    # LLM-asserted confidence: the one place where "we could not check this" was
+    # silently reading as "this checked out". Kept alongside the other two rather
+    # than replacing them so an older/partial block still caps on what it has.
     faithfulness_score: float | None = None
     if confidence is not None and verification_block is not None:
-        for _cap_key in ("faithfulness_score", "confidence_ceiling"):
+        for _cap_key in ("faithfulness_score", "confidence_ceiling", "overall_score"):
             _cap = verification_block.get(_cap_key)
             if isinstance(_cap, (int, float)) and not isinstance(_cap, bool):
                 confidence = min(confidence, float(_cap))

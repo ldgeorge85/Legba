@@ -149,6 +149,20 @@ method:
     absence in the searched set is not absence in the world. When coverage is
     thin, say so plainly.
 
+    DATE WHAT YOU RETRIEVED. The corpus you search spans YEARS. Documents you
+    pull are marked RETRIEVED and print their own collection and publication
+    dates, in the same [N] numbering as the recent working set — those printed
+    dates are the only thing distinguishing an archive document from this
+    morning's reporting. Take every date you write from the printed dates, not
+    from a date mentioned inside a document's prose (that is a date in the
+    story, not the date of the reporting). When you rest a claim on older
+    material, ATTRIBUTE it in the sentence — "a March 2024 report found …",
+    "as of reporting from November 2023 …" — so a reader can never mistake
+    archive material for a current finding. A deep investigation legitimately
+    reaches back in time; what it may not do is present what WAS true as what
+    IS true. Where your answer turns on the present state and your evidence is
+    older than the working set, say so and lower your confidence.
+
     Produce EXACTLY ONE finding. Respond with STRICT JSON and nothing else — no
     prose before or after, no code fences:
     {

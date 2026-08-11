@@ -434,6 +434,27 @@ else
   run_registrar -m legba.data.migrate --dry-run 2>&1 | sed 's/^/        /' || true
 fi
 
+# (e) COLD ACTIVATION — NOT WIRED IN YET (RUNBOOK §26); run it by hand after this
+#     script finishes:
+#
+#         scripts/deploy_smoke_cold_activation.sh --env-file "${ENV_FILE}"
+#
+#     Checks (a)-(d) all confirm that processes STARTED. None of them proves an
+#     actor can go from cold to a completed run, and that is the exact gap the
+#     2026-08-01 outage fell through: the descriptor-parse bug only bites on the
+#     COLD path, so warm actors kept serving and every check above stayed green
+#     while the fleet could not activate. The full test suite missed it too —
+#     8,500 tests build descriptors in process, none traverse
+#     registry-fetch → parse → activate → run against a live sidecar.
+#
+#     The smoke forces ONE unit on ONE desk through the sidecar and asserts a
+#     fresh analyst_traces row, distinguishing "no trace" (cold-activation
+#     failure) from "failed trace" (activated, run died). Exits nonzero loudly.
+#
+#     Left as a manual step this pass because it WRITES — a real analyst run,
+#     a real finding. Promoting it into VERIFY_FAIL is a deliberate decision
+#     about whether deploy.sh may mutate the substrate, not a wiring detail.
+
 # --- summary -----------------------------------------------------------------
 phase "SUMMARY"
 printf '   project       : %s\n' "${PROJECT}"

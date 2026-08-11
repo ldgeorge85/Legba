@@ -65,7 +65,7 @@ measures **groundedness**: does each claim follow from the evidence it cites?
 *not* one model's verdict — it is a composition of small, individually-checked
 reads:
 
-1. **Eight bounded reasoning units** (`inline_target` LLM analysts). Seven broad
+1. **Nine bounded reasoning units** (`inline_target` LLM analysts). Seven broad
    ones — `leadership_transition`, `energy_security`, `escalation`,
    `narrative_coordination`, `internal_stability`, `military_posture`,
    `economic_coercion` — each fanned out to every **country desk** by a
@@ -429,17 +429,18 @@ Two checks combine:
   live failure class where a model emits `【3】`/`［3］` instead of ASCII `[3]`.)
 - An **LLM judge.** A descriptor that declares `method.llm.verify` and runs with
   `LEGBA_VERIFY_LLM_JUDGE` on has each cited finding scored for faithfulness in
-  `[0,1]` by an LLM judge. **Currently that judge is the SAME core model**
-  (`llm.primary.openai_compat`, gpt-oss-120B) that produced the finding — it is
-  **not** cross-family. This is a deliberate, temporary choice: the earlier
-  cross-family 8B judge (`llm.verify.slm_8b`, "legba-slm", Llama-3.1-8B) proved
-  too weak (harsh + mis-aimed), so the strong reasoning model runs the judging to
-  prove the flow. **Known limitation:** a model grading its own house style shares
-  its blind spots, so the faithfulness signal is weaker than an independent
-  cross-family judge; the deterministic floor and the signed provenance chain
-  still backstop it, and a dedicated reasoning judge is planned. If the judge is
-  unresolved the pass **soft-fails to the deterministic floor** rather than
-  silently passing everything.
+  `[0,1]` by an LLM judge, resolved through the judge's own **repointable
+  route** (`LEGBA_JUDGE_STACK_REF` env > `method.llm.judge` > `.verify` >
+  `.primary`). The shipped descriptor default is the **same core model** that
+  produced the finding (self-hostable — with the known limitation that a model
+  grading its own house style shares its blind spots; the deterministic floor
+  and the signed provenance chain backstop it). The reference deployment sets
+  the env rung, so every judge call runs **cross-family** on a hosted Gemma
+  judge; every critique stamps `judge_llm_ref` and a `judge_pipeline_version`
+  so verdict populations never pool across judges or rule revisions. If the
+  judge is unresolved the pass **soft-fails to the deterministic floor**
+  (stamped `judge_status='deterministic'`, published PROVISIONAL under a
+  ceiling) rather than silently passing everything.
 
 The score is folded, not enforced destructively:
 `effective_confidence = min(confidence, faithfulness_score)` is computed at read
@@ -472,7 +473,9 @@ a gap to paper over.
 faithfulness number with correctness-vs-reference (`unit_correctness_scorer`),
 reported honest-null where unmeasured; plus the exogenous calibration Brier and the
 acute-forecast BSS. A no-skill or insufficient-sample result is **published, not
-hidden**. Today the correctness-vs-reference gold set is tiny (n=1, reported
+hidden**. Today the correctness gold set is small (a first weekly cohort of
+n=8 verdicts feeds the correctness axis; the deterministic reference leg is
+still n=1, reported
 insufficient-sample), and the acute-forecast pilot reports **no proven skill** (a
 degenerate sample; skill withheld) — both surfaced as such.
 
@@ -486,7 +489,7 @@ ambitious legs return *only* as measured, gated experiments:
   **one** measured unit
   (`leadership_transition`) as a `unit_optimizer` descriptor whose every candidate
   carries a **real before/after paired faithfulness delta** measured on the same
-  faithfulness judge (currently the core model, not cross-family; a live run read
+  faithfulness judge (whatever the judge route resolves; a live run read
   parent 0.34 → candidate 0.29, delta −0.05). It stays
   `promotion_gate=human_gated` and can **never** promote on a
   degenerate / absent / non-finite / non-positive delta (`gepa._delta_gates_ok`
@@ -885,7 +888,7 @@ reminder-flood incident (a >4 MB workflow payload orphaning scheduler reminders)
 registers no `run_cadence` reminder and it fires on no tick (SEAMS #30). GEPA **returns** only as the separate, scoped `unit_optimizer`
 descriptor (§3.6) over the single `leadership_transition` unit, whose
 `method.kind: dspy_compile` candidates each carry a real paired faithfulness delta
-on the same faithfulness judge (currently the core model, not cross-family), stay
+on the same faithfulness judge (whatever the judge route resolves), stay
 `human_gated`, and cannot auto-promote on a
 degenerate / absent / non-positive delta.
 
@@ -904,7 +907,7 @@ the Dapr-Workflow client or the in-process fallback). Nothing dials Temporal.io.
 ## 7. Data shape
 
 Substrate schema is built by a single `src/legba/data/migrations/0001_baseline.sql`
-(Postgres) plus the forward chain (`0032`…`0085`, migration head **`0085`**). A cold start from empty volumes
+(Postgres) plus the forward chain (`0032`…`0185`, migration head **`0185`**). A cold start from empty volumes
 applies them in order. (The historical 0001→0031 migration chain was flattened to this
 baseline for the clean-slate release; it remains in git history.)
 
@@ -1229,11 +1232,13 @@ planes are wired, by role:
 - **Core analyst plane** — the self-hosted `gpt-oss-120b`
   (`llm.primary.openai_compat`, $0 to run) drives every production analyst: the
   nine units, the composition tower, and the deterministic-plus-LLM handlers.
-- **Faithfulness verify judge** — currently the **same core `gpt-oss-120b`**
-  (`llm.primary.openai_compat`) scores groundedness on the verify pass (§3.5). It
-  is **not** cross-family — a deliberate, temporary choice after the 8B judge
-  (`llm.verify.slm_8b`, "legba-slm") proved too weak; a dedicated reasoning judge
-  is planned (known limitation: same-model judging shares blind spots).
+- **Faithfulness verify judge** — resolved through its own repointable route
+  (`LEGBA_JUDGE_STACK_REF` env > `method.llm.judge` > `.verify` > `.primary`).
+  The shipped descriptor default is the **same core `gpt-oss-120b`**
+  (self-hostable; same-model judging shares blind spots); the reference
+  deployment repoints every judge call **cross-family** at a hosted Gemma judge
+  (`llm.judge.cerebras_gemma4_31b.openai_compat`, Cerebras) — scores
+  groundedness on the verify pass (§3.5).
 - **Consult plane** — Claude Opus 4.8 backs the `consult_on_demand` /
   `deep_consult` kinds **only** (it is metered/billed, so it is used sparingly).
 

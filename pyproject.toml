@@ -188,3 +188,137 @@ markers = [
     "integration: tests that require external services (Redis, Postgres, Qdrant)",
     "slow: tests that exercise multi-stage substrate paths and shouldn't run in the fast suite",
 ]
+
+# ===========================================================================
+# ruff — the CI-lite LINT RATCHET (R7).
+#
+# THE CONTRACT: this configuration is GREEN on the tree exactly as it stands,
+# and scripts/host_nightly_suite.sh fails loudly the night it stops being
+# green. That is the entire point — it is a ratchet for NEW code, not a
+# cleanup mandate. A `ruff check --fix` sweep under a broader selection would
+# be a five-figure-line diff that collides with every branch held for the
+# panel, so every rule the current tree violates is parked in `ignore` below
+# instead. That list IS the debt ledger: retire entries one family at a time,
+# in their own commits, when someone is actually reading the diff.
+#
+# ADDING a rule is therefore always safe (it fires on nobody). REMOVING an
+# ignore is the deliberate act that costs a cleanup commit.
+# ===========================================================================
+[tool.ruff]
+target-version = "py311"   # tracks requires-python = ">=3.11"
+# Informational only — E501 (line-too-long) is NOT selected; the tree carries
+# ~2,600 long lines and reflowing them is exactly the diff this config exists
+# to avoid. Set here so adopting E501 later is a one-line config flip.
+line-length = 88
+
+[tool.ruff.lint]
+# Families chosen for SIGNAL over style: things that are wrong at runtime or
+# wrong about async, not things that are merely unfashionable. Deliberately
+# absent:
+#   I    (isort)        — 580 unsorted-import hits; a reorder touches every file.
+#   UP   (pyupgrade)    — 1,013 UP017 alone; pure churn against held branches.
+#   TID  (tidy-imports) — 1,055 TID252: relative imports are this codebase's
+#                         house style, not a defect.
+#   S    (bandit)       — 145 S110 try-except-pass; needs a triage pass of its
+#                         own before it can be a gate.
+#   RUF100 (unused noqa)— 392 hits, all downstream of the families above.
+select = [
+    "E4",     # pycodestyle: import placement/formatting (ruff default set)
+    "E7",     # pycodestyle: statement-level errors      (ruff default set)
+    "E9",     # pycodestyle: syntax / IO errors          (ruff default set)
+    "F",      # pyflakes — the core correctness family
+    "A",      # builtin shadowing
+    "ASYNC",  # blocking calls inside async def — this codebase is async top to bottom
+    "B",      # bugbear — the mutable-default / loop-closure bug classes
+    "C4",     # comprehension misuse
+    "EXE",    # shebang/executable-bit mismatches (scripts/ ships host cron entrypoints)
+    "G",      # logging-format defects
+    "INT",    # gettext misuse
+    "ISC",    # implicit string concatenation (the accidental-missing-comma bug)
+    "LOG",    # stdlib logging misuse
+    "PIE",    # miscellaneous dead constructs
+    "PLE",    # pylint ERRORS only — never the R/C/W opinion families
+    "RET",    # return-path defects
+    "SIM",    # simplifications that usually indicate a logic slip
+    "SLOT",   # __slots__ correctness
+    "T10",    # a `breakpoint()` left in the tree
+    "YTT",    # sys.version comparisons that break on 3.10+
+]
+
+# The debt ledger. Every code here fires on the tree TODAY; the count is from
+# the 2026-08-04 measurement over the whole repo. Nothing below is a statement
+# that the rule is wrong — only that turning it on today would fail the gate
+# on pre-existing code.
+ignore = [
+    # --- shadowing / naming -------------------------------------------------
+    "A002",      # 27  builtin-argument-shadowing (`input`, `id`, `filter` params)
+    # --- async: real findings, but a triage pass of their own ---------------
+    "ASYNC109",  # 21  async-function-with-timeout
+    "ASYNC110",  # 1   async-busy-wait
+    "ASYNC210",  # 1   blocking-http-call-in-async-function
+    "ASYNC230",  # 11  blocking-open-call-in-async-function
+    "ASYNC240",  # 18  blocking-path-method-in-async-function
+    "ASYNC251",  # 2   blocking-sleep-in-async-function
+    # --- bugbear ------------------------------------------------------------
+    "B007",      # 10  unused-loop-control-variable
+    "B008",      # 78  function-call-in-default-argument (FastAPI Depends idiom)
+    "B009",      # 27  get-attr-with-constant
+    "B010",      # 4   set-attr-with-constant
+    "B011",      # 1   assert-false
+    "B017",      # 36  assert-raises-exception (broad pytest.raises in tests)
+    "B023",      # 5   function-uses-loop-variable
+    "B039",      # 1   mutable-contextvar-default
+    "B904",      # 23  raise-without-from-inside-except
+    "B905",      # 32  zip-without-explicit-strict
+    # --- comprehensions -----------------------------------------------------
+    "C401", "C402", "C405", "C408", "C410", "C413", "C416", "C420",  # 56 total
+    # --- pycodestyle statement-level ----------------------------------------
+    "E402",      # 67  module-import-not-at-top-of-file (sys.path bootstraps in scripts/)
+    "E702",      # 6   multiple-statements-on-one-line-semicolon
+    "E703",      # 1   useless-semicolon
+    "E731",      # 1   lambda-assignment
+    "E741",      # 10  ambiguous-variable-name
+    # --- executables --------------------------------------------------------
+    "EXE001",    # 49  shebang-not-executable (bringup scripts run via `python -m`)
+    # --- pyflakes: the unused-* family is the 227k-line diff we refuse -------
+    "F401",      # 379 unused-import
+    "F541",      # 16  f-string-missing-placeholders
+    "F811",      # 28  redefined-while-unused
+    "F841",      # 34  unused-variable
+    #   NOTE: F821 (undefined-name) stays SELECTED. It found three genuine
+    #   latent NameErrors on 2026-08-04 (dapr_host `Mapping`,
+    #   bringup_register_analysts `Any`, test_spike_integration `uuid4`), all
+    #   fixed in the same commit as this config. Its only remaining hits are
+    #   the deliberately-retired tests handled in per-file-ignores below.
+    # --- logging ------------------------------------------------------------
+    "G004",      # 11  logging-f-string
+    # --- implicit string concatenation --------------------------------------
+    "ISC002",    # 2   multi-line-implicit-string-concatenation
+    "ISC004",    # 115 implicit-string-concatenation-in-collection-literal
+    # --- misc dead constructs -----------------------------------------------
+    "PIE808",    # 4   unnecessary-range-start
+    "PIE810",    # 13  multiple-starts-ends-with
+    # --- pylint errors ------------------------------------------------------
+    "PLE0605",   # 1   invalid-all-format: registry/__init__.py builds __all__ as
+                 #     `[...] + _L110_EXPORTS + ...` so optional subsystems can
+                 #     drop out of the export list. Valid Python, deliberate.
+    "PLE2502",   # 1   bidirectional-unicode  \
+    "PLE2515",   # 6   zero-width-space        > BOTH are the DATA UNDER TEST:
+                 #     _entity_canon / fact_extractor strip these characters out
+                 #     of entity names, so the literal codepoint has to appear in
+                 #     the source. Escaping them would only hide the fixture.
+    # --- return paths -------------------------------------------------------
+    "RET501", "RET504", "RET505", "RET506",  # 29 total
+    # --- simplifications ----------------------------------------------------
+    "SIM102", "SIM103", "SIM105", "SIM108", "SIM110", "SIM114", "SIM115",
+    "SIM117", "SIM118", "SIM222", "SIM300", "SIM905", "SIM910",  # 263 total
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The remaining F821s. These tests are decorated `@pytest.mark.skip` with a
+# retirement reason: they call `write_target_signal` / `SignalPayload`, which
+# were deleted with the pre-pivot target-owned signal model (migration 0024).
+# The bodies are kept as the record of what the pivot dropped. Silencing the
+# rule here — rather than tree-wide — keeps F821 live everywhere else, which
+# is where it earns its place.
+"tests/data_pkg/test_writes.py" = ["F821"]

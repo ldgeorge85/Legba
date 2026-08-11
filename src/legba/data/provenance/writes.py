@@ -52,6 +52,7 @@ from ._core import (
 )
 from ..vocabulary import normalize_predicate
 from .dlq import OutputDeadLetterEntry, route_to_output_dead_letter
+from .entity_edge_writes import write_entity_edge_for_nexus
 from .kinds import (
     KIND_REGISTRY,
     OutputKind,
@@ -1754,6 +1755,17 @@ async def _insert_nexus(
     Before the insert we run ``supersede_prior_nexuses`` so a polarity/label
     CHANGE for an existing typed triple closes the prior open row(s) and opens
     this one. A same-value re-assert closes nothing (the upsert path owns it).
+
+    K-G1 DUAL-WRITE: this is the ONLY ``INSERT INTO nexuses`` in the codebase,
+    so it is also the only place the id-keyed `entity_edges` mirror has to be
+    written. Every producer — the reifier, proposed_edge_governance, all four
+    seed adapters, manual_batch, graph_mining's proxy chains, the seed_import
+    CLI — funnels through here. Both writes run in ONE transaction opened below:
+    they are in the same Postgres, so atomicity is free, and the house's
+    "never let the graph write fail the fact write" precedent is a cross-store
+    rule that becomes the silent-divergence anti-pattern within a single store.
+    An endpoint that will not resolve is NOT a failure — it is parked and
+    counted, and this nexus write proceeds exactly as before.
     """
     p = payload                                          # type: ignore[assignment]
     data_payload = getattr(p, "data", {}) or {}
@@ -1786,19 +1798,50 @@ async def _insert_nexus(
     # the supersession path stays inert (0 superseded). _canonical_rel_type
     # collapses every separator surface first, so all variants fold to one key.
     rel_type = _canonical_rel_type(getattr(p, "rel_type"))
-    await supersede_prior_nexuses(
-        conn,
-        subject=getattr(p, "subject"),
-        intermediary=intermediary,
-        object_=getattr(p, "object"),
-        rel_type=rel_type,
-        polarity=polarity,
-        label=label,
-        new_nexus_id=row_id,
-    )
     effective_source_type = source_type or getattr(p, "source_type", "agent")
-    await conn.execute(
-        """
+
+    # K-G1 — ONE transaction over the id-keyed mirror and the legacy row. The
+    # edge goes first (an unresolvable endpoint is settled before anything
+    # lands); a genuine DB error on either rolls BOTH back and raises.
+    async with conn.transaction():
+        await write_entity_edge_for_nexus(
+            conn,
+            edge_id=uuid4(),
+            subject=getattr(p, "subject"),
+            object_=getattr(p, "object"),
+            intermediary=intermediary,
+            rel_type=rel_type,
+            polarity=polarity,
+            intent=getattr(p, "intent", "") or "",
+            channel=getattr(p, "channel", "direct") or "direct",
+            confidence=float(getattr(p, "confidence", 1.0)),
+            valid_from=getattr(p, "valid_from", None),
+            valid_until=getattr(p, "valid_until", None),
+            produced_at=produced_at,
+            source_signal_ids=nexus_source_signal_ids,
+            derived_from=lineage_union,
+            data=data_payload,
+            source_type=effective_source_type,
+            seed_batch_id=seed_batch_id,
+            analyst_id=prov.analyst_id,
+            analyst_version=prov.analyst_version,
+            run_id=prov.run_id,
+            target_id=prov.target_id,
+            target_version=prov.target_version,
+            nexus_id=row_id,
+        )
+        await supersede_prior_nexuses(
+            conn,
+            subject=getattr(p, "subject"),
+            intermediary=intermediary,
+            object_=getattr(p, "object"),
+            rel_type=rel_type,
+            polarity=polarity,
+            label=label,
+            new_nexus_id=row_id,
+        )
+        await conn.execute(
+            """
         INSERT INTO nexuses (
             id, subject, intermediary, object, rel_type, label, polarity,
             intent, channel, confidence, valid_from, valid_until,
@@ -1834,31 +1877,31 @@ async def _insert_nexus(
             valid_until       = COALESCE(EXCLUDED.valid_until, nexuses.valid_until),
             updated_at        = now()
         """,
-        row_id,
-        getattr(p, "subject"),
-        intermediary,
-        getattr(p, "object"),
-        rel_type,
-        label,
-        polarity,
-        getattr(p, "intent", "") or "",
-        getattr(p, "channel", "direct") or "direct",
-        float(getattr(p, "confidence", 1.0)),
-        getattr(p, "valid_from", None),
-        getattr(p, "valid_until", None),
-        lineage_union,
-        nexus_source_signal_ids,
-        json.dumps(data_payload, default=_json_default),
-        prov.target_id,
-        prov.target_version,
-        prov.analyst_id,
-        prov.analyst_version,
-        produced_at,
-        effective_schema_uri,
-        prov.run_id,
-        effective_source_type,
-        seed_batch_id,
-    )
+            row_id,
+            getattr(p, "subject"),
+            intermediary,
+            getattr(p, "object"),
+            rel_type,
+            label,
+            polarity,
+            getattr(p, "intent", "") or "",
+            getattr(p, "channel", "direct") or "direct",
+            float(getattr(p, "confidence", 1.0)),
+            getattr(p, "valid_from", None),
+            getattr(p, "valid_until", None),
+            lineage_union,
+            nexus_source_signal_ids,
+            json.dumps(data_payload, default=_json_default),
+            prov.target_id,
+            prov.target_version,
+            prov.analyst_id,
+            prov.analyst_version,
+            produced_at,
+            effective_schema_uri,
+            prov.run_id,
+            effective_source_type,
+            seed_batch_id,
+        )
 
 
 # ---------------------------------------------------------------------------

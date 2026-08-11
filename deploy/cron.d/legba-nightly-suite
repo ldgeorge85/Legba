@@ -1,0 +1,45 @@
+# Legba nightly CI-lite suite (R7). Runs ruff + the full pytest suite in file
+# order + the full suite again under a logged random seed, writes per-run logs
+# to /var/log/legba/nightly/<UTC-timestamp>/ (rotated, 14 runs kept), and pages
+# the operator over ntfy (web UI) when a failure is NOT on the script's
+# known-environmental allowlist. Docs: docs/RUNBOOK.md 24.4.
+#
+# INSTALL (operator, one step) -- AFTER this branch is merged into the main
+# checkout. The cron line below points at the main checkout's copy of
+# host_nightly_suite.sh, and both that script and the `--lint` mode it calls in
+# run_tests_in_container.sh land with this same branch. Installing the cron
+# file first gives a nightly that silently does nothing.
+#   cp /usr/local/deployments/active/legba/deploy/cron.d/legba-nightly-suite \
+#      /etc/cron.d/legba-nightly-suite
+#   chmod 0644 /etc/cron.d/legba-nightly-suite
+#
+# Disable during maintenance:
+#   touch /etc/legba-nightly-suite.disabled     (this job only)
+#   touch /etc/legba-watchdog.disabled          (the whole watchdog family)
+#
+# Verify it is actually running:
+#   ls -l /var/log/legba/nightly/latest
+#   grep VERDICT /var/log/legba/nightly/latest/summary.txt
+# Run it by hand exactly as cron does:
+#   /usr/local/deployments/active/legba/scripts/host_nightly_suite.sh
+#
+# The path below is ABSOLUTE and so is every path inside the script. A relative
+# path here is how scripts/loop_healthcheck.sh failed 7,834 out of 7,834 runs
+# over 54 days without executing one line of its body: cron runs from $HOME.
+#
+# 03:00 is HOST-LOCAL (PDT), deliberately, and this is the one Legba schedule
+# where that is the right unit: the point is "the small hours, after the day's
+# analyst cadence has drained and before the operator reads alerts", which is a
+# wall-clock intent, not a UTC one. Anything that needs an absolute UTC instant
+# must NOT be expressed here -- see the standing note that host cron and bare
+# `date -d` are PDT.
+#
+# Measured 2026-08-04: ~16 min per pass over 10,337 tests, so all three phases
+# land inside 40 minutes. The script still takes /var/lock/legba-nightly-suite.lock
+# and exits quietly if a previous night is somehow still running -- the passes
+# share the legba_pivot_test database and would corrupt each other's fixtures.
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+0 3 * * * root /usr/local/deployments/active/legba/scripts/host_nightly_suite.sh >> /var/log/legba_nightly_suite.log 2>&1

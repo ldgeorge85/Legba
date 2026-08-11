@@ -21,6 +21,12 @@ DB selection (env, both forms honored by PostgresConfig.from_env):
   * ``LEGBA_DATA_PG_DB`` / ``POSTGRES_DB``       — default ``legba`` upstream;
     bring-up scripts default it to ``legba_pivot_test`` if unset.
   * ``LEGBA_DATA_PG_HOST`` / ``LEGBA_DATA_PG_PORT`` / ``..._USER`` / ``..._PASSWORD``
+
+THE OTHER TRANSPORT: the bring-up scripts that POST to the registry SERVER
+rather than the database share :mod:`_bringup_http` instead. Keep them apart —
+importing this module sets the ``LEGBA_DATA_PG_DB`` default below at import
+time, and a REST-only operator tool must not silently acquire a database
+selection it never asked for.
 """
 from __future__ import annotations
 

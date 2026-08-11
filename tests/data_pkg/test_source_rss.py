@@ -523,6 +523,91 @@ async def test_malformed_feed_returns_empty_and_degraded():
 
 
 # ---------------------------------------------------------------------------
+# The SERVE-NOTHING class — HTTP 200 carrying a document that is not a feed.
+#
+# Measured live on source.stategov.press_releases (2026-08-05): state.gov
+# answered every request to its press-release feed with 200 + text/html + a
+# 659KB AWS S3 "Technical Difficulties" page. feedparser scrapes an HTML page's
+# <title>/<meta> into `.feed`, so the pre-existing "bozo + no entries + no feed
+# metadata" guard did NOT fire — the poll was recorded HEALTHY with zero
+# entries. 33 of 33 polls logged "empty", zero logged errors, and the source had
+# never produced one signal row in its life, which read to the gauge exactly
+# like a publisher with nothing to say.
+# ---------------------------------------------------------------------------
+
+# An HTML error page, in the shape origins actually serve one.
+HTML_ERROR_PAGE = (
+    "<!DOCTYPE html><html><head><title>Technical Difficulties</title>"
+    "<meta name='robots' content='noindex'></head>"
+    "<body><h1>We are experiencing technical difficulties.</h1></body></html>"
+)
+
+# A VALID feed that happens to carry no items — a genuinely quiet publisher.
+# This MUST stay healthy; it is the false positive the fix must not create.
+EMPTY_BUT_VALID_FEED = (
+    "<?xml version='1.0' encoding='UTF-8'?>"
+    "<rss version='2.0'><channel><title>Quiet Desk</title>"
+    "<link>https://example.com/</link>"
+    "<description>Nothing new today</description></channel></rss>"
+)
+
+
+@pytest.mark.asyncio
+async def test_html_error_page_with_200_is_a_failure_not_an_empty_poll():
+    """An origin serving an error page must not read as a quiet publisher."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=HTML_ERROR_PAGE,
+            headers={"Content-Type": "text/html; charset=utf-8"},
+            request=req,
+        )
+
+    state = InMemoryStateStore()
+    ctx = _make_ctx(state)
+    rss = _make_handler(handler)
+
+    signals = await _collect(rss.pull(ctx))
+    await rss.aclose()
+
+    assert signals == []
+    health = state.snapshot()[_RSS_HEALTH_KEY]
+    assert health["state"] == "degraded", (
+        "a 200 carrying HTML is a broken origin, not a healthy empty poll"
+    )
+    # The content-type is what makes this diagnosable without refetching by hand.
+    assert "text/html" in (health["last_error"] or "")
+    assert health["detail"]["content_type"].startswith("text/html")
+
+
+@pytest.mark.asyncio
+async def test_valid_feed_with_no_items_stays_healthy():
+    """THE FALSE POSITIVE GUARD. A well-formed feed with zero entries is a
+    publisher being quiet, and must keep reading as healthy — otherwise the fix
+    above would page for five of the seven sources this pass examined."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=EMPTY_BUT_VALID_FEED,
+            headers={"Content-Type": "application/rss+xml"},
+            request=req,
+        )
+
+    state = InMemoryStateStore()
+    ctx = _make_ctx(state)
+    rss = _make_handler(handler)
+
+    signals = await _collect(rss.pull(ctx))
+    await rss.aclose()
+
+    assert signals == []
+    health = state.snapshot()[_RSS_HEALTH_KEY]
+    assert health["state"] == "healthy", (
+        "a valid feed with no items is a quiet publisher, not a fault"
+    )
+
+
+# ---------------------------------------------------------------------------
 # 4xx / 5xx
 # ---------------------------------------------------------------------------
 

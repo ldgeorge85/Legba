@@ -97,10 +97,11 @@ spot to a recovered source.
 | **Proposed edges** | `proposed_edges` (0001) | `entity_resolution` (co-occurrence) | **mutate-in-place** (status + confidence accrual; no version chain) |
 | **Analyst outputs** | `analyst_outputs` (0011) | `write_analyst_output` | **append-only** (kind-routed across 12 `OutputKind`s incl. `finding` / `meta_finding` / `scorecard`; validation fail → DLQ) |
 | **Scorecard** | `analyst_outputs` (kind=`scorecard`) | `scorecard_producer` (deterministic META, daily, pure SQL) | **append-only** — ONE banded row per active **g20/watch-tagged desk** (19 G20 + 13 watch = 32) over already-verified claims in a **14-day band window**; every band names its verified-claim basis id; a dimension with no qualifying verified claim reads `insufficient-evidence` (never fabricated) |
-| **Acute forecasts** (pilot) | `acute_forecasts` (0047) | `forecast_scoreboard` (deterministic META, weekly) | **append** (idempotent weekly issue) + **resolution mutate-in-place** (graded EXOGENOUSLY when the forward window closes). ISOLATED from the findings feed; surfaced only on the calibration scoreboard; reports NO proven skill today (honest — a degenerate p-vector abstains, zero rows) |
-| **Unit gold set** | `unit_reference_labels` (0057) | the labels API (`registry/labels_api.py`) | **append-only** — one `(unit, target)` gold answer grounded to `canonical_source_ids`; the per-unit correctness scorer joins live unit output against it. Tiny today (n≈1 → correctness reports insufficient-sample) |
+| **Acute forecasts** (pilot) | `acute_forecasts` (0047) | `forecast_scoreboard` (deterministic META, weekly) | **append** (idempotent weekly issue) + **resolution mutate-in-place** (graded EXOGENOUSLY when the forward window closes — `resolved_by='forecast_acute_exogenous'`; a pre-clamp-degenerate window is VOIDED, `resolved_by='voided:pre_clamp_degenerate'`, kept and counted but never scored). ISOLATED from the findings feed; surfaced only on the calibration scoreboard; reports NO proven skill today (honest — a degenerate p-vector abstains at issue, zero rows) |
+| **Unit gold set** | `unit_reference_labels` (0057) + `correctness_labels` / `goldset_week_samples` (0096) | the labels API (`registry/labels_api.py`) + the weekly gold-set worksheet | **append-only.** Since 2026-08-03 the correctness axis is fed by the weekly gold-set verdicts (`correctness_labels`, via the shared `correctness_axis` module — first labeled cohort n=8); the deterministic `unit_reference_labels` reference leg stays tiny (n≈1 → reported insufficient-sample, honestly unmeasured) |
 | **Hypotheses** | `hypotheses` (0004, ACH) | `competing_hypotheses` (TRACE_ONLY) | **append** rows + **status transitions mutate-in-place** |
 | **Situations** | `situations` (0020; 0040/0042 first-class) | `situation_clustering` materializes (atomic upsert on `(situation_signature, analyst_id)`); `thematic_proposal` proposes uncovered hot frames | **temporal-frame** — `valid_from`/`valid_until`/`superseded_by` (open while active/dormant, `valid_until` stamped on close); `target_id` populated. Persistent FRAMES + grounding source + the **events substitute** (no `events` table — events = signals + `get_timeline`; situations = the frames) |
+| **Situation events** (trajectory ledger) | `situation_events` (0184) | `situation_tracker` (the ONE ledger writer) | **append-only, schema-enforced** (DELETE and UPDATE both barred by trigger) — one row per movement: `delta ∈ escalates \| de_escalates \| broadens \| unchanged_checkpoint` with a `state_from`/`state_to` trajectory axis (owned by the tracker, deliberately not a second writer on `situations.status`); a delta claim without new evidence is unrepresentable (`CHECK (delta='unchanged_checkpoint' OR derived_from <> '{}')`), and `occurred_at` is evidence time, not run time. Activated live 2026-08-09 |
 | **Analyst traces** | `analyst_traces` (0013) | `RuntimeReceiptChain.record` after outputs | **append-only**, SHA-256 hash-chained (**chain-consistent, single-node** receipts); one row per run (incl. TRACE_ONLY/failure); per-analyst run timing is surfaced read-only by `GET /api/v1/v3/eval/analyst_runtime` (run count, avg/max wall-clock seconds, last run, non-success) |
 | **Analyst critiques** | `analyst_critiques` | the eval-loop critic (CRITIQUE kind) **+** the mandatory faithfulness-verify pass (`title LIKE 'Faithfulness verify%'`) | **append-only** — one per critic run; the verify verdict is folded at read time into `effective_confidence = min(confidence, faithfulness_score)` (a low score demotes, never hard-deletes) |
 | **Journal entries** (off-chain) | `journal_entries` (0048) | the `journal_assessor` META analyst kind via `write_analyst_output` (kind=`journal`) — **NOT** `analyst_outputs` | `entry` rows **append-only**; `consolidation` rows **supersession-versioned** (`valid_from`/`valid_until`/`superseded_by`, `supersede_prior_consolidation` closes the prior open consolidation; partial-unique index = **at most one open consolidation**). **Always-empty `derived_from`**; citations live only in `claims`/`cited_substrate_refs`; `honesty_flags` forced deterministically from substrate metrics. OFF the fact/finding/nexus chain |
@@ -116,6 +117,7 @@ spot to a recovered source.
 | **Bearing edges** | `bearing_edges` (0107) | `claim_watch` (`signal → hypothesis`) + the corpus researcher's answer-link (`finding → hypothesis`) | **append-only** dated typed pointers (`ON CONFLICT DO NOTHING`). A bearing edge is *not* lineage: it says "this later thing bears on that earlier question", and it never mutates the question it points at |
 | **Collection requirements** | `collection_requirements` (0113) | `collection_gap` | **append (idempotent on `natural_key`) + disposition mutate-in-place** — content columns are write-once; the route may only move `status`/`reviewed_by`/`reviewed_at`/`disposition_note` |
 | **Retention config** | `retention_policies` (0109) | operator via `/v3/retention-policies` PATCH (or SQL) | **mutate-in-place config**, read by the shared sweep engine. Both seeded policies ship `ttl_days = 0` = **sweep disabled**. The route may only move `ttl_days`/`keep_classes`/`batch_size`/`enabled`/`description` — `policy_name`/`table_name`/`env_fallback_var` are the code-side pairing to a Python adapter and are never writable through it |
+| **Corpus tombstones** | `corpus_tombstones` (0175) | every `signals`-deletion site, in the SAME transaction as its DELETE (`_retention_sweep._purge_signals`, `collapse_intrasource_dupes`, `seed_corpus_orphan_tombstones`) | **append + drain-stamp**. The OpenSearch corpus's delete QUEUE: `doc_id` IS the deleted `signals.id` IS the OpenSearch `_id`, so no mapping is needed. Drained by the `corpus_retention` sweep, which RE-VERIFIES the row is really gone before deleting (a stale tombstone can never destroy a live doc). Rows are never removed — `purged_at` keeps every dropped id queryable, which is the audit trail the platform lacked when 41.5% of the corpus silently orphaned |
 | **Outputs / emit** | `analyst_outputs` (+ `alert_sink_deliveries`); webhook/STIX/A2A/MCP/NATS sinks | `outputs/*.py` emit | substrate = **append-only**; emit = **ephemeral / side-table** |
 | **DLQ** | `output_dead_letter` (0007) | `route_to_output_dead_letter` | append + operator-resolution mutate |
 
@@ -154,11 +156,12 @@ region-frame targets and the thematic `escalation_composition`.)
 
 ### What does analysis read and write?
 **Reads depend on the analyst's altitude.** A first-order reasoning analyst —
-the eight bounded reasoning UNITS — seven broad ones (`leadership_transition`, `energy_security`,
+the nine bounded reasoning UNITS — seven broad ones (`leadership_transition`, `energy_security`,
 `escalation`, `narrative_coordination`, `internal_stability`, `military_posture`,
 `economic_coercion`), fanned out per g20/watch desk, plus `proliferation_watch`
 (narrow: tag-scoped to the ~8 nuclear-relevant desks, not the full g20/watch
-roster) — and the
+roster) and `disruption_status` (tag-scoped off the country plane entirely, to
+the thematic `supply_chain` lane/flow desks) — and the
 generic `inline_target` — reads a scope-filtered signal slice (24h default; the
 units widen it to a **72h** raw-signal window) + open `facts` / `nexuses` /
 `hypotheses` + a Tier-1 grounding preamble of **accumulated** substrate
@@ -200,13 +203,15 @@ composition) draws a **mandatory faithfulness-verify pass** before it is trusted
 downstream. The pass measures **groundedness, not truth** — does each cited
 clause actually follow from the signal (or sub-claim) it cites? — and scores the
 finding in `[0,1]`. It is the union of two checks: an **always-on deterministic
-citation-presence floor** and a **flag-gated LLM judge** — currently the same core
-reasoning model (`llm.primary.openai_compat`, gpt-oss-120B) that wrote the finding,
-**not** cross-family (a deliberate, temporary choice after the 8B
-`llm.verify.slm_8b` / "legba-slm" judge proved too weak; known limitation —
-same-model judging shares blind spots, so a dedicated reasoning judge is planned);
-gated by `LEGBA_VERIFY_LLM_JUDGE`, soft-failing to the floor if the component is
-unresolved). The verdict is **persisted as an `analyst_critiques` row**, and at
+citation-presence floor** and a **flag-gated LLM judge** resolved through its
+own repointable route (`LEGBA_JUDGE_STACK_REF` env > `method.llm.judge` >
+`.verify` > `.primary` — descriptor default same-model, the reference
+deployment cross-family on a hosted Gemma judge; gated by
+`LEGBA_VERIFY_LLM_JUDGE`, soft-failing to the floor — stamped
+`judge_status='deterministic'`, published PROVISIONAL under a ceiling — if the
+component is unresolved). Every critique row stamps `judge_llm_ref` and a
+`judge_pipeline_version` (`2026-08-10/1` today) so verdict populations from
+different judges or rule revisions never pool. The verdict is **persisted as an `analyst_critiques` row**, and at
 read time the finding↔critique gate folds `effective_confidence =
 min(confidence, faithfulness_score)`. A low score **demotes** a finding into a
 visible low-confidence tier and excludes it from composition/scorecard — it is
@@ -271,7 +276,7 @@ a **first-class, derived, recomputable** state — without ever letting a machin
 overwrite the disputed facts. The substrate change is small and almost entirely
 *additive*; the behaviour is gated OFF by default.
 
-> **Migration head — now `0116`.** (`0095`, `0100`, `0110` and `0111` are
+> **Migration head — now `0185`.** (`0095`, `0100`, `0110` and `0111` are
 > unused: `0095`/`0100` were skipped in the release wave, and `0110`/`0111`
 > were reserved for the C3 source-quality ledger, which landed at `0115`
 > after `0112`–`0114` took the intervening slots — and needed only one of the
@@ -305,6 +310,23 @@ overwrite the disputed facts. The substrate change is small and almost entirely
 > prompt version, and the core-plane `bearing_confirm` verdict + reason). The
 > default is what `claim_watch` writes with the gate OFF, which is the shipped
 > state, so the column changes no existing row and no existing behaviour.
+> The 2026-08 arc carries the head on `0117 → 0185` (sparse numbering — later
+> slots are deliberately spaced): data-hygiene soft-closes and retirements
+> (`0117`–`0121` — prefix-paired relational facts, telegram widget chrome,
+> the never-written `entity_alias` table, poisoned journal rows, the GDELT
+> doc-api source), `0122` a `judge_pipeline_version` stamp on band-calibration
+> claims, `0130` a sub-floor embedding quarantine, `0140`–`0142` signal
+> freshness/geo backfills, **`0143`–`0145` the `entity_edges` graph substrate**
+> (one typed edge table backfilled from nexuses and promoted edges, later from
+> facts at `0180`), `0150`/`0160`/`0165` fixture drops + proposed-edge
+> retirements + a person-phonetic index, `0170` the correctness-axis
+> promotion (comment-only), **`0175` corpus tombstones** (the OpenSearch
+> delete path), `0176` the capital-metonymy fact soft-close, `0180`–`0182`
+> entity-graph backfills + parked-endpoint adjudication, **`0184` the
+> `situation_events` trajectory ledger**, and **`0185` the merge-keeper
+> repoint** (proposed edges folded onto merge keepers — the twice-deferred
+> `0183` replaced by a set-based mover-closure computation, proven on a full
+> copy of live data before the train applied it).
 >
 > One in-tree wart worth knowing before you read the SQL: **`0108`'s internal
 > comments all say "0106"**. It was renumbered `0106 → 0108` when a parallel
@@ -424,7 +446,7 @@ contention sidecar above, they are views *over* the chain, not primary data.
 
 | Mig | Table(s) / change | Write semantics |
 |---|---|---|
-| **0091** | `alert_trigger_watermarks` — PK `(trigger_class, watermark_key)`, `state jsonb`, `fired_at` | **mutate-in-place upsert** — durable "this transition already fired" state for `alert_trigger_scan` (five trigger classes incl. `watchlist_hit`) and `geo_convergence_scan`'s formation/dissolution edges. First-ever scan per class **seeds silently**; a watermark advances **only after the alert row lands**, so a rejected write retries next scan and a transition never re-fires |
+| **0091** | `alert_trigger_watermarks` — PK `(trigger_class, watermark_key)`, `state jsonb`, `fired_at` | **mutate-in-place upsert** — durable "this transition already fired" state for `alert_trigger_scan` (seven trigger classes today — incl. `watchlist_hit`, the folded-in `geo_convergence`, and the production gauge's `production_deficit`) plus `claim_watch`'s cursor row. First-ever scan per class **seeds silently**; a watermark advances **only after the alert row lands**, so a rejected write retries next scan and a transition never re-fires |
 | **0092** | `source_poll_outcomes` + `newest_entry_ts` column | recorded per parsed HTTP-200 **before** the since-filter (26h future-skew clamp; 304 carry-forward) — the quiet-vs-cursor-fault discriminator (`ACQUISITION.md` §1.1.1) |
 | **0093** | `band_calibration_claims` — one resolvable claim per scorecard band **transition**, UNIQUE `(desk, dimension, scorecard_row_id)`; per-horizon (14/28-day) outcome columns; **no probability column by design** (bands are not probabilities — no Brier exists or can). Plus `band_calibration_scan_state` | claims **append + never-overwrite** (`INSERT … DO NOTHING`); each horizon's outcome (`held` / `worsened` / `improved` / `reverted` / `insufficient` / `unresolvable`) is stamped once at resolution |
 | **0094** | `source_ratings` — multi-rater assurance ratings; `visibility_class ∈ public\|private` run as **concurrent currents** via the partial unique `(source_id, rater, visibility_class) WHERE superseded_by IS NULL`; nullable Admiralty `A–F` × `1–6`; typed `rubric jsonb`; deferrable self-FK supersession. Plus `source_dossiers` (one current cited dossier per source, same supersession pattern) | **supersession-versioned** (append the new current, stamp `superseded_by` on the prior). The schema headers state the standing rule: **grades never touch the faithfulness score** |
@@ -469,8 +491,8 @@ instead of four separately-grown ones.
 | Mig | Table(s) / change | Write semantics |
 |---|---|---|
 | **0106** | `output_consumption` — the **forward** consumption index. PK `(consumer_id, consumed_id, context)`, plus `consumer_kind`, `consumed_at`; a second index `(consumed_id, consumed_at DESC)` is the forward-walk direction. **No FK on purpose** (consumers span `analyst_outputs` *and* `journal_entries`) | **append** (PK dedups). `context` is `text` with **no CHECK** — an open vocabulary; the three literals any code writes today are `composition_basis` (a load-bearing verified above-floor input head), `composition_periphery` (a below-floor/unverified row of a two-tier composition), and `journal_slice` (a row of the journal's rendered priming slice). The writer (`provenance/consumption.py`) **never raises** — a failed consumption write degrades, it cannot fail the compose |
-| **0107** | `review_flags` — one row per (product, question-it-was-founded-on) pair whose foundation has since moved. `output_id`, `founded_on_id`, `moved_at`, `reason`, nullable `closed_by` / `closed_at` with a paired CHECK (`(closed_by IS NULL) = (closed_at IS NULL)`), a **partial unique index** allowing exactly ONE open flag per pair, and a **BEFORE DELETE trigger** that unconditionally raises — deletion is schema-impossible, closure is by supersession | **append + close-by-supersession.** `reason` is open text; the only literal written today is `new_evidence_bears_on_open_question` (by `claim_watch`). Rows are **never deleted** — the trigger makes silent flag disappearance a database error, not a code convention |
-| **0107** | `bearing_edges` — dated, typed, weighted "X bears on Y" pointers. All columns `NOT NULL`: `edge_kind` (default `bears_on`), `src_kind`/`src_id`/`src_as_of`, `dst_kind`/`dst_id`/`dst_as_of`, `weight real`, `planes text[]` (CHECK non-empty), `provenance_class` (CHECK ∈ `live` \| `exemplar`), `matcher_version`, `UNIQUE (src_id, dst_id, edge_kind)` | **append-only**, `INSERT … ON CONFLICT DO NOTHING`. Honest scope note: append-only here is **writer discipline, not a trigger** — unlike `review_flags`, `bearing_edges` has no forbid-delete trigger; what guarantees it is that `provenance/bearing.py` contains exactly one statement (the insert) and no UPDATE/DELETE path exists anywhere in the tree. Written by exactly two producers today: `claim_watch` (`signal → hypothesis`, planes drawn from `vector`/`entity`/`geo`, `matcher_version='claim_watch/3.3.0'`, plus the `0116` `data` stamp when the bearing gate is on) and the corpus researcher's answer-link (`finding → hypothesis`, `planes=['corpus_research']`, `matcher_version='corpus_researcher_backlog/1.0.0'`). Both stamp `provenance_class='live'`; `exemplar` is reserved for a future curated set and is written by nothing |
+| **0107** | `review_flags` — one row per (product, question-it-was-founded-on) pair whose foundation has since moved. `output_id`, `founded_on_id`, `moved_at`, `reason`, nullable `closed_by` / `closed_at` with a paired CHECK (`(closed_by IS NULL) = (closed_at IS NULL)`), a **partial unique index** allowing exactly ONE open flag per pair, and a **BEFORE DELETE trigger** that unconditionally raises — deletion is schema-impossible, closure is by supersession | **append + close-by-supersession.** `reason` is open text; two literals are written today, both by `claim_watch`: `new_evidence_bears_on_open_question` (consumer flags) and `new_evidence_bears_on_unconsumed_question` (the 4.1.0 question self-flag — evidence bearing on a watched question no product consumes). Rows are **never deleted** — the trigger makes silent flag disappearance a database error, not a code convention |
+| **0107** | `bearing_edges` — dated, typed, weighted "X bears on Y" pointers. All columns `NOT NULL`: `edge_kind` (default `bears_on`), `src_kind`/`src_id`/`src_as_of`, `dst_kind`/`dst_id`/`dst_as_of`, `weight real`, `planes text[]` (CHECK non-empty), `provenance_class` (CHECK ∈ `live` \| `exemplar`), `matcher_version`, `UNIQUE (src_id, dst_id, edge_kind)` | **append-only**, `INSERT … ON CONFLICT DO NOTHING`. Honest scope note: append-only here is **writer discipline, not a trigger** — unlike `review_flags`, `bearing_edges` has no forbid-delete trigger; what guarantees it is that `provenance/bearing.py` contains exactly one statement (the insert) and no UPDATE/DELETE path exists anywhere in the tree. Written by exactly two producers today: `claim_watch` (`signal → hypothesis`, planes drawn from `vector`/`entity`/`geo`, `matcher_version='claim_watch/4.1.0'` today — the stamp records which matching rule wrote each edge, and rows from every earlier version remain — plus the `0116` `data` stamp when the bearing gate is on) and the corpus researcher's answer-link (`finding → hypothesis`, `planes=['corpus_research']`, `matcher_version='corpus_researcher_backlog/1.0.0'`). Both stamp `provenance_class='live'`; `exemplar` is reserved for a future curated set and is written by nothing |
 | **0108** | `entity_block_key(text)` gains a leading-`a`/`an` strip; `idx_entity_profiles_block_key` rebuilt | function + index only, no table change. (This is the migration whose in-file comments still say "0106" — see the head note above.) |
 | **0109** | `retention_policies` — the **one-janitor** config table. PK `policy_name`, plus `table_name`, `ttl_days integer NOT NULL DEFAULT 0`, `keep_classes text[]`, `batch_size` (CHECK > 0, default 5000), `enabled`, `env_fallback_var`, `description`, `created_by`, timestamps | **operator-edited config**, seeded `ON CONFLICT DO NOTHING` with exactly two rows — `signals_retention` (`keep_classes = {retain_always, evidence_hold}`) and `analyst_traces_retention` (`keep_classes = {}`) — **both at `ttl_days = 0`, which disables the sweep**. Deleting substrate data is an operator decision, so every seeded policy ships INERT. `/v3/retention-policies` (list/get/PATCH) edits `ttl_days`/`keep_classes`/`batch_size`/`enabled`/`description`; `policy_name`/`table_name`/`env_fallback_var` stay SQL-only (the code-side pairing to a Python adapter) |
 | **0112** | `retrieval_origin text` added (nullable) to **both** `signals` and `evidence_archive`, with a partial index on the `signals` column where not null; the `evidence_archive` status CHECK is widened to add `skipped_license_unreviewed` | **stamped at write.** The value vocabulary is a **convention enforced in code, not a CHECK**: `NULL`/absent = a curated registered source (the default — nothing was backfilled), `curated_source` = the same thing said explicitly, `web_search:<component_id>` = retrieved through a named external search provider. One resolver (`legba.data.retrieval_origin.resolve_retrieval_origin`) serves both the archive gate and the corpus facet, so the two cannot drift |
@@ -576,7 +598,7 @@ the isolated forecast pilot `acute_forecasts` + the per-unit gold set
 
 **A note on producers (data-model relevant, not a behaviour spec).** The rows in
 `analyst_outputs` are no longer written by one monolithic per-country analyst.
-The trusted spine is bottom-up: eight bounded `inline_target` UNITS →
+The trusted spine is bottom-up: nine bounded `inline_target` UNITS →
 `country_composition` (per country) → `region_composition` (5 region frames) →
 `world_assessor` (global), plus the thematic `escalation_composition` →
 `scorecard_producer` (deterministic banding). The old monolithic

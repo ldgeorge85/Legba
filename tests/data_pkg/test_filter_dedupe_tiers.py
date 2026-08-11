@@ -569,3 +569,175 @@ async def test_integration_tiers_one_two_real_redis_tier1_hit(real_redis):
     out = await handler.transform(s2, ctx)
     assert out.payload.get("dedupe_tier") == 1
     assert out.payload.get("duplicate_of") == "ext-1"
+
+
+# =============================================================================
+# CW-7b — the canonicalizer's variant-fold counters
+#
+# CW-7 shipped the www strip and the wire-revision strip with NO counter of any
+# kind: its only instrumentation was `channel_post_signals`, the class it
+# DECLINED to resolve. A silent transform inside a hash input is invisible — a
+# fold that never engages looks exactly like one that engages constantly — so
+# "does the www strip actually fire?" could only be answered by hand-querying
+# the substrate. These pin the counters that answer it from the running system.
+#
+# Both folds were verified real, read-only against the live substrate on
+# 2026-08-03: 26 canonical keys fold purely on the www strip, and 823 titles /
+# 408 merged keys on the wire-revision strip.
+# =============================================================================
+
+
+def _counter_handler() -> Dedupe4TierHandler:
+    """Tiers 1+2 only — the two tiers the counted folds feed."""
+    return Dedupe4TierHandler(
+        Dedupe4TierConfig(tiers=[1, 2]), redis=FakeRedis(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_www_fold_counter_moves_only_when_the_label_is_stripped():
+    handler = _counter_handler()
+    ctx = _ctx()
+
+    await handler.transform(
+        _signal(title="bare host", body="b", url="https://ex.example/a",
+                source_id="s", external_id="e1"),
+        ctx,
+    )
+    health = await handler.health_check(ctx)
+    assert health.detail["url_www_folded"] == 0, "a bare host must not count"
+
+    await handler.transform(
+        _signal(title="www host", body="b", url="https://www.ex.example/b",
+                source_id="s", external_id="e2"),
+        ctx,
+    )
+    health = await handler.health_check(ctx)
+    assert health.detail["url_www_folded"] == 1
+
+
+@pytest.mark.asyncio
+async def test_www_fold_counter_does_not_fire_on_www2():
+    """``www2``/``wwwtest`` are genuinely different origins and are NOT stripped.
+
+    The counter asks ``strip_www`` rather than testing the prefix itself, so it
+    can never disagree with the fold it reports on.
+    """
+    handler = _counter_handler()
+    ctx = _ctx()
+    for i, host in enumerate(("www2.ex.example", "wwwtest.ex.example")):
+        await handler.transform(
+            _signal(title=f"t{i}", body="b", url=f"https://{host}/p{i}",
+                    source_id="s", external_id=f"e{i}"),
+            ctx,
+        )
+    health = await handler.health_check(ctx)
+    assert health.detail["url_www_folded"] == 0
+
+
+@pytest.mark.asyncio
+async def test_www_fold_counter_counts_the_signal_not_the_hash():
+    """A tier-1 MISS hashes the URL twice (lookup + insert). The counter is a
+    property of the SIGNAL, so it must still read 1."""
+    handler = _counter_handler()
+    ctx = _ctx()
+    await handler.transform(
+        _signal(title="only once", body="b", url="https://www.ex.example/solo",
+                source_id="s", external_id="e1"),
+        ctx,
+    )
+    health = await handler.health_check(ctx)
+    assert health.detail["url_www_folded"] == 1
+
+
+@pytest.mark.asyncio
+async def test_wire_revision_counter_moves_on_agency_markers():
+    handler = _counter_handler()
+    ctx = _ctx()
+
+    await handler.transform(
+        _signal(title="Seoul shares end higher on tech gains", body="b",
+                url="https://ex.example/1", source_id="s", external_id="e1"),
+        ctx,
+    )
+    assert (await handler.health_check(ctx)).detail["wire_revision_folded"] == 0
+
+    for i, title in enumerate(
+        (
+            "(LEAD) Seoul shares end higher on tech gains",
+            "(2nd LD) Seoul shares end higher on tech gains",
+            "(URGENT) S. Korea's GDP expands 0.6 pct in Q2",
+            "UPDATE 1-Oil prices steady after OPEC meeting",
+        ),
+        start=2,
+    ):
+        await handler.transform(
+            _signal(title=title, body="b", url=f"https://ex.example/{i}",
+                    source_id="s", external_id=f"e{i}"),
+            ctx,
+        )
+    assert (await handler.health_check(ctx)).detail["wire_revision_folded"] == 4
+
+
+@pytest.mark.asyncio
+async def test_wire_revision_counter_ignores_a_mid_headline_parenthetical():
+    """The marker regex is anchored at the START — an inner parenthetical is
+    content ("Cabinet clears the bill (with conditions)")."""
+    handler = _counter_handler()
+    ctx = _ctx()
+    await handler.transform(
+        _signal(title="Cabinet clears the bill (with conditions)", body="b",
+                url="https://ex.example/x", source_id="s", external_id="e1"),
+        ctx,
+    )
+    assert (await handler.health_check(ctx)).detail["wire_revision_folded"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_wire_revision_resend_actually_dedupes_on_tier_2():
+    """The counter is not the point on its own — the FOLD is. A marker-only
+    re-send must land as a tier-2 duplicate of the original."""
+    handler = _counter_handler()
+    ctx = _ctx()
+    body = "Seoul stocks closed higher on Wednesday as chipmakers rallied."
+    await handler.transform(
+        _signal(title="Seoul stocks end higher", body=body,
+                url="https://ex.example/orig", source_id="s", external_id="e1"),
+        ctx,
+    )
+    out = await handler.transform(
+        _signal(title="(LEAD) Seoul stocks end higher", body=body,
+                url="https://ex.example/resend", source_id="s",
+                external_id="e2"),
+        ctx,
+    )
+    assert out.payload.get("dedupe_tier") == 2
+    assert out.payload.get("duplicate_of") == "e1"
+
+
+@pytest.mark.asyncio
+async def test_a_www_variant_actually_dedupes_on_tier_1():
+    handler = _counter_handler()
+    ctx = _ctx()
+    await handler.transform(
+        _signal(title="t1", body="b1", url="https://aa.example/en/story/4014079",
+                source_id="s", external_id="e1"),
+        ctx,
+    )
+    out = await handler.transform(
+        _signal(title="t2", body="b2",
+                url="https://www.aa.example/en/story/4014079",
+                source_id="s", external_id="e2"),
+        ctx,
+    )
+    assert out.payload.get("dedupe_tier") == 1
+    assert out.payload.get("duplicate_of") == "e1"
+
+
+@pytest.mark.asyncio
+async def test_health_detail_exposes_all_three_cw7_variant_counters():
+    """The declined class AND the two resolved ones — CW-7 only had the first."""
+    handler = _counter_handler()
+    detail = (await handler.health_check(_ctx())).detail
+    for key in ("channel_post_signals", "url_www_folded", "wire_revision_folded"):
+        assert key in detail, f"{key} missing from the dedupe health detail"

@@ -114,7 +114,7 @@ async def test_handle_reports_writer_counts_verbatim(monkeypatch):
             receipt["reason"] = "issued"
         return 4
 
-    async def _resolve(deps, options):
+    async def _resolve(deps, options, *, receipt=None):
         seen.append("resolve")
         return 2
 
@@ -150,7 +150,7 @@ async def test_leg_failure_is_isolated(monkeypatch):
     async def _issue_boom(deps, options, *, receipt=None):
         raise RuntimeError("issue exploded")
 
-    async def _resolve(deps, options):
+    async def _resolve(deps, options, *, receipt=None):
         return 5
 
     async def _pull(deps, options):
@@ -210,6 +210,9 @@ class _AbstainConn:
         raise AssertionError(f"unexpected fetch SQL: {sql[:80]}")
 
     async def fetchrow(self, sql, *args):
+        # The resolver's backlog SELF-CHECK — no gradeable row is overdue here.
+        if "AS oldest_days" in sql:
+            return {"n": 0, "oldest_days": 0}
         # _count_class_k → recent-rate = 0 events for every country.
         if "AS cnt" in sql:
             return {"cnt": 0}
@@ -281,7 +284,7 @@ async def test_issued_zero_reason_maps_to_distinct_warning(monkeypatch, reason, 
             receipt["uncertain"] = 0
         return 0
 
-    async def _noop_resolve(deps, options):
+    async def _noop_resolve(deps, options, *, receipt=None):
         return 0
 
     async def _noop_pull(deps, options):

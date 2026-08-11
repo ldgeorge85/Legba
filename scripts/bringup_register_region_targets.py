@@ -40,21 +40,18 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import os
 import pathlib
 import sys
 
 import httpx
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _bringup_http import registry_base, registry_client  # noqa: E402
 from _token import resolve_token  # noqa: E402
 
 from legba.data.schemas.target import TargetDescriptor  # noqa: E402
 
-BASE = os.environ.get(
-    "LEGBA_REGISTRY_URL",
-    "http://127.0.0.1:8090/api/v1/registry",
-)
+BASE = registry_base()
 
 FAMILY = "target"
 
@@ -168,14 +165,6 @@ def build_region_frames() -> list[tuple[str, dict, TargetDescriptor]]:
     return out
 
 
-def _client() -> httpx.Client:
-    return httpx.Client(
-        base_url=BASE,
-        headers={"Authorization": f"Bearer {resolve_token()}"},
-        timeout=30,
-    )
-
-
 def _get_head(client: httpx.Client, descriptor_id: str) -> dict | None:
     r = client.get(f"/descriptors/{FAMILY}/{descriptor_id}")
     if r.status_code == 200:
@@ -246,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  would-register  {FAMILY}/{desc_id}  tags={desc.scope.tags}")
         return 0
 
-    with _client() as client:
+    with registry_client(BASE, resolve_token()) as client:
         results, failures = register_frames(client)
     _print_results(results, failures)
     return 1 if failures else 0

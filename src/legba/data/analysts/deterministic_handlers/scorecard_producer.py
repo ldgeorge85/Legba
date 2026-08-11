@@ -118,9 +118,16 @@ def parse_unit_eval(raw_data: Any) -> dict[str, dict[str, Any]]:
 
     ``raw_data`` is the finding's ``analyst_outputs.data`` JSONB (the nested
     scorer result lives under ``data['data']['units']``). Returns a map
-    ``unit -> {faithfulness, correctness_vs_reference, n_labeled}`` with HONEST
-    NULLs. A missing / malformed blob yields an empty map (every unit then reads
-    unmeasured), never a stub.
+    ``unit -> {faithfulness, judge_pipeline_version, correctness_operator,
+    n_operator_scored, operator_sufficient, correctness_vs_reference,
+    n_labeled}`` with HONEST NULLs. A missing / malformed blob yields an empty
+    map (every unit then reads unmeasured), never a stub.
+
+    M-1: ``correctness_operator`` is the OPERATOR gold-set axis, carried as its
+    OWN keys beside — never merged with — the deterministic source-overlap
+    ``correctness_vs_reference``. M-2: ``judge_pipeline_version`` names WHICH
+    judge produced the faithfulness figure, so a card cannot display a number
+    pooled across a judge swap without saying so.
     """
     if isinstance(raw_data, str):
         try:
@@ -138,8 +145,19 @@ def parse_unit_eval(raw_data: Any) -> dict[str, dict[str, Any]]:
         if not isinstance(record, Mapping):
             continue
         n_labeled = record.get("n_labeled")
+        n_op = record.get("n_operator_scored")
+        population = record.get("faithfulness_population")
+        population = population if isinstance(population, Mapping) else {}
         out[str(unit)] = {
             "faithfulness": _num_or_none(record.get("faithfulness")),
+            "judge_pipeline_version": population.get("judge_pipeline_version"),
+            # PRIMARY correctness axis (operator gold set) — its own keys.
+            "correctness_operator": _num_or_none(
+                record.get("correctness_operator")
+            ),
+            "n_operator_scored": int(n_op) if isinstance(n_op, int) else 0,
+            "operator_sufficient": bool(record.get("operator_sufficient")),
+            # SECONDARY (diagnostic) correctness axis — source-id overlap.
             "correctness_vs_reference": _num_or_none(
                 record.get("correctness_vs_reference")
             ),
@@ -156,13 +174,23 @@ def fold_unit_eval(
 ) -> None:
     """Attach a per-dimension ``eval`` block to a T1 verdict IN PLACE (T5-A).
 
-    For every dimension: attach ``{faithfulness, correctness_vs_reference,
-    n_labeled, faithfulness_flagged}`` from ``eval_by_unit`` (honest-null when the
-    unit is absent / unmeasured). ``faithfulness_flagged`` is the belt-and-
-    suspenders DISPLAY flag — True whenever the CROSS-eval aggregate faithfulness
-    is present AND below ``faith_floor`` (distinct from the per-claim demote,
-    which the T1 banding already applied). An unmeasured (None) faithfulness is
-    NEVER flagged (absence of proof is not proof of unfaithfulness)."""
+    For every dimension: attach ``{faithfulness, judge_pipeline_version,
+    correctness_operator, n_operator_scored, operator_sufficient,
+    correctness_vs_reference, n_labeled, faithfulness_flagged}`` from
+    ``eval_by_unit`` (honest-null when the unit is absent / unmeasured).
+    ``faithfulness_flagged`` is the belt-and-suspenders DISPLAY flag — True
+    whenever the CROSS-eval aggregate faithfulness is present AND below
+    ``faith_floor`` (distinct from the per-claim demote, which the T1 banding
+    already applied). An unmeasured (None) faithfulness is NEVER flagged
+    (absence of proof is not proof of unfaithfulness).
+
+    M-1: the operator correctness axis rides here as its OWN axis. It does NOT
+    demote a band and is never averaged with faithfulness or with the
+    source-overlap axis — a scorecard reader needs to see that a dimension can
+    be highly faithful and only partially right at the same time, which is
+    exactly what the 2026-07-28 gold-set round measured. ``operator_sufficient``
+    travels with it so a tiny-n figure can never be rendered as a measured rate.
+    """
     dimensions = verdict.get("dimensions")
     if not isinstance(dimensions, Mapping):
         return
@@ -173,6 +201,14 @@ def fold_unit_eval(
         faith = rec.get("faithfulness")
         dim["eval"] = {
             "faithfulness": faith,
+            # M-2 — WHICH judge produced that number. A faithfulness figure with
+            # no population named is a figure that can silently pool a swap.
+            "judge_pipeline_version": rec.get("judge_pipeline_version"),
+            # PRIMARY correctness axis — judge-independent, never pooled.
+            "correctness_operator": rec.get("correctness_operator"),
+            "n_operator_scored": int(rec.get("n_operator_scored") or 0),
+            "operator_sufficient": bool(rec.get("operator_sufficient")),
+            # SECONDARY (diagnostic) correctness axis.
             "correctness_vs_reference": rec.get("correctness_vs_reference"),
             "n_labeled": int(rec.get("n_labeled") or 0),
             "faithfulness_flagged": (
@@ -248,10 +284,19 @@ def build_scorecard_payload(
         if not isinstance(dim, Mapping):
             continue
         ev = dim.get("eval") or {}
+        n_op = int(ev.get("n_operator_scored") or 0)
+        # The operator axis prints WITH its n, always — an `op=1.00` with no n
+        # beside it is exactly the misreading the tiny-n rule exists to stop.
+        op = (
+            f" op={ev.get('correctness_operator')}(n={n_op}"
+            f"{'' if ev.get('operator_sufficient') else ',indicative'})"
+            if n_op else " op=unmeasured"
+        )
         dim_lines.append(
             f"{unit}: {dim.get('band')} | {dim.get('reason')} | "
             f"eff={dim.get('effective_confidence')} | "
             f"faith={ev.get('faithfulness')} corr={ev.get('correctness_vs_reference')}"
+            f"{op}"
             f"{' ⚑' if ev.get('faithfulness_flagged') else ''}"
         )
     body = "\n".join(dim_lines)

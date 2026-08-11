@@ -129,6 +129,13 @@ from typing import (
 )
 from uuid import UUID
 
+from ._llm_budget import (
+    CHARS_PER_TOKEN,
+    DEFAULT_INPUT_TOKEN_BUDGET,
+    estimate_tokens,
+    input_token_budget,
+)
+from ..provenance.consumption import CONSUMPTION_CONTEXT_QUESTION
 from ..provenance.kinds import OutputKind
 from ..provenance.models import FindingPayload
 from ..schemas.analyst import IndicatorEntry, MAX_OPEN_QUESTIONS, OpenQuestionEntry
@@ -139,6 +146,16 @@ from .consult_on_demand import (
     _coerce_uuid_list,
     _extract_json,
     _refs_from_tool_result,
+)
+# V-N1 OUTPUT CONTRACT — "what the model returned is a finding", enforced at the
+# ONE point raw text becomes a row. Extracted to a leaf module rather than grown
+# here: this file is against its size ceiling, and the contract is pure and
+# testable with no slice, LLM or DB (see the module note for the traced defect).
+from .output_contract import (
+    OutputContractError,
+    is_unusable_output,
+    parse_finding_envelope,
+    strip_tool_plan_preamble,
 )
 # QW1-B DESK GROUNDING — the composition CONTINUITY idiom one floor down. The
 # slice reader stamps the marked rows; this module owns the partition, the render,
@@ -252,6 +269,14 @@ class AnalystMethodResult:
     # ``legba.data.provenance.consumption``). Default empty: kinds that don't
     # stamp it get no consumption rows and are byte-for-byte unchanged.
     consumed_edges: list[tuple[UUID, str]] = field(default_factory=list)
+    # Continuity P2 — pending `situation_events` ledger rows
+    # (:class:`legba.data.situations.trajectory.TrajectoryEvent`) the
+    # `situation_tracker` built this run. The runtime materializes them on the
+    # SAME flow as the output write, stamping `source_output_id` with the new
+    # row's id — the handler cannot know it, because the actor mints output ids.
+    # Same data-driven contract as ``consumed_edges``: kinds that don't stamp it
+    # are byte-for-byte unchanged.
+    situation_events: list[Any] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -300,8 +325,12 @@ _GATHER_BLOCK_SNIPPET_CHARS = 500
 # unsupported" to "contradicted => unsupported" on the excerpt. See
 # verify._marker_to_evidence.
 _SOURCE_TEXT_CHARS = 3200
-_DEFAULT_INPUT_TOKEN_BUDGET = 32000
-_CHARS_PER_TOKEN = 4            # rough estimate; we don't tokenize on the hot path
+# F-D (2026-08-03): the budget definition moved to ``_llm_budget`` so the
+# COMPOSITION path can pack against the SAME window rather than its own pair of
+# fixed character constants (it was reading its inputs at ~7% of this). These
+# aliases keep every reference in this module — and its tests — unchanged.
+_DEFAULT_INPUT_TOKEN_BUDGET = DEFAULT_INPUT_TOKEN_BUDGET
+_CHARS_PER_TOKEN = CHARS_PER_TOKEN
 # DQ P6 — cap on the grounding-preamble text persisted into the trace's
 # ``inject_preamble`` step (a live preamble is ~3.8k chars; 16k covers the tail
 # without letting a pathological preamble bloat the analyst_traces row).
@@ -315,25 +344,15 @@ _PREAMBLE_TRACE_CHAR_CAP = 16000
 _FALLBACK_BASIS_CITATIONS_CAP = 25
 
 
-def _input_token_budget() -> int:
-    """Estimated INPUT-token budget for the assembled signals block.
+#: Estimated INPUT-token budget for the assembled signals block — the SHARED
+#: definition (``_llm_budget.input_token_budget``), so the composition path packs
+#: against the same window. Bounds the SIGNALS block only; the separately-bounded
+#: grounding preamble is prepended on top in ``run_method``, and output is never
+#: capped on the core plane.
+_input_token_budget = input_token_budget
 
-    Env ``LEGBA_LLM_INPUT_TOKEN_BUDGET`` (default 32000). Bounds the SIGNALS
-    block only; the separately-bounded grounding preamble is prepended on top in
-    ``run_method``. Output is never capped on the core plane.
-    """
-    raw = os.getenv("LEGBA_LLM_INPUT_TOKEN_BUDGET")
-    if raw and raw.strip():
-        try:
-            return max(1, int(raw))
-        except (TypeError, ValueError):
-            pass
-    return _DEFAULT_INPUT_TOKEN_BUDGET
-
-
-def _estimate_tokens(text: str) -> int:
-    """Cheap chars/4 token estimate (no tokenizer on the inference hot path)."""
-    return (len(text) + _CHARS_PER_TOKEN - 1) // _CHARS_PER_TOKEN
+#: Cheap chars/4 token estimate (no tokenizer on the inference hot path).
+_estimate_tokens = estimate_tokens
 
 
 # ---------------------------------------------------------------------------
@@ -1029,48 +1048,16 @@ def _is_dead_row(row: Mapping[str, Any]) -> bool:
     return _signal_body(row).kind in _UNUSABLE_BODY_KINDS
 
 
-def _render_signal(idx: int, row: Mapping[str, Any]) -> str:
-    """Render ONE signal block (title + provenance + truncated snippet).
-
-    Shared by the user-prompt renderer and the ORIENT token-budget estimator so
-    the token accounting matches the bytes actually sent to the LLM.
-    """
-    data = row.get("data")
-    title = (_signal_title(row) or "(untitled)")[:_MAX_TITLE_CHARS]
-    produced_at = row.get("produced_at")
-    source = row.get("source_url") or ""
-    # `produced_at` is INGESTION (fetch) time, NOT the event date — label it
-    # honestly and surface the article's own published date when present, so the
-    # LLM can't read fetch-time as event-time (the world-assessor temporal-collapse
-    # class: a fresh June article about a Feb event got dated "today").
-    published_at = data.get("published_at") if isinstance(data, dict) else None
-    # ONE body precedence, shared with the citation-evidence snippet, so the
-    # verify judge's WORKING text is byte-identical to what the analyst read.
-    snippet = _signal_body(row).text
-    published_str = f" published={published_at}" if published_at else ""
-    return (
-        f"[{idx}] {title}\n"
-        f"    ingested={produced_at}{published_str} source={source}\n"
-        f"    snippet={snippet}"
-    )
-
-
-def _render_user_prompt(
-    inputs: list[Mapping[str, Any]],
-    target_id: str | None,
-) -> str:
-    """Render the (already ORIENTed) substrate slice into a user prompt.
-
-    Each signal carries title + provenance + a snippet truncated to
-    ``_MAX_SNIPPET_CHARS``; the slice itself is bounded by the INPUT-token
-    budget in :func:`_orient`.
-    """
-    header = (
-        f"Target: {target_id or 'unspecified'}\n"
-        f"Number of signals: {len(inputs)}\n\n"
-    )
-    body_lines = [_render_signal(i, row) for i, row in enumerate(inputs, start=1)]
-    return header + "\n".join(body_lines)
+# Slice rendering extracted to slice_render.py at the regrowth-gate seam
+# (2026-08-05). Re-exported: callers and tests import from here unchanged.
+from .slice_render import (  # noqa: F401
+    _CAMEO_LEGEND,
+    _CAMEO_TITLE_TAG,
+    _format_window,
+    _render_signal,
+    _render_user_prompt,
+    _row_is_cameo_coded,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1100,9 +1087,103 @@ _CITATION_MARKER_RE = re.compile(r"\[(\d+)\]")
 # scored faithfulness 0.00 with 0 resolved citations.)
 _VARIANT_CITATION_RE = re.compile(r"[【［〔〖](\s*\d+\s*)[】］〕〗]")
 
+# R-tail (2026-08-04) — the same bracket drift, on the NON-numeric markers.
+#
+# The digit rule above deliberately left everything else alone, which is right
+# for CJK prose but wrong for the three other things the core plane puts in
+# these brackets. Measured over the live corpus (457 findings carry a
+# lenticular bracket; 218 carry a non-digit one):
+#
+#   * ``【ref:2】`` / ``【[ref:1]】`` — the COMPOSITION citation marker
+#     (``[[ref:N]]``) in variant brackets. ~100 occurrences. Same failure as the
+#     original bug, one layer up: the composition marker parser misses it, so a
+#     correctly-cited composed claim resolves to zero citations.
+#   * ``【1-120】`` — a RANGE citation, 93 occurrences (see the regex below).
+#   * ``【none】`` (23), ``【assessed】`` (36), ``【assessment】`` (25),
+#     ``【not_observed】`` (25), ``【assessed situation】``, ``【system_assessed】``,
+#     ``【authoritative_current_context】`` — the model ANNOTATING a clause as
+#     deliberately un-citable. ``verify._NO_CITATION_MARKER`` already has a
+#     canonical spelling for exactly this intent (``[no citation]``, floor-EXEMPT
+#     but still judge-graded), and these are that intent in other words. Left
+#     un-normalized they survive into published prose AND are counted as uncited
+#     fact assertions — the floor punishing the model for being honest.
+#
+# An explicit ALLOWLIST, not "any non-digit content": the guarantee that CJK
+# prose using these glyphs is left intact is worth keeping, and a bounded list
+# of observed tokens is auditable in a way that a catch-all is not. Matching is
+# case-insensitive and tolerant of ``_``/`` ``/``-`` as the word separator,
+# since the live corpus spells the same token all three ways.
+_VARIANT_REF_CITATION_RE = re.compile(
+    r"[【［〔〖]\s*\[?\s*ref:\s*(\d+)\s*\]?\s*[】］〕〗]", re.IGNORECASE
+)
+#: A RANGE citation in variant brackets — ``【1-120】``. 93 live occurrences.
+#: The digit rule above requires a bare integer, so these fall through, and the
+#: range parser (``verify._CLAIM_RANGE_RE``) never sees them: a survey clause
+#: that legitimately cites the whole enumerated corpus floors as UNCITED. The
+#: dash class is wide on purpose — the corpus uses ASCII ``-``, en dash ``–``
+#: and the non-breaking hyphen ``‑`` interchangeably — and the rewrite emits an
+#: ASCII hyphen so the downstream parser matches whichever glyph arrived.
+_VARIANT_RANGE_CITATION_RE = re.compile(
+    r"[【［〔〖]\s*(\d+)\s*[-–—‑]\s*(\d+)\s*[】］〕〗]"
+)
+_UNCITABLE_ANNOTATIONS: frozenset[str] = frozenset(
+    {
+        "none",
+        "no citation",
+        "not observed",
+        "assessed",
+        "assessment",
+        "assessed situation",
+        "assessed situations",
+        "assessed structure",
+        "system assessed",
+        "derived structure",
+        "authoritative current context",
+    }
+)
+_VARIANT_ANNOTATION_RE = re.compile(r"[【［〔〖]([^】］〕〗]{1,40})[】］〕〗]")
+# V-I3 (2026-08-05) — the three marker syntaxes the round-4 panel found still
+# unparsed, each with a live specimen (see the long rationale in
+# ``verify._normalize_verify_markers``, which carries the same three rules):
+# ``(ref:2)`` (S2, `country_composition`/cn), the compound ``[[ref:2,6]]``
+# (08-04 §6.2, named and unshipped), and ``【2†L1-L2】`` (§6.8, the Brazil
+# `military_posture` body). Mirrored rather than imported: this module runs at
+# WRITE time and persists the rewrite, verify.py grades what was stored, and
+# verify.py stays stdlib-only + slim-image-safe.
+_PAREN_REF_CITATION_RE = re.compile(
+    r"\(\s*\[{0,2}\s*ref:\s*(\d+(?:\s*,\s*\d+)*)\s*\]{0,2}\s*\)", re.IGNORECASE
+)
+_COMPOUND_REF_CITATION_RE = re.compile(
+    r"\[\[\s*ref:\s*(\d+(?:\s*,\s*\d+)+)\s*\]\]", re.IGNORECASE
+)
+#: ``【2†L1-L2】`` — the dagger is required, so CJK prose using the same glyphs
+#: is left intact.
+_VARIANT_DAGGER_CITATION_RE = re.compile(r"[【［〔〖]\s*(\d+)\s*†[^】］〕〗]*[】］〕〗]")
+
+
+def _expand_ref_list(digits: str) -> str:
+    """``"2, 6, 7"`` -> ``"[[ref:2]][[ref:6]][[ref:7]]"`` (one marker each)."""
+    return "".join(f"[[ref:{n.strip()}]]" for n in digits.split(","))
+#: The ASCII form the annotations above collapse to — the marker
+#: ``verify._NO_CITATION_MARKER`` already recognizes. Spelled here rather than
+#: imported: verify.py is stdlib-only/slim-image-safe and must not import the
+#: analysts package, so the constant travels as a literal in both directions.
+_NO_CITATION_ASCII = "[no citation]"
+
+
+def _canonical_annotation(token: str) -> str | None:
+    """The canonical ``[no citation]`` marker when ``token`` is one of the
+    known un-citable annotations, else ``None`` (leave the text alone)."""
+    flat = re.sub(r"[_\-\s]+", " ", token).strip().casefold()
+    return _NO_CITATION_ASCII if flat in _UNCITABLE_ANNOTATIONS else None
+
 
 def _normalize_citation_markers(text: str) -> str:
     """Rewrite ``【N】``/``［N］``-style citation brackets to ASCII ``[N]``.
+
+    Also rewrites ``【ref:N】`` to the composition marker ``[[ref:N]]`` and the
+    known un-citable annotations (``【none】``, ``【assessed】``, …) to the
+    canonical ``[no citation]``.
 
     Idempotent on already-ASCII prose. Run BEFORE ``_extract_citations`` and
     persist the result so the stored prose, the marker parser, and the UI
@@ -1110,7 +1191,19 @@ def _normalize_citation_markers(text: str) -> str:
     """
     if not text:
         return text
-    return _VARIANT_CITATION_RE.sub(lambda m: f"[{m.group(1).strip()}]", text)
+    text = _VARIANT_CITATION_RE.sub(lambda m: f"[{m.group(1).strip()}]", text)
+    text = _VARIANT_RANGE_CITATION_RE.sub(
+        lambda m: f"[{m.group(1)}-{m.group(2)}]", text
+    )
+    # V-I3: the dagger form runs BEFORE the plain annotation rewrite, which would
+    # otherwise read "2†L1-L2" as un-citable prose and leave it alone.
+    text = _VARIANT_DAGGER_CITATION_RE.sub(lambda m: f"[{m.group(1)}]", text)
+    text = _VARIANT_REF_CITATION_RE.sub(lambda m: f"[[ref:{m.group(1)}]]", text)
+    text = _COMPOUND_REF_CITATION_RE.sub(lambda m: _expand_ref_list(m.group(1)), text)
+    text = _PAREN_REF_CITATION_RE.sub(lambda m: _expand_ref_list(m.group(1)), text)
+    return _VARIANT_ANNOTATION_RE.sub(
+        lambda m: _canonical_annotation(m.group(1)) or m.group(0), text
+    )
 
 
 def _resolve_signal_id(raw_id: Any) -> str | None:
@@ -1138,6 +1231,7 @@ def _citation_entry(
     title: Any,
     source: Any,
     fields: Mapping[str, Any] | None,
+    source_id: Any = None,
 ) -> dict[str, Any]:
     """Build ONE citation-index entry from a signal's id + title + source + body.
 
@@ -1175,8 +1269,16 @@ def _citation_entry(
         # common_crawl) → content → content_text → summary → description — so the
         # judge grounds on the SAME raw field. When the analyst read raw directly
         # this coincides with ``snippet``; that's fine.
+        # R1-0 (2026-08-05): ``archived_text`` LEADS the chain — the archived
+        # full article is the fullest RAW source we hold (an extraction of the
+        # source page, not a summary, so the distilled_body exclusion is
+        # untouched). Before this line the analyst read the full article while
+        # the judge was handed a ~545-char teaser as "the authoritative
+        # source" on 6,512 measured citations, and its rubric reads
+        # absent-from-source as unsupported.
         raw_source = (
-            fields.get("raw_body")
+            fields.get("archived_text")
+            or fields.get("raw_body")
             or fields.get("text")
             or fields.get("body")
             or fields.get("content")
@@ -1207,6 +1309,12 @@ def _citation_entry(
         "signal_id": signal_id,
         "title": str(title) if title is not None else None,
         "source": str(source) if source else None,
+        # V-H1: the OUTLET ref (``signals.source_id`` — "source.bbc.world"). The
+        # 08-03 panel's `soft_fail#2` named six outlets, verified all six BY HAND
+        # against a citation list the judge could not see, and the claim was
+        # graded unsupported anyway: an attribution claim was unverifiable BY
+        # CONSTRUCTION because this field never reached the evidence view.
+        "source_id": str(source_id) if source_id else None,
         "snippet": snippet or None,
         "source_text": source_text or None,
         "source_truncated": source_truncated,
@@ -1238,6 +1346,7 @@ def _build_citation_index(
             title=row.get("title"),
             source=row.get("source_url"),
             fields=row.get("data"),
+            source_id=row.get("source_id"),
         )
     return index
 
@@ -1277,6 +1386,11 @@ def _citation_from_index_entry(
         citation["title"] = entry["title"]
     if entry.get("source"):
         citation["source"] = entry["source"]
+    # V-H1: the OUTLET, so an attribution claim ("near-identical framing across
+    # CBC, NPR and the BBC") is checkable at all. Emitted only when the row
+    # carried one — never fabricated.
+    if entry.get("source_id"):
+        citation["source_id"] = entry["source_id"]
     # #116(e): carry the compact evidence snippet (the analyst's WORKING text,
     # distilled-first) so the verify judge sees the cited signal's CONTENT, not
     # just its headline (see _marker_to_evidence).
@@ -1368,6 +1482,12 @@ def _title_from_text(text: str, *, fallback_title: str) -> str:
                     return rest[:2048]
         # First usable narrative line — strip a leading markdown emphasis.
         cleaned = line.strip("*").strip()
+        # The voice contract opens every body with an italic "*As of <date>;
+        # slice covers …*" header. It is a temporal stamp, not a headline —
+        # skipping it lets the BLUF branch catch the real lead on the next
+        # lines (2.7% of findings were titled with their own As-of line).
+        if cleaned.lower().startswith("as of "):
+            continue
         if cleaned and cleaned not in ("{", "}"):
             return cleaned[:2048]
     return fallback_title[:2048]
@@ -1750,6 +1870,80 @@ def _salvage_envelope_body(raw: str) -> str | None:
     return decoded or None
 
 
+def _coerce_confidence(raw: Any, *, default: float = 0.5) -> float:
+    """The model's ``confidence``, coerced into the 0.0-1.0 the schema allows.
+
+    ``float(parsed["confidence"])`` used to run bare inside the field-extraction
+    ``try``, so a model emitting ``1.5`` (or ``"high"``) raised, was swallowed by
+    the broad handler below, and threw away an OTHERWISE-GOOD finding — its real
+    title, body, evidence and tags replaced by a raw-text ``coerce_failed`` blob.
+    A confidence out of range is a miscalibration, not a corrupt finding: clamp
+    it and keep the analysis. An unreadable one falls back to the schema default
+    rather than failing the row.
+    """
+    try:
+        value = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    if value != value:  # NaN — never a calibrated number
+        return default
+    return max(0.0, min(1.0, value))
+
+
+def _unstructured_finding(
+    text: str, *, fallback_title: str, tag: str,
+) -> FindingPayload:
+    """The DEGRADE path: a finding built from text that is not the contract.
+
+    Shared by both fallback branches of :func:`_coerce_finding` so they cannot
+    drift. Three things happen here, in order:
+
+      * #125 — when the raw is a MALFORMED/TRUNCATED ``{title, body}`` envelope,
+        salvage the inner markdown so the body column never holds raw JSON.
+      * V-N1 — strip any leading TOOL-PLAN sentence, so a model narrating its
+        plan ("We will use search_corpus.") cannot supply the finding's TITLE.
+        ``_title_from_text`` takes the first non-empty line, which is exactly
+        how that sentence became a headline on the product surface.
+      * V-N1 — if NOTHING readable survives, raise. Persisting a row of JSON
+        punctuation (or an empty body, which scored a vacuous faithfulness 1.00
+        on 0 claims) is worse than failing: every layer above this one reads it
+        as analysis, and the only thing that catches it is a human noticing.
+
+    D27's plain-markdown path is preserved exactly: a model that answered in
+    prose instead of JSON still lands a finding, because prose IS content.
+    """
+    # ORDER IS LOAD-BEARING: strip BEFORE salvaging. ``_salvage_envelope_body``
+    # tests ``startswith("{")``, so a preamble in front of a TRUNCATED envelope
+    # would defeat it exactly the way it defeated the primary parse — and that
+    # combination (a plan sentence, then a JSON object the stream cut off
+    # mid-body) is the one shape neither half recovers alone.
+    body, preamble = strip_tool_plan_preamble(text)
+    if preamble:
+        logger.warning(
+            "inline_target.finding.tool_plan_preamble_stripped preamble=%r",
+            preamble[:200],
+        )
+    salvaged = _salvage_envelope_body(body)
+    if salvaged is not None:
+        body = salvaged
+    if is_unusable_output(body):
+        raise OutputContractError(
+            "model output carries no readable finding content "
+            f"(tag={tag}, {len(text)} raw chars): "
+            f"{text.strip()[:200]!r}"
+        )
+    # DS-1: truncation loses the `indicators` array (it serializes AFTER the
+    # body) and keeps the prose — derive it, never fabricate. test_s3_indicators §2b.
+    derived = _coerce_indicators(_derive_indicators_from_prose(body))
+    return FindingPayload(
+        title=_title_from_text(body, fallback_title=fallback_title),
+        body=body[:65536],
+        confidence=0.3,
+        tags=[tag],
+        data={"indicators": derived} if derived else {},
+    )
+
+
 def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
     """Parse the LLM's JSON response into a :class:`FindingPayload`.
 
@@ -1797,29 +1991,28 @@ def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
             candidate = candidate[:end]
         parsed = json.loads(candidate)
     except (json.JSONDecodeError, ValueError) as exc:
-        logger.warning("inline_target.finding.parse_failed err=%s", exc)
-        # D27: the LLM authored prose that didn't parse as JSON — keep its text
-        # as the body (rendered markdown) and lift a real title from it instead
-        # of the static placeholder.
-        # #125: but if the un-parseable raw is a MALFORMED/TRUNCATED {title,body}
-        # envelope, salvage the inner markdown body first — never persist a raw
-        # {"title": ..., "body": ...} JSON string as the body column.
-        salvaged = _salvage_envelope_body(raw)
-        body = salvaged if salvaged is not None else raw
-        return FindingPayload(
-            title=_title_from_text(body, fallback_title=fallback_title),
-            body=body[:65536],
-            confidence=0.3,
-            tags=["unstructured"],
+        # V-N1: the scan above is anchored at offset 0, so a model that emitted
+        # a TOOL-PLAN SENTENCE before its JSON ("We will use search_corpus.")
+        # lands here with a perfectly good contract one line down. Measured on
+        # cross_doc_corroborator: 4 of its last 10 findings, each collapsed to
+        # the 0.3 unstructured fallback with the plan sentence as the TITLE and
+        # the model's own title/confidence/evidence/tags discarded. Look for the
+        # contract ANYWHERE before degrading.
+        recovered = parse_finding_envelope(raw)
+        if recovered is None:
+            logger.warning("inline_target.finding.parse_failed err=%s", exc)
+            return _unstructured_finding(
+                raw, fallback_title=fallback_title, tag="unstructured",
+            )
+        logger.warning(
+            "inline_target.finding.preamble_recovered err=%s prefix=%r",
+            exc, raw.strip()[:120],
         )
+        parsed = recovered
 
     if not isinstance(parsed, dict):
-        body = str(parsed)
-        return FindingPayload(
-            title=_title_from_text(body, fallback_title=fallback_title),
-            body=body[:65536],
-            confidence=0.3,
-            tags=["unstructured"],
+        return _unstructured_finding(
+            str(parsed), fallback_title=fallback_title, tag="unstructured",
         )
 
     try:
@@ -1828,14 +2021,38 @@ def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
         # inner markdown body AND lift its inner title so a real headline
         # survives even when the OUTER title is missing/placeholder.
         body, inner_title = _unwrap_envelope(str(parsed.get("body") or ""))
+        # V-N1: strip a TOOL-PLAN sentence from the contract's own body BEFORE
+        # anything reads it. Order is load-bearing — the title falls back to
+        # ``_title_from_text(body)``, which takes the first non-empty line, so
+        # stripping after that point would still let "We will use
+        # search_corpus." become the headline. Indicator derivation reads the
+        # same stripped body for the same reason.
+        body, body_preamble = strip_tool_plan_preamble(body)
+        if body_preamble:
+            logger.warning(
+                "inline_target.finding.tool_plan_preamble_in_body preamble=%r",
+                body_preamble[:200],
+            )
         # Title precedence: the LLM's own outer title → the unwrapped inner
         # envelope's title → a heading lifted from the rendered body → the
-        # static placeholder.
-        title = str(parsed.get("title") or "").strip()
+        # static placeholder. A title the model set to its own plan sentence is
+        # stripped the same way (it is not a headline, whichever slot it landed
+        # in); an emptied title falls through to the next source.
+        title = strip_tool_plan_preamble(str(parsed.get("title") or ""))[0].strip()
         if not title and inner_title:
-            title = inner_title
+            title = strip_tool_plan_preamble(inner_title)[0].strip()
         if not title:
             title = _title_from_text(body, fallback_title=fallback_title)
+        # V-N1: a contract whose BODY is empty or pure scaffolding is a vacuous
+        # finding, not a terse one. The live shape (``dd916255``) scored
+        # faithfulness 1.00 on ZERO claims — a perfect grade for saying nothing,
+        # which is the most misleading row this path can write. Same raise as
+        # the degrade branches; the caller DLQs the run.
+        if is_unusable_output(body):
+            raise OutputContractError(
+                "model returned a finding contract with no readable body "
+                f"(title={title[:120]!r})"
+            )
         # S3-T1: the OPTIONAL structured I&W block. The unit prompts emit it as a
         # top-level `indicators` array alongside the prose; tolerate a model that
         # nested it under `data`. Coerce leniently (drop malformed entries) so a
@@ -1884,21 +2101,17 @@ def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
         return FindingPayload(
             title=title[:2048],
             body=body[:65536],
-            confidence=float(parsed.get("confidence", 0.5)),
+            confidence=_coerce_confidence(parsed.get("confidence", 0.5)),
             evidence=[str(e) for e in (parsed.get("evidence") or [])][:50],
             tags=[str(t) for t in (parsed.get("tags") or [])][:50],
             data=data,
         )
-    except Exception as exc:                            # pragma: no cover
+    except OutputContractError:
+        raise
+    except Exception as exc:
         logger.warning("inline_target.finding.coerce_failed err=%s", exc)
-        # #125: same envelope-salvage guard as the parse-failed branch.
-        salvaged = _salvage_envelope_body(raw)
-        body = salvaged if salvaged is not None else raw
-        return FindingPayload(
-            title=_title_from_text(body, fallback_title=fallback_title),
-            body=body[:65536],
-            confidence=0.3,
-            tags=["coerce_failed"],
+        return _unstructured_finding(
+            raw, fallback_title=fallback_title, tag="coerce_failed",
         )
 
 
@@ -2255,6 +2468,57 @@ _GATHER_TOOLS = _GATHER_READ_TOOLS + _GATHER_WEB_TOOLS + _GATHER_WRITE_TOOLS
 # …) returns facts / relationships / products whose ids are NOT signal ids and
 # likewise stay UNnumbered — numbering one would fabricate an ungroundable citation.
 _GATHER_SIGNAL_ROW_TOOLS: tuple[str, ...] = ()
+
+
+def _render_gathered_block(
+    n: int, entry: Mapping[str, Any], fields: Mapping[str, Any] | None,
+) -> str:
+    """Render ONE [N]-numbered GATHERED source document.
+
+    V-N2 — THIS BLOCK USED TO CARRY NO DATE AT ALL. It rendered as
+    ``[N] <title> — <snippet>`` while a slice signal rendered its
+    ``ingested=`` / ``published=`` provenance line, and BOTH share one flat
+    ``[N]`` numbering space. Two consequences, both real:
+
+      * The D1 dated-claim rule (``_tradecraft._DATED_CLAIM_RULE``) requires
+        every load-bearing claim to carry "the date of the reporting that
+        supports it, taken from that source's OWN printed date". For a gathered
+        document there WAS no printed date, so the rule was unfollowable for
+        exactly the evidence a retrieval analyst leans on hardest. The only
+        date visible was whatever the prose happened to mention — which is a
+        date INSIDE the story, not the date OF the reporting.
+      * A document pulled from the ~106k-doc corpus can be years old, and
+        nothing distinguished it from a signal collected this morning. The
+        model cannot weigh recency it cannot see.
+
+    So the shape now mirrors :func:`_render_signal` field-for-field — same
+    labels, same order, same honesty about ingestion-vs-publication — plus a
+    RETRIEVED marker naming what this block IS: a document this run went and
+    fetched, not part of the cadence slice. The corpus doc carries
+    ``fetched_at`` / ``published_at`` at the top level of its OpenSearch
+    ``_source`` (see ``data/opensearch.py``); an absent date renders as an
+    absent field, never as a fabricated one.
+    """
+    title = str(entry.get("title") or "(untitled)")[:_MAX_TITLE_CHARS]
+    snippet = str(entry.get("snippet") or "")[:_GATHER_BLOCK_SNIPPET_CHARS]
+    fetched_at = published_at = None
+    if isinstance(fields, Mapping):
+        fetched_at = fields.get("fetched_at") or fields.get("produced_at")
+        published_at = fields.get("published_at")
+    parts = [f"[{n}] {title}", "    RETRIEVED (fetched by this run from the corpus"]
+    if fetched_at:
+        parts[1] += f"; collected {fetched_at}"
+    parts[1] += ")"
+    prov = ""
+    if published_at:
+        prov += f" published={published_at}"
+    source = entry.get("source")
+    if source:
+        prov += f" source={source}"
+    if prov:
+        parts.append(f"   {prov}")
+    parts.append(f"    snippet={snippet}")
+    return "\n".join(parts)
 
 
 def _gathered_signals_from_result(
@@ -2793,10 +3057,11 @@ async def _gather(
             # The preamble block is the model's PREVIEW to decide citations — keep
             # it short (the FULL raw source_text is in ``entry`` for the verify
             # judge). A long per-block snippet × many blocks is the context bloat.
-            gathered_blocks.append(
-                f"[{n}] {entry.get('title') or '(untitled)'} — "
-                f"{(entry.get('snippet') or '')[:_GATHER_BLOCK_SNIPPET_CHARS]}"
-            )
+            # V-N2 adds a provenance LINE (dates + RETRIEVED marker), not snippet
+            # length: one short line × at most _GATHER_MAX_CITED_SIGNALS blocks,
+            # which is what makes the dated-claim rule followable for gathered
+            # evidence at all.
+            gathered_blocks.append(_render_gathered_block(n, entry, fields))
             # L1 lineage: search_corpus / read_document carry NO ``refs`` key, so
             # without this a [N]-cited corpus doc never reaches the finding's
             # derived_from. A numbered gathered signal IS a real substrate ref the
@@ -2836,7 +3101,11 @@ async def _gather(
         sections.append(
             "SUBSTRATE INVESTIGATION — numbered source documents you gathered. "
             "Cite the ones you rely on in your finding with [N] (exactly like the "
-            "input signals) and list their signal ids in `evidence`:\n"
+            "input signals) and list their signal ids in `evidence`. "
+            "THESE ARE RETRIEVED DOCUMENTS, NOT THIS RUN'S SLICE: they come from "
+            "the whole corpus and may be of ANY age. Each block prints its own "
+            "collection and publication dates — read them before you date "
+            "anything, and never assume a retrieved document is recent.\n"
             + "\n".join(gathered_blocks)
         )
     if tool_summaries:
@@ -2959,7 +3228,16 @@ async def run_method(
         )
 
     # --- PLAN ----------------------------------------------------------
-    user_prompt = _render_user_prompt(sliced, target_id)
+    # PHASE-V D1/D8a — the window comes off the DESCRIPTOR (stamped into options
+    # by the actor from the same resolver that cut the slice), never off a
+    # constant here and never out of the prompt prose. Absent => the header
+    # simply omits the window line.
+    _window_opt = options.get("slice_window_hours")
+    user_prompt = _render_user_prompt(
+        sliced,
+        target_id,
+        window_hours=_window_opt if isinstance(_window_opt, int) else None,
+    )
     # Piece 2 (gather_only): with an EMPTY slice the default render is
     # "Number of signals: 0", which reads as "nothing to do" — the model then
     # emits an unparseable/final response in GATHER round 1 instead of a tool call,
@@ -3210,7 +3488,17 @@ async def run_method(
 
     # --- REFLECT -------------------------------------------------------
     fallback_title = f"Assessment for {target_id or 'target'}"
-    finding = _coerce_finding(content, fallback_title=fallback_title)
+    try:
+        finding = _coerce_finding(content, fallback_title=fallback_title)
+    except OutputContractError:
+        # V-N1 DEGRADE-NOT-FABRICATE. The model returned nothing a reader could
+        # use — an empty completion, or pure tool-plan / JSON scaffolding. Fail
+        # the run the same way an LLM error fails it (the runtime classifies and
+        # DLQs), rather than persisting a row that every layer above reads as
+        # analysis. Stamped as its OWN step kind so the rate is countable from
+        # traces instead of only findable by reading findings.
+        steps.append({"phase": "reflect", "kind": "output_contract_violation"})
+        raise
 
     # P0-T1 (cite the prose): parse the [N] markers the synthesis prose already
     # carries (the prompt asks every key-development claim to cite its signal [N])
@@ -3344,6 +3632,24 @@ async def run_method(
     # never touches the question row itself).
     if backlog_question_id is not None and backlog_question_id not in full_derived:
         full_derived.append(backlog_question_id)
+    # W1-C2 — THE FORWARD leg of the same linkage, and the one the review-flag
+    # plane was actually waiting on. `derived_from` (above) answers "what did
+    # this finding read?"; `claim_watch`'s flag write asks the INVERSE — "which
+    # live products rest on this question?" — and walks `output_consumption`
+    # forward from the hypothesis id (`_FORWARD_WALK_SQL`, seeded
+    # `WHERE oc.consumed_id = $1`). No producer had ever written such a row:
+    # verified live 2026-08-03, 0 rows where output_consumption.consumed_id
+    # joins hypotheses at any status, ever — so `review_flags` is 0 rows
+    # all-time and `flags_written` is 0 on every claim_watch tick, not because
+    # nothing is stale but because the walk has never had an edge to walk.
+    # Stamping the SAME resolved id the bearing edge already uses closes it,
+    # with no new query and no new judgment: an answered question is consumed
+    # by the answer. The actor materializes this via the existing data-driven
+    # `record_output_consumption` call (no kind switch); a run that resolves no
+    # question stamps nothing and is byte-for-byte unchanged.
+    consumed_edges: list[tuple[UUID, str]] = []
+    if backlog_question_id is not None:
+        consumed_edges.append((backlog_question_id, CONSUMPTION_CONTEXT_QUESTION))
     steps.append({
         "phase": "persist",
         "kind": "envelope",
@@ -3392,6 +3698,7 @@ async def run_method(
         derived_from=full_derived,
         intermediate_steps=steps,
         force_trace_only=force_trace_only,
+        consumed_edges=consumed_edges,
     )
 
 

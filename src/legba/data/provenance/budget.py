@@ -40,7 +40,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Mapping
+from typing import Any, Mapping, Sequence
 
 from typing import TYPE_CHECKING
 
@@ -261,8 +261,134 @@ async def record_budget(
     )
 
 
+# ---------------------------------------------------------------------------
+# S-4 — the judge leg's own ledger dimension
+# ---------------------------------------------------------------------------
+
+#: Prefix stamped into ``budget_ledger.analyst_version`` for judge rows.
+#:
+#: ``budget_ledger`` is keyed ``(analyst_id, analyst_version, bucket)`` and has
+#: no provider/model columns, so ``analyst_version`` is the only place a second
+#: DIMENSION can live without a migration that repartitions a live table. A
+#: judge row therefore lands as ``(desk_analyst_id, "judge:<component_id>",
+#: today)``, which gets three properties at once:
+#:
+#:   * it does NOT collide with the generation row (whose analyst_version is a
+#:     descriptor content-hash — a value that can never begin with this prefix);
+#:   * it stays INVISIBLE to per-analyst enforcement, which reads
+#:     ``WHERE analyst_id = $1 AND analyst_version = $2`` against the descriptor
+#:     version — so metering the judge cannot start throttling desks;
+#:   * it IS visible to the global governor, which sums ``tokens_used`` over the
+#:     whole bucket — which is exactly the accounting P3 found missing.
+#:
+#: Per-desk attribution is preserved by analyst_id; per-call detail lives in the
+#: run's ``analyst_traces.llm_calls`` receipt.
+JUDGE_LEDGER_VERSION_PREFIX = "judge:"
+
+
+def judge_ledger_version(component_id: str) -> str:
+    """The ``analyst_version`` a judge component's ledger rows are keyed under."""
+    return f"{JUDGE_LEDGER_VERSION_PREFIX}{component_id}"
+
+
+def is_judge_ledger_version(analyst_version: str) -> bool:
+    """Whether a ``budget_ledger`` row belongs to the judge population.
+
+    The read-side predicate for splitting the ledger — a reporting query wanting
+    generation-only totals filters these out, and one wanting judge cost filters
+    them in.
+    """
+    return str(analyst_version or "").startswith(JUDGE_LEDGER_VERSION_PREFIX)
+
+
+async def record_judge_calls_budget(
+    conn: asyncpg.Connection,
+    *,
+    analyst_id: str,
+    calls: "Sequence[Mapping[str, Any]]",
+    bucket: date | None = None,
+) -> list[BudgetLedgerRow]:
+    """Meter a run's JUDGE LLM calls into ``budget_ledger``. Returns the rows.
+
+    ``calls`` are ``run_accounting`` records (the ones
+    :meth:`LLMProviderHandler._account_call` produced) — each carrying
+    ``component_id``, ``subprovider``, ``model`` and token counts. They are
+    grouped by ``(component_id, subprovider, model)`` so one run writes ONE
+    upsert per distinct judge target, not one per claim partition; a
+    long finding can partition into many judge calls and they must not become
+    many round-trips.
+
+    ``runs`` accumulates the judge CALL count (not the analyst run count), which
+    is the denominator that makes tokens-per-judge-call readable — the figure
+    that was unobtainable while the leg was unmetered.
+
+    Cost resolves through the same :func:`compute_cost_usd` price-table dispatch
+    every other row uses. An unpriced model contributes 0 to cost while its
+    tokens still accumulate — the honest, pre-existing behaviour for self-hosted
+    and not-yet-priced endpoints, not a judge-specific fudge.
+
+    Calls with no usable token counts (a failed call — status != success — has
+    none) are skipped for the ledger: they are already evidenced per-call in the
+    trace receipt, and inventing a zero-token row would misreport the run count.
+    """
+    if not calls:
+        return []
+
+    grouped: dict[tuple[str, str, str], dict[str, int]] = {}
+    for call in calls:
+        component_id = str(call.get("component_id") or "")
+        if not component_id:
+            # Nothing to key a dimension on. The call is still in the receipt.
+            continue
+        prompt = int(call.get("prompt_tokens") or 0)
+        completion = int(call.get("completion_tokens") or 0)
+        reasoning = int(call.get("reasoning_tokens") or 0)
+        if prompt + completion + reasoning <= 0:
+            continue
+        key = (
+            component_id,
+            str(call.get("subprovider") or ""),
+            str(call.get("model") or ""),
+        )
+        acc = grouped.setdefault(
+            key,
+            {"prompt": 0, "completion": 0, "reasoning": 0,
+             "cache_read": 0, "cache_write": 0, "calls": 0},
+        )
+        acc["prompt"] += prompt
+        acc["completion"] += completion
+        acc["reasoning"] += reasoning
+        acc["cache_read"] += int(call.get("cache_read_tokens") or 0)
+        acc["cache_write"] += int(call.get("cache_write_tokens") or 0)
+        acc["calls"] += 1
+
+    rows: list[BudgetLedgerRow] = []
+    for (component_id, subprovider, model), acc in grouped.items():
+        rows.append(
+            await record_budget(
+                conn,
+                analyst_id=analyst_id,
+                analyst_version=judge_ledger_version(component_id),
+                provider=subprovider,
+                model=model,
+                prompt_tokens=acc["prompt"],
+                completion_tokens=acc["completion"],
+                reasoning_tokens=acc["reasoning"],
+                cache_read_tokens=acc["cache_read"],
+                cache_write_tokens=acc["cache_write"],
+                bucket=bucket,
+                runs_increment=acc["calls"],
+            )
+        )
+    return rows
+
+
 __all__ = [
     "BudgetLedgerRow",
+    "JUDGE_LEDGER_VERSION_PREFIX",
     "compute_cost_usd",
+    "is_judge_ledger_version",
+    "judge_ledger_version",
     "record_budget",
+    "record_judge_calls_budget",
 ]

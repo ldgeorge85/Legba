@@ -545,3 +545,151 @@ async def test_agency_accounting_is_a_noop_outside_a_run():
     )
     assert outcome.admitted is False
     assert run_accounting.current_tool_calls() == []
+
+
+# ---------------------------------------------------------------------------
+# 7) Tool ARGUMENTS — bounded + secret-redacted.
+#
+# Without them the tool leg of a receipt is unfalsifiable: two `search_corpus`
+# calls with completely different queries are indistinguishable in the audit
+# record. They were previously omitted on the stated grounds that they "already
+# live in action_pack_invocations" — they do not; that table has no args column
+# (verified against the live schema), so the arguments were recorded nowhere.
+#
+# The receipt is durable, hash-chained, retained 45 days and leaves the box via
+# substrate_export, so the redaction half of this is a security property, not a
+# nicety.
+# ---------------------------------------------------------------------------
+
+
+async def test_args_are_recorded_so_two_calls_are_distinguishable():
+    a = run_accounting.redact_tool_args({"query": "iran drone strike", "limit": 20})
+    b = run_accounting.redact_tool_args({"query": "sudan famine", "limit": 20})
+    assert a["query"] == "iran drone strike"
+    assert a["limit"] == 20
+    assert a != b
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "api_key", "apiKey", "API_KEY", "key", "map_key", "primary_key",
+        "token", "auth_token", "authToken", "access.token", "password",
+        "passwd", "pwd", "secret", "client_secret", "credential", "creds",
+        "session", "cookie", "authorization", "private_key", "signature",
+        "api_hash", "apiHash",
+    ],
+)
+async def test_secret_named_args_are_redacted(key):
+    out = run_accounting.redact_tool_args({key: "hunter2-the-real-thing"})
+    assert out[key] == "[redacted]", f"{key} leaked a credential into the receipt"
+    assert "hunter2" not in json.dumps(out)
+
+
+@pytest.mark.parametrize(
+    "key", ["keyword", "monkey", "content_hash", "signal_hash", "passage", "author"],
+)
+async def test_innocent_names_that_merely_contain_a_secret_token_survive(key):
+    """Over-redaction is the chosen default, but it has to stop somewhere:
+    substring matching would eat `keyword` and `monkey`, and putting `hash` in
+    the token set would eat `content_hash` — load-bearing forensics, not
+    secrets. Tokenised matching plus a narrow compound list is the line."""
+    out = run_accounting.redact_tool_args({key: "value-here"})
+    assert out[key] == "value-here"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "sk-abcdef0123456789",
+        "Bearer abcdef.0123456789",
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig",
+        "-----BEGIN RSA PRIVATE KEY-----",
+    ],
+)
+async def test_secret_shaped_values_are_redacted_under_an_innocent_key(value):
+    """The second net: a credential passed as `q` or `note` still goes."""
+    out = run_accounting.redact_tool_args({"note": value})
+    assert out["note"] == "[redacted]"
+
+
+async def test_nested_secrets_are_redacted():
+    out = run_accounting.redact_tool_args(
+        {"upstream": {"url": "https://x.invalid", "headers": {"authorization": "abc"}}}
+    )
+    assert out["upstream"]["headers"]["authorization"] == "[redacted]"
+    assert out["upstream"]["url"] == "https://x.invalid"
+    assert "abc" not in json.dumps(out)
+
+
+async def test_args_are_bounded_on_every_axis():
+    long_value = "x" * 5_000
+    out = run_accounting.redact_tool_args({"q": long_value})
+    assert len(out["q"]) < 400 and out["q"].startswith("xxx")
+
+    out = run_accounting.redact_tool_args({"ids": list(range(500))})
+    assert len(out["ids"]) == 11 and "more" in str(out["ids"][-1])
+
+    many = {f"k{i}": i for i in range(200)}
+    out = run_accounting.redact_tool_args(many)
+    assert out["_truncated_keys"] == 200 - 25
+
+    deep = {"a": {"b": {"c": {"d": {"e": 1}}}}}
+    assert "depth" in json.dumps(run_accounting.redact_tool_args(deep))
+
+
+async def test_oversize_args_collapse_to_key_names():
+    """The backstop: many individually-small keys still add up. The call stays
+    identifiable (its key names survive) and the row stays small."""
+    out = run_accounting.redact_tool_args(
+        {f"field_{i}": "y" * 150 for i in range(20)}
+    )
+    assert "_oversize_chars" in out
+    assert out["_keys"][0].startswith("field_")
+    assert len(json.dumps(out)) < 2_000
+
+
+async def test_redaction_never_raises():
+    class _Hostile:
+        def __repr__(self):
+            raise RuntimeError("no repr for you")
+
+        def __str__(self):
+            raise RuntimeError("no str either")
+
+    out = run_accounting.redact_tool_args({"bad": _Hostile()})
+    assert out == {"_unrenderable": True}
+    assert run_accounting.redact_tool_args(None) == {}
+    assert run_accounting.redact_tool_args("not-a-dict") == {"_args": "not-a-dict"}
+
+
+async def test_blocked_call_records_the_args_it_was_blocked_for():
+    """A block is when you most want the arguments — they are the whole
+    argument about whether the governor was right."""
+    from legba.data.analysts.agency.resolution import TargetScopeView
+
+    agency = Agency(tool_registry=ToolRegistry())
+    token = run_accounting.bind_run_accounting()
+    try:
+        await agency.run_pack_tool(
+            _StubConn(),  # type: ignore[arg-type]
+            pack=_pack("substrate_read", tools=["search_corpus"]),
+            call=ToolCall(
+                pack_id="substrate_read",
+                tool_name="search_corpus",
+                args={"query": "iran drone strike", "api_key": "leak-me"},
+            ),
+            analyst_grants=None,
+            target_allows=None,
+            scope=TargetScopeView(target_id="iran", tags=[]),
+            ctx=ToolContext(),
+        )
+        tool_calls = run_accounting.current_tool_calls()
+    finally:
+        run_accounting.reset_run_accounting(token)
+
+    assert len(tool_calls) == 1
+    args = tool_calls[0]["args"]
+    assert args["query"] == "iran drone strike"
+    assert args["api_key"] == "[redacted]"
+    assert "leak-me" not in json.dumps(tool_calls)

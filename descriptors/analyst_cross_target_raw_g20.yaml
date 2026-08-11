@@ -1,0 +1,118 @@
+# W1-E — cross_target_raw BIND (built-but-unbound evidence sheet, item 1).
+#
+# cross_target_raw (L-171, src/legba/data/analysts/cross_target_raw.py, 656
+# LOC) is one of the 9 BUILT-IN AnalystKind values (schemas/analyst.py) with a
+# complete, tested runtime path: analyst_deps_builder._build_cross_target_raw
+# resolves its LLM deps, dapr_actors._read_substrate_slice walks its
+# READ_SLICE constant (the same generic per-kind-reader mechanism every other
+# analyst uses), and its own prompt module (legba.prompts.cross_target_raw.v1)
+# is in-tree. Until this file, ZERO descriptors of any state referenced
+# `kind: cross_target_raw` (verified via `grep -rn cross_target_raw
+# descriptors/` and a live-DB `analyst_descriptors` query) and analyst_traces
+# has zero rows for it — a fully wired capability with no binding path.
+#
+# WHAT IT DOES (per its own docstring): reads raw substrate (signal rows)
+# across N named targets in ONE LLM-planner pass and emits a FindingPayload
+# tagged `cross_target=True` + `contributing_target_ids=[...]`. This is
+# distinct from `meta_findings_synthesizer` (world_assessor etc.), which
+# reads OTHER ANALYSTS' already-digested findings, not raw signals. For the
+# world-graph / multi-domain-scale direction, a first-order raw-signal read
+# across an explicit target set is a real primitive (e.g. correlating raw
+# signals across a bloc/alliance/region before any per-target finding exists)
+# that nothing else in the fleet provides.
+#
+# ACTOR-SIDE CARVE-OUT — LANDED (was the ⚠ KNOWN GAP in the W1-E draft):
+# The module's READ_SLICE resolves its target set from (in order) an explicit
+# runtime arg, `options.target_ids`, `subscription.targets.id_list` (the
+# field W1-E added to SubscriptionTargets), or a single `target_filter`. The
+# runtime now agrees with it on both trigger paths:
+#   * `AnalystActor._cadence_targets()` (runtime/dapr_actors.py) treats
+#     "id_list present" as ONE global run over that explicit set — it returns
+#     None (the single-global-run signal) instead of falling through to
+#     "selector, no predicate -> ALL active targets" and fanning out N
+#     redundant, byte-identical union runs. `_union_target_ids()` carries the
+#     carve-out; declaring BOTH id_list and predicate logs loudly and lets
+#     id_list win (READ_SLICE prefers it unconditionally).
+#   * `source_first_runtime._analyst_ids_for_target()` registers NO
+#     per-(analyst, target) coalescing trigger for a union subscription — a
+#     union read is cadence-driven by construction.
+#
+# This descriptor still ships `state: draft` (draft descriptors register fine
+# but get NO live actor — dapr_host.py: "draft/configured — no live actor
+# wanted", the same gate ACLED/STIX/analyst_traces_retention rely on). The
+# remaining step before ACTIVE is operator scope + cadence tuning (below),
+# not a runtime gap.
+#
+# Illustrative scope below: the G20 target set (mirrors
+# discovery_geopolitical_g20.yaml's roster) as a plausible first cross-target
+# correlation slice — an operator would replace this with whichever bloc/
+# alliance/region grouping the first real use case needs.
+
+identity:
+  id: cross_target_raw_g20
+  name: "Cross-Target Raw Signal Correlation (G20, DRAFT — see actor-side gap note)"
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: cross_target_raw
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: w1e_built_but_unbound
+
+subscription:
+  targets:
+    # id_list (NOT predicate) is what makes this a UNION run: one pass over
+    # the whole declared set. Adding a `predicate` here would be a
+    # misconfiguration — id_list wins in both READ_SLICE and the actor, and
+    # the ignored predicate is logged.
+    id_list:
+      - country_geopolitical_ar
+      - country_geopolitical_au
+      - country_geopolitical_br
+      - country_geopolitical_ca
+      - country_geopolitical_cn
+      - country_geopolitical_de
+      - country_geopolitical_fr
+      - country_geopolitical_gb
+      - country_geopolitical_id
+      - country_geopolitical_in
+      - country_geopolitical_it
+      - country_geopolitical_jp
+      - country_geopolitical_kr
+      - country_geopolitical_mx
+      - country_geopolitical_ru
+      - country_geopolitical_sa
+      - country_geopolitical_tr
+      - country_geopolitical_us
+      - country_geopolitical_za
+    data_types: [signal]
+    time_window: 24h
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: llm_planner
+  prompt_module: "legba.prompts.cross_target_raw.v1"
+  llm:
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 1536              # CrossTargetRawRunner's own default (cross_target_raw.py)
+  budget_tokens_per_day: 1000000
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # Placeholder cadence — untuned, since this never fires while state: draft.
+  # An operator promoting this to active should re-derive from measured
+  # per-run token cost, same as every other LLM analyst's cadence comment.
+  fallback_schedule: "20 6,18 * * *"
+  cooldown_seconds: 39600
+
+outputs: []

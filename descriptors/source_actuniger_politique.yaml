@@ -1,0 +1,123 @@
+# Niger desk (country_watch_ne) coverage pass — 2026-08-03. Ships DRAFT.
+#
+# WHY THIS BATCH EXISTS. A read-only count on the live signals table
+# (7-day window, `'NE' = ANY(geo)`) returned 29 rows across FOUR sources, and
+# 14 of those 29 came from source.rsshub.apnews.niger — the AP country hub that
+# has been serving the same frozen 2026-07-28 snapshot and is now PAUSED. Real
+# live Niger inflow is therefore ~15 signals/week from gdelt.files (12),
+# rsshub.rfi.afrique (2) and allafrica.headlines (1). That is not a desk; that
+# is a rumour of one. This descriptor and its siblings are the domestic-press
+# answer.
+#
+# ActuNiger (actuniger.com) — Niamey-based independent online daily, the
+# most-read general-news site inside Niger; Joomla CMS, so it exposes real
+# per-category RSS through the JoomRSS component. This descriptor takes the
+# POLITIQUE section: national politics and governance — the CNSP/Tiani
+# leadership, ministries, the France/Occident relationship, AES bloc business.
+#
+# VERIFIED LIVE 2026-08-03 by direct fetch: HTTP 200, 50 items, newest item
+# `Mon, 03 Aug 2026 14:37:15 +0000` (same day), 872 Niger/Sahel place-name hits
+# in the payload. Sample headlines seen: RN1 Maradi road rehabilitation; the
+# Journée nationale de l'Arbre with Gen. Tiani; Fête du Trône Niger/Morocco
+# cooperation; Tiani again accusing France and the West. Keyless, no
+# robots/auth wall, served as `application/atom+xml` but structurally RSS 2.0 —
+# feedparser (the handler's parser, `parser: auto`) reads either.
+#
+# NOT A DUPLICATE: checked read-only against source_descriptors — no head row
+# points at actuniger.com, and the four sources currently producing NE signals
+# are gdelt.files, rsshub.rfi.afrique, allafrica.headlines and the paused AP
+# hub. Cross-outlet repeats are collapsed downstream by cross_source_dedup, not
+# here.
+#
+# SIBLING SECTIONS, VERIFIED BUT NOT SHIPPED (so the next reader does not
+# re-probe them): `societe` IS shipped (see source_actuniger_societe.yaml);
+# `international` (50 items, newest 2026-07-30) is Sahel-regional rather than
+# Nigerien and would double the francophone-regional lane we already get from
+# RFI/France24; `faits-divers` (50 items, newest 2026-07-05) and `economie`
+# (50 items, newest 2026-07-06) are real but publish in bursts weeks apart.
+# Add them by copying this file and changing the section + cron minute.
+#
+# geo: [NE] is CORRECT here and is not the global-wire hazard. scope.geo is the
+# PUBLISHER'S origin (data/sources/baseline.py C2): it is parked in
+# `payload.publisher_origin` and promoted into the indexed `geo` column ONLY as
+# a post-enrichment fallback, when nothing in the body geocoded. ActuNiger is a
+# Nigerien outlet writing about Niger, so that fallback is exactly right — it
+# rescues domestic stories whose bodies name only Niamey/Maradi/Zinder and
+# never say "Niger". (The same declaration on a global wire would be a bug;
+# see source_rsshub_apnews_world.yaml.)
+#
+# source_class: reporting — privately-owned commercial news site, not a state
+# organ and not an official body. Credibility host actuniger.com (seeded
+# 0.62/wire by the registrar): established, widely-cited domestic outlet, rated
+# below the international wires because it operates under a military government
+# that has suspended foreign broadcasters, which is a real constraint on any
+# domestic outlet's independence and is priced in here honestly.
+#
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after the route is
+# re-verified live on the instance.
+
+identity:
+  id: source.actuniger.politique
+  name: ActuNiger — Politique
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: source_batch_2026_08
+  created: "2026-08-03T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [NE]
+  languages: [fr]
+  tags: [news, world, africa, sahel, niger, francophone, source_batch_2026_08]
+  source_class: reporting
+
+acquisition: poll
+
+cadence:
+  # Hourly, staggered minute offset — courteous to a small domestic outlet's
+  # own servers, and the handler's conditional GET makes an unchanged poll
+  # nearly free.
+  schedule:
+    factory_kind: cron
+    raw: "31 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 60
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.actuniger.com/component/joomrss/politique.feed?Itemid=101"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual can use the detected language
+    # (French here, and the multilingual NER path is the reason this feed can
+    # be ingested untranslated at all).
+    # No fact_extractor on the draft: the operator adds it after confirming on
+    # the instance that the section feed carries article bodies rather than
+    # teasers — same conservative default as every other batch.
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

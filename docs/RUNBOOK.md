@@ -76,9 +76,9 @@ specs under `docs/` for context. New here? Start with the
 
 - **⚠️ The journal needs its OWN dead-analyst canaries — two of them.** The journal assessor (Legba's first-person reflective voice) runs as **two META single-global-run analysts** (`target_filter=None`, like `world_assessor`) that SHARE one extension analyst kind, `journal_assessor` (registered via `register_analyst_kind` + the vocabulary-entries family — NOT a built-in `AnalystKind`; the built-in-kind count is unchanged): the **entry tier** (`journal_assessor`, descriptor `descriptors/analyst_journal_assessor.yaml`, cadence `0 0,12 * * *` = every 12h) and the **consolidation tier** (`journal_consolidator`, `descriptors/analyst_journal_consolidator.yaml`, cadence `0 2 * * *` = daily 02:00 UTC). Each global-run analyst can go silently dead WITHOUT a target to flag it, so **each needs its OWN activation canary** — the entry-tier canary exercises a DIFFERENT actor id than the consolidator, so a green entry tier does NOT prove the consolidator is alive. **The daily consolidator hides death the LONGEST** (a 24h beat); watch its `produced_at` directly. Producer output lands in the dedicated `journal_entries` table (migration **0048**, which also adds `journal_proposals`) — NOT `analyst_outputs` — and is **OFF the fact/finding/nexus chain**: a journal row is a *perspective OVER* the provenance chain, carrying an always-empty `derived_from` and deliberately excluded from the lineage catalog, so a `GET /api/v1/lineage/...` walk can never surface it. The two analysts are granted ONLY the `journal_read` (14 read tools incl. 9 self-instruments) + `journal_propose` packs (both non-write-fact — the grant-layer backstop for the never-write-a-fact invariant). Register them with `scripts/bringup_register_action_packs.py` (packs) + `scripts/bringup_register_analysts.py` (descriptors + the `journal_assessor` kind). The journal writes ONLY its own entries/consolidations directly; every outward effect (a correction, a change, or a self-revision) goes to the **human-gated `journal_proposals` queue**, never a live table — operator review happens via the accept/reject routes (`GET /api/v1/journal_proposals?status=pending`, `POST /api/v1/journal_proposals/{id}/accept`, `POST /api/v1/journal_proposals/{id}/reject` — reject REQUIRES a `decision_reason`; a `self_revision` touching a protected section auto-rejects on accept). Entries themselves render via `GET /api/v1/journal` + the `system.journal` UI panel.
 
-- **Deploy a fresh instance to CURRENT scope (not just the 3-feed cold-start).** The canonical one-command path (`deploy/deploy.sh --seed`, §2) does all of this; the steps below are what it automates, for reference / partial re-runs. The minimal cold-start verification set is 3 shared world-news sources (BBC / Deutsche Welle / Al Jazeera) — that is the cold-start *smoke test*, NOT the deployed scope and NOT a proven-live limit. The live system runs the full source catalog (the catalog defines 46 handler integrations in `scripts/bringup_register_source_catalog.py`; ~57 registered source descriptors, ~50 live/active including seed/baseline plus the standalone state-media feeds IRNA / PressTV / Ukrinform and the UCDP GED adapter — the latter currently **paused pending an access token**). To stand a fresh instance up to current scope:
+- **Deploy a fresh instance to CURRENT scope (not just the 3-feed cold-start).** The canonical one-command path (`deploy/deploy.sh --seed`, §2) does all of this; the steps below are what it automates, for reference / partial re-runs. The minimal cold-start verification set is 3 shared world-news sources (BBC / Deutsche Welle / Al Jazeera) — that is the cold-start *smoke test*, NOT the deployed scope and NOT a proven-live limit. The live system runs the full source catalog (the catalog defines 46 handler integrations in `scripts/bringup_register_source_catalog.py`; ~57 registered source descriptors, ~50 live/active including seed/baseline plus the standalone state-media feeds IRNA / PressTV / Ukrinform and the UCDP GED adapter — the latter **retired** pending an operator-held access token, SEAMS #37). To stand a fresh instance up to current scope:
   1. Empty substrate up + schema (§2–§3): a fresh deploy applies the single proven baseline `deploy/baseline/0001_baseline.sql` (ledger pre-seeded to head **0053**), then `migrate` applies any future (`0054`+) migrations — currently `0054`…`0105` (live head **0105**; `0095`/`0100` intentionally unused — the runner discovers by sorted glob, so gaps are harmless).
-  2. Vault + stack components (§6–§7), then the source-first working set — packs, the 3 minimal sources, 19 G20 targets, the analysts. **`deploy.sh` registers the LIVE analysis spine via the split registrars** — `bringup_register_analysts.py` registers the eight bounded units + the composition tower (`country_composition` / `region_composition` / `world_assessor` / thematic `escalation_composition`) + the deterministic I&W pair (`indicator_tracker` / `collection_gap`); `bringup_register_watch_country_targets.py` adds the watch tier (13 desks today — extend its `WATCH_ISO2` list to add more); `bringup_register_region_targets.py` adds the 5 region frames. (The older combined `scripts/bringup_register_p17_workingset.py` is a **frozen legacy path** that registers the RETIRED `country_assessor` monolith set — it does NOT bring up the current spine; prefer `deploy.sh`.)
+  2. Vault + stack components (§6–§7), then the source-first working set — packs, the 3 minimal sources, 19 G20 targets, the analysts. **`deploy.sh` registers the LIVE analysis spine via the split registrars** — `bringup_register_analysts.py` registers the eight geopolitics bounded units + the composition tower (`country_composition` / `region_composition` / `world_assessor` / thematic `escalation_composition`) + the deterministic I&W pair (`indicator_tracker` / `collection_gap`) — the ninth unit, `disruption_status`, ships instead with `bringup_register_supply_chain_pack.py` alongside its thematic lane/flow desks; `bringup_register_watch_country_targets.py` adds the watch tier (13 desks today — extend its `WATCH_ISO2` list to add more); `bringup_register_region_targets.py` adds the 5 region frames. (The older combined `scripts/bringup_register_p17_workingset.py` is a **frozen legacy path** that registers the RETIRED `country_assessor` monolith set — it does NOT bring up the current spine; prefer `deploy.sh`.)
   3. **Then the FULL source catalog** — run `scripts/bringup_register_source_catalog.py` to register the 46-source catalog (this is what takes the instance from the 3-feed cold-start to current scope), plus the deterministic cadence analysts + the budget envelope (§7).
   4. Seed the knowledge roots (§7.2) and verify ingestion (§9). A current-scope instance reaches order-of-magnitude tens-of-thousands of signals and tens-of-thousands of findings — the 3-feed set will not.
 
@@ -227,9 +227,9 @@ Idempotent. Re-runs skip already-applied migrations
 > A **fresh deploy** does not replay the full migration history: it applies the
 > single round-trip-proven baseline `deploy/baseline/0001_baseline.sql` (which builds
 > the schema + AGE graph and pre-seeds the ledger to head **0053**), then `migrate`
-> applies any **future** (`0054`+) migrations — currently `0054`…`0105`; live head
-> **0105** (`0095`/`0100` intentionally unused; the runner discovers by sorted glob,
-> so gaps are harmless). Highlights: the contested-claims schema, the
+> applies any **future** (`0054`+) migrations — currently `0054`…`0185`; live head
+> **0185** (`0095`/`0100`/`0110`/`0111` and several later slots intentionally
+> unused; the runner discovers by sorted glob, so gaps are harmless). Highlights: the contested-claims schema, the
 > `unit_reference_labels`
 > gold table, and the composition-tower supersession fold (`0054`…`0060`); the
 > DQ-program migrations (`0061`…`0075`); the 2026-07 audit-remediation sweep
@@ -240,8 +240,13 @@ Idempotent. Re-runs skip already-applied migrations
 > correctness labels + gold-set pinning, contention surfacing + the tie-break
 > cache, fact-decay states, source track records, the traces-retention index,
 > narratives + echo edges, desk baselines, the evidence archive, and the
-> watchlist — all additive/idempotent; see `DATA_MODEL.md` for the per-table
-> detail). The audit-remediation migrations are **demote/close-only** (they
+> watchlist — all additive/idempotent); the follow-on wave (`0106`…`0116` —
+> forward consumption, review flags + bearing edges, retention policies,
+> retrieval origin, collection requirements, the source-quality view); and the
+> 2026-08 arc (`0117`…`0185`, sparse-numbered — hygiene closes, the
+> `entity_edges` graph substrate + backfills, corpus tombstones, the
+> `situation_events` trajectory ledger at `0184`, the merge-keeper repoint at
+> `0185`; see `DATA_MODEL.md` for the per-table detail). The audit-remediation migrations are **demote/close-only** (they
 > tombstone or re-fold junk, never hard-delete):
 >
 > - **0076** — entity re-fold + junk gate (`entity_profiles` 12,257 → 12,144).
@@ -290,7 +295,7 @@ Set in the gitignored `.env` (placeholders + full notes in `.env.example`):
 | `LEGBA_GEOCODER_CONTACT_EMAIL` | OSM Nominatim User-Agent contact (required by OSM ToS) | unset/`.invalid` → geocode **refuses** to build → signals land geo-less → **no geo-scoped findings**. Set a reachable address. |
 | `LEGBA_MEDIA_API_URL` | hosted media-extraction endpoint | unset → `process_media` refuses loud (declared seam) |
 | `LEGBA_A2A_ENABLED` / `LEGBA_A2A_TRUSTED_KEYS` | mount + key-gate the runtime `/a2a/skills` surface | unset → a2a UNMOUNTED |
-| `LEGBA_ACTOR_INVOKE_TIMEOUT_SECONDS` | ActorProxy invoke round-trip budget (the trigger-engine → actor `run` call). Raised from 60→180 so a busy target's `cross_source_dedup` sweep doesn't time out; the actor's own cooldown + trigger-window CAS dedup a late completion. | unset / malformed / ≤0 → falls back to **180s** (`source_first_runtime.actor_invoke_timeout_seconds`) |
+| `LEGBA_ACTOR_INVOKE_TIMEOUT_SECONDS` | ActorProxy invoke round-trip budget (the trigger-engine → actor `run` call). Raised from 60→180 when the heaviest deterministic sweep was `cross_source_dedup` fanned out per target; as of 2026-08-02 that analyst is a singleton running ~0.85s, so the 180s is now headroom for the rest of the fleet rather than for dedup. The actor's own cooldown + trigger-window CAS dedup a late completion. | unset / malformed / ≤0 → falls back to **180s** (`source_first_runtime.actor_invoke_timeout_seconds`) |
 
 ### 4.0.1 Alerting + archive + retention keys (2026-07 wave)
 
@@ -808,7 +813,7 @@ docker compose run --rm --no-deps -v "$PWD:$PWD" -w "$PWD" \
 with the canonical demo set — 3 shared world-news sources, 19 G20 country
 targets (geo-predicate `source_selector` + per-country subscription + inline
 analyst), the action packs, and the analysts — use `deploy.sh` (which registers
-the LIVE spine: the eight bounded units + the composition tower + the I&W pair via
+the LIVE spine: the nine bounded units + the composition tower + the I&W pair via
 the split registrars). The frozen `p17_workingset` one-pass path below registers only
 the RETIRED `country_assessor` monolith set and is kept for dependency-ordering
 reference; run the deterministic analysts + the daily
@@ -1659,6 +1664,14 @@ time.
    injection for auth. Don't move the WS path back into the
    basic_auth-gated handle.
 
+   The SPA's own credential rides the `legba.bearer.v1` **subprotocol**
+   (`Sec-WebSocket-Protocol: legba.bearer.v1, <base64url token>`) — the one
+   custom header a browser CAN set on an upgrade — not `?token=`. The
+   query-param path still authenticates during the rollout window and logs
+   `registry.ws.auth.deprecated_query_token`; grep for that line to know when
+   it is safe to delete. Manual probes (`wscat` below) can keep using
+   `?token=` or an `Authorization: Bearer` header.
+
 ## 13. Alternative: host-mode systemd
 
 The pre-2026-05-23 host-mode bring-up used systemd units that ran
@@ -1887,7 +1900,7 @@ Stages (each must pass; the gate stops at the first failure):
 
 | # | Stage | Backing command | Pass condition |
 |---|---|---|---|
-| 1 | Strict test suite | `LEGBA_TEST_STRICT=1 scripts/run_tests_in_container.sh` | Green; INFRA-gated skips ESCALATE to failures (no silent coverage loss). Known pre-existing infra failures (SSRF-127.0.0.1, port-6090, daprd/webhook/agency/critic e2e) are documented exceptions — see PROJECT_STATE. |
+| 1 | Strict test suite | `LEGBA_TEST_STRICT=1 scripts/run_tests_in_container.sh` | Green; INFRA-gated skips ESCALATE to failures (no silent coverage loss). Known pre-existing infra failures (port-6090, daprd/webhook/agency/critic e2e) are documented exceptions — the authoritative, node-id-level list is now `KNOWN_FAILURES` in `scripts/host_nightly_suite.sh` (§24.4), which is measured rather than remembered. |
 | 2 | No-stub gate | `git grep` for stub/mock markers in `src/**` | Zero hits. A genuinely-deferred item is a fail-loud declared SEAM in `docs/SEAMS.md`, never a silent stub (`tests/test_no_undeclared_stubs.py` is the mechanical enforcer). |
 | 3 | Descriptor validation | `validate_descriptors.py` (or YAML-parse fallback) | Every descriptor parses + type-checks. |
 | 4 | UI build (tsc gate) | `docker compose --profile ui build legba-ui-build` | The container build IS the type-check — a tsc error fails the build. |
@@ -1895,14 +1908,24 @@ Stages (each must pass; the gate stops at the first failure):
 | 6 | Release manifest | `scripts/make_release_manifest.sh` | Writes `release/manifest-<gitsha>.txt` (image digests + pip freeze + UI lockfile hash + migration baseline + smoke commands). Fold-in keeps it from going stale vs the tag. |
 | 7 | Deployed-stack smoke | `scripts/release_smoke.sh` | 401/403/200 bearer pattern, migration-ledger non-empty, caddy edge serving. Optional (`SKIP_SMOKE=1` when no stack is up). |
 
-**Manifest reproducibility.** Compose pins the third-party substrate images
-to floating tags (`apache/age:latest`, `qdrant:latest`,
-`busybox:latest`) to keep dev velocity. The
-manifest freezes the exact answer at release-tag time: resolved sha256
-digests (`docker image inspect`), the real installed `pip freeze` from the
-built runtime image, the UI `package-lock.json` hash, and the migration
-baseline. Re-pinning compose to digests is optional — recording them in the
+**Manifest reproducibility.** Compose still carries some third-party images on
+floating tags (`qdrant:latest` is pinned; `busybox:latest`, `caddy:2-alpine`,
+`redis:7-alpine` and friends are not) to keep dev velocity. The manifest
+freezes the exact answer at release-tag time: resolved sha256 digests
+(`docker image inspect`), the real installed `pip freeze` from the built
+runtime image, the UI `package-lock.json` hash, and the migration baseline.
+Re-pinning compose to digests is optional for those — recording them in the
 manifest is the required step.
+
+**The one exception is the substrate.** `postgres` is pinned **by digest**
+(`apache/age@sha256:4241e2d8…`), not by tag, because that image holds every
+row of truth in the system: a silent `docker compose pull` swapping the
+storage engine underneath 2 GB of facts, entities and provenance is not a
+dev-velocity trade, it is an unreviewed migration. Rolling it forward is a
+deliberate act — re-read the digest with
+`docker buildx imagetools inspect apache/age:latest`, bump the line, and
+re-run `scripts/age_probe/run_probe.sh` so the engine's behaviour is
+re-measured *before* it reaches the data (see `docs/AGE_PROBE_REPORT.md`).
 
 ## 19. Codename / prior-host scan findings (2026-06)
 
@@ -2316,7 +2339,84 @@ installs its own line; they live beside the §24 stall watchdog in
 */15 * * * * root /usr/local/deployments/active/legba/scripts/host_search_canary.sh >/dev/null 2>&1
 ```
 
-All three are installed and running on this host. Verify with
+**Retired: `scripts/loop_healthcheck.sh` (S-3, 2026-08-02).** A fourth watchdog
+used to exist, scheduled from the ROOT CRONTAB rather than the file above:
+
+```cron
+*/10 * * * * bash scripts/loop_healthcheck.sh >> /var/log/legba_loop_health.log 2>&1
+```
+
+That line has a **relative path and no `cd`**. Cron runs it from `$HOME`
+(`/root`), where `scripts/` does not exist, so every invocation since the
+2026-06-09 install died with `bash: scripts/loop_healthcheck.sh: No such file
+or directory` — 7,834 of 7,834 runs, a log of exactly one repeated line and not
+one execution of the script body. The three lines in the block above use
+ABSOLUTE paths, which is precisely why they work and this one never did.
+
+It was retired rather than repaired because everything it tested is already
+covered strictly better:
+
+- its signal-freshness half → §24's stall watchdog, at a tighter threshold
+  (30 min vs 35), twice the cadence, with an actuator and a durable
+  `alert_sink_deliveries` row — where `loop_healthcheck` only echoed into a
+  logfile that had no reader and no pager;
+- its findings-freshness half → the LLM heartbeat, which excludes deterministic
+  analysts (their output masks an LLM-plane outage — the blind spot a naive
+  `max(analyst_outputs.created_at)` cannot see) and actually pages;
+- its trigger was an **AND** of the two, so a pure LLM-plane outage with signals
+  still flowing could never trip it — exactly the 2026-07-29 class;
+- its printed remediation (`--force-recreate` the scheduler + wipe
+  `deploy/dapr-scheduler-data/`) contradicts current doctrine, which is
+  **restart, never recreate** (recreate churn is itself implicated in degrading
+  the actor plane — see §24). Repairing the path would have armed a watchdog
+  that prints actively harmful advice.
+
+**The operator step is DONE** (verified 2026-08-03): `crontab -l` is empty and
+`/var/log/legba_loop_health.log` no longer exists. Nothing references the
+script — no cron.d file, no deploy path, no doc.
+
+**Retired: `scripts/loop_watchdog.sh` (S-6 rider, 2026-08-03).** The sibling of
+the above, and the last of the dead watchdog family (P6 H7). It was **never
+scheduled anywhere** — not in `/etc/cron.d/legba-watchdog`, not in the root
+crontab, not in `deploy/`, and referenced by no file in the repo but itself
+since the day it was committed (2026-06-24). It has therefore never run once,
+and unlike `loop_healthcheck` it did not even leave a log to prove it.
+
+It was retired rather than armed, because arming it would have been actively
+dangerous:
+
+- Its remediation is
+  `docker compose up -d --force-recreate dapr-placement dapr-scheduler
+  dapr-sidecar legba-runtime-dapr`. Current doctrine is **restart, never
+  recreate** — recreate churn is itself implicated in degrading the actor plane
+  (§24). This is the same doctrine error that helped retire `loop_healthcheck`.
+- Worse, it force-recreates **`dapr-scheduler`**, which is the single most
+  destructive action available in this stack. The scheduler carries an embedded
+  etcd holding every live reminder; `stop_grace_period: 45s` exists in
+  `docker-compose.yml` *specifically* because docker's default 10 s
+  SIGTERM→SIGKILL was corrupting that etcd mid-write, and the artefact of the
+  time it did — `member/wal/…​.wal.broken`, 19 MB, 2026-06-15 — is still on disk.
+  An automated, cron-driven recreate of that container is a machine that
+  periodically risks total cadence loss to fix a stall a restart fixes.
+- Its kill switch is `/tmp/legba_watchdog_off`, a **different flag** from the
+  `/etc/legba-watchdog.disabled` every other host script honours — so an
+  operator quieting the host layer the documented way before maintenance would
+  not have quieted this one. Its restart cooldown marker also lives in `/tmp`,
+  i.e. is cleared by a reboot.
+- Its detection is `max(signals.fetched_at)` OR `max(analyst_outputs.created_at)`
+  at 22 min. §24's stall watchdog supersedes it: signal freshness at 30 min on a
+  `*/5` cadence, behind a seven-rung safety ladder, with the P2-ordered restart
+  recipe and a durable `alert_sink_deliveries` row. The `analyst_outputs` half
+  is the same blind spot `loop_healthcheck` had — deterministic analysts keep
+  producing output straight through an LLM-plane outage and mask it — which is
+  the gap §24.1's LLM heartbeat was built for.
+- It logged its remediation into `/var/log/legba_loop_health.log`, the log
+  retired above.
+
+The only repo change is the deletion. There is **no operator step** this time:
+there was never a cron line to remove.
+
+All three watchdogs above are installed and running on this host. Verify with
 `cat /etc/cron.d/legba-watchdog` plus `tail /var/log/legba-watchdog.log`; note
 that the canary and heartbeat **exit silently when healthy**, so an empty log is
 the expected steady state and the absence of a streak file
@@ -2324,3 +2424,414 @@ the expected steady state and the absence of a streak file
 To confirm the canary can actually fire, run it once with a deliberately bogus
 component — `SEARCH_COMPONENT_ID=search.nonexistent.local
 scripts/host_search_canary.sh` — twice, and check the page lands.
+
+## 24.2 Container log collector (off-box logs, S-5)
+
+**The problem it solves.** Docker's json-file driver is capped (`x-logging` in
+`docker-compose.yml`, 100 MB × 5), but the log lives inside the container's
+storage and **dies with it**. Every `docker compose up -d --force-recreate`
+therefore deletes history. That has already cost a real investigation: on
+2026-08-01 the runtime froze at 17:30 and the 19:31 recreate destroyed the
+container that froze, taking every line with it. The minute-level
+reconstruction of that outage exists only because `legba-registry` happened
+**not** to be part of that recreate, so its access log still covered the window.
+That is luck, not observability.
+
+**What it is.** `scripts/host_log_collector.sh` — one detached
+`docker logs --follow --timestamps` per compose container, appending to
+`/var/log/legba/containers/<service>.log`. The script itself is the
+**supervisor** for those followers: cron runs it every minute and it (re)starts
+any follower that is missing, dead, or bound to a container id that no longer
+exists (i.e. was recreated under it). Because the followers stream
+*continuously*, every line is already on the host filesystem by the time a
+container is destroyed — that is what "surviving recreates" means here.
+
+Deliberately **not** Vector / Fluent Bit / an OpenSearch pipeline (the design
+drafted in `FEATURE_COMPLETE_PLAN.md`). Those are right for a fleet; this is one
+host that needs its evidence to outlive a recreate, with no new container, no
+new dependency, and nothing extra to keep healthy.
+
+**Install** (operator, one step — the repo ships the cron file, it does not
+install it):
+
+```bash
+cp /usr/local/deployments/active/legba/deploy/cron.d/legba-log-collector \
+   /etc/cron.d/legba-log-collector
+chmod 0644 /etc/cron.d/legba-log-collector
+```
+
+The cron line is:
+
+```cron
+* * * * * root /usr/local/deployments/active/legba/scripts/host_log_collector.sh >> /var/log/legba_log_collector.log 2>&1
+```
+
+**Absolute paths, everywhere.** That is not style. `scripts/loop_healthcheck.sh`
+was installed with a relative path and no `cd`, so cron ran it from `/root` and
+it failed **7,834 out of 7,834 times over 54 days without executing one line of
+its body** (§24.1). Every path in the collector is absolute and nothing in it
+reads `$PWD`.
+
+> **Install the cron, don't just run the script.** Running it by hand starts
+> followers that deliberately **outlive your shell** (`setsid`, so cron cannot
+> kill them either). Rotation, however, happens only on a supervisor **tick** —
+> so a hand-run with no `/etc/cron.d/legba-log-collector` leaves 15 detached
+> followers appending to files **nothing will ever trim**. Half-installed is the
+> one state worse than not installed. If you find yourself there:
+> `scripts/host_log_collector.sh stop`, then install the cron and let it start
+> them properly.
+
+**Verify it is actually running** — the steady state is silent, so silence is
+not evidence:
+
+```bash
+stat -c %y /var/lib/legba-logship/heartbeat     # touched every tick
+/usr/local/deployments/active/legba/scripts/host_log_collector.sh status
+ls -la /var/log/legba/containers/
+```
+
+`status` prints one line per compose service with the follower pid, the
+container id it is bound to, and the live file size. A service reading
+`NOT-FOLLOWING` is the failure to chase.
+
+**Operator surface.**
+
+| Command | Effect |
+|---|---|
+| `host_log_collector.sh` | supervise once — what cron runs |
+| `host_log_collector.sh status` | follower + size, one line per service |
+| `host_log_collector.sh stop` | stop every follower; the files stay |
+| `DRY_RUN=1 host_log_collector.sh` | print what it *would* start; start nothing |
+| `touch /etc/legba-watchdog.disabled` | quiets it, and the §24 watchdogs, together |
+
+**Which containers.** Discovered from compose labels
+(`com.docker.compose.project=legba`), not a hardcoded list — a service added to
+`docker-compose.yml` is collected on the next tick with no edit here. It also
+skips non-compose strays automatically: `legba-test-age-w1`, the orphan
+test-fixture Postgres, carries no compose labels and is correctly ignored.
+`LEGBA_LOGSHIP_SERVICES` is an explicit allowlist when you want fewer.
+
+**Rotation is copy-truncate, performed by the script**, not by logrotate. That
+is not a preference — it is the only correct shape here. The follower holds an
+**open append fd** on the live file, so a rename-based rotation (`mv live
+live.1`) leaves it writing into `live.1` forever while `live` stays empty. This
+is verifiable in ten seconds and worth doing once if you ever change it:
+
+```bash
+( for i in $(seq 1 200); do echo "line-$i"; sleep 0.05; done ) >> /tmp/t.log &
+sleep 1.5; mv -f /tmp/t.log /tmp/t.log.1; : > /tmp/t.log; sleep 1.5
+wc -l /tmp/t.log        # 0 — the writer was stranded on the rotated inode
+```
+
+Copy-truncate (`cp live live.1 && : > live`) keeps the fd valid: an `O_APPEND`
+writer always writes at EOF, which is 0 after the truncate. The collector also
+rotates **its own** cron log (`/var/log/legba_log_collector.log`) the same way,
+since "no logrotate for any `/var/log/legba*.log`" is a standing finding and a
+log collector that leaks its own log would be a poor answer to it.
+
+**Cost, stated rather than buried.** The host has been running near 86% disk, so
+size the collector before it surprises you:
+
+- **Disk** — worst case `services × LEGBA_LOGSHIP_MAX_BYTES × (LEGBA_LOGSHIP_KEEP + 1)`.
+  At the defaults (32 MiB, keep 3) and the current 15-container project that is
+  **~1.9 GB**.
+- **First-run burst** — the one number that surprised us, so it is called out
+  separately. `docker logs --follow` with no `--since` replays the container's
+  **entire retained json log**, which compose caps at 100 MB × 5 = **500 MB per
+  container**. Arming the collector against the live stack wrote **125 MB from
+  `legba-caddy` alone in the first seconds** — while that same container's
+  steady-state rate is ~180 bytes/20 s, four orders of magnitude apart. So the
+  first follow is the entire disk risk and it is pure backfill of history the
+  json-file driver still holds anyway. `LEGBA_LOGSHIP_FIRST_RUN_LOOKBACK`
+  (default `1h`) bounds it: the same caddy first-run now writes **18.7 KB**.
+  A *recreate* still replays from the beginning — that container is seconds old
+  and its window is exactly what the recreate would have destroyed.
+- **Memory** — one `docker logs --follow` CLI process per container, ~15 MB RSS
+  each, **~225 MB** across the project. That is the honest price of the simple
+  design; `LEGBA_LOGSHIP_SERVICES` trims it.
+
+**Two failure modes this script was caught making, during its own bring-up
+test** — both are in the file's comments, and both would have made it *look*
+like it worked:
+
+1. Splitting the container's stdout and stderr into two files left
+   `legba-registry.log` at **0 bytes** while every line of the access log went
+   to a `.err` sidecar nobody would think to open — Python's `logging` defaults
+   to stderr, so this affects most of the fleet. The streams are now merged into
+   one file, which is also what `docker logs` shows you.
+2. A background follower **inherits** the supervisor's `flock` fd, and an
+   inherited fd shares the open file description that carries the lock — so the
+   first follower held the single-flight lock for its entire life and every
+   later tick `flock -n`-failed and exited silently. Rotation would have stopped
+   and a recreated container would never have been re-followed. The launch now
+   closes fd 9 in the child (`9>&-`).
+
+## 24.3 Actor turn budgets (S-6) — why a hung activate no longer freezes the plane
+
+**The 08-01 mechanism, in four facts that compose.** A strict-mode parse bug
+made `proxy.activate()` **hang** rather than fail. `ENSURE_ACTIVE` — the
+reconciler's durability heal — fires against *every* active analyst and source
+on *every* periodic resync. The reconcile main loop is **strictly serial**. And
+Dapr actors are **turn-based** with reentrancy disabled everywhere
+(`dapr/components/configuration.yaml` declares no reentrancy). So each hung
+activate ate the full 90 s `run_once` bound *and* held its actor's turn forever;
+the queue crawled at one descriptor per 90 s (visible in the registry access log
+as one perfectly-spaced GET every 90 s), and every cadence reminder and
+coalesced fire queued behind a turn that would never complete. The whole plane
+was turn-poisoned by its own durability heal inside one resync cycle.
+
+**Two bounds now exist, and they are a pair.** This is the part worth
+remembering, because it is counter-intuitive: a deadline on the *caller* cancels
+the caller's coroutine, it does **not** release the callee's turn — the actor
+runtime holds a per-id lock inside the app process. So:
+
+1. **`src/legba/runtime/dapr_host.py`** bounds every proxy lifecycle call in the
+   reconcile executor. This stops the queue *paying* for a wedged actor. A
+   timed-out call is a logged skip, and the observed-state row is deliberately
+   **not** written — recording an activate that never confirmed is how the
+   reconciler goes blind to the one actor that is actually broken.
+2. **`AnalystActor._on_activate`, `SourceActor._core` / `activate` / `retire`**
+   bound the hang-prone I/O *inside* the turn (the registry deps refetch, the
+   reminder registration, upstream provisioning). This is what makes the turn
+   **complete**, which is what lets the queue behind it drain.
+
+Plus a **breaker** on the heal only: after N consecutive deadline misses on one
+actor, `ENSURE_ACTIVE` is suppressed for a cooloff instead of being re-poked
+every resync. Safe because the heal re-runs next resync anyway; at 217 active
+actors a fleet-wide wedge would otherwise burn `217 × deadline` per cycle,
+every cycle. CREATE / RETIRE / TRANSITION are deadline-bounded but never
+breaker-skipped — those are one-shot convergence steps, and skipping one means a
+descriptor that never reaches its declared state.
+
+**Tunables** (all fail safe — unset, malformed or non-positive falls back to the
+default, so a typo can never silently disable a budget):
+
+| Env | Default | What it bounds |
+|---|---|---|
+| `LEGBA_RECONCILE_HEAL_TIMEOUT_SECONDS` | 20 | one proxy lifecycle call from the reconcile executor |
+| `LEGBA_ACTOR_TURN_OP_TIMEOUT_SECONDS` | 30 | one hang-prone op inside an actor turn |
+| `LEGBA_RECONCILE_HEAL_BREAKER_TRIPS` | 3 | consecutive heal misses before the breaker opens |
+| `LEGBA_RECONCILE_HEAL_BREAKER_COOLOFF_SECONDS` | 600 | how long an open breaker suppresses the heal |
+
+The heal deadline must stay **well below** `ReconcileLoop.run_once_timeout`
+(90 s) — that gap is the entire fix, and a test pins the ratio.
+
+**What to grep when the plane looks slow:**
+
+```bash
+docker logs --since 30m legba-legba-runtime-dapr-1 2>&1 | grep -E \
+  'action_executor.deadline|action_executor.heal_suppressed|actor_turn.budget_exceeded|activate.deps_timeout|reminder.timeout'
+```
+
+- `action_executor.deadline` — a lifecycle call blew the heal budget; carries
+  the consecutive count.
+- `action_executor.heal_suppressed` — the breaker is open for that actor. If
+  this is fleet-wide you are in an 08-01-shaped event: the actors are not
+  answering, and the reconcile loop is now surviving it rather than freezing.
+- `actor_turn.budget_exceeded` — an op *inside* a turn was released. The turn
+  completed; the queue behind it drained.
+- `dapr_actors.analyst.activate.deps_timeout` — the registry did not answer the
+  deps refetch. Check `legba-registry` load before blaming the actor.
+- `dapr_actors.analyst.reminder.timeout` — daprd/scheduler did not answer the
+  reminder registration. Logged separately from `reminder.invalid` on purpose,
+  so a scheduler-plane problem is never misread as a descriptor typo.
+
+Steady state emits **none** of these.
+
+## 24.4 Nightly CI-lite suite (R7, 2026-08-04)
+
+**The condition.** There is no CI. The suite was green whenever somebody last
+remembered to run it, which has been as much as a week, so a regression
+surfaced when the next person ran the suite for an unrelated reason — usually
+mid-wave, and usually blamed on whatever they had just changed.
+
+**What runs.** `scripts/host_nightly_suite.sh`, nightly at 03:00 local, in
+three phases, cheapest first:
+
+| Phase | What | Why |
+|---|---|---|
+| `lint` | `ruff check` per `[tool.ruff]` in `pyproject.toml` | Seconds. A syntax-level mistake pages in one minute, not two hours. |
+| `ordered` | Full suite, `-p no:randomly` | The run that is comparable night to night. |
+| `shuffled` | Full suite, `--randomly-seed=<logged>` | File order is an accident, not a contract. A suite that only passes in one order is hiding shared state between tests. |
+
+All three go through `scripts/run_tests_in_container.sh` — one image, one
+mount, one `REPO_ROOT` — so lint and tests can never drift onto different
+interpreters or a different checkout. That runner pins
+`LEGBA_DATA_PG_DB=legba_pivot_test`, so the nightly never touches live `legba`.
+
+**Install (operator, one step)** — after the branch carrying this is merged
+into the main checkout. The cron line points at the main checkout's copy of
+`host_nightly_suite.sh`, and that script plus the `--lint` mode it calls both
+land with the same branch; installing the cron file first gives a nightly that
+silently does nothing.
+
+```bash
+cp /usr/local/deployments/active/legba/deploy/cron.d/legba-nightly-suite \
+   /etc/cron.d/legba-nightly-suite
+chmod 0644 /etc/cron.d/legba-nightly-suite
+```
+
+**Where the evidence lands.** `/var/log/legba/nightly/<UTC-timestamp>/` with
+`lint.log`, `ordered.log`, `shuffled.log`, `summary.txt`; `latest` is a symlink
+to the newest. The script rotates its own run dirs (14 kept) and caps its own
+cron log — P6 §6 item 11 is "no logrotate for any `/var/log/legba*.log`".
+
+```bash
+ls -l /var/log/legba/nightly/latest
+grep -E 'VERDICT|seed=' /var/log/legba/nightly/latest/summary.txt
+```
+
+**Reproducing a shuffled failure.** The seed is printed in `summary.txt` and in
+the alert body. Replay the exact order with:
+
+```bash
+bash /usr/local/deployments/active/legba/scripts/run_tests_in_container.sh \
+  tests/ --randomly-seed=<SEED>
+```
+
+**The allowlist is the whole point.** A nightly that always fails is a nightly
+nobody reads, so `KNOWN_FAILURES` in the script names the failures this rig
+produces for reasons that are not the code's fault — the `LEGBA_TEST_STRICT`
+infra class, where strict mode deliberately escalates infra-gated skips to
+failures and the live stack already owns the ports those tests want (daprd
+6090/NATS contention, the webhook binder, the SSRF 127.0.0.1 guard). Anything
+**not** on that list pages. Anything **on** it that stops failing is reported
+in the summary as a stale entry to retire.
+
+**The bar for adding an entry** is that the failure is a property of the RIG,
+not the code — something a clean checkout on a clean host would not reproduce.
+Merely flaky or order-dependent does not qualify; that is a bug with a
+misleading name. Four such tests were fixed rather than listed when this
+landed: the production-gauge truncation trap, two dspy assertions, and the K-4
+pre-registered acceptance gate, which had been failing on every full-suite run
+in the main checkout because its subprocess replaced the environment and so
+lost `pydantic`.
+
+**The second list, `KNOWN_SHARED_STATE`, is a work queue.** The first shuffled
+run turned up **14 genuine order dependencies** — tests that read state another
+test wrote, in a suite that shares one Postgres. They are frozen in that list
+for one reason: so a *new* one is visible above them. Without it the shuffled
+pass reports fourteen failures every night, nobody reads it, and the fifteenth
+arrives unnoticed. **The list may only ever shrink**; an addition means someone
+introduced shared state, and the answer is a fix, not an entry.
+
+They share one shape, worth naming because it is what the gauge fixture taught:
+an assertion written as a *global* statement over a substrate the whole suite
+shares — "nothing else was wired", "exactly 3 entities were damped". Written as
+a statement about the test's own rows, each would be order-proof. Reproduce any
+of them with the recorded seed:
+
+```bash
+bash /usr/local/deployments/active/legba/scripts/run_tests_in_container.sh \
+  tests/ --randomly-seed=20260804
+```
+
+**Lint policy.** `[tool.ruff]` is configured to be **green on the tree as it
+stands**. It is a ratchet for new code, not a cleanup mandate: every rule the
+current tree violates is parked in `ignore` with its violation count, and that
+list is the debt ledger. Adding a rule is therefore always safe; removing an
+`ignore` is the deliberate act that costs a cleanup commit. Never run a
+tree-wide `ruff check --fix` — the families left out (`I`, `UP`, `TID`, `S`)
+are five-figure-line diffs that would collide with every held branch.
+
+**Disable during maintenance:**
+
+```bash
+touch /etc/legba-nightly-suite.disabled   # this job only
+touch /etc/legba-watchdog.disabled        # the whole watchdog family
+```
+
+## 25. OpenSearch corpus orphan purge (W2-C, 2026-08-03)
+
+**The condition.** `legba_signals_corpus` had no delete path of any kind — the
+store exposed index/search/get and nothing else — so every `signals` purge in
+the platform's history left its documents behind. Measured exhaustively on
+2026-08-03 (every `_id` scrolled and set-differenced against `signals`, not
+sampled):
+
+```
+corpus docs                     182,648
+signals rows                    111,537
+ORPHAN docs (no signals row)     75,871   (41.5%)
+live docs                       106,777
+indexed signals carrying NO doc    4,743
+```
+
+An orphan stays BM25-searchable forever, and `read_document` serves it verbatim
+— that path does no join back to Postgres. The 41.5% supersedes the 54% in the
+2026-08-02 engine review §3.3, which was a 200-doc sample.
+
+**What is now automatic.** Every signals-deletion site writes a
+`corpus_tombstones` row (migration 0175) in the SAME transaction as its DELETE,
+and the `corpus_retention` analyst drains that queue against OpenSearch every
+15 minutes. Nothing further is required for orphans to stop accumulating.
+
+**The historical 75,871 are NOT queued automatically** — the deletion already
+happened, so there is nothing to hook. Queue them deliberately:
+
+```bash
+# 1. census only, writes nothing — confirm the numbers first
+docker exec legba-legba-runtime-dapr-1 \
+  python scripts/seed_corpus_orphan_tombstones.py
+
+# 2. queue them (the sweep drains ~2,000/tick → the backlog clears in ~5h)
+docker exec legba-legba-runtime-dapr-1 \
+  python scripts/seed_corpus_orphan_tombstones.py --apply
+
+# 3. optional: re-queue the 4,743 signals stamped indexed but carrying no doc,
+#    so corpus_indexer rebuilds them through its normal dirty-marker path
+docker exec legba-legba-runtime-dapr-1 \
+  python scripts/seed_corpus_orphan_tombstones.py --apply --requeue-missing
+```
+
+**Reversible until the sweep runs.** The queue is plain rows:
+
+```sql
+DELETE FROM corpus_tombstones
+ WHERE purged_at IS NULL AND reason = 'orphan_backfill';
+```
+
+After the drain the OpenSearch delete is real, but a doc whose Postgres row is
+gone is a projection of nothing — there is nothing to restore. Every dropped id
+stays queryable (`purged_at IS NOT NULL`), which is the audit trail that did not
+previously exist.
+
+**Watching it.** The queue is a declared `backlog_drain` loop
+(`corpus_tombstone_drain`) on the S-1 production gauge, owned by
+`corpus_retention`, so a drain that stalls pages instead of quietly growing:
+
+```bash
+curl -s "$REG/api/v1/v3/system/production-gauge?loop_class=backlog_drain" | jq
+```
+
+Per-run receipts live in the analyst trace (`examined` / `deleted` / `pending` /
+`skipped_row_alive` / `max_attempts`). **`skipped_row_alive` should always be
+0** — it counts tombstones whose `signals` row still exists, which the drain
+refuses to delete. A non-zero value means the QUEUE is wrong, not the corpus,
+and nothing was destroyed.
+
+## 26. Cold-activation deploy smoke (the 08-01 outage gate)
+
+`deploy/deploy.sh`'s verify phases prove that processes STARTED; none of them
+proves an actor can go from cold to a completed run. That is the exact gap the
+2026-08-01 outage fell through — a descriptor-parse bug that only bites on the
+COLD path kept every warm actor serving (all green) while the fleet could not
+activate, and the test suite missed it too (descriptors are built in-process;
+nothing traverses registry-fetch → parse → activate → run against a live
+sidecar).
+
+After every deploy train, run the smoke by hand:
+
+```bash
+scripts/deploy_smoke_cold_activation.sh --env-file .env
+```
+
+It forces ONE unit on ONE desk through the sidecar and asserts a **fresh
+`analyst_traces` row**, distinguishing "no trace" (cold-activation failure —
+the 08-01 shape) from "failed trace" (activated, run died), and exits nonzero
+loudly. It is deliberately a manual step rather than a `deploy.sh` verify
+phase because it WRITES — a real analyst run, a real finding — and whether the
+deploy script may mutate the substrate is an operator decision, not a wiring
+detail. Pair it with the standing deploy discipline in §0: registry FIRST,
+wait healthy, then the runtime — a stale registry 500s `/typed` and silently
+stops analysts.

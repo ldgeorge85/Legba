@@ -35,11 +35,12 @@
 #   2. Register/refresh this descriptor, then transition:
 #        POST {registry}/api/v1/registry/descriptors/source/source.gdelt.files/transition
 #             {"to_state": "configured"}   then   {"to_state": "active"}
-#   3. Once active, consider pausing/retiring source.gdelt.doc_api (still
-#      paused from the 429 incident) to avoid double-counting GDELT-derived
-#      signals — dedupe absorbs overlap either way (both use the
-#      GLOBALEVENTID+DATEADDED content-hash identity), but there's no reason
-#      to run both acquisition paths at once.
+#   3. DONE 2026-08-02 — source.gdelt.doc_api is RETIRED (migration 0121).
+#      It was never actually paused after the 429 incident; it stayed active
+#      and kept polling at an 84.3% error rate for no signal gain. Both paths
+#      share the GLOBALEVENTID+DATEADDED content-hash identity so dedupe
+#      absorbed the overlap, but the two also share GDELT's PER-IP rate limit,
+#      which is the real reason not to run them together.
 
 identity:
   id: source.gdelt.files

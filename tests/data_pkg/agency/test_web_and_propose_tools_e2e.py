@@ -412,6 +412,136 @@ async def test_request_source_and_open_question_land_rows(pool):
 
 
 # ---------------------------------------------------------------------------
+# 7a) CW-3 — a deictic question is made SELF-CONTAINED before it is stored.
+#
+# The analyst writing this call is looking at a finding, so it writes "the
+# incident" and the answer to "which one" stays in derived_from. K-4 R3
+# measured that class at 0.133 across the open-question set.
+# ---------------------------------------------------------------------------
+
+
+async def _open_question(pool, *, question, derived_from):
+    pack = _pack("propose_facts", tools=["open_question"])
+    agency = Agency()
+    ctx = ToolContext(
+        writeback=WritebackContext(pg_pool=pool, analyst_ctx=_analyst_ctx())
+    )
+    call = ToolCall(
+        pack_id="propose_facts", tool_name="open_question",
+        budget_account=f"acct-{uuid4().hex[:8]}", requested_by="analyst.x",
+        args={"question": question,
+              "derived_from": [str(r) for r in derived_from]},
+    )
+    async with pool.acquire() as conn:
+        res = await agency.run_pack_tool(
+            conn, pack=pack, call=call,
+            analyst_grants=[_ref("propose_facts")],
+            target_allows=[_ref("propose_facts")],
+            scope=TargetScopeView(target_id="t_s6"), ctx=ctx)
+    assert res.tool_result.status == "completed"
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT thesis FROM hypotheses WHERE id = $1",
+            res.tool_result.output["hypothesis_id"])
+
+
+async def _origin_finding(pool, title: str):
+    fid = uuid4()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO analyst_outputs (id, kind, title, body, confidence, "
+            "  data, analyst_id, schema_uri) "
+            "VALUES ($1, 'finding', $2, '', 0.8, '{}'::jsonb, 'unit.x', "
+            "        'iglu:legba/finding/jsonschema/1-0-0')",
+            fid, title,
+        )
+    return fid
+
+
+async def test_a_deictic_question_gets_its_referent_inlined_at_write(pool):
+    origin = await _origin_finding(
+        pool, "Narrative of Ukrainian attack on Iranian vessel, Caspian Sea"
+    )
+    thesis = await _open_question(
+        pool,
+        question="Is the framing of the incident state-orchestrated?",
+        derived_from=[origin],
+    )
+    # The analyst's question is intact; the referent is APPENDED to it, so a
+    # human reading the row sees both what was asked and what it was about.
+    assert thesis.startswith("Is the framing of the incident state-orchestrated?")
+    assert "Caspian Sea" in thesis
+
+
+async def test_a_self_contained_question_is_stored_verbatim(pool):
+    origin = await _origin_finding(pool, "Some unrelated finding title")
+    thesis = await _open_question(
+        pool,
+        question="Will Zeta nationalize Port Theta?",
+        derived_from=[origin],
+    )
+    assert thesis == "Will Zeta nationalize Port Theta?"
+
+
+async def test_an_office_with_no_referent_is_refused_not_recorded(pool):
+    """CW-8. Iran abolished the premiership in 1989 and R3 carried two rows
+    asking about it. The thesis named two offices and no country — so nothing
+    could contradict it, which is both what made it wrong and what made it
+    uncheckable. The tool refuses and says what is missing, the way it already
+    refuses an empty question."""
+    pack = _pack("propose_facts", tools=["open_question"])
+    agency = Agency()
+    ctx = ToolContext(
+        writeback=WritebackContext(pg_pool=pool, analyst_ctx=_analyst_ctx())
+    )
+    call = ToolCall(
+        pack_id="propose_facts", tool_name="open_question",
+        budget_account=f"acct-{uuid4().hex[:8]}", requested_by="analyst.x",
+        args={
+            "question": "How entrenched is the military's loyalty to the "
+                        "Supreme Leader versus the Prime Minister?",
+            "derived_from": [str(uuid4())],
+        },
+    )
+    async with pool.acquire() as conn:
+        res = await agency.run_pack_tool(
+            conn, pack=pack, call=call,
+            analyst_grants=[_ref("propose_facts")],
+            target_allows=[_ref("propose_facts")],
+            scope=TargetScopeView(target_id="t_s6"), ctx=ctx)
+    assert res.tool_result.status == "failed"
+    assert "prime minister" in res.tool_result.error
+    assert "WHOSE office" in res.tool_result.error
+
+
+async def test_the_origin_title_can_ground_an_office_question(pool):
+    """The office check runs AFTER the CW-3 inline, deliberately: the origin
+    finding routinely supplies the country an office question is missing, and
+    refusing one we were a lookup away from grounding would be the guard
+    working against the fix."""
+    origin = await _origin_finding(pool, "Iran: IRGC command reshuffle")
+    thesis = await _open_question(
+        pool,
+        question="Is the military's loyalty to the Supreme Leader shifting "
+                 "after the incident?",
+        derived_from=[origin],
+    )
+    assert "Iran" in thesis
+
+
+async def test_an_unresolvable_referent_still_records_the_question(pool):
+    """A referent that cannot be resolved must leave the thesis exactly as
+    written — visible to claim_watch's deictic guard — never fail the write.
+    A question recorded deictic is recoverable; one not recorded is not."""
+    thesis = await _open_question(
+        pool,
+        question="Is the framing of the incident state-orchestrated?",
+        derived_from=[uuid4()],          # points at nothing
+    )
+    assert thesis == "Is the framing of the incident state-orchestrated?"
+
+
+# ---------------------------------------------------------------------------
 # 8) A schema-invalid propose payload routes to the dead-letter, not a crash.
 # ---------------------------------------------------------------------------
 

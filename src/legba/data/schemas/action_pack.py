@@ -22,7 +22,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .lifecycle import AbstractionLevel, LifecycleState
+from .lifecycle import AbstractionLevel, LifecycleState, WireEnumCoercion
 
 ActionPackId = Annotated[
     str, Field(pattern=r"^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$", max_length=128)
@@ -30,7 +30,9 @@ ActionPackId = Annotated[
 Tag = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=64)]
 
 
-class ActionPackIdentity(BaseModel):
+class ActionPackIdentity(WireEnumCoercion):
+    # strict=True + enum fields ⇒ the wire's bare strings need the mixin's
+    # ``mode='before'`` coercers; see :class:`WireEnumCoercion`.
     model_config = ConfigDict(strict=True, extra="forbid")
 
     id: ActionPackId

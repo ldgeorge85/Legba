@@ -172,6 +172,11 @@ _EXPECTED_FAIL_CLASSES = {
     "judge_unsupported": "soft_fail",
     "hedge_laundering": "soft_fail",
     "unhedged_periphery_citation": "soft_fail",
+    # R2/R3 (2026-08-05) — the two INPUT checks: a lead buried under a
+    # higher-consequence input, and a detected P/not-P pair the composition
+    # never surfaced. Both soft: the defect is order and framing, not fabrication.
+    "buried_lead_salience": "soft_fail",
+    "unsurfaced_input_contradiction": "soft_fail",
     "double_counted": "soft_fail",
     "indicator_uncited_triggered": "soft_fail",
     "unscoped_absence_claim": "soft_fail",
@@ -183,6 +188,41 @@ _EXPECTED_FAIL_CLASSES = {
     # refutation (no resolvable verbatim evidence quote). Still a failure; the
     # unearned hard-fail severity is what the demotion removes.
     "judge_contradicted_unquoted": "soft_fail",
+    # W2 (2026-08-02) — the judge DID point at verbatim evidence, but the span
+    # RESOLVES the claim's subject rather than refuting it (a restatement, or a
+    # span lifted from the PRIOR READ block the claim diffs against). Distinct
+    # from the unquoted class: a bad refutation, not a missing one.
+    "judge_contradicted_unrefuted": "soft_fail",
+    # V-G1 (2026-08-03) — the refuting quote is verbatim and real, and lives in
+    # an ANALYST FINDING the claim never cited (13 of 23 traced quotes on the
+    # 08-03 panel were the desk's own superseded prior read). A desk that updates
+    # on fresh reporting is doing its job: soft, and its own class.
+    "judge_prior_read_conflict": "soft_fail",
+    # V-H4 (2026-08-04) — the claim ENUMERATED what it denies and the refuting
+    # quote names none of those things in full ("business and mortgage defaults"
+    # against "sovereign default pressures"). Real evidence, of something the
+    # claim never denied: soft, and distinct from the unrefuted class so the two
+    # demotion mechanisms stay separable in the counters.
+    "judge_contradicted_off_scope": "soft_fail",
+    # V-I1 (2026-08-05) — the refuting quote states the claim's OWN numbers back
+    # to it once numerals, units and word-numbers are normalized on both sides
+    # ("16 people were killed, and another 36 were injured" against "sixteen
+    # lives and thirty-six injuries"). It CONFIRMS: soft, and its own class
+    # because it is the only demotion about DIRECTION rather than evidence.
+    "judge_quote_confirms_claim": "soft_fail",
+    # V-I4 (2026-08-05) — the refuting quote resolves ONLY inside a GDELT/CAMEO
+    # machine-coded event record. A coding is a machine's reading of an article,
+    # not the article; the V-B route excludes the class 2,109 times a day.
+    "judge_contradicted_machine_row": "soft_fail",
+    # V-I5 (2026-08-05) — the V-B continuity router routed this claim OUT of
+    # slice checking and the judge hard-failed it anyway. The routing decision
+    # is binding: one claim cannot have two authorities.
+    "judge_contradicted_route_excluded": "soft_fail",
+    # V-G5 (2026-08-03) — a claim with NO citation marker resting on a
+    # historical/structural BASELINE about the world. The judge is instructed to
+    # pass markerless prose as synthesis, so this class rode through as SUPPORTED
+    # on both acceptance runs — the pass-side miss.
+    "uncited_world_knowledge": "soft_fail",
     # V-C (2026-07-31) — prose misquoting the platform's OWN metadata (an
     # effective_confidence / tier the cited output's captured column
     # contradicts). Soft: an overclaim about provenance, not a fabricated fact.
@@ -269,8 +309,11 @@ def test_structural_badge_resolution_pinned() -> None:
 # 4. The per-CLAIM-KIND judge profile registry
 # ---------------------------------------------------------------------------
 _EXPECTED_PROFILES = {
-    "citation_support": ("citsupp.v4", False),
-    "absence": ("absence.v2", True),
+    # V-H (2026-08-04): both prompted kinds bumped. The rubrics are unchanged;
+    # the EVIDENCE is not — every unit citation now renders an ``OUTLET:`` line,
+    # which both leads carry (V-H1).
+    "citation_support": ("citsupp.v5", False),
+    "absence": ("absence.v3", True),
     "synthesis": ("synthesis.v0", False),
     "forward_looking": ("fwd.v0", False),
     "structure": ("structure.v0", False),
@@ -333,7 +376,13 @@ def test_claim_kind_is_total() -> None:
 # ---------------------------------------------------------------------------
 #: Only these two kinds may reach the faithfulness verify pass. Widening this is
 #: a deliberate product decision, not an incidental edit.
-_VERIFY_CAPABLE_KINDS = {"FINDING", "JOURNAL"}
+# Continuity P2 (2026-08-04): SITUATION_UPDATE joins the gate DELIBERATELY.
+# It is a first-class claim about the world ("this new event escalates the
+# situation we were already watching") resting on cited verified findings, so
+# plan D3 puts it through the SAME faithfulness pass over the SAME sub-claim
+# citation bridge a composition uses. Widening the gate is exactly the
+# deliberate act this guard exists to force into the diff.
+_VERIFY_CAPABLE_KINDS = {"FINDING", "JOURNAL", "SITUATION_UPDATE"}
 
 
 def _verification_gate_source() -> str:
@@ -371,7 +420,7 @@ def test_verify_capable_kinds_are_real_output_kinds() -> None:
 
 
 def test_output_kind_roster_pinned() -> None:
-    """The 12 kinds. A new kind is a deliberate addition — and must be
+    """The 13 kinds. A new kind is a deliberate addition — and must be
     classified against the verify gate above."""
     assert {k.name for k in OutputKind} == {
         "FINDING",
@@ -386,6 +435,7 @@ def test_output_kind_roster_pinned() -> None:
         "PROMPT_MODULE_CANDIDATE",
         "JOURNAL",
         "SCORECARD",
+        "SITUATION_UPDATE",
     }
 
 
@@ -398,6 +448,7 @@ def test_verification_gate_still_parses_as_python() -> None:
     kinds = set(re.findall(r'identity\.kind\s*(?:==|in)\s*\(?\s*"([a-z_]+)"', gate))
     assert "inline_target" in kinds
     assert "journal_assessor" in kinds
+    assert "situation_tracker" in kinds
 
 
 def test_declares_verify_agrees_with_the_ladder_on_every_live_shape(

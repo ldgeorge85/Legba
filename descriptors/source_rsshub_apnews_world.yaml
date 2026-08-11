@@ -1,0 +1,139 @@
+# RSSHub lane — AP News WORLD desk-agnostic wire. Ships DRAFT (operator activates).
+#
+# THE AP RE-ROUTE (roadmap B-7). The five AP *country-hub* feeds
+# (source_rsshub_apnews_{niger,taiwan,haiti,drcongo,north_korea}.yaml) FROZE
+# upstream on 2026-07-28: every poll returned the same 39-item snapshot with no
+# pubDates, which (via the dedup fetched_at bump + the fetched_at-ordered
+# substrate slice) put a week-old snapshot at the top of five desks' context.
+# Those five are PAUSED and STAY paused — the freeze is in the apnews.com/hub/*
+# pages themselves, not in RSSHub, so re-pointing them is not available.
+#
+# What IS available is AP's site NAVIGATION section, which RSSHub renders from
+# apnews.com/world-news. This descriptor polls
+# `http://rsshub:1200/apnews/nav/world-news` on the same self-hosted RSSHub
+# sidecar (docker-compose `rsshub`, profile `sources-extra`).
+#
+# VERIFIED LIVE 2026-08-03 (re-verified from the 08-02 first probe, because a
+# frozen-once route earns no benefit of the doubt): HTTP 200, 87 items, 78
+# apnews.com/article/* links. Six article pages were fetched and their
+# `datePublished` read directly off the page — 2026-08-03T13:21Z,
+# 2026-08-03T05:50Z, 2026-08-03T04:58Z, 2026-08-02T20:09Z, 2026-08-02T04:09Z,
+# 2026-08-02T01:40Z. Same-day and prior-day AP copy: the section is live.
+#
+# KNOWN LIMITATION — THE FEED CARRIES NO pubDate. Two consequences, both
+# deliberate and both worth stating out loud rather than discovering later:
+#
+#   1. Ingest is UNAFFECTED. `rss.py::_is_not_after` returns False when an
+#      entry has no parsed date, so undated entries are never dropped by the
+#      `since` filter — every genuinely-new article is emitted and every repeat
+#      is collapsed by dedupe_tier_1 (URL-canonical) / dedupe_tier_2 (content
+#      hash). This is exactly how the five country hubs behaved while healthy.
+#
+#   2. FRESHNESS OBSERVABILITY IS NOT. With no dates the handler cannot compute
+#      `newest_entry_ts`, so the poll ledger records NULL and the serve-stale
+#      watchdog is blind to this source the same way it was blind to the frozen
+#      hubs. The honest gauge for this feed is signal PRODUCTION (created_at,
+#      never fetched_at) — the S-1 production-deficit class — not entry age. If
+#      AP's world section ever freezes the way the hubs did, the tell is
+#      "polls succeed, zero NEW signals written for N days", nothing else.
+#      Do not read a `healthy` poll ledger row as evidence of fresh content.
+#
+# ALSO MEASURED, AND DELIBERATELY NOT USED — `?mode=fulltext`. RSSHub can
+# render full article bodies (`?limit=5&mode=fulltext` returned real
+# RichTextStoryBody prose, 10.7s for FIVE items). It does not scale to this
+# route: `?limit=25&mode=fulltext` made the sidecar drop the connection
+# outright (RemoteDisconnected), and the unbounded 87-item form would be far
+# worse — while `config.timeout_seconds` caps at 300. So this descriptor ships
+# on the plain route (title + link), the same fidelity every other RSSHub-lane
+# feed ships at, and `fact_extractor` is correspondingly absent from the
+# enrichment chain. Revisit only with a bounded `?limit=` AND a raised
+# `timeout_seconds`, measured on the instance first.
+#
+# GEO IS FILTERED OUR SIDE, NOT DECLARED HERE. `scope.geo` is the PUBLISHER'S
+# ORIGIN, not the story's subject (see data/sources/baseline.py's C2 comment):
+# it is parked in `payload.publisher_origin` and only promoted into the indexed
+# `geo` column as a post-enrichment FALLBACK when nothing in-body resolved.
+# Declaring `[US]` on a global wire would therefore hand every un-geocoded AP
+# story to the US desk — the exact bug that made a Turkey desk pull 900 Anadolu
+# world stories. So geo stays EMPTY, as it is on every other global wire
+# (bbc.world, guardian.world, dw.world, aljazeera.world). Desks reach this feed
+# by the standard auto-wire — their `source_selector` asks for kind `rss` +
+# tag `news` + owner_tenant `shared` — and then narrow PER SIGNAL through their
+# own `subscription.predicate` (`geo_match(["NE"])` on country_watch_ne, and so
+# on), fed by the in-body `geocode` enrichment stage below.
+#
+# source_class: reporting (AP is a private newswire cooperative). Article links
+# are the real apnews.com URLs, so the credibility filter reads host apnews.com
+# (already seeded 0.90/wire).
+#
+# state: draft — bulk registration creates NO live actor (dapr_host skips
+# draft/configured). Activation (draft -> configured -> active) is the
+# operator's, after confirming the sidecar is up and `rsshub` is on the
+# runtime's LEGBA_EGRESS_ALLOW_HOSTS.
+
+identity:
+  id: source.rsshub.apnews.world
+  name: AP News — World (via RSSHub)
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: source_batch_2026_08
+  created: "2026-08-03T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  # EMPTY on purpose — global wire. See the geo note in the header: scope.geo is
+  # publisher origin (a desk-pollution hazard here), not story subject.
+  geo: []
+  languages: [en]
+  tags: [news, world, geopolitical, global, rsshub_lane, source_batch_2026_08]
+  source_class: reporting
+
+acquisition: poll
+
+cadence:
+  # Hourly, staggered minute offset. RSSHub caches upstream (CACHE_EXPIRE=1h by
+  # default), so polling faster just serves cache — hourly is courteous, and the
+  # handler's conditional GET (ETag / Last-Modified) makes an unchanged poll
+  # nearly free.
+  schedule:
+    factory_kind: cron
+    raw: "22 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 60
+
+config:
+  url:
+    factory_kind: text
+    raw: "http://rsshub:1200/apnews/nav/world-news"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual can use the detected language.
+    # geocode is what actually puts a country on the signal — the desks' own
+    # per-signal geo predicates read that, not scope.geo.
+    # No fact_extractor: the plain route carries title+link, not article bodies
+    # (see the fulltext measurement in the header).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

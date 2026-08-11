@@ -76,12 +76,27 @@ from .._entity_canon import canonicalize_entity, is_junk_entity, same_referent
 # canon must not) so a fragment/alias endpoint rewrites to its elected
 # entity_profiles keeper BEFORE write_nexus. Degrade-not-break: never raises.
 from .._entity_resolve import resolve_keeper
+# K-G2 — the candidate WINDOW (pending-only + merge-aware bidirectional dedup)
+# lives in its own module. ``MIN_EDGE_CONFIDENCE`` is a selection knob and is
+# defined there; re-exported here because it was this module's name first.
+from .edge_qualification import MIN_INDEPENDENT_SOURCES, RECOMMENDED_BAR
+from .reifier_alias_pairs import record_alias_pair
+from .reifier_selection import (
+    MIN_EDGE_CONFIDENCE,
+    SelectionCounters,
+    select_candidates,
+)
 
 logger = logging.getLogger(__name__)
 
 KIND_NAME: str = "relationship_reifier"
 HANDLER_VERSION: str = "0.1.0"
-PROMPT_MODULE_PATH: str = "legba.prompts.relationship_reifier.v1"
+# K-3: this named `legba.prompts.relationship_reifier.v1` — a package that has
+# never existed. Unlike the DSPy-backed kinds, this one carries its prompt in
+# `_SYSTEM_PROMPT` below and exports no `build_prompt_module`, so the dotted
+# path was aspirational and no reader ever noticed. Points at the real constant
+# now; the descriptor's `method.prompt_module` mirrors it.
+PROMPT_MODULE_PATH: str = "legba.data.analysts.relationship_reifier:_SYSTEM_PROMPT"
 
 # OUTPUT_KIND is TRACE_ONLY: this META analyst's REAL product is the `nexus`
 # rows it side-writes via write_nexus on the run's own connection. The per-run
@@ -112,10 +127,37 @@ MAX_CANDIDATES_PER_RUN: int = 40
 """Hard cap on co-mentioned pairs typed per cadence tick. Bounds the per-run
 LLM spend regardless of how many pending edges exist."""
 
-MIN_EDGE_CONFIDENCE: float = 0.45
-"""Skip the thinnest co-occurrence edges — a single co-mention (confidence ~0.4
-from entity_resolution) is too weak to reify. Pairs accrue confidence as they
-re-co-occur; this floors the candidate set at "seen more than once"."""
+DEFAULT_BATCH_SIZE: int = 12
+"""Candidates per typing call. MEASURED (``docs/TYPING_BAKEOFF_2026-08-03.md``
+§7.2-7.3), not assumed: at N=12 the core 120B returned 17/17 clean calls over
+200 candidates with zero truncation, and prompt tokens per candidate fall from
+1,462 (one call per candidate) to 297 — a 4.9× reduction, because the system
+preamble and the whole allowed-``rel_type`` vocabulary are stated ONCE per call
+instead of once per pair. N=24 and N=40 save more but rest on a single
+observation each, and N=40 showed a possible judgement shift (accepts 47.5% →
+35%) that must be ruled out before adoption."""
+
+#: THERE IS NO ESCALATION LADDER, AND THAT IS THE BAKE-OFF'S FINDING.
+#:
+#: A two-tier "type it cheap, escalate the hard ones" router needs a difficulty
+#: signal. K-G2 looked for one — qualification score, evidence length,
+#: independent-source count — and NONE predicts model disagreement (§6.2):
+#: three-way unanimity is flat at 41-48% across every stratum tested.
+#:
+#: The reason is the ceiling. ``core120b`` and the OpenRouter ``gpt-oss-120b``
+#: are the SAME WEIGHTS on identical frozen prompts at temperature 0.1, and they
+#: agree on edge-vs-reject only 79.6% of the time — **Cohen's κ = 0.589**. The
+#: model does not agree with ITSELF on one candidate in five, so ~40% of what
+#: looks like model disagreement is irreducible sampling noise on a task this
+#: underdetermined. Absent a usable difficulty signal, a ladder would route by
+#: coin-flip and pay a second model for the privilege; and any model swap
+#: re-rolls ~20% of the graph's edges whichever model "wins".
+#:
+#: So: ONE typer, on the $0 self-hosted core plane, until the operator's
+#: hand-check labels (docs/data/kg2_bakeoff/handcheck_worksheet.csv) provide the
+#: ground truth to build a real router on. Do not add a fallback tier here
+#: without that.
+SINGLE_TYPER_RATIONALE: str = "kg2_kappa_0.589_self_agreement"
 
 MAX_FACTS_CONTEXT: int = 6
 """Recent facts about either endpoint rendered into the typing prompt."""
@@ -169,6 +211,15 @@ class ReifierDeps:
     max_tokens: int = DEFAULT_MAX_TOKENS
     temperature: float = DEFAULT_TEMPERATURE
     max_candidates: int = MAX_CANDIDATES_PER_RUN
+    #: Candidates per typing call — see :data:`DEFAULT_BATCH_SIZE`. 1 restores
+    #: the pre-K-G2 one-call-per-candidate shape (still a correct path; it is
+    #: what the straggler retry uses), at 4.9× the prompt tokens.
+    batch_size: int = DEFAULT_BATCH_SIZE
+    #: The qualification bar a candidate must clear to earn a typing call, and
+    #: the hard independent-source floor beneath it. Both from K-G2 §7.4;
+    #: :mod:`.edge_qualification` owns the definitions.
+    qualification_bar: float = RECOMMENDED_BAR
+    min_independent_sources: int = MIN_INDEPENDENT_SOURCES
     system_prompt: str | None = None
 
 
@@ -182,6 +233,7 @@ _SYSTEM_PROMPT = with_preamble(
     """TASK — type the relationship between two co-mentioned entities. Decide whether a meaningful, directed relationship holds and, if so, classify it.
 Return ONE JSON object, nothing else:
 {
+  "same_entity": true|false,        // true => A and B are two NAMES for ONE entity
   "related": true|false,            // false => no real relationship; skip
   "subject": "<acting entity>",     // who initiates/conducts
   "object": "<affected entity>",    // who is targeted/affected
@@ -193,6 +245,7 @@ Return ONE JSON object, nothing else:
   "confidence": 0.0-1.0
 }
 Rules: pick rel_type ONLY from the allowed list. If merely co-mentioned with no real relationship, set related=false.
+SAME-ENTITY CHECK FIRST: if A and B are two names for the SAME thing (an acronym and its expansion — IRGC / Revolutionary Guards Corps — an abbreviation, a former name, a translation, a nickname), set same_entity=true and related=false. An entity is not related to itself. A part-whole or membership relation is NOT this: a subsidiary, a subcommittee, a province or a member state is a DIFFERENT entity from its parent.
 INTERMEDIARY rule: set "intermediary" to null UNLESS a "Candidate intermediaries" list is offered AND one of those listed entities genuinely acts as the cut-out the A->B relationship runs through. You MUST copy the intermediary VERBATIM from the offered list — never name a proxy that is not on the list, however plausible. If no offered candidate fits, intermediary=null and channel is direct/institutional as appropriate.
 Worked examples:
   - Hostile supply via a proxy: A arms a militia that attacks B -> subject=A, object=B, intermediary=the militia, rel_type=SuppliesWeaponsTo, polarity=-1, channel=proxy, intent=hostile.
@@ -641,47 +694,29 @@ def _coerce_typing(
 # ---------------------------------------------------------------------------
 
 
-async def _read_candidates(conn: Any, *, limit: int) -> list[dict[str, Any]]:
-    """Pull pending co-mentioned entity pairs from ``proposed_edges`` that are
-    not yet reified into an OPEN nexus. Ordered by confidence so the
-    most-corroborated pairs are typed first within the per-run cap.
+async def _read_candidates(
+    conn: Any, *, limit: int, keeper_cache: dict[str, str] | None = None
+) -> list[dict[str, Any]]:
+    """The per-run candidate window — see :mod:`.reifier_selection`.
 
-    FU4 — also aggregates ``source_signal_text``: the UNION of every backing
-    source signal's ``title`` + ``summary`` (joined via the edge's
-    ``derived_from`` lineage → ``signals.payload``). The D14 sports gate runs over
-    this union so a sports fixture whose sports frame ('World Cup') sits in a
-    DIFFERENT source signal than the excerpt is still gated (see
-    :func:`_sports_gate_text`). ``NULL`` when the edge has no signal lineage."""
-    rows = await conn.fetch(
-        """
-        SELECT pe.source_entity, pe.target_entity, pe.evidence_text,
-               pe.confidence, pe.produced_at, pe.derived_from,
-               (
-                 SELECT string_agg(
-                          btrim(
-                            coalesce(s.payload->>'title', '') || ' ' ||
-                            coalesce(s.payload->>'summary', '')
-                          ),
-                          ' '
-                        )
-                   FROM signals s
-                  WHERE s.id = ANY(pe.derived_from)
-               ) AS source_signal_text
-          FROM proposed_edges pe
-         WHERE pe.confidence >= $1
-           AND NOT EXISTS (
-               SELECT 1 FROM nexuses n
-                WHERE n.valid_until IS NULL AND n.superseded_by IS NULL
-                  AND lower(n.subject) = lower(pe.source_entity)
-                  AND lower(n.object)  = lower(pe.target_entity)
-           )
-         ORDER BY pe.confidence DESC, pe.produced_at DESC
-         LIMIT $2
-        """,
-        MIN_EDGE_CONFIDENCE,
-        limit,
+    K-G2 replaced this function's body. It used to read the WHOLE
+    ``proposed_edges`` table (no ``status`` filter) and dedup against the RAW
+    endpoint surfaces, which the keeper rewrite at write time had already made
+    unmatchable. Measured against the live substrate, the resulting top-40
+    window contained **zero** pending rows — 24 ``orphaned``, 15 ``promoted``,
+    1 ``rejected`` — so every typing call was structurally incapable of
+    producing an edge (``docs/TYPING_BAKEOFF_2026-08-03.md`` §1).
+
+    The selection now lives in its own module because it grew a second stage
+    (keeper resolution + a bulk bidirectional dedup probe) that has nothing to
+    do with typing. This wrapper stays so the existing call sites and tests keep
+    their signature; it returns the window and drops the counters, which
+    ``run_method`` reads directly from :func:`~.reifier_selection.select_candidates`.
+    """
+    rows, _counters = await select_candidates(
+        conn, limit=limit, keeper_cache=keeper_cache
     )
-    return [dict(r) for r in rows]
+    return rows
 
 
 def _sports_gate_text(cand: Mapping[str, Any]) -> str:
@@ -804,6 +839,279 @@ async def _type_via_llm(
 
 
 # ---------------------------------------------------------------------------
+# Batched typing (K-G2) — N candidates per call, one verdict per candidate.
+#
+# The batch PROMPT, the idx correlation protocol, the parse-integrity accounting
+# and the truncation salvage all live in ``relationship_typing_batch``; every
+# verdict it returns has already been validated through THIS module's
+# ``_coerce_typing``, so batching cannot loosen what production accepts. What
+# lives here is only the run-loop policy: how a call that under-answers is
+# recovered, and what that costs the run's counters.
+#
+# The imports are function-local: ``relationship_typing_batch`` imports
+# ``_coerce_typing`` / ``ALLOWED_REL_TYPES`` from this module, so a module-level
+# import here would close the cycle. Same precedent as the ``AnalystContext``
+# import in the write path below.
+# ---------------------------------------------------------------------------
+
+
+async def _retry_single(
+    llm: LLMHandlerLike,
+    cand: Any,
+    *,
+    system_prompt: str,
+    max_tokens: int,
+    temperature: float,
+    gate_text: str,
+    usage_sink: dict[str, int],
+) -> Any | None:
+    """Re-ask ONE candidate the batch failed to answer, on the single-candidate
+    path (:data:`_SYSTEM_PROMPT` + :func:`_build_user_prompt`).
+
+    This is the "retry-or-skip" half of the batch contract: a model that drops,
+    reorders or duplicates an ``idx`` costs that ONE candidate a second call —
+    never the batch. Returns a verdict, or ``None`` to skip (counted
+    ``degraded``). Measured parse integrity for the production typer is 100%
+    over 17/17 calls, so this path is cold by design; it exists so that when it
+    is not cold, the failure is bounded and counted rather than silent.
+    """
+    from .relationship_typing_batch import parse_batch_response
+
+    user_prompt = _build_user_prompt(
+        source=cand.source,
+        target=cand.target,
+        evidence_text=str(cand.evidence_text or ""),
+        facts=list(cand.facts or ()),
+        candidate_intermediaries=tuple(cand.intermediaries or ()),
+    )
+    try:
+        raw, usage = await _type_via_llm(
+            llm,
+            user_prompt=user_prompt,
+            system_prompt=system_prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+    except Exception as exc:
+        logger.warning(
+            "relationship_reifier.retry_llm_failed pair=%s/%s err=%s",
+            cand.source, cand.target, exc,
+        )
+        return None
+    for k in usage_sink:
+        usage_sink[k] += int(usage.get(k, 0) or 0)
+
+    # Score the single response through the BATCH parser rather than
+    # re-implementing verdict construction: a one-object response with no idx
+    # hits its positional fallback (1 object, 1 candidate — unambiguous), and
+    # the retry then inherits every rule the batch path has, including the
+    # same-entity short-circuit, for free. Two verdict builders would be two
+    # places for the rules to drift.
+    result = parse_batch_response(
+        raw, [cand], sports_gate_text={cand.idx: gate_text}
+    )
+    if not result.verdicts:
+        logger.warning(
+            "relationship_reifier.retry_parse_failed pair=%s/%s",
+            cand.source, cand.target,
+        )
+        return None
+    return result.verdicts[0]
+
+
+async def _type_one_batch(
+    llm: LLMHandlerLike,
+    batch: Sequence[Any],
+    *,
+    batch_system_prompt: str,
+    single_system_prompt: str,
+    single_max_tokens: int,
+    temperature: float,
+    gate_text: Mapping[int, str],
+    usage_sink: dict[str, int],
+) -> tuple[list[Any], int]:
+    """One batched typing call, then a bounded single-candidate retry for
+    whatever it failed to answer. Returns ``(verdicts, degraded)``.
+
+    **Never batch-abort.** A transport failure degrades the whole batch and the
+    sweep continues (the module's degrade-not-drop rule, lifted to the batch
+    level). A PARSE failure is not even that: the harness salvages every
+    complete verdict object that preceded a truncation, so a partly-spent call
+    keeps its answered candidates and only the unanswered ones are retried.
+    """
+    from .relationship_typing_batch import (
+        build_batch_user_prompt,
+        max_tokens_for_batch,
+        parse_batch_response,
+    )
+
+    if not batch:
+        return [], 0
+
+    try:
+        raw, usage = await _type_via_llm(
+            llm,
+            user_prompt=build_batch_user_prompt(batch),
+            system_prompt=batch_system_prompt,
+            max_tokens=max_tokens_for_batch(len(batch)),
+            temperature=temperature,
+        )
+    except Exception as exc:
+        logger.warning(
+            "relationship_reifier.batch_llm_failed n=%d err=%s", len(batch), exc
+        )
+        return [], len(batch)
+    for k in usage_sink:
+        usage_sink[k] += int(usage.get(k, 0) or 0)
+
+    result = parse_batch_response(raw, batch, sports_gate_text=dict(gate_text))
+    verdicts = list(result.verdicts)
+    if result.parse_ok:
+        return verdicts, 0
+
+    logger.warning(
+        "relationship_reifier.batch_parse_degraded n=%d recovered=%d missing=%s "
+        "unexpected=%s duplicate=%s truncated=%s",
+        len(batch), result.recovered, result.missing_idx,
+        result.unexpected_idx, result.duplicate_idx, result.truncated,
+    )
+    missing = set(result.missing_idx)
+    if not missing:
+        return verdicts, 0
+
+    by_idx = {c.idx: c for c in batch}
+    degraded = 0
+    for idx in sorted(missing):
+        cand = by_idx.get(idx)
+        if cand is None:  # pragma: no cover - defensive
+            degraded += 1
+            continue
+        verdict = await _retry_single(
+            llm,
+            cand,
+            system_prompt=single_system_prompt,
+            max_tokens=single_max_tokens,
+            temperature=temperature,
+            gate_text=str(gate_text.get(idx) or cand.evidence_text or ""),
+            usage_sink=usage_sink,
+        )
+        if verdict is None:
+            degraded += 1
+        else:
+            verdicts.append(verdict)
+    return verdicts, degraded
+
+
+async def _write_typed_nexus(
+    pool: Any,
+    payload: NexusPayload,
+    *,
+    derived: Sequence[UUID],
+    actx: Any,
+    keeper_cache: dict[str, str],
+) -> str:
+    """Side-write one typed nexus. Returns the outcome for the run counters:
+    ``"written"`` / ``"superseded"`` / ``"self_loop"`` / ``"degraded"``.
+
+    Extracted verbatim from the old per-candidate loop when typing went batched
+    — the write is per-EDGE either way, and keeping it inline would have made
+    the batch loop unreadable. The E1/N4 discipline is unchanged: canonicalize →
+    resolve_keeper → self-loop gate → write.
+    """
+    try:
+        async with pool.acquire() as conn:
+            # E1 — CANONICALIZE-AT-WRITE: resolve each endpoint (already
+            # surface-canonicalized + LLM-renamed by _coerce_typing) to its
+            # elected entity_profiles KEEPER's canonical_name, so a fragment
+            # ('SNSC', 'Resistance') or an alias converges onto the one graph
+            # actor instead of minting a distinct node. resolve_keeper NEVER
+            # raises + returns the input unchanged on any miss/error, so one bad
+            # probe can't sink the row.
+            new_subject = (
+                await resolve_keeper(
+                    conn, payload.subject, entity_class="entity",
+                    cache=keeper_cache,
+                )
+            ).strip()
+            new_object = (
+                await resolve_keeper(
+                    conn, payload.object, entity_class="entity",
+                    cache=keeper_cache,
+                )
+            ).strip()
+            # N4 — re-run the self-loop gate AFTER the keeper rewrite (the
+            # ordering is canonicalize → resolve_keeper → self-loop → write).
+            # Two surfaces that fold onto the SAME keeper ('Axis of Resistance' +
+            # 'Resistance' → one keeper) are now identical strings, so
+            # same_referent catches the self-loop that differing raw surfaces
+            # hid. A degenerate rewrite (empty) is ignored — keep the pre-rewrite
+            # endpoint rather than drop the edge.
+            if new_subject and new_object:
+                if same_referent(new_subject, new_object):
+                    logger.info(
+                        "relationship_reifier.keeper_self_loop dropped "
+                        "pair=%s/%s -> %s/%s",
+                        payload.subject, payload.object, new_subject, new_object,
+                    )
+                    return "self_loop"
+                if (new_subject, new_object) != (payload.subject, payload.object):
+                    payload.subject = new_subject
+                    payload.object = new_object
+                    # Keep the human label consistent with the rewritten
+                    # endpoints (label was built from the pre-keeper surfaces in
+                    # _coerce_typing).
+                    payload.label = (
+                        f"{new_subject} {payload.rel_type} {new_object}"[:4096]
+                    )
+            before = await conn.fetchval(
+                "SELECT count(*) FROM nexuses "
+                "WHERE lower(subject)=lower($1) AND lower(object)=lower($2) "
+                "AND superseded_by IS NOT NULL",
+                payload.subject, payload.object,
+            )
+            out, dlq = await write_nexus(
+                conn,
+                analyst_ctx=actx,
+                payload=payload,
+                derived_from=list(derived),
+                source_signal_ids=list(derived),  # D15: populate BOTH columns
+            )
+            if out is not None:
+                after = await conn.fetchval(
+                    "SELECT count(*) FROM nexuses "
+                    "WHERE lower(subject)=lower($1) AND lower(object)=lower($2) "
+                    "AND superseded_by IS NOT NULL",
+                    payload.subject, payload.object,
+                )
+                return "superseded" if (after or 0) > (before or 0) else "written"
+            if dlq is not None:
+                return "degraded"
+            return "degraded"
+    except Exception as exc:
+        logger.warning(
+            "relationship_reifier.write_failed pair=%s/%s err=%s",
+            payload.subject, payload.object, exc,
+        )
+        return "degraded"
+
+
+def _opt_int(options: Mapping[str, Any], key: str, default: int) -> int:
+    """A descriptor-set integer knob, or ``default``. Never raises — the option
+    plane already validated the value; this is the last-mile coercion."""
+    try:
+        return int(options[key])
+    except (KeyError, TypeError, ValueError):
+        return int(default)
+
+
+def _opt_float(options: Mapping[str, Any], key: str, default: float) -> float:
+    try:
+        return float(options[key])
+    except (KeyError, TypeError, ValueError):
+        return float(default)
+
+
+# ---------------------------------------------------------------------------
 # Public entry — run_method
 # ---------------------------------------------------------------------------
 
@@ -834,21 +1142,47 @@ async def run_method(
     system_prompt = deps.system_prompt or _SYSTEM_PROMPT
     now = datetime.now(tz=timezone.utc)
 
+    # X-1 / QW1-B — descriptor-declared knobs. The runtime merges the
+    # descriptor's ``method.options`` into ``options`` (validated against
+    # ``handler_options.ANALYST_KIND_OPTIONS['relationship_reifier']``, with a
+    # receipt on the run trace for anything it dropped). The deps value is the
+    # fallback, so an options-less descriptor is byte-identical to the dataclass
+    # defaults.
+    max_candidates = _opt_int(options, "max_candidates", deps.max_candidates)
+    batch_size = max(1, _opt_int(options, "batch_size", deps.batch_size))
+    qualification_bar = _opt_float(
+        options, "qualification_bar", deps.qualification_bar
+    )
+    min_independent_sources = _opt_int(
+        options, "min_independent_sources", deps.min_independent_sources
+    )
+
     total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0}
     candidates: list[dict[str, Any]] = []
     pool = deps.pg_pool
+    # E1 — one keeper-election memo for the WHOLE run. Selection resolves every
+    # examined pair and the write path resolves every typed one; sharing the memo
+    # means each surface costs one probe per run, not two.
+    keeper_cache: dict[str, str] = {}
+    selection = SelectionCounters()
 
     # 1) Assemble candidate pairs. Prefer the live proposed_edges sweep; fall
     #    back to the inputs the runtime materialized (test / no-pool path).
     if pool is not None:
         try:
             async with pool.acquire() as conn:
-                candidates = await _read_candidates(conn, limit=deps.max_candidates)
+                candidates, selection = await select_candidates(
+                    conn,
+                    limit=max_candidates,
+                    bar=qualification_bar,
+                    min_sources=min_independent_sources,
+                    keeper_cache=keeper_cache,
+                )
         except Exception as exc:
             logger.warning("relationship_reifier.read_candidates_failed err=%s", exc)
             candidates = []
     if not candidates:
-        for row in inputs[: deps.max_candidates]:
+        for row in inputs[:max_candidates]:
             src = row.get("source_entity") or row.get("subject") or row.get("src")
             tgt = row.get("target_entity") or row.get("object") or row.get("dst")
             if src and tgt:
@@ -860,19 +1194,40 @@ async def run_method(
                     "derived_from": list(row.get("derived_from") or []),
                 })
 
+    from .relationship_typing_batch import BATCH_SYSTEM_PROMPT, BatchCandidate
+
     n_candidates = len(candidates)
     typed = 0
+    accepted = 0
+    rejected = 0
+    alias_pairs = 0
+    alias_pairs_routed = 0
     written = 0
     superseded = 0
     degraded = 0
-    skipped_endpoints = 0  # D3: candidate pairs dropped as junk / demonym self-loop
+    # D3: candidate pairs dropped as junk / demonym self-loop. Selection already
+    # dropped these for the pg path (its own counter); this one covers the
+    # no-pool ``inputs`` path, which bypasses selection entirely.
+    skipped_endpoints = selection.skipped_endpoints
     budget_paused = False
-    # E1 — one keeper-election memo for the whole run (endpoints repeat across
-    # pairs; the fallback probe is an un-indexed scan). Fresh each run so it never
-    # goes stale against a concurrent entity_profiles change.
-    keeper_cache: dict[str, str] = {}
+    batch_system_prompt = deps.system_prompt or BATCH_SYSTEM_PROMPT
 
-    for cand in candidates:
+    from ..provenance import AnalystContext  # local import — avoid cycle
+
+    actx = AnalystContext(
+        analyst_id=analyst_id,
+        analyst_version=str(options.get("analyst_version") or ""),
+        run_id=run_id if isinstance(run_id, UUID) else None,  # type: ignore[arg-type]
+        target_id=target_id,
+        target_version=options.get("target_version"),
+    )
+
+    # 2) TYPE. K-G2: N candidates per LLM call, one verdict per candidate,
+    #    correlated by idx (never by position). One typer — no escalation ladder;
+    #    see SINGLE_TYPER_RATIONALE.
+    for start in range(0, len(candidates), batch_size):
+        chunk = candidates[start : start + batch_size]
+
         # Honor the budget envelope before each LLM call (degrade-not-drop:
         # stop issuing new calls, keep what we already wrote).
         if deps.budget is not None:
@@ -884,218 +1239,158 @@ async def run_method(
                 budget_paused = True
                 break
 
-        raw_source = str(cand["source_entity"])
-        raw_target = str(cand["target_entity"])
-        # D3 EARLY GATE — drop junk endpoints and canonicalize the candidate pair
-        # BEFORE spending an LLM call. A demonym pair ("Iran" / "Iranian") both
-        # canonicalize to "Iran" → a self-loop, never a relationship; a junk
-        # endpoint ("TV") is dropped. This kills the "Israel leader of Israeli" /
-        # "Iran supplies weapons to Iranian" class at the cheapest point. The
-        # final _coerce_typing canon pass still re-guards the LLM's own
-        # subject/object (it may re-name them), so this is a fast pre-filter, not
-        # the only gate.
-        if is_junk_entity(raw_source) or is_junk_entity(raw_target):
-            skipped_endpoints += 1
-            continue
-        c_source, _ = canonicalize_entity(raw_source, "entity")
-        c_target, _ = canonicalize_entity(raw_target, "entity")
-        # DQ M8 — same_referent (not a bare lower() equality) also drops a plain
-        # singular/plural self-loop ("Houthi"/"Houthis") the canon does not map.
-        if not c_source or not c_target or same_referent(c_source, c_target):
-            skipped_endpoints += 1
-            continue
-        source = c_source
-        target = c_target
-        facts_ctx: list[dict[str, Any]] = []
-        intermediaries: list[str] = []
-        if pool is not None:
-            try:
-                async with pool.acquire() as conn:
-                    facts_ctx = await _recent_facts_for(
-                        conn, source=source, target=target
-                    )
-                    # 3-entity proxy-chain path (#99): only for the more-
-                    # corroborated pairs (cost guard), offer the third entities
-                    # co-mentioned with BOTH endpoints so the typer SELECTS a
-                    # real cut-out instead of hallucinating one.
-                    try:
-                        pair_conf = float(cand.get("confidence") or 0.0)
-                    except (TypeError, ValueError):
-                        pair_conf = 0.0
-                    if pair_conf >= MIN_INTERMEDIARY_PAIR_CONFIDENCE:
-                        intermediaries = await _intermediary_candidates_for(
-                            conn,
-                            source=source,
-                            target=target,
-                            limit=MAX_INTERMEDIARY_CANDIDATES,
+        batch: list[BatchCandidate] = []
+        gate_text: dict[int, str] = {}
+        by_idx: dict[int, dict[str, Any]] = {}
+        for offset, cand in enumerate(chunk):
+            raw_source = str(cand["source_entity"])
+            raw_target = str(cand["target_entity"])
+            # D3 EARLY GATE — drop junk endpoints and canonicalize the pair
+            # BEFORE it costs a slot in a typing call. A demonym pair ("Iran" /
+            # "Iranian") both canonicalize to "Iran" → a self-loop, never a
+            # relationship; a junk endpoint ("TV") is dropped. Selection already
+            # applies this for the pg path; it stays here because the no-pool
+            # ``inputs`` path bypasses selection entirely, and because
+            # _coerce_typing still re-guards the LLM's own subject/object.
+            if is_junk_entity(raw_source) or is_junk_entity(raw_target):
+                skipped_endpoints += 1
+                continue
+            c_source, _ = canonicalize_entity(raw_source, "entity")
+            c_target, _ = canonicalize_entity(raw_target, "entity")
+            # DQ M8 — same_referent (not a bare lower() equality) also drops a
+            # plain singular/plural self-loop ("Houthi"/"Houthis").
+            if not c_source or not c_target or same_referent(c_source, c_target):
+                skipped_endpoints += 1
+                continue
+
+            facts_ctx: list[dict[str, Any]] = []
+            intermediaries: list[str] = []
+            if pool is not None:
+                try:
+                    async with pool.acquire() as conn:
+                        facts_ctx = await _recent_facts_for(
+                            conn, source=c_source, target=c_target
                         )
-            except Exception:  # pragma: no cover - context is best-effort
-                facts_ctx = []
-                intermediaries = []
+                        # 3-entity proxy-chain path (#99): only for the more-
+                        # corroborated pairs (cost guard), offer the third
+                        # entities co-mentioned with BOTH endpoints so the typer
+                        # SELECTS a real cut-out instead of hallucinating one.
+                        try:
+                            pair_conf = float(cand.get("confidence") or 0.0)
+                        except (TypeError, ValueError):
+                            pair_conf = 0.0
+                        if pair_conf >= MIN_INTERMEDIARY_PAIR_CONFIDENCE:
+                            intermediaries = await _intermediary_candidates_for(
+                                conn,
+                                source=c_source,
+                                target=c_target,
+                                limit=MAX_INTERMEDIARY_CANDIDATES,
+                            )
+                except Exception:  # pragma: no cover - context is best-effort
+                    facts_ctx = []
+                    intermediaries = []
 
-        user_prompt = _build_user_prompt(
-            source=source,
-            target=target,
-            evidence_text=str(cand.get("evidence_text") or ""),
-            facts=facts_ctx,
-            candidate_intermediaries=intermediaries,
-        )
-        try:
-            raw, usage = await _type_via_llm(
-                deps.llm,
-                user_prompt=user_prompt,
-                system_prompt=system_prompt,
-                max_tokens=deps.max_tokens,
-                temperature=deps.temperature,
-            )
-        except Exception as exc:
-            logger.warning(
-                "relationship_reifier.llm_failed pair=%s/%s err=%s",
-                source, target, exc,
-            )
-            degraded += 1
-            continue
-        for k in total_usage:
-            total_usage[k] += int(usage.get(k, 0) or 0)
-
-        obj = _extract_json_object(raw)
-        if obj is None:
-            logger.warning(
-                "relationship_reifier.parse_failed pair=%s/%s", source, target
-            )
-            degraded += 1
-            continue
-        payload = _coerce_typing(
-            obj,
-            fallback_subject=source,
-            fallback_object=target,
-            allowed_intermediaries=intermediaries,
-            # FU4 — gate over the UNION of the excerpt + all source-signal texts,
-            # so a sports frame in a CO-SOURCE signal (not the excerpt) still gates.
-            evidence_text=_sports_gate_text(cand),
-        )
-        if payload is None:
-            # Model said no real relationship, or shape unusable — not a
-            # failure, just nothing to reify for this pair.
-            continue
-        typed += 1
-
-        # event time = the pair's produced_at (the co-mention's event clock),
-        # else now. Mirrors fact_extractor stamping valid_from at event time.
-        ev = cand.get("produced_at")
-        payload.valid_from = ev if isinstance(ev, datetime) else now
-        # D15 — gather the originating signal/fact UUIDs (the co-occurrence
-        # edge's derived_from) so the nexus carries real provenance into the
-        # tier. These are passed to write_nexus as source_signal_ids (Agent D's
-        # storage populates BOTH derived_from + source_signal_ids columns); we
-        # also stamp the payload field so the row is populated pre-merge.
-        derived = [u for u in (cand.get("derived_from") or []) if isinstance(u, UUID)]
-        payload.source_signal_ids = list(derived)
-
-        # 3) Side-write the nexus row (write_nexus supersedes a prior open row
-        #    on polarity/label change). Degrade-not-drop on write failure.
-        if pool is None:
-            # No-pool test path: the typing was counted (``typed``); without a
-            # pool there is nothing to persist, so skip the write and move on.
-            continue
-        from ..provenance import AnalystContext  # local import — avoid cycle
-
-        actx = AnalystContext(
-            analyst_id=analyst_id,
-            analyst_version=str(options.get("analyst_version") or ""),
-            run_id=run_id if isinstance(run_id, UUID) else None,  # type: ignore[arg-type]
-            target_id=target_id,
-            target_version=options.get("target_version"),
-        )
-        try:
-            async with pool.acquire() as conn:
-                # E1 — CANONICALIZE-AT-WRITE: resolve each endpoint (already
-                # surface-canonicalized + LLM-renamed by _coerce_typing) to its
-                # elected entity_profiles KEEPER's canonical_name, so a fragment
-                # ('SNSC', 'Resistance') or an alias converges onto the one graph
-                # actor instead of minting a distinct node. resolve_keeper NEVER
-                # raises + returns the input unchanged on any miss/error, so one
-                # bad probe can't sink the row — and this whole block is already
-                # wrapped in the per-pair try/except below (degrade-not-drop).
-                new_subject = (
-                    await resolve_keeper(
-                        conn, payload.subject, entity_class="entity",
-                        cache=keeper_cache,
-                    )
-                ).strip()
-                new_object = (
-                    await resolve_keeper(
-                        conn, payload.object, entity_class="entity",
-                        cache=keeper_cache,
-                    )
-                ).strip()
-                # N4 — re-run the self-loop gate AFTER the keeper rewrite (the
-                # ordering is canonicalize → resolve_keeper → self-loop → write).
-                # Two surfaces that fold onto the SAME keeper ('Axis of
-                # Resistance' + 'Resistance' → one keeper) are now identical
-                # strings, so same_referent catches the self-loop that differing
-                # raw surfaces hid. A degenerate rewrite (empty) is ignored —
-                # keep the pre-rewrite endpoint rather than drop the edge.
-                if new_subject and new_object:
-                    if same_referent(new_subject, new_object):
-                        logger.info(
-                            "relationship_reifier.keeper_self_loop dropped "
-                            "pair=%s/%s -> %s/%s",
-                            payload.subject, payload.object,
-                            new_subject, new_object,
-                        )
-                        continue
-                    if (new_subject, new_object) != (payload.subject, payload.object):
-                        payload.subject = new_subject
-                        payload.object = new_object
-                        # Keep the human label consistent with the rewritten
-                        # endpoints (label was built from the pre-keeper surfaces
-                        # in _coerce_typing).
-                        payload.label = (
-                            f"{new_subject} {payload.rel_type} {new_object}"[:4096]
-                        )
-                before = await conn.fetchval(
-                    "SELECT count(*) FROM nexuses "
-                    "WHERE lower(subject)=lower($1) AND lower(object)=lower($2) "
-                    "AND superseded_by IS NOT NULL",
-                    payload.subject, payload.object,
+            idx = start + offset
+            by_idx[idx] = cand
+            # FU4 — the gate runs over the UNION of the excerpt + all backing
+            # source-signal texts, so a sports frame in a CO-SOURCE signal (not
+            # the excerpt) still gates. The PROMPT keeps the terse excerpt.
+            gate_text[idx] = _sports_gate_text(cand)
+            batch.append(
+                BatchCandidate(
+                    idx=idx,
+                    source=c_source,
+                    target=c_target,
+                    evidence_text=str(cand.get("evidence_text") or ""),
+                    facts=tuple(facts_ctx),
+                    intermediaries=tuple(intermediaries),
+                    ref=idx,
                 )
-                out, dlq = await write_nexus(
-                    conn,
-                    analyst_ctx=actx,
-                    payload=payload,
-                    derived_from=derived,
-                    source_signal_ids=derived,  # D15: populate BOTH columns
-                )
-                if out is not None:
-                    written += 1
-                    after = await conn.fetchval(
-                        "SELECT count(*) FROM nexuses "
-                        "WHERE lower(subject)=lower($1) AND lower(object)=lower($2) "
-                        "AND superseded_by IS NOT NULL",
-                        payload.subject, payload.object,
-                    )
-                    if (after or 0) > (before or 0):
-                        superseded += 1
-                elif dlq is not None:
-                    degraded += 1
-        except Exception as exc:
-            logger.warning(
-                "relationship_reifier.write_failed pair=%s/%s err=%s",
-                source, target, exc,
             )
-            degraded += 1
+
+        if not batch:
             continue
+
+        verdicts, batch_degraded = await _type_one_batch(
+            deps.llm,
+            batch,
+            batch_system_prompt=batch_system_prompt,
+            single_system_prompt=system_prompt,
+            single_max_tokens=deps.max_tokens,
+            temperature=deps.temperature,
+            gate_text=gate_text,
+            usage_sink=total_usage,
+        )
+        degraded += batch_degraded
+        typed += len(verdicts)
+
+        # 3) Side-write one nexus per ACCEPTED verdict (write_nexus supersedes a
+        #    prior open row on polarity/label change). Degrade-not-drop.
+        for verdict in verdicts:
+            # ALIAS PAIR — "these are two names for one entity". Never an edge
+            # (an entity is not related to itself), and not a plain rejection
+            # either: it is a merge-candidate signal. See reifier_alias_pairs.
+            if getattr(verdict, "same_entity", False):
+                alias_pairs += 1
+                if pool is not None:
+                    async with pool.acquire() as conn:
+                        outcome = await record_alias_pair(
+                            conn, verdict.source, verdict.target,
+                            confidence=verdict.confidence,
+                            keeper_cache=keeper_cache,
+                        )
+                    if outcome == "recorded":
+                        alias_pairs_routed += 1
+                continue
+            if not verdict.accepted or verdict.payload is None:
+                rejected += 1
+                continue
+            accepted += 1
+            cand = by_idx.get(int(verdict.idx))
+            if cand is None:  # pragma: no cover - defensive
+                continue
+            payload = verdict.payload
+            # event time = the pair's produced_at (the co-mention's event
+            # clock), else now. Mirrors fact_extractor stamping valid_from at
+            # event time.
+            ev = cand.get("produced_at")
+            payload.valid_from = ev if isinstance(ev, datetime) else now
+            # D15 — carry the originating signal UUIDs (the co-occurrence edge's
+            # derived_from) so the nexus lands with real provenance.
+            derived = [
+                u for u in (cand.get("derived_from") or []) if isinstance(u, UUID)
+            ]
+            payload.source_signal_ids = list(derived)
+
+            if pool is None:
+                # No-pool test path: the typing was counted; without a pool there
+                # is nothing to persist.
+                continue
+            outcome = await _write_typed_nexus(
+                pool, payload, derived=derived, actx=actx, keeper_cache=keeper_cache
+            )
+            if outcome == "written":
+                written += 1
+            elif outcome == "superseded":
+                written += 1
+                superseded += 1
+            elif outcome == "degraded":
+                degraded += 1
 
     finding = _build_summary(
         n_candidates=n_candidates,
         typed=typed,
+        accepted=accepted,
+        rejected=rejected,
+        alias_pairs=alias_pairs,
+        alias_pairs_routed=alias_pairs_routed,
         written=written,
         superseded=superseded,
         degraded=degraded,
         skipped_endpoints=skipped_endpoints,
         budget_paused=budget_paused,
         target_id=target_id,
+        selection=selection,
     )
     return AnalystMethodResult(finding=finding, usage=total_usage)
 
@@ -1110,7 +1405,19 @@ def _build_summary(
     skipped_endpoints: int = 0,
     budget_paused: bool,
     target_id: str | None,
+    accepted: int = 0,
+    rejected: int = 0,
+    alias_pairs: int = 0,
+    alias_pairs_routed: int = 0,
+    selection: SelectionCounters | None = None,
 ) -> FindingPayload:
+    # K-G2 counter vocabulary. ``typed`` is now "the typer returned a verdict",
+    # which splits into ``accepted`` (a payload the coercion accepted → an edge
+    # is attempted) and ``rejected`` (the model said no relationship, or the
+    # verdict failed validation). Before batching, ``typed`` meant only the
+    # accepted half, so a run could not distinguish "the typer rejected these"
+    # from "the typer never saw these" — the exact ambiguity that let the dead-row
+    # window hide for weeks.
     title = (
         f"Relationship reifier: {written} nexuses written "
         f"({typed} typed / {n_candidates} candidates)"
@@ -1124,13 +1431,20 @@ def _build_summary(
         tags.append("degraded")
     if budget_paused:
         tags.append("budget_paused")
+    # K-G2 — the selection receipt. The old summary said ``candidates=40`` on
+    # every tick while all 40 were dead rows; these counters are what makes a
+    # collapsed window visible without a DB session.
+    sel = (selection or SelectionCounters()).as_dict()
     return FindingPayload(
         title=title[:2048],
         body=(
-            f"candidates={n_candidates} typed={typed} written={written} "
+            f"candidates={n_candidates} typed={typed} accepted={accepted} "
+            f"rejected={rejected} alias_pairs={alias_pairs} "
+            f"alias_pairs_routed={alias_pairs_routed} written={written} "
             f"superseded={superseded} degraded={degraded} "
             f"skipped_endpoints={skipped_endpoints} "
-            f"budget_paused={budget_paused}"
+            f"budget_paused={budget_paused} "
+            + " ".join(f"selection_{k}={v}" for k, v in sel.items())
         )[:65536],
         confidence=1.0,
         tags=tags,
@@ -1139,11 +1453,16 @@ def _build_summary(
             "sub_handler": "relationship_reifier",
             "candidates": n_candidates,
             "typed": typed,
+            "accepted": accepted,
+            "rejected": rejected,
+            "alias_pairs": alias_pairs,
+            "alias_pairs_routed": alias_pairs_routed,
             "written": written,
             "superseded": superseded,
             "degraded": degraded,
             "skipped_endpoints": skipped_endpoints,
             "budget_paused": budget_paused,
+            "selection": sel,
         },
     )
 
@@ -1154,4 +1473,10 @@ __all__ = [
     "ReifierDeps",
     "run_method",
     "ALLOWED_REL_TYPES",
+    "DEFAULT_BATCH_SIZE",
+    "SINGLE_TYPER_RATIONALE",
+    # Re-exported: a SELECTION knob that now lives with the selection
+    # (:mod:`.reifier_selection`), kept importable here because this was its
+    # name first and the K-G2 report cites it at this path.
+    "MIN_EDGE_CONFIDENCE",
 ]

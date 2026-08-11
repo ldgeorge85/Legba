@@ -11,26 +11,54 @@
  *    tails. This is the S7-T4 fix for the old `source=all` mode that mixed raw
  *    signals into finished compositions.
  *  - **One FilterBar** (`FeedFilterBar`) — typed `key:value` chips
- *    (severity/verified/confidence/country/kind/analyst/last) + free text, with
- *    verification as a FIRST-CLASS facet on the ICD-203 verdict vocabulary. The
- *    whole filter + stream + sort serialize to a saved view AND to the `#view=`
- *    URL hash (addressable, no router).
- *  - **Review-first + live-tail with pause-on-scroll.** The stable paginated
- *    read is primary; the live tail is a toggle. Scrolling DOWN pauses the live
- *    prepend (so a read isn't yanked) and buffers new rows behind a "N new"
- *    banner; scrolling back to the top — or clicking the banner — resumes.
+ *    (severity/verified/confidence/target/kind/analyst/last/minconf) + free
+ *    text, with verification as a FIRST-CLASS facet on the ICD-203 verdict
+ *    vocabulary. The whole filter + stream + sort serialize to a saved view AND
+ *    to the `#view=` URL hash (addressable, no router).
  *  - **Latest-per-situation.** Superseded near-dups are hidden by default
  *    (P-FS supersession index); a toggle reveals them. Signals are atomic and
  *    never cluster.
  *
- * The pure logic lives in `@/lib/feedFilters` (filter model, verdict, view
- * serialization) and `@/lib/findingsViews` (row mapping, supersession, live-tail
- * envelopes) so it is unit-tested without a DOM. Row click drives the shared
- * selection store (opens the Inspector).
+ * The pure logic lives in `@/lib/feedFilters` (filter model, verdict, server
+ * push, view serialization), `@/lib/feedProducers` (the producer taxonomy) and
+ * `@/lib/findingsViews` (row mapping, supersession, live-tail envelopes) so it
+ * is unit-tested without a DOM; the feed's own view state lives in
+ * `@/state/feedView`.
+ *
+ * ---------------------------------------------------------------------------
+ * THE THREE THINGS THIS PANEL GUARANTEES (they are what it kept getting wrong)
+ * ---------------------------------------------------------------------------
+ *
+ * 1. **A refetch never moves the ground under a read.** The REST page is
+ *    fetched with `placeholderData: keepPreviousData`, so a poll or a filter
+ *    change never blanks the list, and its result is not rendered directly:
+ *    it is COMMITTED into `committed` only when the operator is at the top of
+ *    the feed. Scrolled away, the fresh page is STAGED behind an "N new" pill
+ *    instead, so nothing is ever inserted above the row being read. Rows carry
+ *    stable identities (`rowDedupKey`, via the table's `getRowId`), the loaded
+ *    extra pages (`appended`) survive a background refetch, and the scroll
+ *    offset is remembered in the feed store so it also survives the panel being
+ *    unmounted by a Dockview tab switch.
+ *
+ * 2. **Every filter is the operator's to set.** The FilterBar carries desk,
+ *    producer (units · compositions · other), output kind, severity,
+ *    verification and an effective-confidence floor, all AND-combined, all
+ *    shown as removable chips, all persisted for the session. Facets the REST
+ *    routes can answer (`target_id`, `analyst_id`, `severity`, `since`) are
+ *    pushed server-side by `serverFilterParams` so they reach past the loaded
+ *    page; the rest filter client-side. No new API routes.
+ *
+ * 3. **Selecting is not filtering.** The feed's desk filter used to be DERIVED
+ *    from the global selection, so opening a row in the Inspector (selection →
+ *    `kind: 'finding'`) silently wiped the desk filter and reset the feed. Now:
+ *    a desk selection SEEDS an ordinary, visible, removable `target:` chip
+ *    (see `state/feedView.ts`), and a row click ONLY moves the global selection
+ *    — it never touches this panel's filters, pages, or scroll. The inspected
+ *    row is highlighted in place.
  */
 
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useMemo, useRef, useState, type UIEvent } from 'react'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from 'react'
 import {
   getCoreRowModel,
   getSortedRowModel,
@@ -44,9 +72,10 @@ import { PanelChrome } from '@/components/PanelChrome'
 import { SeverityBadge } from '@/components/SeverityBadge'
 import { VerdictBadge } from '@/components/VerdictBadge'
 import CitedProse from '@/components/CitedProse'
-import { FeedFilterBar } from '@/components/FeedFilterBar'
+import { FeedFilterBar, type DeskOption } from '@/components/FeedFilterBar'
 import { extractCitations } from '@/lib/citationsModel'
 import { humanizeAnalystId } from '@/lib/analystNames'
+import { countryNameForTargetId, humanizeId, thematicDeskName } from '@/lib/deskNames'
 import type { Severity } from '@/v4/world/types'
 import { apiGet } from '@/lib/api'
 import { feedPreview } from '@/lib/proseText'
@@ -55,6 +84,10 @@ import { useBatchedTail } from '@/lib/liveTail'
 import type { PanelProps } from '@/types'
 import { selectRow, useSelection } from '@/state/selection'
 import { useExportBasket } from '@/state/exportBasket'
+import { FEED_VIEW_RESTORED, useFeedView } from '@/state/feedView'
+import { useCountryVerdicts } from '@/v4/world/countryVerdicts'
+import { useSupplyChainDesks } from '@/v4/world/supplyChainDesks'
+import { buildProducerOptions, exactProducerIds } from '@/lib/feedProducers'
 import {
   FINDINGS_TAIL_FILTER,
   SIGNALS_TAIL_FILTER,
@@ -70,21 +103,20 @@ import {
   type UnifiedRow,
 } from '@/lib/findingsViews'
 import {
-  DEFAULT_VIEW,
+  FINDINGS_SERVER_FACETS,
+  SIGNALS_SERVER_FACETS,
+  chipValue,
   deriveRowVerdict,
   loadFeedViews,
   matchesFilter,
-  parseFilterInput,
   persistFeedViews,
-  readViewHash,
   removeFeedView,
   serializeFilter,
+  serverFilterParams,
   upsertFeedView,
   writeViewHash,
   type FeedSavedView,
   type FeedSort,
-  type FeedStream,
-  type ParsedFilter,
 } from '@/lib/feedFilters'
 
 /** A REST `/findings` row — every UnifiedRow field except the `source` stamp. */
@@ -108,11 +140,13 @@ interface RowItem {
   verdict: ReturnType<typeof deriveRowVerdict>
 }
 
-/** Scrolling past this many px from the top pauses the live prepend. */
-const SCROLL_PAUSE_PX = 24
+/** Scrolling past this many px from the top HOLDS new arrivals behind the pill. */
+const SCROLL_HOLD_PX = 24
 /** Above this row count we virtualize; below it a plain list is cheaper (and
  *  keeps small feeds — and jsdom component tests — rendering every row). */
 const VIRTUALIZE_THRESHOLD = 40
+/** Scroll is a high-frequency event; only persist the offset once it settles. */
+const SCROLL_PERSIST_MS = 250
 
 /** The left severity rail colour (the at-a-glance scan channel). */
 function severityRailClass(severity: string | null | undefined): string {
@@ -140,16 +174,40 @@ function prependDedup(prev: UnifiedRow[], row: UnifiedRow, cap = 300): UnifiedRo
   return [row, ...prev].slice(0, cap)
 }
 
+/**
+ * Union new values into a monotonic "seen" list, returning the SAME array when
+ * nothing was added so React bails out of the re-render. The facet dropdowns
+ * are built from these lists: they only ever grow, so narrowing the feed to one
+ * producer never collapses the menu you narrowed it with.
+ */
+function unionSeen(prev: string[], incoming: Iterable<string | null | undefined>): string[] {
+  const seen = new Set(prev)
+  let grew = false
+  for (const raw of incoming) {
+    const v = (raw ?? '').trim()
+    if (!v || seen.has(v)) continue
+    seen.add(v)
+    grew = true
+  }
+  return grew ? [...seen] : prev
+}
+
 export default function FindingsFeedPanel({ registration }: PanelProps) {
   const qc = useQueryClient()
 
-  // ---- view state (stream · sort · filter), hydrated from #view= once ----
-  const initialView = useMemo(() => readViewHash() ?? DEFAULT_VIEW, [])
-  const [stream, setStream] = useState<FeedStream>(initialView.stream)
-  const [sort, setSort] = useState<FeedSort>(initialView.sort)
-  const [filter, setFilter] = useState<ParsedFilter>(() => parseFilterInput(initialView.query))
-  const [hideSuperseded, setHideSuperseded] = useState(true)
-  const [live, setLive] = useState(true)
+  // ---- view state (stream · sort · filter · toggles) — the feed's OWN store,
+  // session-scoped so a Dockview tab switch never drops the operator's posture.
+  const stream = useFeedView((s) => s.stream)
+  const sort = useFeedView((s) => s.sort)
+  const filter = useFeedView((s) => s.filter)
+  const hideSuperseded = useFeedView((s) => s.hideSuperseded)
+  const live = useFeedView((s) => s.live)
+  const setStream = useFeedView((s) => s.setStream)
+  const setSort = useFeedView((s) => s.setSort)
+  const setFilter = useFeedView((s) => s.setFilter)
+  const setHideSuperseded = useFeedView((s) => s.setHideSuperseded)
+  const setLive = useFeedView((s) => s.setLive)
+  const applyStoredView = useFeedView((s) => s.applyView)
   const [views, setViews] = useState<FeedSavedView[]>(() => loadFeedViews())
 
   // Serialize stream+sort+filter back into the #view= hash on every change.
@@ -157,94 +215,233 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
     writeViewHash({ stream, sort, query: serializeFilter(filter) })
   }, [stream, sort, filter])
 
-  // KEYSTONE (#89): the feed follows the global target selection so "click a
-  // country → see its findings (+ its geo signals)" works. One-way (selection →
-  // server target filter); the FilterBar chips stay independently editable.
+  // ---- selection ⇄ feed, with the two directions DELIBERATELY asymmetric ----
+  //
+  // IN  (desk → feed): a desk selection SEEDS the `target:` chip. Subscribed
+  //     imperatively rather than through a render dependency so that re-picking
+  //     the SAME desk after the operator cleared the chip by hand seeds it
+  //     again (a fresh click is a fresh instruction), while a no-op re-render
+  //     never rewrites a filter the operator has since changed.
+  // OUT (feed → Inspector): `openRow` moves the global selection and NOTHING
+  //     else. Selecting a finding does not filter the feed — that coupling is
+  //     the bug this panel was carrying.
+  useEffect(() => {
+    const seed = (sel: ReturnType<typeof useSelection.getState>['selection']) => {
+      if (sel?.kind !== 'target' || !sel.id) return
+      const view = useFeedView.getState()
+      // Already the active desk filter? Nothing to do — never churn the store.
+      if (chipValue(view.filter.chips, 'target') === sel.id) return
+      view.seedDeskFilter(sel.id)
+    }
+    // Adopt a target that was already selected when the panel mounted ONLY on a
+    // pristine feed (fresh session, no `#view=`): that is the deep-link /
+    // cold-boot case the keystone "pick a desk → see its findings" flow needs.
+    // A session where the operator has been driving the filters is never
+    // retro-seeded out from under them.
+    if (!FEED_VIEW_RESTORED) seed(useSelection.getState().selection)
+    return useSelection.subscribe((s) => seed(s.selection))
+  }, [])
+
   const selection = useSelection((s) => s.selection)
-  const serverTargetId = selection?.kind === 'target' ? selection.id : ''
+  /** The row the Inspector is showing, so the feed can highlight it in place. */
+  const selectedRowId =
+    selection && (selection.kind === 'finding' || selection.kind === 'signal') ? selection.id : null
 
   // ---- REST paging + live buffers (per active stream) ----
+  /** The committed REST page — what the list actually renders. */
+  const [committed, setCommitted] = useState<UnifiedRow[]>([])
+  const [pageCursor, setPageCursor] = useState<string | null>(null)
+  /** A fresh REST page held back because the operator is mid-read (see `hold`). */
+  const [staged, setStaged] = useState<{ rows: UnifiedRow[]; cursor: string | null } | null>(null)
+  /** Extra pages pulled by "load more" — kept across background refetches. */
   const [appended, setAppended] = useState<UnifiedRow[]>([])
-  const [nextCursor, setNextCursor] = useState<string | null>(null)
+  const [appendCursor, setAppendCursor] = useState<string | null | undefined>(undefined)
   const [liveShown, setLiveShown] = useState<UnifiedRow[]>([])
-  const [pending, setPending] = useState<UnifiedRow[]>([])
+  const [pendingTail, setPendingTail] = useState<UnifiedRow[]>([])
 
-  // Pause-on-scroll: manual pause OR scrolled away from the top holds the tail.
-  const [manualPaused, setManualPaused] = useState(false)
+  /** Monotonic facet vocabularies, harvested from every page we have seen. */
+  const [seenProducers, setSeenProducers] = useState<string[]>([])
+  const [seenTargets, setSeenTargets] = useState<string[]>([])
+  const [seenKinds, setSeenKinds] = useState<string[]>([])
+
+  // HOLD — scrolled away from the top means a read is in progress, so nothing
+  // new may be inserted above it. Everything queues behind the "N new" pill.
   const [scrolledAway, setScrolledAway] = useState(false)
-  const isPaused = manualPaused || scrolledAway
-  const isPausedRef = useRef(isPaused)
-  isPausedRef.current = isPaused
+  const holdRef = useRef(scrolledAway)
+  holdRef.current = scrolledAway
 
-  // Reset paging + live buffers whenever the stream or the server target flips.
+  // The scroll container + the last offset seen on it (persisted on a debounce).
+  const parentRef = useRef<HTMLDivElement>(null)
+  const lastTopRef = useRef(0)
+
+  // Ref mirrors so the drain can read the held buffers without a setState
+  // updater reaching for another setState (updaters must stay pure).
+  const stagedRef = useRef(staged)
+  stagedRef.current = staged
+  const pendingTailRef = useRef(pendingTail)
+  pendingTailRef.current = pendingTail
+
+  /** Merge everything held back into the visible list, in one pass. */
+  const drain = useCallback(() => {
+    const s = stagedRef.current
+    if (s) {
+      setCommitted(s.rows)
+      setPageCursor(s.cursor)
+      setStaged(null)
+    }
+    const buf = pendingTailRef.current
+    if (buf.length > 0) {
+      setLiveShown((prev) => [...buf].reverse().reduce((acc, r) => prependDedup(acc, r), prev))
+      setPendingTail([])
+    }
+  }, [])
+
+  /** The pill's action: merge the held rows AND go back to the top. */
+  const showNew = useCallback(() => {
+    drain()
+    if (parentRef.current) parentRef.current.scrollTop = 0
+    lastTopRef.current = 0
+    setScrolledAway(false)
+  }, [drain])
+
+  // Scrolling back to the top is itself the "I'm done reading" signal — drain
+  // whatever queued up while the operator was down the list.
   useEffect(() => {
-    setAppended([])
-    setNextCursor(null)
+    if (!scrolledAway) drain()
+  }, [scrolledAway, drain])
+
+  // ---- server-side facet push -------------------------------------------
+  // The desk roster is shared cache with the Sidebar/map (same query keys), so
+  // offering it here costs no extra request.
+  const { verdicts } = useCountryVerdicts()
+  const { desks: supplyChainDesks } = useSupplyChainDesks()
+
+  const deskOptions = useMemo<DeskOption[]>(() => {
+    const byId = new Map<string, string>()
+    for (const v of verdicts.values()) {
+      if (!v.targetId) continue
+      byId.set(v.targetId, countryNameForTargetId(v.targetId) ?? humanizeId(v.targetId))
+    }
+    for (const d of supplyChainDesks) {
+      byId.set(d.targetId, thematicDeskName(d.targetId) ?? humanizeId(d.targetId))
+    }
+    for (const t of seenTargets) if (!byId.has(t)) byId.set(t, humanizeId(t))
+    return [...byId.entries()]
+      .map(([id, label]) => ({ id, label }))
+      .sort((a, b) => a.label.localeCompare(b.label))
+  }, [verdicts, supplyChainDesks, seenTargets])
+
+  const exactTargets = useMemo(() => new Set(deskOptions.map((d) => d.id)), [deskOptions])
+  const exactAnalysts = useMemo(() => exactProducerIds(seenProducers), [seenProducers])
+  const producerOptions = useMemo(() => buildProducerOptions(seenProducers), [seenProducers])
+
+  const findingsParams = useMemo(() => {
+    const p = new URLSearchParams({ limit: '50' })
+    const pushed = serverFilterParams(filter, {
+      supports: FINDINGS_SERVER_FACETS,
+      exactTargets,
+      exactAnalysts,
+    })
+    for (const [k, v] of Object.entries(pushed)) p.set(k, v)
+    return p
+  }, [filter, exactTargets, exactAnalysts])
+
+  const signalsParams = useMemo(() => {
+    const p = new URLSearchParams({ limit: '50' })
+    const pushed = serverFilterParams(filter, { supports: SIGNALS_SERVER_FACETS, exactTargets })
+    for (const [k, v] of Object.entries(pushed)) p.set(k, v)
+    return p
+  }, [filter, exactTargets])
+
+  // ---- REST queries — only the ACTIVE stream fetches (hard separation) ----
+  // `keepPreviousData` is load-bearing: a 30s poll (or a filter change) must
+  // never blank the list. The queryFn is a PURE fetch — the old version reset
+  // the paging state from inside it, which is exactly what made every poll
+  // throw away the operator's loaded pages.
+  const findingsQ = useQuery<FindingsResponse>({
+    queryKey: ['feed-findings', findingsParams.toString()],
+    enabled: stream === 'intelligence',
+    queryFn: () => apiGet<FindingsResponse>(`/findings?${findingsParams.toString()}`),
+    refetchInterval: 30_000,
+    placeholderData: keepPreviousData,
+  })
+
+  const signalsQ = useQuery<SignalsResponse>({
+    queryKey: ['feed-signals', signalsParams.toString()],
+    enabled: stream === 'signals',
+    queryFn: () => apiGet<SignalsResponse>(`/signals?${signalsParams.toString()}`),
+    refetchInterval: 30_000,
+    placeholderData: keepPreviousData,
+  })
+
+  const activeQ = stream === 'intelligence' ? findingsQ : signalsQ
+  /** Identity of the page currently on screen — a change means a NEW question
+   *  was asked (filter/stream), not just a re-poll of the same one. */
+  const restKey = `${stream}:${(stream === 'intelligence' ? findingsParams : signalsParams).toString()}`
+  const committedKeyRef = useRef<string | null>(null)
+
+  const restRows = useMemo<UnifiedRow[]>(() => {
+    if (stream === 'intelligence') {
+      const page = findingsQ.data as FindingsResponse | undefined
+      return (page?.data ?? []).map(stampFinding)
+    }
+    const page = signalsQ.data as SignalsResponse | undefined
+    return (page?.data ?? []).map(signalRestToRow)
+  }, [stream, findingsQ.data, signalsQ.data])
+
+  const restCursor =
+    (stream === 'intelligence' ? findingsQ.data?.next_cursor : signalsQ.data?.next_cursor) ?? null
+
+  /**
+   * Commit (or stage) each freshly-fetched page.
+   *
+   *  - a NEW question (`restKey` changed) always commits and resets the paging;
+   *  - a re-poll of the SAME question commits only while the operator is at the
+   *    top; scrolled away it is staged behind the pill so the list never
+   *    reflows under a read. Loaded extra pages (`appended`) survive either way.
+   */
+  useEffect(() => {
+    // Placeholder data belongs to the PREVIOUS query key — committing it would
+    // mis-file the old page under the new question.
+    if (activeQ.isPlaceholderData || !activeQ.data) return
+
+    setSeenProducers((prev) => unionSeen(prev, restRows.map((r) => r.analyst_id)))
+    setSeenTargets((prev) => unionSeen(prev, restRows.map((r) => r.target_id)))
+    setSeenKinds((prev) => unionSeen(prev, restRows.map((r) => r.kind)))
+
+    if (committedKeyRef.current !== restKey) {
+      committedKeyRef.current = restKey
+      setCommitted(restRows)
+      setPageCursor(restCursor)
+      setStaged(null)
+      setAppended([])
+      setAppendCursor(undefined)
+      return
+    }
+    if (holdRef.current) setStaged({ rows: restRows, cursor: restCursor })
+    else {
+      setCommitted(restRows)
+      setPageCursor(restCursor)
+      setStaged(null)
+    }
+  }, [activeQ.data, activeQ.isPlaceholderData, restRows, restCursor, restKey])
+
+  // A stream flip drops the live buffers immediately (they are per-stream), so a
+  // signals tail can never leak into the intelligence list during the refetch.
+  useEffect(() => {
     setLiveShown([])
-    setPending([])
-  }, [stream, serverTargetId])
+    setPendingTail([])
+  }, [stream])
 
   // Live OFF clears the live buffers (a paused feed never shows stale live rows).
   useEffect(() => {
     if (!live) {
       setLiveShown([])
-      setPending([])
+      setPendingTail([])
     }
   }, [live])
 
-  // When we un-pause (scrolled back to top, tail on), drain the buffer in.
-  useEffect(() => {
-    if (!isPaused && pending.length > 0) {
-      setLiveShown((prev) => {
-        let next = prev
-        for (const r of [...pending].reverse()) next = prependDedup(next, r)
-        return next
-      })
-      setPending([])
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPaused])
-
-  // ---- REST queries — only the ACTIVE stream fetches (hard separation) ----
-  const findingsParams = useMemo(() => {
-    const p = new URLSearchParams({ limit: '50' })
-    if (serverTargetId) p.set('target_id', serverTargetId)
-    const sev = filter.chips.find((c) => c.key === 'severity')?.value
-    if (sev) p.set('severity', sev) // exact-match facet — safe to push server-side
-    return p
-  }, [serverTargetId, filter.chips])
-
-  const findingsQ = useQuery<FindingsResponse>({
-    queryKey: ['feed-findings', findingsParams.toString()],
-    enabled: stream === 'intelligence',
-    queryFn: async () => {
-      const r = await apiGet<FindingsResponse>(`/findings?${findingsParams.toString()}`)
-      setAppended([])
-      setNextCursor(r.next_cursor ?? null)
-      return r
-    },
-    refetchInterval: 30_000,
-  })
-
-  const signalsParams = useMemo(() => {
-    const p = new URLSearchParams({ limit: '50' })
-    if (serverTargetId) p.set('target_id', serverTargetId)
-    return p
-  }, [serverTargetId])
-
-  const signalsQ = useQuery<SignalsResponse>({
-    queryKey: ['feed-signals', signalsParams.toString()],
-    enabled: stream === 'signals',
-    queryFn: async () => {
-      const r = await apiGet<SignalsResponse>(`/signals?${signalsParams.toString()}`)
-      setAppended([])
-      setNextCursor(r.next_cursor ?? null)
-      return r
-    },
-    refetchInterval: 30_000,
-  })
-
-  // -------- live tails (only the active stream tails) --------
+  // ---- live tails (only the active stream tails) --------------------------
   const filterRef = useRef(filter)
   filterRef.current = filter
   const findingsTail = useLiveTail(
@@ -253,11 +450,11 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
       if (ev.type !== 'event') return
       const row = mapTailEnvelope(ev.payload)
       if (!row) return
-      // Respect the active facets on the tail so a paused-and-resumed feed stays
+      // Respect the active facets on the tail so a held-and-resumed feed stays
       // consistent with the filter (verdict recomputed per row).
       const cites = row.data ? extractCitations(row.data) : []
       if (!matchesFilter(row, deriveRowVerdict(row, cites.length), filterRef.current)) return
-      if (isPausedRef.current) setPending((prev) => prependDedup(prev, row))
+      if (holdRef.current) setPendingTail((prev) => prependDedup(prev, row))
       else setLiveShown((prev) => prependDedup(prev, row))
     },
     live && stream === 'intelligence',
@@ -270,7 +467,7 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
         .filter((r): r is UnifiedRow => r !== null)
         .filter((r) => matchesFilter(r, deriveRowVerdict(r, 0), filterRef.current))
       if (mapped.length === 0) return
-      if (isPausedRef.current) setPending((prev) => mapped.reduce((acc, r) => prependDedup(acc, r), prev))
+      if (holdRef.current) setPendingTail((prev) => mapped.reduce((acc, r) => prependDedup(acc, r), prev))
       else setLiveShown((prev) => mapped.reduce((acc, r) => prependDedup(acc, r), prev))
     },
     { intervalMs: 5000, enabled: live && stream === 'signals' },
@@ -278,16 +475,15 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
   const connected = stream === 'signals' ? signalsTail.connected : findingsTail.connected
 
   // ---- merge → dedup → filter → supersession-hide ----
-  const restRows = useMemo<UnifiedRow[]>(() => {
-    if (stream === 'intelligence') return (findingsQ.data?.data ?? []).map(stampFinding)
-    return (signalsQ.data?.data ?? []).map(signalRestToRow)
-  }, [stream, findingsQ.data, signalsQ.data])
-
-  const { rows, supersededHidden } = useMemo<{ rows: RowItem[]; supersededHidden: number }>(() => {
+  const { rows, supersededHidden, shownKeys } = useMemo<{
+    rows: RowItem[]
+    supersededHidden: number
+    shownKeys: Set<string>
+  }>(() => {
     const now = Date.now()
     const seen = new Set<string>()
     const merged: UnifiedRow[] = []
-    for (const r of [...liveShown, ...restRows, ...appended]) {
+    for (const r of [...liveShown, ...committed, ...appended]) {
       // Belt-and-suspenders: the buffers can outlive a stream flip.
       if (stream === 'intelligence' && r.source !== 'finding') continue
       if (stream === 'signals' && r.source !== 'signal') continue
@@ -317,8 +513,27 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
         return true
       })
     }
-    return { rows: visible, supersededHidden: hidden }
-  }, [restRows, appended, liveShown, stream, filter, hideSuperseded])
+    return { rows: visible, supersededHidden: hidden, shownKeys: seen }
+  }, [committed, appended, liveShown, stream, filter, hideSuperseded])
+
+  /**
+   * What the "N new" pill is counting: staged REST rows the operator has not
+   * seen AND that pass the active filter (an arrival the filter would hide is
+   * not "new" to this reader), plus the buffered live-tail rows.
+   */
+  const newFromStaged = useMemo(() => {
+    if (!staged) return 0
+    const now = Date.now()
+    let n = 0
+    for (const r of staged.rows) {
+      if (shownKeys.has(rowDedupKey(r))) continue
+      const cites = r.source === 'finding' && r.data ? extractCitations(r.data) : []
+      if (!matchesFilter(r, deriveRowVerdict(r, cites.length), filter, now)) continue
+      n += 1
+    }
+    return n
+  }, [staged, shownKeys, filter])
+  const pendingCount = pendingTail.length + newFromStaged
 
   // ---- TanStack Table (sorting + row model) ----
   const columns = useMemo<ColumnDef<RowItem>[]>(
@@ -341,12 +556,13 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
     state: { sorting },
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    // STABLE ROW IDENTITY — the same row keeps the same React key across every
+    // refetch, so a re-poll re-uses the DOM node instead of remounting the list.
     getRowId: (x) => rowDedupKey(x.row),
   })
   const sortedRows = table.getRowModel().rows
 
-  // ---- virtualization ----
-  const parentRef = useRef<HTMLDivElement>(null)
+  // ---- virtualization + scroll continuity ----
   const virtualize = sortedRows.length > VIRTUALIZE_THRESHOLD
   const virtualizer = useVirtualizer({
     count: sortedRows.length,
@@ -355,16 +571,42 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
     overscan: 10,
   })
 
+  // Remember the scroll offset (debounced — it fires every frame) and flush it
+  // on unmount, so a Dockview tab switch returns to the same place in the feed.
+  const scrollFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (scrollFlushRef.current) clearTimeout(scrollFlushRef.current)
+      useFeedView.getState().setScrollTop(lastTopRef.current)
+    },
+    [],
+  )
+
   function onScroll(e: UIEvent<HTMLDivElement>) {
-    setScrolledAway(e.currentTarget.scrollTop > SCROLL_PAUSE_PX)
-  }
-  function resumeLive() {
-    setManualPaused(false)
-    if (parentRef.current) parentRef.current.scrollTop = 0
-    setScrolledAway(false)
+    const top = e.currentTarget.scrollTop
+    lastTopRef.current = top
+    setScrolledAway(top > SCROLL_HOLD_PX)
+    if (scrollFlushRef.current) clearTimeout(scrollFlushRef.current)
+    scrollFlushRef.current = setTimeout(() => useFeedView.getState().setScrollTop(top), SCROLL_PERSIST_MS)
   }
 
+  // One-shot restore once there is something to scroll through.
+  const restoredRef = useRef(false)
+  useEffect(() => {
+    if (restoredRef.current || sortedRows.length === 0) return
+    const el = parentRef.current
+    if (!el) return
+    restoredRef.current = true
+    const top = useFeedView.getState().scrollTop
+    if (top > 0) {
+      el.scrollTop = top
+      lastTopRef.current = top
+      setScrolledAway(top > SCROLL_HOLD_PX)
+    }
+  }, [sortedRows.length])
+
   // ---- load more ----
+  const nextCursor = appendCursor === undefined ? pageCursor : appendCursor
   const hasMore = !!nextCursor
   async function loadMore() {
     if (!nextCursor) return
@@ -374,14 +616,18 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
     if (stream === 'intelligence') {
       const next = await apiGet<FindingsResponse>(`/findings?${p.toString()}`)
       setAppended((prev) => [...prev, ...next.data.map(stampFinding)])
-      setNextCursor(next.next_cursor ?? null)
+      setAppendCursor(next.next_cursor ?? null)
     } else {
       const next = await apiGet<SignalsResponse>(`/signals?${p.toString()}`)
       setAppended((prev) => [...prev, ...next.data.map(signalRestToRow)])
-      setNextCursor(next.next_cursor ?? null)
+      setAppendCursor(next.next_cursor ?? null)
     }
   }
 
+  /**
+   * Open a row in the Inspector. Moves the GLOBAL selection and nothing else —
+   * no filter write, no refetch, no scroll change. (Defect 3.)
+   */
   function openRow(row: UnifiedRow) {
     const preview =
       row.source === 'finding' && row.body
@@ -408,9 +654,7 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
     persistFeedViews(next)
   }
   function applyView(v: FeedSavedView) {
-    setStream(v.stream)
-    setSort(v.sort)
-    setFilter(parseFilterInput(v.query))
+    applyStoredView({ stream: v.stream, sort: v.sort, query: v.query })
   }
   function deleteView(name: string) {
     const next = removeFeedView(views, name)
@@ -418,12 +662,11 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
     persistFeedViews(next)
   }
 
-  const isLoading = stream === 'intelligence' ? findingsQ.isLoading : signalsQ.isLoading
-  const isFetching = stream === 'intelligence' ? findingsQ.isFetching : signalsQ.isFetching
+  const isLoading = activeQ.isLoading
+  const isFetching = activeQ.isFetching
   const error =
     (findingsQ.error instanceof Error ? findingsQ.error : null) ||
     (signalsQ.error instanceof Error ? signalsQ.error : null)
-  const pendingCount = pending.length
 
   return (
     <PanelChrome
@@ -471,7 +714,7 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
             <option value="confidence">confidence</option>
           </select>
           <button
-            onClick={() => setLive((v) => !v)}
+            onClick={() => setLive(!live)}
             className={`rounded border px-2 py-0.5 text-label ${
               live
                 ? connected
@@ -493,10 +736,18 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
         </div>
       }
       onRefresh={() => {
+        // An explicit refresh is the one place a full reset is what was asked
+        // for — drop the buffers, return to the top (so the incoming page
+        // commits rather than queueing behind the pill) and re-ask the question
+        // from page one.
         setAppended([])
+        setAppendCursor(undefined)
         setLiveShown([])
-        setPending([])
-        setNextCursor(null)
+        setPendingTail([])
+        setStaged(null)
+        if (parentRef.current) parentRef.current.scrollTop = 0
+        lastTopRef.current = 0
+        setScrolledAway(false)
         qc.invalidateQueries({ queryKey: ['feed-findings'] })
         qc.invalidateQueries({ queryKey: ['feed-signals'] })
         if (stream === 'intelligence') findingsQ.refetch()
@@ -511,6 +762,9 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
         onSaveView={saveCurrentView}
         onDeleteView={deleteView}
         severityDisabled={stream === 'signals'}
+        deskOptions={deskOptions}
+        producerOptions={producerOptions}
+        kindOptions={seenKinds}
       />
 
       {/* secondary controls: supersession reveal + fetching hint */}
@@ -518,7 +772,7 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
         {stream === 'intelligence' && (
           <button
             className="inline-flex items-center gap-1 hover:text-ink-1"
-            onClick={() => setHideSuperseded((v) => !v)}
+            onClick={() => setHideSuperseded(!hideSuperseded)}
             data-testid="feed-superseded-toggle"
             title="Latest-per-situation: hide near-dup findings a newer run superseded"
           >
@@ -539,16 +793,17 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
         {isFetching && <span>loading…</span>}
       </div>
 
-      {/* pause-on-scroll banner — buffered live rows waiting behind a scroll */}
-      {live && pendingCount > 0 && (
+      {/* The hold banner — everything that arrived while the operator was
+          reading, waiting to be merged on THEIR say-so. */}
+      {pendingCount > 0 && (
         <button
-          onClick={resumeLive}
+          onClick={showNew}
           className="mb-1 flex w-full items-center justify-center gap-1.5 rounded border border-accent-ok/50 bg-accent-ok/10 py-1 text-label text-accent-ok hover:bg-accent-ok/20"
           data-testid="feed-resume-live"
         >
           <ArrowDownToLine className="h-3 w-3" />
           {pendingCount} new {stream === 'signals' ? 'signal' : 'finding'}
-          {pendingCount === 1 ? '' : 's'} — resume live
+          {pendingCount === 1 ? '' : 's'} — show
         </button>
       )}
 
@@ -586,6 +841,7 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
                     citations={item.citations}
                     verdict={item.verdict}
                     index={vi.index + 1}
+                    active={item.row.id === selectedRowId}
                     onOpen={() => openRow(item.row)}
                   />
                 </div>
@@ -601,6 +857,7 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
                 citations={r.original.citations}
                 verdict={r.original.verdict}
                 index={i + 1}
+                active={r.original.row.id === selectedRowId}
                 onOpen={() => openRow(r.original.row)}
               />
             ))}
@@ -664,18 +921,21 @@ function FeedAddToExport({ id, title }: { id: string; title: string | null }) {
 /**
  * One feed row — a finding OR a signal. A finding carries the full card + a
  * muted VerdictBadge (ICD-203); a signal is the slim raw-intake variant.
+ * `active` marks the row the Inspector is currently showing.
  */
 function FeedCard({
   row,
   citations,
   verdict,
   index,
+  active = false,
   onOpen,
 }: {
   row: UnifiedRow
   citations: ReturnType<typeof extractCitations>
   verdict: ReturnType<typeof deriveRowVerdict>
   index?: number
+  active?: boolean
   onOpen: () => void
 }) {
   const isSignal = row.source === 'signal'
@@ -683,10 +943,12 @@ function FeedCard({
   return (
     <button
       onClick={onOpen}
+      aria-current={active ? 'true' : undefined}
       className={`group block w-full cursor-pointer border-l-2 text-left text-body ${severityRailClass(
         row.severity,
-      )} bg-surf-2 py-1 pl-2 pr-2 hover:bg-surf-1`}
+      )} py-1 pl-2 pr-2 ${active ? 'bg-surf-3 ring-1 ring-inset ring-accent-info/60' : 'bg-surf-2 hover:bg-surf-1'}`}
       data-testid={isSignal ? `signal-${row.id}` : `finding-${row.id}`}
+      data-active={active ? 'true' : undefined}
     >
       {/* title row */}
       <div className="flex items-baseline gap-2">

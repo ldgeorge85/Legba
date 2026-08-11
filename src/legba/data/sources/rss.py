@@ -247,11 +247,21 @@ class RSSSourceHandler:
         body_text = response.text
         feed = self._safe_parse(body_text)
         if feed is None:
+            # content_type is carried into the health detail because the
+            # serve-nothing class is diagnosed by it in one glance: a feed URL
+            # answering 200 with `text/html` is an origin error page, not a
+            # feed. Without it the operator sees "parse failure" and has to go
+            # fetch the document by hand to learn anything.
+            content_type = response.headers.get("content-type", "") or ""
             await self._record_health(
                 ctx,
                 state="degraded",
-                last_error="feed parse failure",
-                detail={"status": response.status_code},
+                last_error=f"feed parse failure (content-type={content_type!r})",
+                detail={
+                    "status": response.status_code,
+                    "content_type": content_type,
+                    "bytes": len(body_text or ""),
+                },
             )
             return
 
@@ -503,6 +513,40 @@ class RSSSourceHandler:
         entries = getattr(parsed, "entries", []) or []
         feed_meta = getattr(parsed, "feed", {}) or {}
         if getattr(parsed, "bozo", 0) and not entries and not feed_meta:
+            return None
+
+        # THE SERVE-NOTHING CLASS. The guard above is not enough, because
+        # `feed_meta` is truthy for a document that is not a feed at all:
+        # feedparser scrapes an HTML page's <title>/<meta> into `feed` and
+        # returns `{'html', 'meta', 'summary'}`. So an origin that answers a
+        # conditional GET with HTTP 200 and an HTML ERROR PAGE parsed "fine",
+        # yielded zero entries, and was recorded HEALTHY — an empty poll,
+        # indistinguishable from a publisher having nothing new to say.
+        #
+        # Measured on source.stategov.press_releases (2026-08-05): state.gov
+        # served a 659,508-byte AWS S3 "Technical Difficulties" page, 200,
+        # content-type text/html, on every request to both its feed paths. The
+        # source had 33 of 33 polls logged "empty", zero logged errors, and had
+        # NEVER produced a single signal row — 21 days presenting to the gauge
+        # as a quiet publisher rather than a broken one. Nothing in the health
+        # record contradicted that reading, which is why it went unlooked-at.
+        #
+        # `version` is the discriminator and it is exact: feedparser sets it to
+        # the detected feed format ('rss20', 'atom10', ...) and to '' when the
+        # document is not a feed in any format it knows. A VALID BUT EMPTY feed
+        # keeps its version, so a genuinely quiet publisher stays healthy —
+        # both cases verified against the live documents.
+        if not entries and not getattr(parsed, "version", ""):
+            logger.warning(
+                "rss.parse.not_a_feed url=%s — HTTP 200 carried a document "
+                "feedparser cannot identify as any feed format (bozo=%s, "
+                "0 entries, feed keys=%s). Recording a FAILURE, not an empty "
+                "poll: an origin serving an error page must not read as a "
+                "quiet publisher.",
+                self._config.url,
+                getattr(parsed, "bozo", 0),
+                sorted(feed_meta.keys())[:6],
+            )
             return None
         return parsed
 

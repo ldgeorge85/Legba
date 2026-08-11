@@ -481,10 +481,18 @@ def _row_to_signal_payload(row: dict[str, Any]) -> dict[str, Any]:
         "external_id": row.get("GLOBALEVENTID"),
         "published_at": row.get("SQLDATE"),
         "date_added": row.get("DATEADDED"),
+        # B-6: the ``_fips`` suffixes are load-bearing, not decoration. These
+        # columns are FIPS 10-4, and the sibling file-dump handler already named
+        # them so; leaving this one's bare ``country_code`` was an invitation for
+        # the next reader to treat it as ISO — which is exactly the mistake that
+        # put Germany's stories on Gambia's desk. Nothing in-tree read the old
+        # keys. This handler still stamps NO ``Signal.geo`` (the geocode filter
+        # owns geo here, resolving it from lat/lon); if that ever changes, route
+        # the value through ``legba.data._fips_iso.fips_to_iso2`` first.
         "geo": {
             "type": row.get("ActionGeo_Type"),
             "full_name": row.get("ActionGeo_FullName"),
-            "country_code": row.get("ActionGeo_CountryCode"),
+            "country_code_fips": row.get("ActionGeo_CountryCode"),
             "adm1_code": row.get("ActionGeo_ADM1Code"),
             "lat": row.get("ActionGeo_Lat"),
             "lon": row.get("ActionGeo_Long"),
@@ -492,11 +500,11 @@ def _row_to_signal_payload(row: dict[str, Any]) -> dict[str, Any]:
         "actors": {
             "actor1_code": row.get("Actor1Code"),
             "actor1_name": row.get("Actor1Name"),
-            "actor1_country": row.get("Actor1CountryCode"),
+            "actor1_country_fips": row.get("Actor1CountryCode"),
             "actor1_type": row.get("Actor1Type1Code"),
             "actor2_code": row.get("Actor2Code"),
             "actor2_name": row.get("Actor2Name"),
-            "actor2_country": row.get("Actor2CountryCode"),
+            "actor2_country_fips": row.get("Actor2CountryCode"),
             "actor2_type": row.get("Actor2Type1Code"),
         },
         "event_code": row.get("EventCode"),

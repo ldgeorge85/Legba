@@ -696,12 +696,15 @@ async def _insert_signal(
     geo: tuple[str, ...] = (),
     entities: list[Any] | None = None,
     canonical_url: str | None = None,
+    payload: dict[str, Any] | None = None,
 ) -> UUID:
     """A signal strictly NEWER than everything before it (monotonic future
     offsets, so post-seed inserts always land past the cursor)."""
     _SIG_SEQ["n"] += 1
     sid = uuid4()
-    payload: dict[str, Any] = {"title": f"kw3 signal {_SIG_SEQ['n']}"}
+    payload = dict(payload) if payload else {
+        "title": f"kw3 signal {_SIG_SEQ['n']}"
+    }
     if entities is not None:
         payload["entities"] = entities
     await conn.execute(
@@ -885,15 +888,18 @@ async def _insert_question(
     return qid
 
 
-async def _insert_desk(conn: Any, desk: str, geo: tuple[str, ...]) -> None:
+async def _insert_desk(
+    conn: Any, desk: str, geo: tuple[str, ...], name: str | None = None
+) -> None:
     await conn.execute(
         "INSERT INTO target_descriptors (descriptor_id, version, schema_uri, "
         "  is_head, state, owner, name, body) "
-        "VALUES ($1, 'v1', 'legba/target/2.0.0', TRUE, 'active', $2, $1, "
+        "VALUES ($1, 'v1', 'legba/target/2.0.0', TRUE, 'active', $2, $4, "
         "        $3::jsonb) ON CONFLICT DO NOTHING",
         desk,
         _ANALYST,
         json.dumps({"scope": {"geo": list(geo), "tags": ["watch"]}}),
+        name if name is not None else desk,
     )
 
 
@@ -1235,6 +1241,108 @@ async def test_review_flags_only_for_live_traced_questions(
         assert all(f["reason"] == cw.FLAG_REASON for f in flags)
         assert all(f["closed_at"] is None for f in flags)
         assert all(f["moved_at"] is not None for f in flags)
+
+
+async def test_review_flags_fire_from_the_REAL_producer_stamp(pg_pool, clean_slate):
+    """W1-C2 — the same flag, seeded the way PRODUCTION seeds it.
+
+    The sibling test above hand-writes its ``output_consumption`` rows with
+    ``context='composition_basis'`` / ``consumer_kind='meta_findings_
+    synthesizer'`` — a shape no producer in the codebase has EVER written for a
+    hypothesis. That is why the flag plane was green in tests and 0 rows in
+    production: ``review_flags`` all-time = 0, ``flags_written`` = 0 on every
+    tick, and live 2026-08-03 there were 0 ``output_consumption`` rows whose
+    ``consumed_id`` joins ``hypotheses`` at any status. The walk was never
+    broken; nothing ever gave it an edge.
+
+    So this test writes NO consumption row of its own. It runs
+    ``inline_target.run_method`` (the real corpus_researcher path), takes the
+    ``consumed_edges`` that run stamps, materializes them with the production
+    ``record_output_consumption``, and then lets the real ``claim_watch`` pass
+    walk it. Every artifact in the chain is shipped code.
+    """
+    from types import SimpleNamespace
+
+    from legba.data.analysts.inline_target import (
+        GROUNDING_QUESTION_SINK_KEY,
+        InlineTargetDeps,
+    )
+    from legba.data.analysts.inline_target import run_method as inline_run_method
+    from legba.data.provenance.consumption import (
+        CONSUMPTION_CONTEXT_QUESTION,
+        record_output_consumption,
+    )
+
+    async with pg_pool.acquire() as conn:
+        qid, ents, _ = await _matchable_question(conn, thesis="kw3 answered q")
+
+    # --- the REAL producer leg: an assessor answers the standing question ---
+    class _LLM:
+        subprovider = "kw3_real_path"
+
+        async def chat_complete(self, *a: Any, **k: Any) -> Any:
+            return SimpleNamespace(
+                content=json.dumps({
+                    "title": "Answered", "body": "The corpus settles it. [1]",
+                    "confidence": 0.7, "evidence": ["sig-1"],
+                    "tags": ["severity:low"], "addressed_question": "Q1",
+                }),
+                usage=SimpleNamespace(
+                    prompt_tokens=1, completion_tokens=1, reasoning_tokens=0
+                ),
+            )
+
+    async def _hook(inputs: Any, options: Any) -> str:
+        sink = options.get(GROUNDING_QUESTION_SINK_KEY)
+        if isinstance(sink, dict):
+            sink["Q1"] = {"id": str(qid), "produced_at": "2026-07-20T00:00:00+00:00",
+                          "harvest_class": "below_floor"}
+        return "STANDING OPEN QUESTIONS:\n- [Q1] kw3 answered q\n"
+
+    result = await inline_run_method(
+        [{"id": uuid4(), "title": "a signal",
+          "produced_at": "2026-07-27T00:00:00+00:00"}],
+        {"analyst_id": "corpus_researcher"},
+        InlineTargetDeps(llm=_LLM(), grounding_hook=_hook),
+    )
+    assert result.consumed_edges == [(qid, CONSUMPTION_CONTEXT_QUESTION)], (
+        "the producer stamped no question-consumption edge — the rest of this "
+        "chain cannot fire and review_flags stays structurally dead"
+    )
+
+    # --- the runtime leg: the actor materializes the stamp (same helper) ---
+    async with pg_pool.acquire() as conn:
+        consumer_id = await _insert_consumer(conn)
+        written = await record_output_consumption(
+            conn,
+            consumer_id=consumer_id,
+            consumer_kind="inline_target",
+            edges=result.consumed_edges,
+        )
+    assert written == 1
+
+    await _run(pg_pool)  # seed silently
+
+    async with pg_pool.acquire() as conn:
+        s1 = await _insert_signal(conn, geo=("IR",))
+        await _link_all(conn, s1, ents)
+
+    # --- the consumer leg: claim_watch's forward walk finally has an edge ---
+    counters = _counters(await _run(pg_pool))
+    assert counters["edges_written"] == 1
+    assert counters["flags_written"] == 1, (
+        "new evidence bore on an ANSWERED question and flagged nothing — the "
+        f"forward walk is still starved: {counters}"
+    )
+    assert counters["staleness_debt"] == 1
+
+    async with pg_pool.acquire() as conn:
+        flags = await _flags(conn)
+    assert len(flags) == 1
+    assert flags[0]["output_id"] == consumer_id
+    assert flags[0]["founded_on_id"] == qid
+    assert flags[0]["reason"] == cw.FLAG_REASON
+    assert flags[0]["closed_at"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -2279,7 +2387,199 @@ async def test_meta_questions_are_skipped_counted_and_stay_open(
     # The stamp is the ONLY thing that tells an edge written under one model
     # apart from an edge written under another, so it is pinned to a LITERAL
     # here — a bump must be a deliberate edit, never a silent inherit.
-    assert edges[0]["matcher_version"] == "claim_watch/3.3.0"
+    assert edges[0]["matcher_version"] == "claim_watch/4.1.0"
+
+
+async def test_a_deictic_thesis_is_skipped_counted_and_stays_open(
+    pg_pool, clean_slate
+):
+    """CW-3. "Is the framing of the incident ...?" is not a weak match, it is
+    an unanswerable one: the string every plane reads does not contain the
+    proposition. K-4 R3 measured the class at 0.133. Skipped like the meta
+    classes, for the same reason, and just as loudly."""
+    async with pg_pool.acquire() as conn:
+        qid, ents, _ = await _matchable_question(
+            conn,
+            desk="kw3_deictic",
+            thesis=(
+                "Is the framing of the incident being driven by an "
+                "orchestrated campaign from Russian or Iranian state actors?"
+            ),
+        )
+    await _run(pg_pool, **_L2_OFF)  # seed
+    async with pg_pool.acquire() as conn:
+        sid = await _insert_signal(conn, geo=("IR",))
+        await _link_all(conn, sid, ents)
+
+    c = _counters(await _run(pg_pool, **_L2_OFF))
+    assert c["questions_scanned"] == 1
+    assert c["skipped_deictic_questions"] == 1
+    assert c["questions_matchable"] == 0
+    assert c["edges_written"] == 0
+    async with pg_pool.acquire() as conn:
+        # A matcher-side skip, never a status mutation.
+        assert (
+            await conn.fetchval(
+                "SELECT status FROM hypotheses WHERE id = $1", qid
+            )
+            == "open_question"
+        )
+    assert sid is not None
+
+
+async def test_the_deictic_guard_leaves_a_self_contained_thesis_alone(
+    pg_pool, clean_slate
+):
+    """The near-miss that a looser guard would have cost: "the recent
+    attacks" is VAGUE, not anaphoric, and its R3 row scored a correct
+    match."""
+    async with pg_pool.acquire() as conn:
+        qid, ents, _ = await _matchable_question(
+            conn,
+            desk="kw3_not_deictic",
+            thesis=(
+                "What is the quantitative impact of the recent attacks on "
+                "actual vessel transit volumes in the Black Sea?"
+            ),
+        )
+    await _run(pg_pool, **_L2_OFF)  # seed
+    async with pg_pool.acquire() as conn:
+        sid = await _insert_signal(conn, geo=("IR",))
+        await _link_all(conn, sid, ents)
+
+    c = _counters(await _run(pg_pool, **_L2_OFF))
+    assert c["skipped_deictic_questions"] == 0
+    assert c["edges_written"] == 1
+    assert (qid, sid) is not None
+
+
+async def test_the_deictic_guard_is_operator_disablable(pg_pool, clean_slate):
+    async with pg_pool.acquire() as conn:
+        qid, ents, _ = await _matchable_question(
+            conn,
+            desk="kw3_deictic_off",
+            thesis="Is the framing of the incident state-orchestrated?",
+        )
+    await _run(pg_pool, **_L2_OFF)  # seed
+    async with pg_pool.acquire() as conn:
+        sid = await _insert_signal(conn, geo=("IR",))
+        await _link_all(conn, sid, ents)
+
+    c = _counters(await _run(pg_pool, **{**_L2_OFF, "deictic_guard": "off"}))
+    assert c["skipped_deictic_questions"] == 0
+    assert c["edges_written"] == 1
+    assert (qid, sid) is not None
+
+
+_CONTENTION_THESIS = (
+    'Contested fact: which value of "located in" for "texas" is correct? '
+    '2 competing value clusters; current surfaced winner: "spacex".'
+)
+
+
+async def test_a_contention_pair_without_its_subject_is_refused(
+    pg_pool, clean_slate
+):
+    """CW-5, through the real handler. The R3 row this reproduces was labeled
+    spurious: the matcher edged "which value of 'located in' for TEXAS" onto
+    a SpaceX story that contains no Texas token, because nothing required the
+    signal to be about the SUBJECT — only about the contested value."""
+    async with pg_pool.acquire() as conn:
+        qid, ents, _ = await _matchable_question(
+            conn, desk="kw3_anchor_miss", thesis=_CONTENTION_THESIS
+        )
+    await _run(pg_pool, **_L2_OFF)  # seed
+    async with pg_pool.acquire() as conn:
+        sid = await _insert_signal(
+            conn,
+            geo=("IR",),
+            payload={
+                "title": "SpaceX Starship floats belly up after splashdown",
+                "summary": "Recovery crews work to secure the vehicle.",
+            },
+        )
+        await _link_all(conn, sid, ents)
+
+    c = _counters(await _run(pg_pool, **_L2_OFF))
+    assert c["contention_questions"] == 0     # not harvest-marked in this scene
+    assert c["contention_subject_unanchored"] == 1
+    assert c["edges_written"] == 0
+    assert (qid, sid) is not None
+
+
+async def test_a_contention_pair_naming_its_subject_still_matches(
+    pg_pool, clean_slate
+):
+    """The guard is monotone and narrow: name the subject and the pair scores
+    exactly as it did in 3.3.0."""
+    async with pg_pool.acquire() as conn:
+        qid, ents, _ = await _matchable_question(
+            conn, desk="kw3_anchor_hit", thesis=_CONTENTION_THESIS
+        )
+    await _run(pg_pool, **_L2_OFF)  # seed
+    async with pg_pool.acquire() as conn:
+        sid = await _insert_signal(
+            conn,
+            geo=("IR",),
+            payload={
+                "title": "Starship recovered off the Texas coast",
+                "summary": "Crews towed the vehicle back to Boca Chica.",
+            },
+        )
+        await _link_all(conn, sid, ents)
+
+    c = _counters(await _run(pg_pool, **_L2_OFF))
+    assert c["contention_subject_unanchored"] == 0
+    assert c["edges_written"] == 1
+    assert (qid, sid) is not None
+
+
+async def test_the_subject_anchor_is_operator_disablable(pg_pool, clean_slate):
+    async with pg_pool.acquire() as conn:
+        qid, ents, _ = await _matchable_question(
+            conn, desk="kw3_anchor_off", thesis=_CONTENTION_THESIS
+        )
+    await _run(pg_pool, **_L2_OFF)  # seed
+    async with pg_pool.acquire() as conn:
+        sid = await _insert_signal(
+            conn, geo=("IR",),
+            payload={"title": "SpaceX Starship floats belly up"},
+        )
+        await _link_all(conn, sid, ents)
+
+    c = _counters(
+        await _run(
+            pg_pool, **{**_L2_OFF, "contention_subject_anchor": "off"}
+        )
+    )
+    assert c["contention_subject_unanchored"] == 0
+    assert c["edges_written"] == 1
+    assert (qid, sid) is not None
+
+
+async def test_a_non_contention_question_is_never_anchor_checked(
+    pg_pool, clean_slate
+):
+    """Scope. The guard reads a contested (subject, predicate) out of the
+    thesis; every other question shape parses to None and is untouched."""
+    async with pg_pool.acquire() as conn:
+        qid, ents, _ = await _matchable_question(
+            conn,
+            desk="kw3_anchor_scope",
+            thesis="Will Iran proceed with closing the Strait of Hormuz?",
+        )
+    await _run(pg_pool, **_L2_OFF)  # seed
+    async with pg_pool.acquire() as conn:
+        sid = await _insert_signal(
+            conn, geo=("IR",),
+            payload={"title": "Wholly unrelated wire copy about nothing"},
+        )
+        await _link_all(conn, sid, ents)
+
+    c = _counters(await _run(pg_pool, **_L2_OFF))
+    assert c["contention_subject_unanchored"] == 0
+    assert c["edges_written"] == 1
+    assert (qid, sid) is not None
 
 
 async def test_every_meta_class_is_skipped_and_fact_contention_is_not(
@@ -2397,20 +2697,38 @@ async def _global_df_scene(
         for i in range(cw.MIN_DESK_QUESTIONS_FOR_SPECIFICITY - 2)
     ]
     # Filler stream: bulk-insert n_filler signals, each linked to the hubs.
-    # Stamped OLDER than the fixture's other rows (a negative offset) so they
-    # sit behind the seed cursor and never enter a match batch — they are
-    # stream CONTEXT for the df window, not candidates.
+    # Stamped OLDER than the lineage signal so they sit behind the seed cursor
+    # (which seeds at the stream head) and never enter a match batch — they
+    # are stream CONTEXT for the df window, not candidates.
+    #
+    # OLDER THAN THE LINEAGE, NOT OLDER THAN NOW. The df window is the newest
+    # `global_df_window` signals of the WHOLE shared table, and the tests pass
+    # a window pinned to this fixture's own row count — so every filler row a
+    # foreign row out-dates is one attributed row displaced OUT of the window.
+    # The old `now() - 600 - g` stamp put the filler behind every signal any
+    # other file had inserted in the previous ~11 minutes; whenever 50+ such
+    # foreign leftovers were unattributed, the sample fell under the
+    # `global_df_min_signals=50` floor and the lever went honestly inert —
+    # the 2026-08-10 shuffled nightly failed BOTH live global-df tests on
+    # exactly that (`global_specificity_inert is True`). `_insert_signal`
+    # already stamps monotonic FUTURE offsets precisely so this file's stream
+    # out-dates anything a sibling suite leaves behind; the filler now takes
+    # the same protection, packed into the open second below the lineage
+    # signal's own offset (strictly between the lineage and its predecessor,
+    # so the seed cursor still shields it from every match batch).
     tag = f"kw3 filler {desk}"
     await conn.execute(
         "INSERT INTO signals (id, source_id, geo, fetched_at, payload, "
         "  content_hash) "
         "SELECT gen_random_uuid(), $1, '{}'::text[], "
-        "       now() - make_interval(secs => 600 + g), "
+        "       now() + make_interval(secs => $4::float8 - 1.0 "
+        "                                     + g / ($2 + 1.0)::float8), "
         "       jsonb_build_object('title', $3::text), md5(random()::text) "
         "  FROM generate_series(1, $2) g",
         _SRC,
         n_filler,
         tag,
+        float(_SIG_SEQ["n"]),
     )
     await conn.execute(
         "INSERT INTO signal_entity_links (signal_id, entity_id, analyst_id) "
@@ -2749,9 +3067,15 @@ class _FakeGateLLM:
         self.replies = list(replies)
         self.default = default
         self.prompts: list[str] = []
+        self.systems: list[str] = []
 
     async def chat_complete(self, messages, **kwargs):
-        self.prompts.append(messages[0]["content"])
+        # The LAST turn: for the gate that is the row under test (the seven
+        # few-shot exemplars sit in between), for the batched confirm it is
+        # the only turn. Recording messages[0] would have shown the SYSTEM
+        # message for the gate and hidden every per-row substitution.
+        self.prompts.append(messages[-1]["content"])
+        self.systems.append(messages[0]["content"])
         reply = self.replies.pop(0) if self.replies else self.default
         if isinstance(reply, Exception):
             raise reply
@@ -2933,6 +3257,8 @@ async def test_over_the_gate_budget_the_edge_is_stamped_deferred_not_dropped(
 async def test_the_confirm_leg_stamps_a_verdict_and_a_reason(
     pg_pool, clean_slate
 ):
+    """ADVISORY mode — the 3.3.0 leg, one descriptor PUT away and still
+    exercised end-to-end so the escape hatch is a tested path, not a hope."""
     qid, sid = await _gate_scene(pg_pool, "kw3_confirm")
     confirm = _FakeGateLLM(
         '[{"id": "e0", "bears": "no", "reason": "different dispute entirely"}]'
@@ -2941,13 +3267,14 @@ async def test_the_confirm_leg_stamps_a_verdict_and_a_reason(
         await _run(
             pg_pool,
             extras=_gate_extras(_FakeGateLLM("YES"), confirm),
-            **_gate_on(),
+            **_gate_on(bearing_confirm_mode="advisory"),
         )
     )
-    # A confirm 'no' NEVER retracts the edge — the gate already wrote it.
     assert c["edges_written"] == 1
     assert c["bearing_confirm_no"] == 1
     assert c["bearing_confirm_calls"] == 1
+    assert c["bearing_confirm_mode"] == "advisory"
+    assert c["bearing_confirm_blocked"] == 0
 
     async with pg_pool.acquire() as conn:
         data = _edge_data((await _edges_with_data(conn))[0])
@@ -2955,6 +3282,111 @@ async def test_the_confirm_leg_stamps_a_verdict_and_a_reason(
     assert data["bearing_confirm"] == "no"
     assert data["bearing_confirm_reason"] == "different dispute entirely"
     assert data["bearing_confirm_prompt"] == bg.CONFIRM_PROMPT_VERSION
+    # Advisory or not, the row says which population it belongs to.
+    assert data["bearing_watch"] == "unconfirmed"
+    assert (qid, sid) is not None
+
+
+async def test_a_confirm_no_writes_no_edge_and_raises_no_flag(
+    pg_pool, clean_slate
+):
+    """CW-1, through the REAL handler: a blocked candidate must leave the
+    substrate untouched — no bearing_edges row, and no review_flag either,
+    since ``matched_questions`` is rebuilt from the survivors."""
+    qid, sid = await _gate_scene(pg_pool, "kw3_confirm_blocking")
+    confirm = _FakeGateLLM('[{"id": "e0", "bears": "no", "reason": "off thesis"}]')
+    c = _counters(
+        await _run(
+            pg_pool,
+            extras=_gate_extras(_FakeGateLLM("YES"), confirm),
+            **_gate_on(),
+        )
+    )
+    assert c["bearing_gate_yes"] == 1        # the gate DID pass it
+    assert c["bearing_confirm_no"] == 1
+    assert c["bearing_confirm_blocked"] == 1
+    assert c["bearing_confirm_mode"] == "blocking"
+    assert c["edges_written"] == 0
+    assert c["flags_written"] == 0
+    async with pg_pool.acquire() as conn:
+        assert await _edges_with_data(conn) == []
+    assert (qid, sid) is not None
+
+
+async def test_the_desk_identity_reaches_both_prompts_and_the_edge(
+    pg_pool, clean_slate
+):
+    """CW-2, end to end. The desk was in target_descriptors the whole time;
+    what was missing was any path from that row to the prompt. K-4 R3 pair
+    06cc3f2f is what the absence cost: a US-Senate story onto the Türkiye
+    desk, gate-yes AND confirm-yes, because neither leg could see a desk."""
+    async with pg_pool.acquire() as conn:
+        await _insert_desk(
+            conn, "kw3_desk_ident", ("IR",), name="Watch — Testland"
+        )
+        qid, ents, _ = await _matchable_question(conn, desk="kw3_desk_ident")
+    await _run(pg_pool, **_L2_OFF)  # seed
+    async with pg_pool.acquire() as conn:
+        sid = await _insert_signal(conn, geo=("IR",))
+        await _link_all(conn, sid, ents)
+
+    gate = _FakeGateLLM(default="YES")
+    confirm = _FakeGateLLM('[{"id": "e0", "bears": "yes", "reason": "r"}]')
+    await _run(
+        pg_pool, extras=_gate_extras(gate, confirm), **_gate_on()
+    )
+    expected = "Desk: Watch — Testland [kw3_desk_ident]"
+    assert expected in gate.prompts[0]
+    assert expected in confirm.prompts[0]
+    async with pg_pool.acquire() as conn:
+        data = _edge_data((await _edges_with_data(conn))[0])
+    assert data["bearing_desk"] == "Watch — Testland [kw3_desk_ident]"
+    assert (qid, sid) is not None
+
+
+async def test_a_deskless_question_shows_no_desk_line(pg_pool, clean_slate):
+    """A fact_contention question has target_id NULL. It must produce the
+    exact fewshot/1 prompt shape, not "Desk: (none)" — an absent scope is not
+    a scope, and inviting the 8B to reason about one is how you get a desk
+    hallucinated onto a question that never had one."""
+    async with pg_pool.acquire() as conn:
+        # THREE entities: with no target_id there is no desk geo, so the geo
+        # plane contributes nothing and the entity plane has to carry the pair
+        # over threshold on its own (3 x 0.56 > 0.45).
+        qid, ents, _ = await _matchable_question(
+            conn, desk="kw3_deskless", n_entities=3
+        )
+        await conn.execute(
+            "UPDATE hypotheses SET target_id = NULL WHERE id = $1", qid
+        )
+    await _run(pg_pool, **_L2_OFF)  # seed
+    async with pg_pool.acquire() as conn:
+        sid = await _insert_signal(conn, geo=("IR",))
+        await _link_all(conn, sid, ents)
+
+    gate = _FakeGateLLM(default="YES")
+    await _run(pg_pool, extras=_gate_extras(gate), **_gate_on())
+    assert gate.prompts and "Desk:" not in gate.prompts[0]
+    assert (qid, sid) is not None
+
+
+async def test_a_confirm_yes_is_written_as_a_confirmed_watch_hit(
+    pg_pool, clean_slate
+):
+    qid, sid = await _gate_scene(pg_pool, "kw3_confirm_yes")
+    confirm = _FakeGateLLM('[{"id": "e0", "bears": "yes", "reason": "on thesis"}]')
+    c = _counters(
+        await _run(
+            pg_pool,
+            extras=_gate_extras(_FakeGateLLM("YES"), confirm),
+            **_gate_on(),
+        )
+    )
+    assert c["edges_written"] == 1
+    assert c["bearing_watch_confirmed"] == 1
+    async with pg_pool.acquire() as conn:
+        data = _edge_data((await _edges_with_data(conn))[0])
+    assert data["bearing_watch"] == "confirmed"
     assert (qid, sid) is not None
 
 

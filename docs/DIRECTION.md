@@ -21,12 +21,12 @@ named so the design is checkable against the tree. New here? Start with the
 
 One distinction applies everywhere below: the mandatory verify pass measures
 **groundedness, not truth**. It scores whether each claim *follows from its
-cited evidence* (a faithfulness score in `[0,1]`, from an LLM judge — currently
-the same core reasoning model that writes the analysis, not cross-family (a
-deliberate, temporary choice; see `AI_MODELS.md` §3) — plus a deterministic
-citation-presence floor); it does **not** adjudicate whether the claim is true
+cited evidence* (a faithfulness score in `[0,1]`, from an LLM judge resolved
+through its own repointable route — descriptor default same-model, the
+reference deployment cross-family on a hosted Gemma judge; see `AI_MODELS.md`
+§3 — plus a deterministic citation-presence floor); it does **not** adjudicate whether the claim is true
 about the world. Within the **built** system this document still separates the
-**measured core** — the eight units, the per-country / per-region / world
+**measured core** — the nine units, the per-country / per-region / world
 composition tower, the
 banded scorecard, and the provenance / drill-down that carries them — from **the
 ambitious legs, which now return ONLY as measured, honestly-reported
@@ -37,8 +37,10 @@ experiments**:
   banded scorecard is deliberately a *mix* — some country dimensions band from a
   qualifying verified claim, others read `insufficient-evidence` with an explicit
   reason (e.g. the US card currently reads all-insufficient because that unit's
-  faithfulness is genuinely low), and the correctness-vs-reference gold set is
-  tiny (n=1, reported insufficient-sample). No band is ever fabricated.
+  faithfulness is genuinely low), and the correctness gold set is
+  small (a first weekly cohort of n=8 verdicts feeds the correctness axis;
+  the deterministic reference leg is still n=1, reported insufficient-sample).
+  No band is ever fabricated.
 - **Forecasting** returns ONLY as a precise-question `acute_forecasts` Brier /
   BSS scoreboard (question + window + probability + auto-resolve), surfaced solely
   on the calibration route, **never** as a free-text claim or finding. It
@@ -51,7 +53,7 @@ experiments**:
 - **The GEPA self-optimizer** returns scoped to ONE measured unit
   (`leadership_transition`) as a `unit_optimizer` descriptor; every candidate
   carries a REAL before/after paired faithfulness delta measured on the same
-  faithfulness judge (currently the core model, not cross-family; a live run read parent `0.34` → candidate `0.29`, delta `-0.05`), stays
+  faithfulness judge (whatever the judge route resolves; a live run read parent `0.34` → candidate `0.29`, delta `-0.05`), stays
   `promotion_gate = human_gated`, and can never auto-promote on an absent /
   degenerate / non-positive delta. The old monolithic `country_optimizer` stays
   **cadence-frozen** (its descriptor is still `state: active`, but it no longer ticks —
@@ -800,11 +802,12 @@ Three tiers:
 (`src/legba/data/analysts/inline_target.py`); `_build_grounding_hook`
 (`src/legba/runtime/analyst_deps_builder.py`); the seed adapters
 (`src/legba/data/seed/adapters/wikidata_leaders.py`, `world_baseline.py`); the RAG
-loader (`src/legba/data/rag/`); the eight unit descriptors carrying the `grounding:`
+loader (`src/legba/data/rag/`); the nine unit descriptors carrying the `grounding:`
 block (`descriptors/analyst_leadership_transition.yaml`, `analyst_energy_security.yaml`,
 `analyst_escalation.yaml`, `analyst_narrative_coordination.yaml`,
 `analyst_internal_stability.yaml`, `analyst_military_posture.yaml`,
-`analyst_economic_coercion.yaml`, `analyst_proliferation_watch.yaml`).
+`analyst_economic_coercion.yaml`, `analyst_proliferation_watch.yaml`,
+`analyst_disruption_status.yaml`).
 
 **Status:** Tier 0 + Tier 1 **built** (deployed + canary-verified live); Tier 2
 (vector `world_context`) is now **BUILT / LIVE** — the embedder-through-port wiring

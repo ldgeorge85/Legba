@@ -76,6 +76,8 @@ class RecordingConn:
         self.executes: list[tuple[str, tuple[Any, ...]]] = []
         self.fetchvals: list[tuple[str, tuple[Any, ...]]] = []
         self.fetchrows: list[tuple[str, tuple[Any, ...]]] = []
+        self.fetches: list[tuple[str, tuple[Any, ...]]] = []
+        self.transactions = 0
         self._fetchval_results = list(fetchval_results or [])
 
     async def execute(self, sql: str, *params: Any) -> str:
@@ -92,6 +94,30 @@ class RecordingConn:
     async def fetchrow(self, sql: str, *params: Any) -> Any:
         self.fetchrows.append((sql, params))
         return None
+
+    async def fetch(self, sql: str, *params: Any) -> list[Any]:
+        # K-G1 — the entity_edges dual-write resolves its endpoints with a
+        # fetch(). No rows = both endpoints unresolved, which is the branch that
+        # parks and returns without touching the nexus write. Exactly what this
+        # file wants: the nexus SQL under assertion, uncontaminated.
+        self.fetches.append((sql, params))
+        return []
+
+    def transaction(self):
+        """`_insert_nexus` wraps the edge mirror + the legacy row in ONE
+        transaction (K-G1). A stand-in for asyncpg.Connection has to model that,
+        or it is asserting against a contract production does not have."""
+        conn = self
+
+        class _Tx:
+            async def __aenter__(self):
+                conn.transactions += 1
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+        return _Tx()
 
     # --- assertion helpers -------------------------------------------------
 

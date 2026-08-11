@@ -644,10 +644,21 @@ class TestSelectorAutoWire:
 
         assert target_id in wired, f"expected {target_id} wired, got {wired}"
 
-        # Idempotent: re-running records no new wire.
+        # Idempotent: re-running records no new wire FOR THIS TEST'S TARGET.
+        # The old `wired2 == []` was a statement about every selector-bearing
+        # target in the persistent pivot DB: the sweep also wires the
+        # long-lived country_g20_* heads, and any sibling (or concurrent
+        # session — this DB outlives the pytest session) that re-registers
+        # those targets rewrites their body and drops the trailer, so the
+        # re-run "re-wires" 19 foreign targets and fails this test about
+        # state it never owned (recurred 2026-08-10 in a seed-174413029
+        # replay alongside another session's run). The idempotency contract
+        # this test can honestly assert is its OWN wire.
         async with store.transaction() as conn:
             wired2 = await auto_wire_discovered_source(conn, source_id=source_id)
-        assert wired2 == []
+        assert target_id not in wired2, (
+            f"re-run re-wired this test's own target: {wired2}"
+        )
 
         # The provenance trailer landed on the target body.
         async with store.acquire() as conn:

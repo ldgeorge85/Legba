@@ -1,0 +1,114 @@
+# Niger desk (country_watch_ne) coverage pass — 2026-08-03. Ships DRAFT.
+#
+# France 24 — section AFRIQUE (french). The batch's high-volume francophone
+# regional wire. France Médias Monde, state-FUNDED but editorially independent
+# under statute — the same treatment already applied to its sibling RFI
+# (source.rsshub.rfi.afrique, `reporting`, state_affiliation true) and to DW:
+# `reporting`, NOT `state_media`.
+#
+# NOT THE SAME FEED AS source.france24.english. That descriptor polls
+# `https://www.france24.com/en/rss` — the ENGLISH global front. This is the
+# FRENCH Africa section: a different newsroom output with several items an hour
+# and a standing Sahel beat that the English global front does not carry at
+# anything like the same density.
+#
+# WHY IT IS WORTH A SLOT ALONGSIDE RFI AFRIQUE. RFI Afrique is already active
+# and produced TWO NE-geo signals in the measured 7-day window — the francophone
+# lane is real but single-threaded. France 24 Afrique is the sibling television
+# newsroom rather than a mirror of the radio wire, and at 30 items/refresh it
+# roughly triples the francophone-regional volume reaching the desk. Overlapping
+# stories are the point of a second wire, and identical ones collapse in
+# cross_source_dedup.
+#
+# VERIFIED LIVE 2026-08-03 by direct fetch: HTTP 200,
+# `application/rss+xml; charset=utf-8`, 30 items, newest item
+# `Mon, 03 Aug 2026 16:43:02 GMT` (same day, minutes before the probe), 10
+# Niger/Sahel place-name hits in a single refresh. Sample headlines seen: the
+# FLA showing captured Malian soldiers; the DRC Ebola outbreak passing 3,700
+# cases; Libreville under a water state of emergency. Keyless, no auth wall.
+#
+# ONE HONEST CAVEAT, RECORDED SO IT IS NOT REDISCOVERED AS A SURPRISE: France 24
+# and RFI are among the foreign broadcasters SUSPENDED inside Niger by the
+# military government, which is why a domestic pair (ActuNiger, Studio Kalangou)
+# ships in the same batch rather than this feed being treated as sufficient. The
+# suspension constrains their in-country access; it does not stop them reporting
+# on Niger from the region, and their Sahel desks remain among the deepest in
+# French.
+#
+# NOT A DUPLICATE: checked read-only against source_descriptors — the only
+# france24.com head row is source.france24.english on the /en/rss route.
+#
+# geo: [] — DELIBERATE, and the reason is not "global": it is that scope.geo is
+# publisher ORIGIN (data/sources/baseline.py C2), promoted into the indexed geo
+# column only as a post-enrichment fallback. Declaring [FR] on an Africa feed
+# would fallback-tag every un-geocoded African story to the France desk; [NE]
+# would be simply false. Empty, and the desks' own per-signal geo predicates do
+# the filtering — the same posture as every other multi-country feed here.
+#
+# source_class: reporting. Credibility host france24.com is ALREADY seeded
+# (0.70 / wire / state_affiliation true) — the registrar re-lists it with the
+# ON CONFLICT DO NOTHING convention so a fresh instance still gets it and an
+# existing/overridden row is never clobbered.
+#
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after the route is
+# re-verified live on the instance.
+
+identity:
+  id: source.france24.afrique
+  name: France 24 — Afrique (français)
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: source_batch_2026_08
+  created: "2026-08-03T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  # EMPTY on purpose — continental beat, French publisher. See the geo note.
+  geo: []
+  languages: [fr]
+  tags: [news, world, africa, sahel, francophone, source_batch_2026_08]
+  source_class: reporting
+
+acquisition: poll
+
+cadence:
+  # Hourly, staggered minute offset. Several items/hour at peak; the handler's
+  # conditional GET keeps an unchanged poll near-free.
+  schedule:
+    factory_kind: cron
+    raw: "55 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 60
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.france24.com/fr/afrique/rss"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

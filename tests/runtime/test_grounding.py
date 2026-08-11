@@ -191,10 +191,13 @@ class _StubConn:
 
     async def fetch(self, sql: str, *params: Any) -> list[dict[str, Any]]:
         self._log.append((sql, params))
-        # Route by table keyword so one stub serves facts + nexuses + situations.
+        # Route by table keyword so one stub serves facts + edges + situations.
         if "FROM facts" in sql:
             return self._fetch_rows.get("facts", [])
-        if "FROM nexuses" in sql:
+        # W3-A: the signed ground-truth relationships come from `entity_edges`
+        # now. The fixture key stays "nexuses" — it names the PREAMBLE SECTION
+        # these rows render into, and every test in this file uses it.
+        if "FROM entity_edges" in sql or "FROM nexuses" in sql:
             return self._fetch_rows.get("nexuses", [])
         if "FROM situations" in sql:
             return self._fetch_rows.get("situations", [])
@@ -440,16 +443,30 @@ async def test_resolver_facts_sql_filters_to_trusted_provenance():
 
 @pytest.mark.asyncio
 async def test_resolver_nexuses_sql_filters_to_trusted_provenance():
-    """The same provenance gate applies to signed nexuses — the reified /
-    promoted 'agent' lane is an analysis product, excluded from ground truth."""
+    """The same provenance gate applies to signed edges — the reified /
+    promoted 'agent' lane is an analysis product, excluded from ground truth.
+
+    W3-A adds a SECOND gate on the same query: `edge_family`. It does not
+    replace the provenance gate, it narrows it — a curated edge somehow tiered
+    `cooccurrence` is still a co-mention and still must not be asserted as
+    ground truth. Note the family list here is the INVERSE of the analytics
+    handlers': grounding WANTS the imported `reference` lattice, because it is
+    rendering things that are true rather than measuring alignment.
+    """
+    from legba.runtime.grounding import _GROUNDING_EDGE_FAMILIES
+
     pool = _StubPool(fetch_rows={"facts": [], "nexuses": []})
     resolver = SubstrateGroundingResolver(pg_pool=pool)
-    await resolver.resolve(["Iran"], max_facts=30)  # facts empty → nexus query runs
+    await resolver.resolve(["Iran"], max_facts=30)  # facts empty → edge query runs
     nexus_sql, nexus_params = next(
-        (sql, p) for sql, p in pool.log if "FROM nexuses" in sql
+        (sql, p) for sql, p in pool.log if "FROM entity_edges" in sql
     )
-    assert "source_type = ANY($2::text[])" in nexus_sql
+    assert "e.source_type = ANY($2::text[])" in nexus_sql
     assert list(nexus_params[1]) == ["seed", "curated"]
+    assert "e.edge_family = ANY($4::text[])" in nexus_sql
+    assert list(nexus_params[3]) == list(_GROUNDING_EDGE_FAMILIES)
+    assert "cooccurrence" not in _GROUNDING_EDGE_FAMILIES
+    assert "reference" in _GROUNDING_EDGE_FAMILIES
 
 
 def test_trusted_source_types_default_and_env_override(monkeypatch):

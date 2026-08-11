@@ -14,13 +14,28 @@ and side-writes append-only markers — NEVER content:
     the semantic-judgment stamp in ``data`` (migration 0116). The UNIQUE
     (src_id, dst_id, edge_kind) constraint + ON CONFLICT DO NOTHING make
     re-runs idempotent.
-  * ``review_flags`` rows (migration 0107) ONLY for matched questions that
-    trace to LIVE products via a FORWARD walk over ``output_consumption``
+  * ``review_flags`` rows (migration 0107) for matched questions that trace
+    to LIVE products via a FORWARD walk over ``output_consumption``
     (migration 0106): each non-superseded consumer output reached gets one
     open flag per (consumer, question) pair (the partial unique index is the
     writer's idempotency). A consumer id with no ``analyst_outputs`` row
     (e.g. a journal entry) counts as live — supersession is only observable
     for ``analyst_outputs`` rows, and journal entries are never superseded.
+    ...and, when ``question_flags`` is on (F5, ships OFF — the X-1
+    byte-identical contract; armed by the same descriptor PUT that arms the
+    gate), a matched question the walk finds NO consumer for writes ONE open
+    SELF-flag: ``output_id = founded_on_id =`` the question's own hypothesis
+    id, reason :data:`FLAG_REASON_UNCONSUMED`. K-4 R4 measured why this leg
+    exists (§9 F5): ``output_consumption`` held 0 rows for ALL 112 watched
+    question ids, so the consumer walk found nobody to flag on any run of any
+    version, ``review_flags`` was 0 rows ALL-TIME, and ``bearing_edges`` was
+    the only artifact the watcher produced — "a detect-only watcher whose
+    detect surface has never contained a single row is not detecting anything
+    a human can see." The self-flag is the report's "wire the flag path to
+    something that exists": the thing that exists is the question row itself,
+    the partial unique index bounds it to one OPEN flag per question, and the
+    existing staleness-debt gauge + ``/system/staleness-debt`` reason
+    breakdown surface it with no new read machinery.
   * ONE summary receipt per run (the ``alert_trigger_scan`` pattern):
     TRACE_ONLY — fully audited in ``analyst_traces``, no ``analyst_outputs``
     row, which also keeps this handler OUT of the FINDING-emitters set the
@@ -72,9 +87,16 @@ Three properties that keep this from being a new failure mode:
 
 A second, BATCHED judgment over the gate-YES edges only — the $0 core plane,
 echo-bound by pair id — records ``data.bearing_confirm`` +
-``bearing_confirm_reason`` on the edge. It never blocks an edge (by then the
-edge is already written); it is a richer second reading for the consumers and
-for the measurement loop.
+``bearing_confirm_reason`` on the edge. As of 4.0.0 (CW-1) it also DECIDES:
+a confirm-NO drops the candidate. K-4 round 3 measured that leg's verdicts on
+120 labeled rows off the live gated stream and found the confirm-YES band at
+0.667 precision against the confirm-NO band's 0.085 — a 7.8x discriminator the
+3.3.0 pipeline computed, stamped and then ignored while the stream it wrote
+measured 0.267 population-weighted. An UNRESOLVED confirm (leg unwired, over
+cap, call/parse failed) is written and flagged ``data.bearing_watch=
+'unconfirmed'`` rather than blocked: that band measured 0.375, and blocking on
+the error path would turn one core-plane outage into a silent hole in the
+bearing plane — the same failure the gate leg already refuses.
 
 Matching planes (fused into one weight)
 ---------------------------------------
@@ -268,6 +290,17 @@ Guards
   marker ``scripts/harvest_open_questions.py`` stamps (see
   :func:`harvest_class`); unmarked questions (the agency faucet, unit
   payloads) are never meta.
+* **Deictic theses (CW-3)** — a thesis whose subject is a back-reference it
+  never carries ("Is the framing of THE INCIDENT being driven by an
+  orchestrated campaign?") is skipped for the meta classes' exact reason: no
+  plane can read what it is about, because the string does not contain the
+  proposition. K-4 R3 measured 0.133 for the class and 0.071 for
+  ``narrative_coordination``, the unit that writes most of them. Counted as
+  ``skipped_deictic_questions``; the questions stay open everywhere else.
+  The real fix is upstream — the ``open_question`` write tool now folds the
+  origin finding's TITLE into the thesis before storing it (see
+  :mod:`legba.data.analysts.question_text`), so a newly written question is
+  self-contained for EVERY reader and not merely tolerable to this matcher.
 * **Omnibus signals** — a live blog, day digest or press review carries a
   huge entity set and sprays it across the whole open-question set. Measured
   over the 11,195 live 3.x edges: 943 source signals, a MEDIAN of 15
@@ -383,11 +416,40 @@ from uuid import UUID
 
 from legba.data._entity_resolve import resolve_keeper
 
+from ..._url_canon import canonical_url as _document_identity
 from ...facts.decay import retention_factor
 from ...provenance.models import FindingPayload
+from ..question_text import deictic_spans
 from ....runtime.analyst_method import AnalystMethodResult
+from .claim_watch_guards import (
+    DEFAULT_CONTENTION_LIVENESS_DAYS,
+    anchor_text,
+    contention_key,
+    live_contention_ids,
+    subject_anchored,
+)
+
+# Every statement this handler issues, extracted under the module-size gate
+# (the file's own "SQL" section banner was the seam). Re-exported here so the
+# split is invisible to any reader who expects them at module scope.
+from .claim_watch_sql import (  # noqa: F401 — re-export, see module docstring
+    _DESK_GEO_SQL,
+    _ENTITY_NAMES_SQL,
+    _FORWARD_WALK_SQL,
+    _GLOBAL_ENTITY_DF_SQL,
+    _INSERT_EDGE_SQL,
+    _INSERT_FLAG_SQL,
+    _NEW_SIGNALS_SQL,
+    _NEWEST_SIGNAL_SQL,
+    _OPEN_QUESTIONS_SQL,
+    _QUESTION_LINEAGE_SQL,
+    _SIGNAL_ENTITIES_SQL,
+    _SKIPPED_SIGNAL_COUNT_SQL,
+    _STALENESS_DEBT_SQL,
+)
 from .bearing_gate import (
     DEFAULT_BEARING_CONFIRM_CAP,
+    DEFAULT_BEARING_CONFIRM_MODE,
     DEFAULT_BEARING_GATE,
     DEFAULT_BEARING_GATE_CAP,
     DEFAULT_BEARING_GATE_REF,
@@ -434,12 +496,43 @@ CURSOR_KEY = "_cursor"
 #: filter a 3.2.0 row never faced. That is a difference in what the population
 #: MEANS, which is exactly what this stamp exists to record — even though the
 #: gate ships OFF and an off run writes the same rows 3.2.0 wrote.
+#: 4.0.0 = THE CW PRECISION TRAIN, the bundled response to K-4 round 3 (which
+#: measured the 3.3.0 gated stream at 0.267 population-weighted against a 0.85
+#: bar): the confirm leg promoted to BLOCKING with a ``bearing_watch`` band on
+#: every row (CW-1), desk identity in both LLM prompts (CW-2), deictic theses
+#: resolved at harvest and refused at match time (CW-3), and the contention
+#: plane given a liveness filter plus a SUBJECT anchor (CW-4/CW-5). The train
+#: ships as ONE deploy — a 4.0.0 row is a row that faced all five.
+#: 4.1.0 = the K-4 R4 FOLLOW-UPS (R4 measured the live 4.0.0 stream at 0.908):
+#: CW-2b — one consequence-specificity clause in BOTH bearing prompts,
+#: targeting R4's F1 class (3 of its 6 residual failures were "the thesis
+#: names a specific country's imports and the signal never mentions that
+#: country's imports"; report §11.3) — plus the F5 question self-flag surface
+#: and the F3 article-id URL dedupe. The FUSION MODEL is byte-for-byte 4.0.0;
+#: the bump records that a 4.1.0 row survived prompts a 4.0.0 row never faced
+#: (the same population-meaning argument that bumped 3.3.0), so K-4 R6 can cut
+#: on the stamp instead of on ``data.bearing_*_prompt`` archaeology.
 #: Rows written under each model stay readable and stay attributable to the
 #: model that made them.
-MATCHER_VERSION = "claim_watch/3.3.0"
+MATCHER_VERSION = "claim_watch/4.1.0"
 
-#: review_flags.reason for flags this matcher writes.
+#: review_flags.reason for consumer flags this matcher writes.
 FLAG_REASON = "new_evidence_bears_on_open_question"
+
+#: review_flags.reason for the F5 SELF-flag — new evidence bears on a watched
+#: question that NO downstream product consumes (``output_id = founded_on_id
+#: =`` the hypothesis id). A distinct reason, not a reuse: the consumer flag
+#: says "re-review this product", this one says "a human should look at this
+#: question — nothing downstream will", and the ``/system/staleness-debt``
+#: reason breakdown must keep the two populations tellable apart.
+FLAG_REASON_UNCONSUMED = "new_evidence_bears_on_unconsumed_question"
+
+#: F5's switch — ``question_flags``. OFF in code so a descriptor with no
+#: ``method.options`` block behaves byte-for-byte like 4.0.0 (the X-1
+#: contract, same as the bearing gate's own default); the operator arms it
+#: with the descriptor PUT at deploy. Anything that is not exactly ``'on'``
+#: is off — a typo'd value must never silently start writing rows.
+DEFAULT_QUESTION_FLAGS = "off"
 
 # ---------------------------------------------------------------------------
 # Fusion model — weights, floors, thresholds (conservative by construction)
@@ -572,6 +665,20 @@ META_QUESTION_CLASSES: frozenset[str] = frozenset(
         "scorecard_disagreement",
     }
 )
+
+#: CW-3 — the DEICTIC guard's default. A thesis that leans on a referent it
+#: does not carry ("Is the framing of THE INCIDENT being driven by an
+#: orchestrated campaign?") cannot be matched, only guessed at: the string the
+#: vector plane embeds and the 8B reads does not contain the proposition. K-4
+#: R3 measured the class at 0.133 and the unit that writes most of them
+#: (``narrative_coordination``) at 0.071. The real fix is at harvest —
+#: ``open_question_tool`` now inlines the origin finding's title
+#: (:mod:`legba.data.analysts.question_text`) — so this is a BACKSTOP for the
+#: rows written before that landed and for any writer whose origin ref cannot
+#: be resolved. Same shape and same justification as the meta-class exclusion
+#: above: a class the matcher structurally cannot get right is skipped and
+#: counted, never down-weighted. ``deictic_guard: "off"`` disables it.
+DEFAULT_DEICTIC_GUARD = "on"
 
 #: Cosine below this contributes NOTHING (the vector plane is not recorded).
 #: 0.45 is set from measurement, not intuition (scripts/
@@ -837,6 +944,29 @@ def harvest_class(diagnostic_evidence: Any) -> Optional[str]:
     return None
 
 
+def harvest_source_id(diagnostic_evidence: Any, harvest_cls: str) -> Optional[str]:
+    """The ``source_id`` of a question harvested under ``harvest_cls``.
+
+    For ``fact_contention`` that is the arbiter's contention-group UUID — the
+    exact key CW-4's liveness read needs, already durable on the row. Re-
+    deriving it by matching the thesis back against the group table would be
+    a second identity for a thing that already has one."""
+    data = _parse_jsonish(diagnostic_evidence)
+    if not isinstance(data, list):
+        return None
+    for item in data:
+        if not isinstance(item, Mapping):
+            continue
+        if item.get("marker") != HARVEST_MARKER_KEY:
+            continue
+        if str(item.get("harvest_class") or "") != harvest_cls:
+            continue
+        sid = item.get("source_id")
+        if isinstance(sid, str) and sid.strip():
+            return sid.strip()
+    return None
+
+
 def is_meta_question(
     diagnostic_evidence: Any,
     meta_classes: frozenset[str] | set[str] = META_QUESTION_CLASSES,
@@ -856,16 +986,25 @@ def dedupe_by_canonical_url(rows: Sequence[Any]) -> tuple[list[Any], int]:
     LAST one — which is also why the batch's final row can never be dropped
     and the cursor advance is untouched by this filter. Rows with no
     canonical url are never deduped (an absent url is not a shared identity).
+
+    The identity key is the CANONICALIZED url
+    (:func:`legba.data._url_canon.canonical_url`), not the stored bytes —
+    K-4 R4 §9 F3 measured the raw-string comparison being defeated by
+    publisher slug rewrites (the same Dawn article id at two headlines
+    landed twice in one sampled population). Canonicalizing here makes this
+    surface agree with the ingest/target dedupe tiers on what "the same
+    document" means — the CW-7 discipline this batch filter had drifted
+    from — including the article-id rule that sees through the slug.
     """
     last_at: dict[str, int] = {}
     for i, r in enumerate(rows):
         url = str(r["canonical_url"] or "").strip()
         if url:
-            last_at[url] = i
+            last_at[_document_identity(url)] = i
     kept: list[Any] = []
     for i, r in enumerate(rows):
         url = str(r["canonical_url"] or "").strip()
-        if url and last_at[url] != i:
+        if url and last_at[_document_identity(url)] != i:
             continue  # an older row for the same article — counted, not kept
         kept.append(r)
     return kept, len(rows) - len(kept)
@@ -989,207 +1128,6 @@ def _text_sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
 
 
-# ---------------------------------------------------------------------------
-# SQL
-# ---------------------------------------------------------------------------
-
-_NEWEST_SIGNAL_SQL = """
-    SELECT fetched_at, id
-      FROM signals
-     ORDER BY fetched_at DESC, id DESC
-     LIMIT 1
-"""
-
-_NEW_SIGNALS_SQL = """
-    SELECT id, fetched_at, geo, payload, canonical_url
-      FROM signals
-     WHERE (fetched_at, id) > ($1::timestamptz, $2::uuid)
-     ORDER BY fetched_at ASC, id ASC
-     LIMIT $3
-"""
-
-# EXACT count of the signals a skip-ahead abandons, over the half-open range
-# (old cursor, horizon]. Bounded by a probe LIMIT so measuring an abandonment
-# can never itself become an unbounded scan; saturation is reported, not
-# rounded away.
-_SKIPPED_SIGNAL_COUNT_SQL = """
-    SELECT count(*)::bigint AS skipped
-      FROM (
-        SELECT 1
-          FROM signals
-         WHERE (fetched_at, id) > ($1::timestamptz, $2::uuid)
-           AND (fetched_at, id) <= ($3::timestamptz, $4::uuid)
-         LIMIT $5
-      ) probe
-"""
-
-_OPEN_QUESTIONS_SQL = """
-    SELECT id, thesis, status, target_id, produced_at, derived_from,
-           supporting_signals, refuting_signals, diagnostic_evidence
-      FROM hypotheses
-     WHERE status = ANY($1::text[])
-     ORDER BY produced_at DESC, id
-     LIMIT $2
-"""
-
-# Per-question lineage expansion (bounded two-hop: hypothesis.derived_from →
-# facts'/findings' derived_from → facts-cited-by-findings' derived_from) down
-# to SIGNAL ids, plus the canonical entity ids linked to those signals
-# (one-level merged_into fold — losers converge onto the elected row).
-_QUESTION_LINEAGE_SQL = """
-    WITH q AS (
-        SELECT id, derived_from FROM hypotheses WHERE id = ANY($1::uuid[])
-    ), l0 AS (
-        SELECT q.id AS qid, unnest(q.derived_from) AS ref FROM q
-    ), l1 AS (
-        SELECT l0.qid, unnest(fx.derived_from) AS ref
-          FROM facts fx JOIN l0 ON fx.id = l0.ref
-        UNION
-        SELECT l0.qid, unnest(ao.derived_from) AS ref
-          FROM analyst_outputs ao JOIN l0 ON ao.id = l0.ref
-    ), l2 AS (
-        SELECT l1.qid, unnest(fx.derived_from) AS ref
-          FROM facts fx JOIN l1 ON fx.id = l1.ref
-    ), refs AS (
-        SELECT qid, ref FROM l0
-        UNION SELECT qid, ref FROM l1
-        UNION SELECT qid, ref FROM l2
-    ), qsig AS (
-        SELECT DISTINCT r.qid, s.id AS sid
-          FROM refs r JOIN signals s ON s.id = r.ref
-    )
-    SELECT qs.qid::text AS qid,
-           array_agg(DISTINCT qs.sid) AS lineage_signal_ids,
-           COALESCE(
-             array_agg(DISTINCT COALESCE(ep.merged_into, sel.entity_id))
-               FILTER (WHERE sel.entity_id IS NOT NULL),
-             '{}'::uuid[]
-           ) AS entity_ids
-      FROM qsig qs
-      LEFT JOIN signal_entity_links sel ON sel.signal_id = qs.sid
-      LEFT JOIN entity_profiles ep ON ep.id = sel.entity_id
-     GROUP BY qs.qid
-"""
-
-_SIGNAL_ENTITIES_SQL = """
-    SELECT sel.signal_id::text AS sid,
-           array_agg(DISTINCT COALESCE(ep.merged_into, sel.entity_id))
-               AS entity_ids
-      FROM signal_entity_links sel
-      LEFT JOIN entity_profiles ep ON ep.id = sel.entity_id
-     WHERE sel.signal_id = ANY($1::uuid[])
-     GROUP BY sel.signal_id
-"""
-
-# GLOBAL (signal-side) entity document frequency over a recent stream window.
-#
-# Denominator = the ATTRIBUTED signals in the window (rows carrying ANY entity
-# link), NOT every signal: an unlinked row is a MISSING OBSERVATION (the
-# resolution sweep has not reached it, which is exactly the case this
-# handler's NER fallback exists for), not evidence that a name is rare.
-# Counting unlinked rows in the denominator deflates every df uniformly —
-# measured on the live DB, only 224 of the 500 newest signals were attributed,
-# so it would have understated every hub by a factor of ~2.2.
-#
-# Numerator is restricted to the entities that could POSSIBLY be shared (the
-# question side's canonical set), so the result stays a few hundred rows
-# regardless of how many entities the window mentions. The denominator is
-# computed over the whole window either way — restricting it would be the
-# same deflation in reverse.
-_GLOBAL_ENTITY_DF_SQL = """
-    WITH win AS (
-        SELECT id FROM signals ORDER BY fetched_at DESC, id DESC LIMIT $1
-    ), attributed AS (
-        SELECT DISTINCT sel.signal_id
-          FROM signal_entity_links sel
-          JOIN win ON win.id = sel.signal_id
-    ), df AS (
-        SELECT COALESCE(ep.merged_into, sel.entity_id) AS eid,
-               count(DISTINCT sel.signal_id)::bigint AS n
-          FROM signal_entity_links sel
-          JOIN attributed a ON a.signal_id = sel.signal_id
-          LEFT JOIN entity_profiles ep ON ep.id = sel.entity_id
-         WHERE COALESCE(ep.merged_into, sel.entity_id) = ANY($2::uuid[])
-         GROUP BY 1
-    )
-    SELECT sample.attributed_signals,
-           df.eid::text AS entity_id,
-           df.n AS df
-      FROM (SELECT count(*)::bigint AS attributed_signals FROM attributed) sample
-      LEFT JOIN df ON TRUE
-"""
-
-_ENTITY_NAMES_SQL = """
-    SELECT id, lower(btrim(canonical_name)) AS name
-      FROM entity_profiles
-     WHERE id = ANY($1::uuid[])
-"""
-
-_DESK_GEO_SQL = """
-    SELECT descriptor_id, body -> 'scope' -> 'geo' AS geo
-      FROM target_descriptors
-     WHERE is_head = TRUE
-       AND descriptor_id = ANY($1::text[])
-"""
-
-# FORWARD consumption walk from one question id to its live (non-superseded)
-# consumer outputs. A consumer with no analyst_outputs row (journal entries)
-# counts as live — supersession is only observable on analyst_outputs.
-_FORWARD_WALK_SQL = """
-    WITH RECURSIVE walk AS (
-        SELECT oc.consumer_id, 1 AS depth
-          FROM output_consumption oc
-         WHERE oc.consumed_id = $1
-        UNION
-        SELECT oc.consumer_id, w.depth + 1
-          FROM output_consumption oc
-          JOIN walk w ON oc.consumed_id = w.consumer_id
-         WHERE w.depth < $2
-    )
-    SELECT DISTINCT w.consumer_id
-      FROM walk w
-     WHERE NOT EXISTS (
-           SELECT 1 FROM analyst_outputs ao
-            WHERE ao.id = w.consumer_id
-              AND ao.superseded_by IS NOT NULL
-     )
-     LIMIT $3
-"""
-
-# ``data`` (migration 0116) carries the bearing-gate stamp. With the gate OFF
-# the writer binds '{}' — the column's own DEFAULT — so a gate-off run stores
-# exactly the bytes 3.2.0 stored and the X-1 "absent option changes nothing"
-# contract holds at the storage layer, not merely in the handler.
-_INSERT_EDGE_SQL = """
-    INSERT INTO bearing_edges
-        (edge_kind, src_kind, src_id, src_as_of, dst_kind, dst_id, dst_as_of,
-         weight, planes, provenance_class, matcher_version, data)
-    VALUES ('bears_on', 'signal', $1, $2, 'hypothesis', $3, $4, $5,
-            $6::text[], 'live', $7, $8::jsonb)
-    ON CONFLICT (src_id, dst_id, edge_kind) DO NOTHING
-"""
-
-_INSERT_FLAG_SQL = """
-    INSERT INTO review_flags (output_id, founded_on_id, moved_at, reason)
-    VALUES ($1, $2, $3, $4)
-    ON CONFLICT (output_id, founded_on_id) WHERE closed_at IS NULL DO NOTHING
-"""
-
-# The staleness-debt gauge: open flags whose flagged consumer is still a live
-# (non-superseded) head. Closed-by-supersession flags are excluded by the
-# closed_at test; flags whose consumer got superseded (but nobody closed the
-# flag yet) are excluded by the liveness test — the debt only counts review
-# work that still has a live product to re-review.
-_STALENESS_DEBT_SQL = """
-    SELECT count(*)::int AS debt
-      FROM review_flags rf
-     WHERE rf.closed_at IS NULL
-       AND NOT EXISTS (
-             SELECT 1 FROM analyst_outputs ao
-              WHERE ao.id = rf.output_id
-                AND ao.superseded_by IS NOT NULL
-       )
-"""
 
 
 def _uuid_or_none(raw: Any) -> Optional[UUID]:
@@ -1314,9 +1252,15 @@ async def _embed_questions(
 
 
 def _build_receipt(counters: Mapping[str, Any]) -> FindingPayload:
+    # F5 in the TITLE whenever it wrote (the same rule as every other lever):
+    # the self-flag surface exists because the flag plane was invisible, so
+    # its output must never itself be visible only in the body.
+    question_flags = int(counters.get("question_flags_written", 0) or 0)
+    qf_part = f"{question_flags} question flag(s), " if question_flags else ""
     title = (
         f"Claim watch: {counters.get('edges_written', 0)} bearing edge(s), "
         f"{counters.get('flags_written', 0)} review flag(s), "
+        f"{qf_part}"
         f"staleness_debt={counters.get('staleness_debt', 0)}"
     )
     if counters.get("seeded"):
@@ -1423,6 +1367,15 @@ async def handle(
     question_cap = max(1, int(options.get("question_cap", DEFAULT_QUESTION_CAP)))
     edge_cap = max(1, int(options.get("edge_cap", DEFAULT_EDGE_CAP)))
     flag_cap = max(1, int(options.get("flag_cap", DEFAULT_FLAG_CAP)))
+    # F5 — the question SELF-flag surface. OFF in code (a descriptor with no
+    # options block is byte-identical to 4.0.0); the PUT arms it. Read here
+    # for the X-1 catalog drift guard, like every other knob in this file.
+    question_flags_on = (
+        str(options.get("question_flags", DEFAULT_QUESTION_FLAGS))
+        .strip()
+        .lower()
+        == "on"
+    )
     embed_cap = max(0, int(options.get("embed_cap", DEFAULT_EMBED_CAP)))
     max_lag_seconds = float(
         options.get("max_lag_seconds", DEFAULT_MAX_CURSOR_LAG_SECONDS)
@@ -1461,6 +1414,29 @@ async def handle(
             )
         ),
     )
+    # CW-3 — the deictic backstop. On by default; an operator turning it off
+    # gets the 3.3.0 population back for that class and the receipt still
+    # reports the zero.
+    deictic_guard_on = (
+        str(options.get("deictic_guard", DEFAULT_DEICTIC_GUARD)).strip().lower()
+        != "off"
+    )
+    # CW-4/CW-5 — the contention-question guards (see
+    # :mod:`.claim_watch_guards`). The anchor is on by default (it is the
+    # measured lever); the liveness window is generous by default because the
+    # measurement does NOT support a tight one — 0 disables the read entirely.
+    contention_anchor_on = (
+        str(options.get("contention_subject_anchor", "on")).strip().lower()
+        != "off"
+    )
+    contention_liveness_days = max(
+        0.0,
+        float(
+            options.get(
+                "contention_liveness_days", DEFAULT_CONTENTION_LIVENESS_DAYS
+            )
+        ),
+    )
     # L3 — the omnibus damper.
     max_questions_per_signal = max(
         1,
@@ -1485,6 +1461,12 @@ async def handle(
     bearing_confirm_cap = max(
         0, int(options.get("bearing_confirm_cap", DEFAULT_BEARING_CONFIRM_CAP))
     )
+    # CW-1 — what a confirm-NO DOES. 'blocking' (the default) drops the
+    # candidate; 'advisory' restores the 3.3.0 stamp-only leg. Read here for
+    # the same X-1 reason as its siblings.
+    bearing_confirm_mode = options.get(
+        "bearing_confirm_mode", DEFAULT_BEARING_CONFIRM_MODE
+    )
     # Resolved once so the OFF path costs literally nothing: with the gate off
     # the per-signal text digest below is never even built.
     bearing_gate_on = gate_enabled(bearing_gate_mode)
@@ -1503,6 +1485,10 @@ async def handle(
         "signals_url_deduped": 0,
         "questions_scanned": 0,
         "skipped_meta_questions": 0,
+        "skipped_deictic_questions": 0,
+        "skipped_stale_contention": 0,
+        "contention_questions": 0,
+        "contention_subject_unanchored": 0,
         "questions_matchable": 0,
         "edges_written": 0,
         "edges_deduped": 0,
@@ -1512,6 +1498,11 @@ async def handle(
         "flags_written": 0,
         "flags_deduped": 0,
         "flags_dropped_cap": 0,
+        # F5 — the question self-flag surface, seeded inert on every path so
+        # "the surface is off" and "the surface refused nothing" read off one
+        # receipt (the bearing-counter convention).
+        "question_flags_written": 0,
+        "question_flags_deduped": 0,
         "matches_vector": 0,
         "matches_entity": 0,
         "matches_geo": 0,
@@ -1691,6 +1682,86 @@ async def handle(
         counters["skipped_meta_questions"] = len(all_question_rows) - len(
             question_rows
         )
+
+        # CW-3 — DEICTIC EXCLUSION, the same lever for the same reason one
+        # class over. A thesis whose subject is a back-reference it does not
+        # carry ("the incident", "the alleged Ukrainian attack") is not a weak
+        # match, it is an unanswerable one: the string every plane reads does
+        # not contain the proposition. Dropped HERE, with the meta classes,
+        # so the exclusion buys back the embed budget and the lineage walk
+        # rather than merely muting output. They stay open questions in every
+        # other read path — and the durable fix is upstream, where
+        # ``open_question_tool`` now inlines the origin finding's title.
+        if deictic_guard_on:
+            kept_rows: list[Any] = []
+            deictic_examples: list[str] = []
+            for q in question_rows:
+                spans = deictic_spans(q["thesis"])
+                if not spans:
+                    kept_rows.append(q)
+                    continue
+                if len(deictic_examples) < 3:
+                    deictic_examples.append(f"{spans[0]!r}")
+            counters["skipped_deictic_questions"] = len(question_rows) - len(
+                kept_rows
+            )
+            question_rows = kept_rows
+            if counters["skipped_deictic_questions"]:
+                logger.info(
+                    "claim_watch.skipped_deictic_questions skipped=%d "
+                    "matchable=%d e.g. %s — the thesis leans on a referent it "
+                    "does not carry, so no plane can read what it is about "
+                    "(K-4 R3 measured the class at 0.133). They stay OPEN; "
+                    "new rows are written self-contained at harvest",
+                    counters["skipped_deictic_questions"],
+                    len(question_rows),
+                    ", ".join(deictic_examples) or "-",
+                )
+        # CW-4 — RELATION LIVENESS, built and shipped OFF. A contention
+        # question whose dispute the arbiter has COLLAPSED, or whose values
+        # stopped being asserted, would be a question about a settled or
+        # dormant relation — so the filter belongs here, with the other
+        # structural exclusions. It is default-DISABLED
+        # (contention_liveness_days = 0) because it was measured and it does
+        # not help: replayed over the K-4 R3 gold set it removed 7 correct
+        # matches for 8 false ones against a 60% base false rate, since a
+        # group collapses precisely when good evidence settles the dispute.
+        # See :mod:`.claim_watch_guards` for the full reading. The population
+        # finding 4 identified is removed by the SUBJECT ANCHOR below, which
+        # measures.
+        contention_group: dict[str, str] = {}
+        for q in question_rows:
+            gid = harvest_source_id(q["diagnostic_evidence"], "fact_contention")
+            if gid:
+                contention_group[str(q["id"])] = gid
+        counters["contention_questions"] = len(contention_group)
+        if contention_group and contention_liveness_days > 0:
+            live_ids = await live_contention_ids(
+                conn,
+                set(contention_group.values()),
+                now=now,
+                liveness_days=contention_liveness_days,
+            )
+            stale_qids = {
+                qid
+                for qid, gid in contention_group.items()
+                if gid not in live_ids
+            }
+            if stale_qids:
+                question_rows = [
+                    q for q in question_rows if str(q["id"]) not in stale_qids
+                ]
+                counters["skipped_stale_contention"] = len(stale_qids)
+                logger.info(
+                    "claim_watch.skipped_stale_contention skipped=%d "
+                    "matchable=%d window_days=%.1f — the dispute is collapsed "
+                    "or dormant, so new reporting is not going to adjudicate "
+                    "it; the questions stay OPEN",
+                    len(stale_qids),
+                    len(question_rows),
+                    contention_liveness_days,
+                )
+
         counters["questions_matchable"] = len(question_rows)
         if counters["skipped_meta_questions"]:
             logger.info(
@@ -1841,19 +1912,37 @@ async def handle(
             q_entity_ids[qid] = {str(e) for e in ents}
             all_q_entity_ids.update(ents)
 
+        # Signal-side canonical entity ids (linked). Read BEFORE the name
+        # lookup so both sides' names come out of ONE query — CW-5's subject
+        # anchor compares a contested subject against the SIGNAL's canonical
+        # names, which the 3.3.0 matcher never had (it only ever compared ids).
+        sig_entity_ids: dict[str, set[str]] = {}
+        for r in await conn.fetch(_SIGNAL_ENTITIES_SQL, signal_ids):
+            sig_entity_ids[str(r["sid"])] = {
+                str(e) for e in (r["entity_ids"] or []) if e is not None
+            }
+
         # Canonical names of the questions' entities (the NER-name fallback's
-        # comparison surface).
-        q_entity_names: dict[str, str] = {}
-        if all_q_entity_ids:
+        # comparison surface) AND of the signals' (CW-5's anchor surface).
+        entity_names: dict[str, str] = {}
+        all_entity_ids: set[Any] = set(all_q_entity_ids)
+        for ents in sig_entity_ids.values():
+            all_entity_ids.update(ents)
+        if all_entity_ids:
             name_rows = await conn.fetch(
-                _ENTITY_NAMES_SQL, sorted(all_q_entity_ids, key=str)
+                _ENTITY_NAMES_SQL, sorted(all_entity_ids, key=str)
             )
-            q_entity_names = {
+            entity_names = {
                 str(r["id"]): str(r["name"] or "") for r in name_rows
             }
+        q_entity_names = entity_names
         q_name_sets: dict[str, set[str]] = {
-            qid: {q_entity_names[e] for e in ents if q_entity_names.get(e)}
+            qid: {entity_names[e] for e in ents if entity_names.get(e)}
             for qid, ents in q_entity_ids.items()
+        }
+        sig_canonical_names: dict[str, set[str]] = {
+            sid: {entity_names[e] for e in ents if entity_names.get(e)}
+            for sid, ents in sig_entity_ids.items()
         }
 
         # Desk geo scope per question target.
@@ -1861,21 +1950,25 @@ async def handle(
             {str(q["target_id"]) for q in question_rows if q["target_id"]}
         )
         desk_geo: dict[str, set[str]] = {}
+        # CW-2 — the desk IDENTITY, keyed by target_id. Rendered "<name>
+        # [<id>]" so the prompts carry both the human name a model can reason
+        # about ("G20 — Türkiye") and the id an operator can grep. A desk with
+        # no name row falls back to the bare id rather than to nothing: the
+        # scope is real even when the descriptor is unnamed.
+        desk_label: dict[str, str] = {}
         if target_ids:
             for r in await conn.fetch(_DESK_GEO_SQL, target_ids):
+                did = str(r["descriptor_id"])
                 geo_raw = _parse_jsonish(r["geo"])
                 if isinstance(geo_raw, list):
-                    desk_geo[str(r["descriptor_id"])] = {
+                    desk_geo[did] = {
                         str(g).strip().upper() for g in geo_raw if str(g).strip()
                     }
+                name = str(r["name"] or "").strip()
+                desk_label[did] = f"{name} [{did}]" if name else did
 
-        # Signal-side canonical entity ids (linked) + NER-name fallback for
-        # signals the resolution sweep has not linked yet.
-        sig_entity_ids: dict[str, set[str]] = {}
-        for r in await conn.fetch(_SIGNAL_ENTITIES_SQL, signal_ids):
-            sig_entity_ids[str(r["sid"])] = {
-                str(e) for e in (r["entity_ids"] or []) if e is not None
-            }
+        # NER-name fallback for signals the resolution sweep has not linked
+        # yet (the linked ids were read above, with the name lookup).
         sig_names: dict[str, set[str]] = {}
         resolve_cache: dict[str, str] = {}
         resolve_calls = 0
@@ -1994,6 +2087,15 @@ async def handle(
         str(q["id"]): question_age_factor(q["produced_at"], now)
         for q in question_rows
     }
+    # CW-5 — the contested SUBJECT per contention question, parsed once.
+    # Empty when the guard is off or there are no contention questions, in
+    # which case the per-pair check below is one dict lookup that misses.
+    contention_subject: dict[str, str] = {}
+    if contention_anchor_on:
+        for q in question_rows:
+            key = contention_key(q["thesis"])
+            if key is not None:
+                contention_subject[str(q["id"])] = key.subject
     edge_rows: list[EdgeCandidate] = []
     matched_questions: dict[str, datetime] = {}
     last_processed: Any | None = None
@@ -2006,6 +2108,14 @@ async def handle(
         s_ents = sig_entity_ids.get(sid, set())
         s_names = sig_names.get(sid, set())
         s_vec = sig_vecs.get(sid)
+        # CW-5's anchor surfaces, built ONCE per signal and only when some
+        # contention question is in play — the text extraction is cheap but
+        # not free, and an ordinary run has no reason to pay for it.
+        if contention_subject:
+            s_anchor_text = anchor_text(s["payload"])
+            s_anchor_names = sig_canonical_names.get(sid, set()) | s_names
+        else:
+            s_anchor_text, s_anchor_names = "", set()
 
         cands: list[tuple[float, list[str], Any]] = []
         for q in question_rows:
@@ -2020,6 +2130,23 @@ async def handle(
                 or any(sid == str(x) for x in (q["supporting_signals"] or []))
                 or any(sid == str(x) for x in (q["refuting_signals"] or []))
             ):
+                continue
+
+            # CW-5 — SUBJECT ANCHOR. A contested-fact question is about a
+            # SUBJECT and a RELATION; the 3.3.0 matcher could edge it off the
+            # contested VALUE and the desk furniture alone, which is how
+            # "which value of 'located in' for TEXAS is correct? (winner:
+            # spacex)" matched a SpaceX Starship story containing no Texas
+            # token at all. The signal must actually be about the subject —
+            # literally, or through a resolved canonical alias, so an "idf"
+            # question still reaches an "Israel Defense Forces" story.
+            subject = contention_subject.get(qid)
+            if subject is not None and not subject_anchored(
+                subject,
+                signal_text=s_anchor_text,
+                signal_names=s_anchor_names,
+            ):
+                counters["contention_subject_unanchored"] += 1
                 continue
 
             vector_sim = None
@@ -2117,6 +2244,10 @@ async def handle(
                     question_thesis=str(q["thesis"] or ""),
                     weight=weight,
                     planes=planes,
+                    # CW-2. Empty for a question with no target_id — the
+                    # prompts then show no desk line at all, which is the
+                    # honest rendering of "this question is not desk-scoped".
+                    desk_label=desk_label.get(str(q["target_id"] or ""), ""),
                 )
             )
             # matches_* count what the DETERMINISTIC matcher produced — the
@@ -2185,6 +2316,7 @@ async def handle(
         gate_ref=bearing_gate_ref,
         gate_cap=bearing_gate_cap,
         confirm_cap=bearing_confirm_cap,
+        confirm_mode=bearing_confirm_mode,
         counters=counters,
     )
     for cand in edge_rows:
@@ -2215,8 +2347,11 @@ async def handle(
             else:
                 counters["edges_deduped"] += 1
 
-        # Review flags — ONLY for matched questions that trace FORWARD to a
-        # live product; one open flag per (consumer, question) pair.
+        # Review flags — matched questions that trace FORWARD to a live
+        # product flag each consumer (one open flag per (consumer, question)
+        # pair); a matched question the walk finds NOBODY for writes ONE open
+        # SELF-flag instead (F5, when armed) — the flag budget is shared, so
+        # ``flag_cap`` bounds the run's total flag writes either way.
         for qid, moved_at in sorted(matched_questions.items()):
             quuid = _uuid_or_none(qid)
             if quuid is None:
@@ -2227,8 +2362,38 @@ async def handle(
                 FORWARD_WALK_MAX_DEPTH,
                 _MAX_CONSUMERS_PER_QUESTION,
             )
+            if not consumers and question_flags_on:
+                # F5 — the walk found no consumer, which live is EVERY
+                # harvested question (K-4 R4 §9: 0 consumption rows for all
+                # 112 watched ids). The detect surface is the question row
+                # itself; the partial unique index bounds this to one OPEN
+                # flag per question, so a stream of further evidence dedupes
+                # instead of flooding.
+                if (
+                    counters["flags_written"]
+                    + counters["question_flags_written"]
+                    >= flag_cap
+                ):
+                    counters["flags_dropped_cap"] += 1
+                    continue
+                tag = await conn.execute(
+                    _INSERT_FLAG_SQL,
+                    quuid,
+                    quuid,
+                    moved_at,
+                    FLAG_REASON_UNCONSUMED,
+                )
+                if tag.endswith(" 1"):
+                    counters["question_flags_written"] += 1
+                else:
+                    counters["question_flags_deduped"] += 1
+                continue
             for c in consumers:
-                if counters["flags_written"] >= flag_cap:
+                if (
+                    counters["flags_written"]
+                    + counters["question_flags_written"]
+                    >= flag_cap
+                ):
                     counters["flags_dropped_cap"] += 1
                     continue
                 tag = await conn.execute(
@@ -2253,12 +2418,17 @@ async def handle(
             )
         counters["staleness_debt"] = await _staleness_debt(conn)
 
-    if counters["edges_written"] or counters["flags_written"]:
+    if (
+        counters["edges_written"]
+        or counters["flags_written"]
+        or counters["question_flags_written"]
+    ):
         logger.info(
             "claim_watch.done signals=%d questions=%d/%d edges=%d (+%d dup) "
-            "flags=%d (+%d dup) staleness_debt=%d lag_hours=%.1f skipped=%d "
-            "held=%d vectors=%d/%d meta_skipped=%d omnibus_capped=%d "
-            "url_deduped=%d global_df_sample=%d",
+            "flags=%d (+%d dup) qflags=%d (+%d dup) staleness_debt=%d "
+            "lag_hours=%.1f skipped=%d "
+            "held=%d vectors=%d/%d meta_skipped=%d deictic_skipped=%d "
+            "omnibus_capped=%d url_deduped=%d global_df_sample=%d",
             counters["examined_signals"],
             counters["questions_matchable"],
             counters["questions_scanned"],
@@ -2266,6 +2436,8 @@ async def handle(
             counters["edges_deduped"],
             counters["flags_written"],
             counters["flags_deduped"],
+            counters["question_flags_written"],
+            counters["question_flags_deduped"],
             counters["staleness_debt"],
             float(counters["cursor_lag_seconds"]) / 3600.0,
             counters["signals_skipped_ahead"],
@@ -2273,6 +2445,7 @@ async def handle(
             counters["signal_vectors_found"],
             counters["examined_signals"],
             counters["skipped_meta_questions"],
+            counters["skipped_deictic_questions"],
             counters["omnibus_capped"],
             counters["signals_url_deduped"],
             counters["global_specificity_sample"],
@@ -2283,11 +2456,14 @@ async def handle(
 __all__ = [
     "AGE_FACTOR_FLOOR",
     "CURSOR_KEY",
+    "DEFAULT_DEICTIC_GUARD",
     "DEFAULT_MATCH_THRESHOLD",
     "DEFAULT_MAX_CURSOR_LAG_SECONDS",
+    "DEFAULT_QUESTION_FLAGS",
     "DF_UBIQUITY_KNEE",
     "ENTITY_SPECIFICITY_FLOOR",
     "FLAG_REASON",
+    "FLAG_REASON_UNCONSUMED",
     "GLOBAL_DF_SATURATION",
     "GLOBAL_DF_UBIQUITY_KNEE",
     "GLOBAL_DF_WINDOW_SIGNALS",

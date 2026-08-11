@@ -290,6 +290,55 @@ class RuntimeReceiptChain:
             self._counts[analyst_id] = self._counts.get(analyst_id, 0) + 1
             return receipt, prev
 
+    async def append_llm_calls(
+        self,
+        *,
+        run_id: UUID,
+        calls: Sequence[dict[str, Any]],
+    ) -> int:
+        """S-4 — append LLM calls to an ALREADY-WRITTEN trace's ``llm_calls``.
+
+        Returns the number of entries appended (0 when ``calls`` is empty or
+        the run_id matches no row).
+
+        Why an UPDATE rather than a later ``record``: the analyst run must write
+        its trace row BEFORE the faithfulness verify pass, because V-B's
+        absence-slice check reads this run's ``input_row_refs`` back over the
+        same connection. The judge calls therefore happen after the row exists.
+        Reordering the write is not an option; appending to it is.
+
+        **This does NOT touch the receipt chain.** ``compute_receipt_hash``
+        covers run_id / analyst id+version / input_row_refs / prompt_module_hash
+        / prompt_rendered / output_row_refs / output_payload / run_ended_at /
+        prev_receipt_hash — ``llm_calls`` is not in the payload, by design (it is
+        instrumentation, not provenance). So the row's ``receipt_hash`` stays
+        valid and the chain stays verifiable, which is the whole reason this can
+        be an in-place append instead of a schema or chain change.
+
+        Idempotence is the CALLER's job: this appends unconditionally, so a
+        retried caller double-counts. The one caller takes a per-run watermark
+        and appends once.
+        """
+        if not calls:
+            return 0
+        async with self._pool.acquire() as conn:
+            updated = await conn.execute(
+                """
+                UPDATE analyst_traces
+                   SET llm_calls = COALESCE(llm_calls, '[]'::jsonb)
+                                   || $2::jsonb
+                 WHERE run_id = $1
+                """,
+                run_id,
+                json.dumps(list(calls), default=_json_default),
+            )
+        # asyncpg returns the command tag ("UPDATE 1"); a 0 means the trace row
+        # is missing, which happens legitimately on a TRACE_ONLY run or when the
+        # receipt write itself failed earlier in the turn.
+        if updated.endswith(" 0"):
+            return 0
+        return len(calls)
+
     async def append_run(
         self,
         *,

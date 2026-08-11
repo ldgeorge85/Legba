@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from .api import RegistryAPIDeps, require_bearer
@@ -33,12 +33,30 @@ from .api import RegistryAPIDeps, require_bearer
 # imports NOTHING from the deterministic-handler package, so the slim REGISTRY
 # image can import it at module level — no pycountry/geocode runtime deps — and
 # ``/graph/path`` serves directly (no lazy import / soft-fail needed).
-from ..graph_paths import _MAX_PATH_LEN, shortest_path_with_broker
+from ..graph_paths import (
+    GRAPH_UNAVAILABLE_WARNINGS,
+    _MAX_PATH_LEN,
+    shortest_path_with_broker,
+)
 
 # The metric rows whose payloads carry an `interesting` shortlist (#99).
 _STRUCTURE_METRIC_KINDS = ("structural_balance", "graph_mining")
 DEFAULT_LIMIT = 24
 MAX_LIMIT = 100
+
+# Operator-readable text for each way the substrate can decline to answer a
+# path question. These ride a 503, never a 200 — see the graph_path handler.
+_UNAVAILABLE_MESSAGES = {
+    "graph_unpopulated": (
+        "the world graph holds no id-keyed vertices — nothing has been "
+        "projected into it yet, so no path question can be answered"
+    ),
+    "engine_unreachable": (
+        "the graph engine could not be reached or the traversal raised; "
+        "this is an engine fault, not a statement about these two actors"
+    ),
+    "no_pool": "no substrate pool is bound to this registry process",
+}
 # Default variable-length path cap for /graph/path (callers may request a
 # tighter K; the engine clamps to _MAX_PATH_LEN regardless).
 DEFAULT_PATH_MAX_LEN = _MAX_PATH_LEN
@@ -82,6 +100,10 @@ class GraphPath(BaseModel):
     broker: PathBroker | None = None
     max_len: int = DEFAULT_PATH_MAX_LEN
     detail: str = ""
+    # The engine's own account of WHY there is no path. Empty on a hit; on a
+    # miss it carries exactly one of graph_paths.GRAPH_MISS_WARNINGS, so a
+    # client can tell "these two are not connected" from "the graph is empty".
+    warnings: list[str] = Field(default_factory=list)
 
 
 def _coerce_item(raw: Any, *, source: str) -> StructureItem | None:
@@ -224,6 +246,29 @@ def build_graph_structure_router(deps: RegistryAPIDeps) -> APIRouter:
             else None
         )
         found = bool(res.get("found"))
+        warnings = [str(w) for w in (res.get("warnings") or [])]
+
+        # FAIL LOUD. "The graph holds nothing" and "the engine is unreachable"
+        # are NOT answers to a path question — until 2026-08-03 both were
+        # rendered as a confident 200 + detail="no path" over a graph that held
+        # 27 smoke-test fixtures and no production row (JUDGE_SYNTHESIS §4.3
+        # item 3 / live defect #2). A substrate that cannot answer must say so
+        # with a status code, so no caller and no analyst can read the silence
+        # as evidence of disconnection.
+        blocking = [w for w in warnings if w in GRAPH_UNAVAILABLE_WARNINGS]
+        if not found and blocking:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": blocking[0],
+                    "source": src,
+                    "target": dst,
+                    "message": _UNAVAILABLE_MESSAGES.get(
+                        blocking[0], "the graph substrate could not answer"
+                    ),
+                },
+            )
+
         return GraphPath(
             found=found,
             source=src,
@@ -233,7 +278,8 @@ def build_graph_structure_router(deps: RegistryAPIDeps) -> APIRouter:
             length=res.get("length"),
             broker=broker,
             max_len=int(res.get("max_len", DEFAULT_PATH_MAX_LEN)),
-            detail="" if found else "no path",
+            detail="" if found else "no path within the hop cap",
+            warnings=warnings,
         )
 
     return router

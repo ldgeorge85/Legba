@@ -140,6 +140,56 @@ def _dispatch_timeout_s() -> float:
 
 
 # ---------------------------------------------------------------------------
+# Parent prompt-module resolution
+# ---------------------------------------------------------------------------
+
+
+#: Prompt packages are named by analyst KIND, not by analyst id:
+#: ``src/legba/prompts/<kind>/v1.py`` — ``inline_target``, ``predictor``,
+#: ``critic``, ``cross_target_raw``. (``country_assessor`` is the one legacy
+#: package named for an analyst; that optimizer declares its path explicitly.)
+PROMPT_MODULE_CONVENTION: str = "legba.prompts.{kind}.v1"
+
+
+def convention_parent_prompt_module_path(analyzed_analyst_kind: str) -> str:
+    """The prompt module an analyst of ``analyzed_analyst_kind`` uses.
+
+    Derived from the KIND. The convention used to be built from the analyzed
+    ANALYST id, which silently produced non-existent modules for every unit
+    analyst — ``unit_optimizer`` optimizes ``leadership_transition`` (kind
+    ``inline_target``) and the derived ``legba.prompts.leadership_transition.v1``
+    has never existed. See K5_BLAST_RADIUS §3.2.
+    """
+    return PROMPT_MODULE_CONVENTION.format(kind=analyzed_analyst_kind)
+
+
+def resolve_parent_prompt_module_path(
+    options: Mapping[str, Any],
+) -> str | None:
+    """Resolve the parent prompt module GEPA evolves, or ``None``.
+
+    Ladder:
+
+      1. ``options['parent_prompt_module_path']`` — an explicit per-run
+         override, or the optimizer descriptor's declared
+         ``eval.optimizer.parent_prompt_module_path`` (the actor plumbs it
+         through this key; before that plumbing existed the declared value
+         never reached here and the convention below always won).
+      2. the convention, from ``options['analyzed_analyst_kind']``.
+
+    ``None`` — nothing to resolve from. The caller emits a loud no-op rather
+    than handing GEPA a module path it invented.
+    """
+    declared = options.get("parent_prompt_module_path")
+    if isinstance(declared, str) and declared.strip():
+        return declared.strip()
+    kind = options.get("analyzed_analyst_kind")
+    if isinstance(kind, str) and kind.strip():
+        return convention_parent_prompt_module_path(kind.strip())
+    return None
+
+
+# ---------------------------------------------------------------------------
 # READ_SLICE — joins analyst_traces + analyst_critiques for the target analyst
 # ---------------------------------------------------------------------------
 
@@ -501,9 +551,14 @@ async def run_method(
       * ``analyzed_analyst_id`` — the analyst being optimized.  Pulled
         from the row when present (since READ_SLICE projects it), or
         from options as a runtime-passthrough.
-      * ``parent_prompt_module_path`` — optional explicit override;
-        otherwise resolved from the descriptor's
-        ``eval.optimizer.parent_prompt_module_path``.
+      * ``parent_prompt_module_path`` — the parent module GEPA evolves.
+        The actor plumbs the descriptor's declared
+        ``eval.optimizer.parent_prompt_module_path`` here; an explicit
+        per-run value overrides it.
+      * ``analyzed_analyst_kind`` — the analyzed analyst's ``identity.kind``,
+        plumbed by the actor. Only used when nothing is declared, to build
+        the convention path (see
+        :func:`resolve_parent_prompt_module_path`).
       * ``promotion_policy`` — override; defaults to the descriptor's
         ``eval.promotion`` value.
       * ``run_id`` — supplied by the runtime; we forward it so the
@@ -527,9 +582,26 @@ async def run_method(
             training_size=len(inputs),
         )
 
-    parent_path = options.get("parent_prompt_module_path") or (
-        f"legba.prompts.{analyzed_analyst_id}.v1"
-    )
+    parent_path = resolve_parent_prompt_module_path(options)
+    if not parent_path:
+        # Neither a declared path nor a kind to build the convention from.
+        # Refusing beats guessing: the old analyst-id convention produced a
+        # module that does not exist, GEPA then optimized the placeholder text
+        # it got back, and a promoted candidate could become a live analyst's
+        # system prompt (K5_BLAST_RADIUS §3.2). An audit row saying so is the
+        # honest outcome.
+        logger.error(
+            "optimizer.parent_prompt.unresolved analyzed_analyst=%s optimizer=%s "
+            "— declare eval.optimizer.parent_prompt_module_path on the "
+            "optimizer descriptor, or make the analyzed analyst's kind "
+            "resolvable; refusing to guess a prompt module",
+            analyzed_analyst_id, options.get("analyst_id"),
+        )
+        return _no_op_result(
+            reason="unresolved_parent_prompt_module",
+            options=options,
+            training_size=len(inputs),
+        )
     promotion_policy = str(options.get("promotion_policy") or "human_gated")
 
     # PASS-BY-REFERENCE (Dapr-Workflow payload-size fix)
@@ -843,8 +915,22 @@ def _shape_training_set(
 
     Workflow needs JSON-serializable dicts (the engine's JSON
     serialization).  We keep the load-bearing fields and drop the rest.
+
+    R-tail (2026-08-04) — LOUD on the empty-input degradation. ``input`` comes
+    from ``analyst_traces.prompt_rendered``, which is NULL **by design**
+    (``run_accounting``: persisting the rendered prompt would put up to the
+    full 32k-token input budget on every trace; the bounded
+    ``llm_calls[].prompt_sha256`` + ``prompt_chars`` digest carries the
+    evidence instead, and does so on 100% of LLM-bearing traces). Live: 0 of
+    187,550 rows carry it. So every training row's ``input`` is ``""`` and has
+    been all along — GEPA optimizes against empty inputs and says nothing.
+    That is a real defect, but it is a SCOPED one (the fix is to source the
+    training input from somewhere other than a deliberately-NULL column), so
+    the honest interim behaviour is to make it audible instead of silent: a
+    wholly-empty training set is now a warning, not a shrug.
     """
     out: list[dict[str, Any]] = []
+    empty_inputs = 0
     for row in inputs:
         input_text = row.get("input") or row.get("prompt_rendered") or ""
         gold = row.get("gold") or row.get("output_payload") or ""
@@ -852,6 +938,8 @@ def _shape_training_set(
             input_text = str(input_text)
         if not isinstance(gold, str):
             gold = str(gold)
+        if not input_text.strip():
+            empty_inputs += 1
         score = row.get("critique_score")
         if score is not None:
             try:
@@ -865,6 +953,17 @@ def _shape_training_set(
             "critique_score": score,
             "trace_status": row.get("trace_status"),
         })
+    if out and empty_inputs == len(out):
+        logger.warning(
+            "optimizer.training_set.all_inputs_empty rows=%s — every training "
+            "row's `input` is empty because it is read from "
+            "analyst_traces.prompt_rendered, which is NULL BY DESIGN (the "
+            "bounded llm_calls[].prompt_sha256 digest carries the prompt "
+            "evidence instead). GEPA is optimizing against empty inputs; the "
+            "training input needs a different source before any promotion off "
+            "this run should be trusted.",
+            len(out),
+        )
     return out
 
 
@@ -1090,11 +1189,14 @@ __all__ = [
     "MAX_TRAINING_ROWS",
     "OUTPUT_KIND",
     "OptimizerDeps",
+    "PROMPT_MODULE_CONVENTION",
     "PROMPT_MODULE_PATH",
     "READ_SLICE",
     "SCHEMA_VERSION",
     "build_prompt_module",
+    "convention_parent_prompt_module_path",
     "read_traces_and_critiques",
+    "resolve_parent_prompt_module_path",
     "run_method",
     "_collect_derived_from",
     "_collect_derived_trace_ids",

@@ -17,6 +17,7 @@ the two forms compare equal byte-for-byte.
 
 from __future__ import annotations
 
+import logging
 import threading
 from datetime import date
 from enum import Enum
@@ -200,6 +201,19 @@ class AnalystIdentity(BaseModel):
             return v
         raise ValueError(f"kind must be a string or AnalystKind, got {type(v).__name__}")
 
+    @field_validator("state", mode="before")
+    @classmethod
+    def _coerce_state(cls, v: Any) -> Any:
+        # strict=True disables pydantic's str→Enum coercion, and the wire form
+        # (registry /typed JSON) carries the bare string ("active"). Without
+        # this mirror of ``_coerce_kind``, EVERY typed-descriptor parse fails
+        # `is_instance_of` and actor activation spins in a hot refetch loop —
+        # the 2026-08-01 unit-fleet outage. Accept the enum for in-process
+        # construction and coerce known strings on the wire path.
+        if isinstance(v, str):
+            return LifecycleState(v)
+        return v
+
     @field_validator("kind", mode="after")
     @classmethod
     def _kind_in_registry(cls, v: str) -> str:
@@ -224,6 +238,23 @@ class SubscriptionTargets(BaseModel):
     predicate: str | None = None
     data_types: list[str] = Field(default_factory=list)
     time_window: str = "24h"
+    # W1-E (2026-08-03): explicit target_id allowlist for kinds that read a
+    # UNION across N named targets in a single run (cross_target_raw) rather
+    # than fanning out one run per predicate-matched target (inline_target).
+    # cross_target_raw.READ_SLICE has referenced `subscription.targets.id_list`
+    # since it was written, but the field never existed on this model — every
+    # access silently fell through `getattr(..., "id_list", None)` to the
+    # target_filter/empty fallback. Declared here so the module's documented
+    # contract type-validates.
+    #
+    # A subscription carrying `id_list` is a UNION binding, and the runtime
+    # honours that on both trigger paths: `AnalystActor._cadence_targets()`
+    # returns None (ONE global run — READ_SLICE re-resolves this list) instead
+    # of fanning out per target, and `_analyst_ids_for_target()` registers no
+    # per-target coalescing trigger. `id_list` beats `predicate` if a
+    # descriptor declares both (READ_SLICE prefers it unconditionally); the
+    # ignored predicate is logged, never silently dropped.
+    id_list: list[str] | None = None
 
     @field_validator("predicate", mode="after")
     @classmethod
@@ -401,6 +432,40 @@ class GatherBlock(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
     max_rounds: int = Field(default=1, ge=1, le=6)
+
+
+def _env_limited_dep(exc: ModuleNotFoundError) -> str | None:
+    """The absent NON-legba dependency name, or ``None``.
+
+    Mirror of ``registry.descriptor_refs._missing_dependency_name``'s
+    philosophy: when an import chain dies on a third-party package, the code
+    being imported exists in-tree and only this process's environment is short
+    a dependency. A missing ``legba.*`` module, by contrast, is a real
+    breakage and must propagate.
+    """
+    if exc.name and not exc.name.startswith("legba"):
+        return exc.name
+    return None
+
+
+def _load_options_catalog() -> tuple[Any, Any] | None:
+    """The handler-options resolvers, or ``None`` where this environment
+    cannot import their chain (a non-legba dependency is absent — the
+    registry image ships lighter than the runtime)."""
+    try:
+        from ..analysts.handler_options import (
+            resolve_handler_options,
+            resolve_kind_options,
+        )
+    except ModuleNotFoundError as exc:
+        if dep := _env_limited_dep(exc):
+            logging.getLogger(__name__).info(
+                "handler-options catalog unimportable here: dependency %r "
+                "absent in this environment", dep,
+            )
+            return None
+        raise
+    return resolve_handler_options, resolve_kind_options
 
 
 def _is_json_option_value(value: Any) -> bool:
@@ -830,7 +895,21 @@ class AnalystDescriptor(BaseModel):
             return
         if self.method.kind == "deterministic":
             return
-        from ..analysts.handler_options import ANALYST_KIND_OPTIONS
+        try:
+            from ..analysts.handler_options import ANALYST_KIND_OPTIONS
+        except ModuleNotFoundError as exc:
+            if _env_limited_dep(exc):
+                # Same environment split as _warn_on_dead_options: the catalog
+                # chain needs a runtime-only package (pycountry, live 08-04 —
+                # this exact validator 422'd the relationship_reifier PUT).
+                # The runtime validates authoritatively with full deps; a
+                # dep-light process skips rather than refusing valid updates.
+                logging.getLogger(__name__).info(
+                    "inert-options check skipped for %s: catalog unimportable "
+                    "in this environment", self.identity.id,
+                )
+                return
+            raise
 
         kind = str(getattr(self.identity.kind, "value", self.identity.kind))
         if kind in ANALYST_KIND_OPTIONS:
@@ -858,10 +937,22 @@ class AnalystDescriptor(BaseModel):
         """
         if not self.method.options:
             return
-        from ..analysts.handler_options import (
-            resolve_handler_options,
-            resolve_kind_options,
-        )
+        catalog = _load_options_catalog()
+        if catalog is None:
+            # The catalog's import chain needs a package this PROCESS does not
+            # ship — the registry image is lighter than the runtime, and on
+            # 2026-08-04 pycountry (via deterministic_handlers →
+            # entity_resolution → geocode) 500'd /typed for every
+            # options-bearing deterministic analyst, silencing claim_watch and
+            # signal_embedder for 14h. This helper is warn-only by contract:
+            # an absent dependency downgrades it to a log line, never an
+            # exception out of a read path.
+            logging.getLogger(__name__).info(
+                "dead-options check skipped for %s: catalog unimportable in "
+                "this environment", self.identity.id,
+            )
+            return
+        resolve_handler_options, resolve_kind_options = catalog
 
         if self.method.kind != "deterministic":
             # QW1-B kind lane — checked against the KIND catalog, since no

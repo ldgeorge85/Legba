@@ -69,6 +69,7 @@ from ..data.sources.provision import (
     desired_watch_set,
     reconcile_provision,
 )
+from .actor_turn import bounded_turn_op_or
 from .deps import StandardDeps
 from .source_factory import build_source_handler
 from .state import FilterStateStore
@@ -131,12 +132,33 @@ _MAX_ENTRIES_CONFIG_KEY = "max_entries_per_poll"
 # fetch time), so an exact (source_id, content_hash) match is byte-identical
 # content: safe to collapse. Before inserting we look for an existing
 # same-(source_id, content_hash) row within a lookback window and, on a hit,
-# BUMP that row's fetched_at (recency stays fresh — "we still see this") and SKIP
-# the insert instead of appending a redundant row. This is INTRA-source only
-# (the lookup pins source_id); a cross-source same-hash dup is still KEPT and
-# alias-linked by ingest_dedupe / the periodic cross_source_dedup analyst.
+# record the re-serve on that row and SKIP the insert instead of appending a
+# redundant row. This is INTRA-source only (the lookup pins source_id); a
+# cross-source same-hash dup is still KEPT and alias-linked by ingest_dedupe /
+# the periodic cross_source_dedup analyst.
 # Default ON — the collapse is provably lossless for an exact hash; set
 # LEGBA_INTRASOURCE_DEDUP=0 to disable (fall back to keep-all + alias-link).
+#
+# B-1 (2026-08-03) — WHAT THE COLLAPSE BUMPS. It used to advance the surviving
+# row's ``fetched_at``, on the reading "recency stays fresh — we still see this".
+# That reading cost us the 08-03 freshness incident (MASTER_PLAN §32.7): when the
+# 5 rsshub AP-topic feeds froze upstream and re-served the same 39-item snapshot
+# every poll for six days, 201 signals reported ``fetched_at = today`` the whole
+# time, and because the substrate slice WINDOWS + ORDERS on ``fetched_at`` a
+# 07-28 snapshot topped every 72h slice for five country desks and the journal.
+#
+# ``fetched_at`` now means exactly what every reader already assumed: the fetch
+# that first delivered THIS content. An exact content_hash match is, by
+# construction, identical content — nothing was fetched, so nothing is bumped.
+# The re-serve is recorded on ``last_seen_at`` (migration 0140) and counted per
+# poll as ``reserve_unchanged``.
+#
+# The load-bearing converse still holds WITHOUT special-casing: genuinely-updated
+# content (an EONET/GDACS event whose feature JSON changed, a re-published RSS
+# item with an edited body) hashes DIFFERENTLY, so it never reaches this path at
+# all — it inserts a new row carrying its own honest, fresh ``fetched_at``. The
+# "updates must still look fresh" semantic is a property of content-addressed
+# hashing, not of the bump.
 _INTRASOURCE_DEDUP_ENV = "LEGBA_INTRASOURCE_DEDUP"
 _INTRASOURCE_DEDUP_WINDOW_ENV = "LEGBA_INTRASOURCE_DEDUP_WINDOW_HOURS"
 _DEFAULT_INTRASOURCE_DEDUP_WINDOW_HOURS = 168  # 7 days
@@ -152,13 +174,17 @@ def _intrasource_dedup_enabled() -> bool:
 def _intrasource_dedup_window_hours() -> int:
     """Lookback window (hours) for the (source_id, content_hash) existence check.
 
-    A re-emission WITHIN this window collapses onto (bumps) the existing row; a
+    A re-emission WITHIN this window collapses onto the existing row; a
     re-appearance after a longer silence lands a fresh row (treated as a new
-    occurrence). Because every collapse bumps the surviving row's fetched_at to
-    ~now, an item that keeps re-emitting never falls out of its own window — the
-    bound only governs re-appearance after a real gap. Defaults to 168h (7d);
-    override via LEGBA_INTRASOURCE_DEDUP_WINDOW_HOURS (a non-positive/garbage
-    value degrades to the default).
+    occurrence). The window is measured from ``last_seen_at`` (B-1), so an item
+    that keeps re-emitting never falls out of its own window — the bound only
+    governs re-appearance after a real gap. Measuring it from ``fetched_at``
+    instead would, now that a re-serve no longer bumps ``fetched_at``, drop a
+    continuously-re-served item out of its own window after 7 days and insert a
+    duplicate carrying a fresh timestamp: the 08-03 freshness lie, on a weekly
+    period. Defaults to 168h (7d); override via
+    LEGBA_INTRASOURCE_DEDUP_WINDOW_HOURS (a non-positive/garbage value degrades
+    to the default).
     """
     raw = os.getenv(_INTRASOURCE_DEDUP_WINDOW_ENV, "").strip()
     if not raw:
@@ -528,6 +554,11 @@ async def resolve_source_deps(actor_id: str) -> SourceDeps | None:
 # ---------------------------------------------------------------------------
 
 
+# B-1: ``last_seen_at`` is stamped from the SAME ``fetched_at`` this insert
+# carries — at first write the two agree ("fetched now, seen now"). They diverge
+# only when the source later re-serves this exact content: the S-4 collapse
+# advances ``last_seen_at`` and leaves ``fetched_at`` pinned to the fetch that
+# actually delivered the content (migration 0140).
 _INSERT_SIGNAL = """
 INSERT INTO signals (
     id, source_id, source_version, produced_by_id, produced_by_kind,
@@ -535,7 +566,8 @@ INSERT INTO signals (
     retention_class, media_ref_expires_at, object_ref,
     payload, canonical_url, language_hint, raw_provenance,
     language, geo, tags, entity_classes, source_credibility,
-    content_hash, canonical_signal_id, derived_from, schema_uri
+    content_hash, canonical_signal_id, derived_from, schema_uri,
+    last_seen_at
 )
 VALUES (
     $1, $2, $3, $4, $5,
@@ -543,28 +575,36 @@ VALUES (
     $12, $13, $14,
     $15::jsonb, $16, $17, $18::jsonb,
     $19, $20::text[], $21::text[], $22::text[], $23,
-    $24, $25, $26::uuid[], $27
+    $24, $25, $26::uuid[], $27,
+    $6
 )
 ON CONFLICT (id) DO NOTHING
 RETURNING id
 """
 
 
-# S-4: atomic find-and-bump for an intra-source exact-hash duplicate. Picks the
+# S-4: atomic find-and-record for an intra-source exact-hash duplicate. Picks the
 # MOST-RECENT existing row sharing this (source_id, content_hash, owner_tenant)
-# within the lookback window and advances its fetched_at (never backwards — via
-# GREATEST) + updated_at. Bumping the MOST-RECENT — deliberately NOT the earliest
-# — keeps the "earliest fetched_at = canonical" ordering that ingest_dedupe and
-# the cross_source_dedup analyst pick deterministically stable. content_hash <>
-# '' skips the schema-default "no hash" rows (empty string is never a dedup key).
-# The window bound is inlined (int-validated, no user input) mirroring the
-# coalescer's INTERVAL pattern. The equality on (source_id, content_hash) rides
-# the existing signals_content_hash_idx + signals_source_idx (content_hash is a
-# sha256 → the per-hash candidate set is tiny), so no new index is needed.
+# within the lookback window and advances its last_seen_at (never backwards — via
+# GREATEST) + updated_at. Recording on the MOST-RECENT row — deliberately NOT the
+# earliest — keeps the "earliest fetched_at = canonical" ordering that
+# ingest_dedupe and the cross_source_dedup analyst pick deterministically stable.
+# content_hash <> '' skips the schema-default "no hash" rows (empty string is
+# never a dedup key). The window bound is inlined (int-validated, no user input)
+# mirroring the coalescer's INTERVAL pattern. The equality on (source_id,
+# content_hash) rides the existing signals_content_hash_idx + signals_source_idx
+# (content_hash is a sha256 → the per-hash candidate set is tiny), so no new
+# index is needed.
+#
+# B-1: ``fetched_at`` is NOT touched. An exact content_hash match is identical
+# content — no fetch of anything new happened, so the row's fetch time must not
+# move (the 08-03 freshness lie). ``last_seen_at`` carries the re-serve, and the
+# window + the candidate ORDER BY key off it (COALESCE for pre-0140 rows, which
+# have never recorded a re-serve and so are correctly read at their fetched_at).
 def _bump_intrasource_sql(window_hours: int) -> str:
     return f"""
     UPDATE signals
-       SET fetched_at = GREATEST(fetched_at, $4),
+       SET last_seen_at = GREATEST(COALESCE(last_seen_at, fetched_at), $4),
            updated_at = NOW()
      WHERE id = (
          SELECT id FROM signals
@@ -572,8 +612,9 @@ def _bump_intrasource_sql(window_hours: int) -> str:
             AND content_hash = $2
             AND content_hash <> ''
             AND owner_tenant = $3
-            AND fetched_at > NOW() - INTERVAL '{int(window_hours)} hours'
-          ORDER BY fetched_at DESC, id DESC
+            AND COALESCE(last_seen_at, fetched_at)
+                > NOW() - INTERVAL '{int(window_hours)} hours'
+          ORDER BY COALESCE(last_seen_at, fetched_at) DESC, id DESC
           LIMIT 1
      )
     RETURNING id
@@ -587,14 +628,17 @@ async def _bump_intrasource_duplicate(
     owner_tenant: str,
     window_hours: int,
 ) -> Any | None:
-    """Bump the freshest existing same-(source_id, content_hash) row's recency.
+    """Record a re-serve on the freshest existing same-(source_id, content_hash) row.
 
-    Returns the bumped row id on a hit (the caller then SKIPS the insert), or
+    Returns the recorded row id on a hit (the caller then SKIPS the insert), or
     None when no in-window duplicate exists (the caller inserts normally). The
     read+write is a SINGLE atomic UPDATE ... RETURNING, so there is no
     check-then-insert race within the connection (and a source is a single Dapr
     actor — its polls are turn-serialized, so no cross-poll race either). The
     caller guards ``content_hash`` non-empty before calling.
+
+    B-1: what advances is ``last_seen_at`` ("the source re-served this"), never
+    ``fetched_at`` ("we fetched this content"). See the module note above S-4.
     """
     return await conn.fetchval(
         _bump_intrasource_sql(window_hours),
@@ -670,11 +714,13 @@ async def write_canonical_signal(
     and NO new row is inserted. The caller treats ``None`` as "nothing written,
     nothing to fan out".
 
-    ``dedup_stats``: when supplied, its ``"deduped"`` counter is incremented on
-    each S-4 collapse. The poll path passes this so it can tell "wrote nothing
-    because every item was an already-seen duplicate" (a productive, source-alive
-    poll — recency was bumped) apart from "wrote nothing because the feed was
-    empty" (the liveness watchdog's stall signal). See
+    ``dedup_stats``: when supplied, its ``"reserve_unchanged"`` counter is
+    incremented on each S-4 collapse. The poll path passes this so it can tell
+    "wrote nothing because the source re-served content we already hold, byte for
+    byte" (source alive, content NOT moving) apart from "wrote nothing because the
+    feed was empty" (the liveness watchdog's stall signal). B-1 named the counter
+    for what it measures — an unchanged re-serve — because that is the serve-stale
+    evidence the 08-03 incident had nowhere to live. See
     :data:`_INTRASOURCE_DEDUP_ENV`.
     """
     # FIX P2-3: backfill source_credibility from the registry-scored host table
@@ -706,10 +752,13 @@ async def write_canonical_signal(
             bumped = None
         if bumped is not None:
             if dedup_stats is not None:
-                dedup_stats["deduped"] = dedup_stats.get("deduped", 0) + 1
+                dedup_stats["reserve_unchanged"] = (
+                    dedup_stats.get("reserve_unchanged", 0) + 1
+                )
             logger.debug(
                 "source_actor.intrasource_dedup.collapsed source=%s hash=%s "
-                "bumped_row=%s (recency advanced; insert skipped)",
+                "row=%s (unchanged re-serve: last_seen_at advanced, fetched_at "
+                "unchanged, insert skipped)",
                 signal.source_id, signal.content_hash[:16], bumped,
             )
             return None
@@ -765,9 +814,10 @@ async def write_canonical_signal(
 _INSERT_POLL_OUTCOME = """
 INSERT INTO public.source_poll_outcomes (
     source_id, source_version, owner_tenant,
-    outcome, health_state, capped, signals_written, error, newest_entry_ts
+    outcome, health_state, capped, signals_written, error, newest_entry_ts,
+    reserve_unchanged
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 """
 
 # Cap the stored error string so a verbose traceback can't bloat the row.
@@ -786,6 +836,7 @@ async def write_poll_outcome(
     signals_written: int,
     error: str | None,
     newest_entry_ts: datetime | None = None,
+    reserve_unchanged: int = 0,
 ) -> None:
     """Append a provenance row for ONE poll (DQ-H5b; success — migration 0114).
 
@@ -793,11 +844,11 @@ async def write_poll_outcome(
     precedence:
 
       * ``'success'`` — the poll was PRODUCTIVE: it wrote >=1 signal, or it
-        collapsed >=1 intra-source duplicate (it saw current content and
-        bumped recency). ``signals_written`` carries the count. A partial
-        failure (some rows written, then an exception) is still a success —
-        the source produced — but keeps its ``error`` / ``health_state``
-        detail on the row rather than discarding it.
+        collapsed >=1 intra-source duplicate (the source answered with real
+        content). ``signals_written`` carries the count. A partial failure
+        (some rows written, then an exception) is still a success — the source
+        produced — but keeps its ``error`` / ``health_state`` detail on the
+        row rather than discarding it.
       * ``'error'`` — the poll failed: an escaped exception OR a
         handler-swallowed 4xx / parse-fail / timeout surfaced via
         ``health_state``.
@@ -813,6 +864,13 @@ async def write_poll_outcome(
     check compares it against the source's newest ingested signal to
     discriminate honest-quiet (no alert) from a cursor/filter fault
     (escalate). NULL when the handler records no such observation.
+
+    ``reserve_unchanged`` (B-1, migration 0140): how many entries this poll
+    re-served byte-identically (exact ``content_hash`` match on a row we already
+    hold). ``signals_written = 0 AND reserve_unchanged > 0`` is the SERVE-STALE
+    signature — the source is answering, the content is frozen. That is the
+    state the 5 rsshub AP feeds sat in for six days while this ledger recorded
+    nothing but healthy successes.
     """
     await conn.execute(
         _INSERT_POLL_OUTCOME,
@@ -825,6 +883,7 @@ async def write_poll_outcome(
         int(signals_written),
         error[:_POLL_OUTCOME_ERROR_MAX] if error else None,
         newest_entry_ts,
+        max(0, int(reserve_unchanged)),
     )
 
 
@@ -1054,6 +1113,17 @@ class SourceCore:
                 self.actor_id, published, tenant, source_id,
             )
 
+    # -- discovery path ----------------------------------------------------
+
+    async def run_discovery_cycle(self) -> dict[str, Any]:
+        """Delegate: one SOURCE-discovery cycle (P-13). Mechanism, contract
+        and rationale live in :mod:`.source_discovery_dispatch` — extracted at
+        the regrowth-gate seam. Errors propagate to :meth:`SourceActor.run`.
+        """
+        from .source_discovery_dispatch import run_discovery_cycle
+
+        return await run_discovery_cycle(self)
+
     # -- poll path ---------------------------------------------------------
 
     async def pull_once(self) -> dict[str, Any]:
@@ -1108,10 +1178,13 @@ class SourceCore:
 
         written: list[Signal] = []
         # S-4: count intra-source exact-hash collapses this poll. A poll that
-        # wrote 0 rows but collapsed >=1 duplicate DID see productive content
-        # (the source is alive + current — recency was bumped), so it must NOT be
-        # recorded as a non-productive 'empty' poll (which the liveness watchdog
-        # counts toward an empty-streak degradation).
+        # wrote 0 rows but collapsed >=1 duplicate DID get real content back from
+        # the source, so it must NOT be recorded as a non-productive 'empty' poll
+        # (which the liveness watchdog counts toward an empty-streak
+        # degradation). B-1: the count is now RECORDED on the outcome row as
+        # ``reserve_unchanged`` rather than only steering the rollup word — a
+        # source whose every poll is unchanged re-serves is alive but frozen, and
+        # that is the distinction the ledger could not express on 08-03.
         dedup_stats: dict[str, int] = {}
         errored: str | None = None
         capped = False
@@ -1231,16 +1304,19 @@ class SourceCore:
             # 'success' breaks the run at the first productive poll.
             #
             # S-4: a poll that wrote 0 rows but COLLAPSED >=1 intra-source
-            # duplicate is ALSO productive (it saw current content + bumped
-            # recency) — it records 'success' with signals_written=0, never
-            # 'empty', so a hazard feed healthily re-serving active events
-            # still cannot trip the watchdog's empty-streak degradation.
+            # duplicate is ALSO productive (the source answered with content) —
+            # it records 'success' with signals_written=0, never 'empty', so a
+            # hazard feed healthily re-serving active events still cannot trip
+            # the watchdog's empty-streak degradation. B-1 keeps that rollup
+            # UNCHANGED and adds the count itself to the row, so a reader can
+            # now tell a healthy hazard re-serve from a frozen feed without
+            # re-deriving it from the signals table.
             await self._record_poll_outcome(
                 ctx, handler,
                 errored=errored,
                 capped=capped,
                 signals_written=len(written),
-                deduped=int(dedup_stats.get("deduped") or 0),
+                reserve_unchanged=int(dedup_stats.get("reserve_unchanged") or 0),
             )
 
         if written or capped or errored:
@@ -1265,7 +1341,7 @@ class SourceCore:
         errored: str | None,
         capped: bool,
         signals_written: int = 0,
-        deduped: int = 0,
+        reserve_unchanged: int = 0,
     ) -> None:
         """Persist this poll's provenance row (DQ-H5b #88; success — mig 0114).
 
@@ -1279,8 +1355,8 @@ class SourceCore:
 
         Outcome precedence (PRODUCTIVITY WINS over the failure signals):
 
-          * ``signals_written > 0`` or ``deduped > 0`` → ``'success'``. A poll
-            that produced is not a failing poll, whatever else it reported —
+          * ``signals_written > 0`` or ``reserve_unchanged > 0`` → ``'success'``.
+            A poll that produced is not a failing poll, whatever else it reported —
             counting it as an error is exactly how a repaired source got
             re-paused off its own recovery. Any ``errored`` / degraded health
             from a PARTIAL failure is still carried on the row (``error`` /
@@ -1337,7 +1413,8 @@ class SourceCore:
                             newest_entry_ts = None
 
         written_n = max(0, int(signals_written))
-        if written_n > 0 or int(deduped) > 0:
+        reserve_n = max(0, int(reserve_unchanged))
+        if written_n > 0 or reserve_n > 0:
             # PRODUCTIVE — this poll moved real content into the substrate.
             outcome = "success"
         elif errored is not None or health_state in ("degraded", "unhealthy"):
@@ -1358,6 +1435,7 @@ class SourceCore:
                     signals_written=written_n,
                     error=errored or health_error,
                     newest_entry_ts=newest_entry_ts,
+                    reserve_unchanged=reserve_n,
                 )
         except Exception:  # provenance write must never mask the pull result
             logger.warning(
@@ -1518,11 +1596,22 @@ if _DAPR_AVAILABLE:
         """
 
         async def _core(self) -> SourceCore | None:
-            sd = await resolve_source_deps(self.id.id)
+            # S-6: `resolve_source_deps` falls through to a registry fetch on a
+            # cache miss, so it is the SourceActor's copy of the 08-01 hang
+            # point. Bounded, and a timeout rejoins the existing `sd is None`
+            # branch — the turn ends, the actor is not activated this pass, and
+            # the reconciler's ENSURE_ACTIVE retries next resync. The
+            # alternative is a held turn, which for a source means its poll
+            # reminder and every fire behind it queue forever.
+            sd = await bounded_turn_op_or(
+                resolve_source_deps(self.id.id), None,
+                op="source.resolve_deps", actor_id=self.id.id,
+            )
             if sd is None:
                 logger.warning(
                     "source_actor.no_deps actor_id=%s (host did not register "
-                    "deps and resolver did not resolve)",
+                    "deps and resolver did not resolve, or the lookup blew its "
+                    "turn budget)",
                     self.id.id,
                 )
                 return None
@@ -1604,7 +1693,20 @@ if _DAPR_AVAILABLE:
             await self._set_record(rec)
 
             # Provisioning first (upstream watch must exist before we receive).
-            prov_result = await core.reconcile_upstream()
+            # S-6: this reaches a THIRD-PARTY upstream (a webhook subscription,
+            # a watch registration). A remote host that accepts the connection
+            # and never answers is the exact failure shape that wedged the
+            # models host on 08-01 — listening, not completing — and here it
+            # would hold this source's turn forever. Bounded; a timeout records
+            # the miss and lets activation finish, because the reminder
+            # registration below is the part that keeps the source alive and it
+            # must not be hostage to a slow upstream. `reconcile_upstream` is
+            # idempotent and re-runs on the next ENSURE_ACTIVE.
+            prov_result = await bounded_turn_op_or(
+                core.reconcile_upstream(),
+                {"outcome": "deadline", "reason": "turn_budget_exceeded"},
+                op="source.activate.reconcile_upstream", actor_id=self.id.id,
+            )
 
             if sd.acquisition == "poll":
                 schedule = sd.cadence.schedule if sd.cadence else None
@@ -1665,7 +1767,17 @@ if _DAPR_AVAILABLE:
             core = await self._core()
             deprov = {}
             if core is not None:
-                deprov = await core.deprovision_upstream()
+                # S-6: same third-party exposure as activate()'s provisioning
+                # leg, and worse to hold — a retire that never returns keeps a
+                # superseded actor's turn occupied while the reconciler waits on
+                # it. The reminder unregister below is the part that actually
+                # stops the polling and runs regardless.
+                deprov = await bounded_turn_op_or(
+                    core.deprovision_upstream(),
+                    {"outcome": "deadline", "reason": "turn_budget_exceeded"},
+                    op="source.retire.deprovision_upstream",
+                    actor_id=self.id.id,
+                )
             # A-1: unregister by the PARSED descriptor_id (segment 1 of the
             # actor id — identical to sd.identity.id) so the reminder dies
             # even when deps resolution fails, e.g. the descriptor was
@@ -1696,6 +1808,30 @@ if _DAPR_AVAILABLE:
             core = await self._core()
             if core is None:
                 return {"outcome": "hard_fail", "error": "no_deps"}
+            # DISCOVERY branch — mirrors TargetActor.run's discriminator: a
+            # descriptor carrying a `discovery` block materialises sources
+            # instead of acquiring signals. It must precede the acquisition
+            # check: a discovery template does not pull (its materialised
+            # children do), so the `push_source_not_polled` / `pull_once` path
+            # is not the work it wants.
+            if core.descriptor.discovery is not None:
+                try:
+                    result = await core.run_discovery_cycle()
+                except Exception as exc:
+                    logger.exception(
+                        "source_actor.discovery.failed actor_id=%s err=%s",
+                        self.id.id, exc,
+                    )
+                    rec["last_run_at"] = _utcnow().isoformat()
+                    rec["last_outcome"] = "hard_fail"
+                    rec["last_error"] = str(exc)
+                    await self._set_record(rec)
+                    return {"outcome": "hard_fail", "error": str(exc)}
+                rec["last_run_at"] = _utcnow().isoformat()
+                rec["last_outcome"] = result["outcome"]
+                rec["last_error"] = None
+                await self._set_record(rec)
+                return result
             if core.descriptor.acquisition != "poll":
                 return {"outcome": "noop", "reason": "push_source_not_polled"}
             result = await core.pull_once()

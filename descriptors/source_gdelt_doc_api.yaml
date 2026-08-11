@@ -18,6 +18,15 @@
 #
 # Example descriptor — NOT registered by any bringup script. Register
 # explicitly via the registry API / DescriptorRegistry when wanted.
+#
+# RETIRED 2026-08-02 (migration 0121). `source.gdelt.files` — the 15-min
+# file-dump adapter — was purpose-built to replace this path, and measured over
+# 7 days it carries ~39x the volume at an inverted success rate (files 92.3%
+# success / 8,974 signals; doc_api 84.3% HTTP-429 error / 229 signals). This
+# descriptor stayed `active` only because nobody disposed of it. The declared
+# state is `retired` so re-registering the file cannot silently resurrect a
+# poller that spends the per-IP GDELT rate-limit budget the successor needs.
+# The handler itself is fine and stays exercised by the tests below.
 
 identity:
   id: source.gdelt.doc_api
@@ -26,7 +35,7 @@ identity:
   schema_uri: legba/source/1.0.0
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
-  state: active
+  state: retired
   owner: source_bringup
   created: "2026-06-09T00:00:00Z"
 

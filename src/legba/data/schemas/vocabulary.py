@@ -28,6 +28,13 @@ class VocabularyEntry(BaseModel):
         "filter_kind",
         "enrichment_kind",
         "discovery_kind",
+        # K-G1 (migration 0143): the `entity_edges.edge_family` tier —
+        # relation / reference / cooccurrence / structural. The column carries
+        # its own CHECK; this row makes the tier map readable through the same
+        # registry every other closed vocabulary uses. NOTE the literal is
+        # closed: a family registered in the TABLE but missing HERE fails the
+        # whole `VocabularyCache.refresh()`, not just its own row.
+        "edge_family",
     ]
     value: str
     schema_uri: str = Field(pattern=r"^legba/vocabulary/\d+\.\d+\.\d+$")
@@ -46,7 +53,7 @@ class VocabularyEntry(BaseModel):
                 raise ValueError("relationship_type must be PascalCase identifier")
         elif family in (
             "entity_class", "source_kind", "filter_kind", "enrichment_kind",
-            "output_kind", "discovery_kind", "analyst_kind",
+            "output_kind", "discovery_kind", "analyst_kind", "edge_family",
         ):
             if v != v.lower() or " " in v:
                 raise ValueError(f"{family} must be lowercase_snake_case")

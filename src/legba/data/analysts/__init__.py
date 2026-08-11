@@ -36,11 +36,8 @@ registration.
 from __future__ import annotations
 
 import importlib
-import logging
 from dataclasses import dataclass
 from typing import Any, Callable
-
-logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +104,10 @@ _KIND_MODULE_NAMES: tuple[str, ...] = (
     # S-1 — the per-signal salience scorer (global META sweep, $0-plane LLM).
     # OUTPUT_KIND = TRACE_ONLY; real product = signals.salience writes.
     "signal_salience",
+    # Continuity P2 — the situation TRAJECTORY ledger's one writer.
+    # OUTPUT_KIND = OutputKind.SITUATION_UPDATE (a first-class GRADED claim, not
+    # a receipt); side product = the append-only `situation_events` rows.
+    "situation_tracker",
 )
 
 
@@ -126,43 +127,59 @@ _register_analyst_kind("journal_assessor")
 _register_analyst_kind("entity_researcher")
 # S-1 signal_salience is an EXTENSION kind (not in the closed AnalystKind enum).
 _register_analyst_kind("signal_salience")
+# Continuity P2 situation_tracker is an EXTENSION kind. Registry-side, migration
+# 0184 seeds the matching `vocabulary_entries` row (the registry REPLACES its
+# extension set from that table on every refresh, so in-code registration alone
+# would not survive there).
+_register_analyst_kind("situation_tracker")
 
 
 def discover_analyst_kinds() -> dict[str, KindHandler]:
     """Walk the package, import every kind module, return a registry.
 
     Each kind module that exposes a ``KIND_NAME`` + ``run_method`` is
-    included in the returned mapping.  Modules that fail to import (e.g.
-    a Phase 6 kind landing mid-wave) are logged and skipped — same
-    defensive-import shape the package init has had since L-170.
+    included in the returned mapping.
+
+    K-3: this walker used to log a warning and ``continue`` past a module
+    that failed to import or lacked the contract. That is the exact shape
+    that lets a rename disable a production analyst silently — the kind just
+    stops appearing in the registry, ``analyst_deps_builder`` raises
+    "unknown analyst kind" per run, and nothing at boot said why. Every
+    module named in :data:`_KIND_MODULE_NAMES` is a declaration that it
+    exists and satisfies the contract, so a false declaration now raises
+    :class:`~legba.data.kind_discovery.KindDiscoveryError` — after collecting
+    ALL failures, so one boot names the whole blast radius.
 
     Returns a dict keyed by ``KIND_NAME`` mapping to a :class:`KindHandler`
     bundle.
+
+    Raises
+    ------
+    KindDiscoveryError
+        Any declared module failed to import or is missing ``KIND_NAME`` /
+        ``run_method``.
     """
     # Lazy import here so the package init is cheap even when callers
     # don't need the OutputKind enum.
     from ..provenance.kinds import OutputKind  # noqa: F401 — re-exported
+    from ..kind_discovery import (
+        DiscoveryFailure, import_declared_module, raise_if_failed, require_attrs,
+    )
 
     registry: dict[str, KindHandler] = {}
+    failures: list[DiscoveryFailure] = []
     for mod_name in _KIND_MODULE_NAMES:
-        try:
-            module = importlib.import_module(f"{__name__}.{mod_name}")
-        except Exception as exc:                                # pragma: no cover
-            logger.warning(
-                "analysts.discover.import_failed module=%s err=%s",
-                mod_name, exc,
-            )
+        dotted = f"{__name__}.{mod_name}"
+        module = import_declared_module("analysts", dotted, failures)
+        if module is None:
+            continue
+        if not require_attrs(
+            "analysts", dotted, module, ("KIND_NAME", "run_method"), failures,
+        ):
             continue
 
-        kind_name = getattr(module, "KIND_NAME", None)
-        run_method = getattr(module, "run_method", None)
-        if not kind_name or run_method is None:
-            logger.warning(
-                "analysts.discover.skip module=%s reason=missing_contract "
-                "(KIND_NAME=%r run_method=%r)",
-                mod_name, kind_name, run_method,
-            )
-            continue
+        kind_name = getattr(module, "KIND_NAME")
+        run_method = getattr(module, "run_method")
 
         registry[str(kind_name)] = KindHandler(
             kind_name=str(kind_name),
@@ -173,41 +190,49 @@ def discover_analyst_kinds() -> dict[str, KindHandler]:
             module=module,
         )
 
+    raise_if_failed(failures)
     return registry
 
 
 # ---------------------------------------------------------------------------
-# Defensive-import re-exports (preserve the spike's import shape)
+# Package-level re-exports
 # ---------------------------------------------------------------------------
+#
+# K-3: these two blocks used to be ``try: ... except Exception: pass``, framed
+# as tolerating "a partial wave". The waves landed years ago; what the bare
+# ``except`` tolerates today is a typo. A failure here does not surface as an
+# error — the name simply stops being importable from the package, and every
+# call site that does ``from legba.data.analysts import X`` gets an ImportError
+# far from the cause, or worse, a caller using ``getattr`` gets ``None``.
+# Both blocks are now plain imports: they fail at import time, at the line that
+# is wrong, with the real traceback.
 
 
 __all__: list[str] = ["KindHandler", "discover_analyst_kinds"]
 
 # inline_target (L-170) — re-export for the spike's existing call sites.
-try:                                                            # pragma: no cover
-    from .inline_target import (                                # noqa: F401
-        AnalystMethodResult,
-        InlineTargetRunner,
-        KIND_NAME,
-        LLMHandlerLike,
-        build_prompt_module,
-        run_method,
-    )
-except Exception:                                               # pragma: no cover
-    pass
-else:                                                           # pragma: no cover
-    __all__.extend([
-        "AnalystMethodResult",
-        "InlineTargetRunner",
-        "KIND_NAME",
-        "LLMHandlerLike",
-        "build_prompt_module",
-        "run_method",
-    ])
+from .inline_target import (                                    # noqa: E402,F401
+    AnalystMethodResult,
+    InlineTargetRunner,
+    KIND_NAME,
+    LLMHandlerLike,
+    build_prompt_module,
+    run_method,
+)
 
-# Sibling kind modules — defensive imports so a partial wave doesn't break
-# the package import for already-merged kinds.
-for _mod in (
+__all__.extend([
+    "AnalystMethodResult",
+    "InlineTargetRunner",
+    "KIND_NAME",
+    "LLMHandlerLike",
+    "build_prompt_module",
+    "run_method",
+])
+
+# Sibling kind modules — imported eagerly so the package namespace carries
+# them (call sites do ``analysts.deterministic``). Any import error here is a
+# real defect in that module and must not be swallowed.
+_SIBLING_KIND_MODULES: tuple[str, ...] = (
     "cross_target_raw",
     "cross_analyst_correlator",
     "competing_hypotheses",
@@ -219,10 +244,8 @@ for _mod in (
     "critic",
     "optimizer",
     "journal_assessor",
-):
-    try:                                                        # pragma: no cover
-        importlib.import_module(f"{__name__}.{_mod}")
-    except Exception:                                           # pragma: no cover
-        pass
-    else:                                                       # pragma: no cover
-        __all__.append(_mod)
+)
+
+for _mod in _SIBLING_KIND_MODULES:
+    importlib.import_module(f"{__name__}.{_mod}")
+    __all__.append(_mod)

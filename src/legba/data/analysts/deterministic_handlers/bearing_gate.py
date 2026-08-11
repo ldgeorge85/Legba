@@ -66,12 +66,53 @@ binding a verdict to the wrong edge is worse than no verdict. Writes
 ``data.bearing_confirm`` = 'yes'/'no'/'unavailable' plus a one-line
 ``data.bearing_confirm_reason``.
 
-The confirm NEVER blocks an edge. By the time it runs the gate has already
-decided the edge is written; the confirm is a second, richer reading recorded
-ON the edge for the consumers and for the measurement loop. A core-plane
-outage stamps ``'unavailable'`` and moves on; an over-cap pair is simply not
-stamped (``bearing_confirm_deferred``) rather than being given a value from a
-vocabulary it never earned.
+CW-1 — THE CONFIRM LEG IS NOW BLOCKING (measured, not assumed)
+--------------------------------------------------------------
+Through 3.3.0 the confirm never blocked: it was "a richer second reading"
+recorded on an edge the gate had already passed. K-4 round 3 measured what
+that reading was worth on 120 labeled rows off the LIVE gated stream
+(``planning/K4_LABELS_R3.csv``)::
+
+    confirm = yes       38/57 = 0.667
+    confirm = no         4/47 = 0.085      <- 7.8x discriminator, discarded
+    confirm absent       6/16 = 0.375
+
+i.e. the single strongest separator in the whole pipeline was being computed,
+stamped, and then ignored. Population-weighted, the stream the gate alone
+produced measured **0.267**; keeping only confirm-YES measures **0.667** at
+28% of the volume with 70% of the true positives retained.
+
+So ``bearing_confirm_mode`` (default ``'blocking'``) now DROPS a confirm-NO
+candidate exactly the way a gate-NO is dropped, counted as
+``bearing_confirm_blocked``. ``'advisory'`` restores the 3.3.0 stamp-only
+behaviour for anyone who wants the old population back.
+
+**What "absent" does, and why.** A pair the confirm leg never RESOLVED —
+``'unavailable'`` (the call or parse failed) or over the per-run cap, or the
+leg not wired at all — is **written with a flag, never blocked**:
+
+  * The evidence says absent is not decision-grade but is not noise either:
+    0.375 pooled (``'unavailable'`` 3/9 = 0.333, over-cap 3/7 = 0.429) —
+    ~4.4x confirm-NO, ~0.56x confirm-YES. Blocking it would throw away a
+    band that is right more than a third of the time.
+  * Blocking it would ALSO convert one core-plane outage into a silent hole
+    in the bearing plane. That is the precise failure class the gate leg
+    already refuses ("degrade-loud, never silence the matcher"), and making
+    the confirm blocking must not smuggle it back in through the error path.
+
+The distinction is carried on the row, not in the population:
+``data.bearing_watch`` = ``'confirmed'`` only when the confirm leg said YES,
+``'unconfirmed'`` for every absent band. A K-5 closer acts on
+``bearing_watch='confirmed'``; everything else is a written, visible,
+un-adjudicated edge. Both are counted (``bearing_watch_confirmed`` /
+``bearing_watch_unconfirmed``), so "the confirm leg is down" reads straight
+off one receipt instead of looking like a quiet precision collapse.
+
+Because the confirm now DECIDES rather than annotates, its cap is sized to
+the gate's (:data:`DEFAULT_BEARING_CONFIRM_CAP` 60 → 200): an over-cap
+'deferred' band used to cost a stamp and now costs an adjudication, so the
+budget must cover a healthy run's whole gate-survivor set rather than a
+sample of it.
 
 DEFAULT OFF
 -----------
@@ -101,14 +142,22 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Mapping, Sequence
 
+# S-2 handler-cache registry. Safe at module scope (unlike the deferred
+# analyst_deps_builder import below): llm_handler_cache imports only stdlib,
+# and legba.runtime.__init__ is docstring-only, so this pulls no runtime
+# closure — and therefore no httpx — into the data package's import graph.
+from ....runtime.llm_handler_cache import register_handler_cache
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "CONFIRM_BATCH_SIZE",
     "CONFIRM_LLM_DEPS_EXTRA_KEY",
+    "CONFIRM_MODES",
     "CONFIRM_PROMPT",
     "CONFIRM_PROMPT_VERSION",
     "DEFAULT_BEARING_CONFIRM_CAP",
+    "DEFAULT_BEARING_CONFIRM_MODE",
     "DEFAULT_BEARING_GATE",
     "DEFAULT_BEARING_GATE_CAP",
     "DEFAULT_BEARING_GATE_REF",
@@ -117,7 +166,10 @@ __all__ = [
     "GATE_PROMPT_VERSION",
     "SLM_DEPS_EXTRA_KEY",
     "EdgeCandidate",
+    "MAX_DESK_CHARS",
     "bearing_counter_defaults",
+    "confirm_blocking",
+    "desk_line",
     "gate_enabled",
     "parse_confirm_batch",
     "parse_gate_verdict",
@@ -153,10 +205,28 @@ DEFAULT_BEARING_GATE_REF = "llm.verify.slm_8b"
 DEFAULT_BEARING_GATE_CAP = 200
 
 #: ``bearing_confirm_cap`` — core-plane confirm judgments per run, over
-#: gate-YES edges only. Lower than the gate cap on purpose: the confirm is a
-#: richer, batched read for the measurement loop, not a filter. 0 disables the
-#: leg entirely (nothing is stamped, nothing is counted as an error).
-DEFAULT_BEARING_CONFIRM_CAP = 60
+#: gate-YES edges only. SIZED TO THE GATE CAP (CW-1, was 60): the confirm no
+#: longer annotates an edge, it DECIDES one, so an over-cap 'deferred' band is
+#: an un-adjudicated band rather than an un-annotated one. 0 disables the leg
+#: entirely (nothing is stamped, nothing blocked, nothing counted as an error)
+#: — which in blocking mode means every gate survivor is written 'unconfirmed'.
+DEFAULT_BEARING_CONFIRM_CAP = 200
+
+#: ``bearing_confirm_mode`` — what a confirm verdict DOES.
+#:
+#:   * ``'blocking'`` (default, CW-1) — a confirm-NO drops the candidate, the
+#:     same way a gate-NO does. Measured: the confirm-YES band is 0.667
+#:     precision against the confirm-NO band's 0.085 on the K-4 R3 gold set.
+#:   * ``'advisory'`` — the 3.3.0 behaviour: stamp and write regardless.
+#:
+#: An unreadable value reads BLOCKING, the opposite of :func:`gate_enabled`'s
+#: rule, and deliberately so: the gate switch defaults OFF because turning a
+#: dropper on by accident is the dangerous direction, while here the dangerous
+#: direction is silently reverting to a population measured at 0.267.
+DEFAULT_BEARING_CONFIRM_MODE = "blocking"
+
+#: The admissible values of that switch (choice-locked in the X-1 catalog).
+CONFIRM_MODES: tuple[str, ...] = ("blocking", "advisory")
 
 #: ``deps.extras`` key the GATE client rides. Not wired by the deps builder
 #: (the gate resolves its own component lazily from the registry, because the
@@ -189,6 +259,10 @@ CONFIRM_BATCH_SIZE = 8
 #: Bounded prompt inputs (the signal_embedder / signal_salience rule).
 MAX_THESIS_CHARS = 600
 MAX_SIGNAL_CHARS = 600
+#: The desk identity line (CW-2). Short by construction — it is a name and an
+#: id, not a scope description; anything longer is a descriptor leaking into a
+#: prompt.
+MAX_DESK_CHARS = 120
 #: Stored reason length — one line, not an essay.
 MAX_REASON_CHARS = 240
 #: Output budget. vLLM ignores this unless explicitly opted in (see
@@ -205,7 +279,7 @@ CONFIRM_MAX_TOKENS = 1200
 #: Bump WITH the prompt, in the same commit: this string is stamped onto every
 #: edge the gate passes, and it is the only thing that tells an edge judged by
 #: one prompt apart from an edge judged by another.
-GATE_PROMPT_VERSION = "fewshot/1"
+GATE_PROMPT_VERSION = "fewshot+desk+consequence/3"
 
 #: The prompt-lab's chosen prompt (planning-doc measurement 2026-07-30,
 #: seed 20260730, 50/50 stratified split): the NAIVE criterion as the system
@@ -217,11 +291,47 @@ GATE_PROMPT_VERSION = "fewshot/1"
 #: the 8B pattern-matches worked failures better than it executes stricter
 #: definitions. A better prompt is a new version with a new measurement,
 #: never an edit to this one.
+#:
+#: CW-2 (``fewshot+desk/2``) — the DESK the question belongs to is now shown.
+#: K-4 R3 measured why: a thesis that never names its own country scored
+#: **0.048**, and the worst single row in the set was a US-Senate live blog
+#: with no Turkey token anywhere in it passing BOTH legs onto the TÜRKIYE desk
+#: (pair 06cc3f2f) — because ``GATE_PROMPT`` showed the model a thesis and a
+#: signal and nothing else, so "is there emerging elite dissent within the
+#: ruling party?" was a question about no country at all and the 8B answered
+#: it about US Republicans. The desk was known to the matcher the whole time;
+#: it simply never reached the prompt.
+#:
+#: The SEVEN measured exemplars are byte-for-byte unchanged — they ARE the
+#: 0.842 measurement, and editing them would silently invalidate it. The desk
+#: arrives as (a) one added clause in the system message, (b) one ADDED
+#: eighth exemplar carrying the measured failure verbatim, and (c) a ``Desk:``
+#: line on the row under test WHEN THE QUESTION HAS A DESK (a fact_contention
+#: question has ``target_id`` NULL and shows no line — the desk-less shape the
+#: original seven already demonstrate). The version bump is the contract:
+#: 0.842 was measured on ``fewshot/1`` and does not transfer to this string.
+#: The next K-4 round re-measures it.
+#:
+#: CW-2b (``fewshot+desk+consequence/3``) — the consequence-specificity line,
+#: verbatim from the K-4 R4 report (§11.3). R4 measured the residual failure
+#: class it targets (F1, 3 of the round's 6 failures): a chokepoint-disruption
+#: question scoped to a SPECIFIC country's imports reliably matched
+#: chokepoint-disruption reporting that never touched the country-side leg —
+#: "the question names a country's imports and the signal never mentions that
+#: country's imports." One sentence, no exemplar change (the eight are still
+#: byte-for-byte the measured set), and — per the replay's own rule, because a
+#: prompt change moves what the MODEL says — its effect is measured by K-4 R6,
+#: never by replay.
 GATE_SYSTEM_PROMPT = (
     "Does this news item provide genuine evidence bearing on the thesis - "
     "supporting, refuting, or materially updating it? Being about the same "
     "country or actors is NOT enough; it must speak to what the thesis "
-    "asserts. Answer with exactly one word: YES or NO."
+    "asserts. When a Desk is shown, the thesis belongs to THAT desk's country "
+    "or theatre even if the thesis text does not name it - an item about a "
+    "different country is NOT evidence, however similar the politics. If the "
+    "thesis names a specific consequence for a specific actor, the signal "
+    "must speak to THAT consequence, not only to the upstream event. Answer "
+    "with exactly one word: YES or NO."
 )
 
 #: (user, assistant) exemplar turns, verbatim from the measured prompt. The
@@ -298,17 +408,41 @@ GATE_FEWSHOT_TURNS: tuple[tuple[str, str], ...] = (
         'positions in Iraq."',
         "YES",
     ),
+    # CW-2, the eighth turn — the measured off-desk failure, verbatim from
+    # K-4 R3 pair 06cc3f2f. The thesis names no country; the item names no
+    # Turkey token; both legs passed it. It is the exemplar precisely because
+    # the 8B pattern-matches worked failures better than it executes stricter
+    # definitions (the lab's own finding), and this is the worked failure.
+    (
+        "Desk: G20 — Türkiye [country_g20_tr]\n"
+        'Question thesis: "Is there emerging elite dissent within the ruling '
+        'party that could accelerate a leadership challenge?"\n'
+        'News item: "US Senate rejects motion to halt Trump\'s Iran '
+        "hostilities - The Senate's war powers resolution failed 49-50, with "
+        "Republicans Collins, Murkowski and Paul crossing the aisle to back "
+        'it."',
+        "NO",
+    ),
 )
 
-#: The final user turn — the row under test, in the exemplars' exact shape
-#: (the lab measured with this format; the truncation limits mirror it too).
+#: The final user turn — the row under test. The exemplars' exact shape (the
+#: lab measured with this format; the truncation limits mirror it too), plus
+#: the CW-2 ``Desk:`` line, which the formatter renders as the EMPTY STRING
+#: when the question has no desk — so a desk-less question produces byte-for-
+#: byte the ``fewshot/1`` user turn.
 GATE_PROMPT = (
-    'Question thesis: "{thesis}"\n'
+    '{desk}Question thesis: "{thesis}"\n'
     'News item: "{signal}"'
 )
 
-#: Bump WITH the prompt (same rule as the gate).
-CONFIRM_PROMPT_VERSION = "naive/1"
+#: Bump WITH the prompt (same rule as the gate). ``desk/2`` = CW-2: each pair
+#: carries the desk that owns its thesis, and the task text says what a desk
+#: MEANS for bearing. The confirm leg blocks now (CW-1), so the off-desk class
+#: it was answering wrong is no longer merely recorded — it is decided.
+#: ``desk+consequence/3`` = CW-2b, the same R4-F1 line the gate gained (see
+#: :data:`GATE_SYSTEM_PROMPT`'s note) — added to BOTH prompts because the R4
+#: F1 failures passed both legs, and measured by R6, not by replay.
+CONFIRM_PROMPT_VERSION = "desk+consequence/3"
 
 #: The confirm prompt. Batched + ECHO-BOUND (the ``signal_salience`` /
 #: ``entity_researcher`` precedent): the model must repeat each pair's ``id``
@@ -327,6 +461,15 @@ VERBATIM so each verdict binds to the right pair:
 Judge only what the texts say. Shared proper nouns, a shared country, or the \
 same news day are NOT bearing on their own — the signal must speak to what \
 the thesis actually claims. When the signal is too thin to tell, answer "no".
+
+A pair may show a DESK: that is the country or theatre the thesis belongs to, \
+even when the thesis text never names it. A signal about a DIFFERENT country \
+or theatre does not bear on that thesis, however similar the politics — \
+answer "no". Pairs with no DESK line are not desk-scoped; judge those on the \
+thesis alone.
+
+If the thesis names a specific consequence for a specific actor, the signal \
+must speak to THAT consequence, not only to the upstream event.
 
 PAIRS:
 {pairs}"""
@@ -355,6 +498,13 @@ class EdgeCandidate:
     weight: float
     planes: list[str] = field(default_factory=list)
 
+    #: CW-2 — the desk that OWNS this question, rendered for a human/model
+    #: ("G20 — Türkiye [country_g20_tr]"). Empty for a question with no
+    #: ``target_id`` (every fact_contention row), which shows no desk line at
+    #: all rather than the words "no desk" — an absent scope must never read
+    #: as a scope.
+    desk_label: str = ""
+
     #: 'yes' | 'unavailable' | 'deferred', or None when the gate was OFF.
     #: A gate verdict of NO drops the candidate, so 'no' never lands here.
     gate: str | None = None
@@ -363,6 +513,18 @@ class EdgeCandidate:
     #: 'yes' | 'no' | 'unavailable', or None when the confirm did not run.
     confirm: str | None = None
     confirm_reason: str | None = None
+
+    @property
+    def watch(self) -> str:
+        """``'confirmed'`` iff the confirm leg actually said YES about THIS
+        pair; ``'unconfirmed'`` for every other reading a written row can
+        carry (leg unwired, over cap, call failed, or advisory-mode NO).
+
+        This is the field a K-5 closer reads. It exists so "adjudicated yes"
+        and "never adjudicated" can never be conflated by a consumer that
+        merely sees a row in the table — the 0.667 band and the 0.375 band
+        are different populations and the row says which it is."""
+        return "confirmed" if self.confirm == "yes" else "unconfirmed"
 
     def data_payload(self) -> dict[str, Any]:
         """The ``bearing_edges.data`` jsonb for this row.
@@ -375,7 +537,10 @@ class EdgeCandidate:
             "bearing_gate": self.gate,
             "bearing_gate_ref": self.gate_ref or "",
             "bearing_gate_prompt": GATE_PROMPT_VERSION,
+            "bearing_watch": self.watch,
         }
+        if self.desk_label:
+            out["bearing_desk"] = _desk_text(self.desk_label)
         if self.confirm is not None:
             out["bearing_confirm"] = self.confirm
             out["bearing_confirm_prompt"] = CONFIRM_PROMPT_VERSION
@@ -399,11 +564,19 @@ def bearing_counter_defaults() -> dict[str, Any]:
         "bearing_gated_out": 0,
         "bearing_gate_errors": 0,
         "bearing_gate_deferred": 0,
+        "bearing_confirm_mode": DEFAULT_BEARING_CONFIRM_MODE,
         "bearing_confirm_calls": 0,
         "bearing_confirm_yes": 0,
         "bearing_confirm_no": 0,
         "bearing_confirm_unavailable": 0,
         "bearing_confirm_deferred": 0,
+        # CW-1. The refusals the confirm leg now makes, and the two
+        # populations a written row can belong to. Seeded on every path so a
+        # receipt from a build WITHOUT the blocking leg is distinguishable
+        # from a run where the leg simply refused nothing.
+        "bearing_confirm_blocked": 0,
+        "bearing_watch_confirmed": 0,
+        "bearing_watch_unconfirmed": 0,
     }
 
 
@@ -411,6 +584,16 @@ def gate_enabled(mode: Any) -> bool:
     """Is the pipeline on? Anything that is not exactly ``'on'`` is OFF —
     an unreadable value must never silently ENABLE a leg that drops edges."""
     return str(mode or "").strip().lower() == "on"
+
+
+def confirm_blocking(mode: Any) -> bool:
+    """Does a confirm-NO DROP the candidate (CW-1) or merely stamp it?
+
+    Only an explicit ``'advisory'`` turns the blocking off. Unlike
+    :func:`gate_enabled`, an unreadable value reads BLOCKING: here the
+    dangerous direction is silently falling back to the 3.3.0 population that
+    K-4 R3 measured at 0.267, not accidentally dropping edges."""
+    return str(mode or "").strip().lower() != "advisory"
 
 
 # ---------------------------------------------------------------------------
@@ -451,6 +634,21 @@ def signal_digest(payload: Any, *, max_chars: int = MAX_SIGNAL_CHARS) -> str:
 
 def _thesis_text(raw: Any) -> str:
     return re.sub(r"\s+", " ", str(raw or "").strip())[:MAX_THESIS_CHARS]
+
+
+def _desk_text(raw: Any) -> str:
+    return re.sub(r"\s+", " ", str(raw or "").strip())[:MAX_DESK_CHARS]
+
+
+def desk_line(raw: Any, *, suffix: str = "\n") -> str:
+    """The CW-2 ``Desk:`` line, or the EMPTY STRING when there is no desk.
+
+    Empty rather than "Desk: (none)" on purpose: a desk-less question (every
+    fact_contention row) must produce the exact prompt shape the ``fewshot/1``
+    lab measured, and a placeholder would both change that shape and invite
+    the model to reason about a scope nobody asserted."""
+    desk = _desk_text(raw)
+    return f"Desk: {desk}{suffix}" if desk else ""
 
 
 # ---------------------------------------------------------------------------
@@ -547,7 +745,15 @@ def parse_confirm_batch(
 #: matcher runs every 30 minutes forever. A FAILED build is never cached —
 #: the next tick retries, so a registry that was not up yet at first fire
 #: heals itself (the LazyNlpClient lesson).
+#:
+#: S-2: registered with the runtime's handler-cache sweep set, so a
+#: ``stack.component.>`` change for the gate's component (``llm.verify.slm_8b``
+#: today, 11.7k calls over two days) drops this entry too. Without it the gate
+#: kept the SAME httpx client — built once with the component's original
+#: timeout — for the life of the process, the identical defect that made the
+#: 2026-08-01 timeout PUT inert on the analyst plane.
 _GATE_CLIENT_CACHE: dict[str, Any] = {}
+register_handler_cache("claim_watch.bearing_gate", _GATE_CLIENT_CACHE)
 
 
 def _extras(deps: Any) -> Mapping[str, Any]:
@@ -627,6 +833,7 @@ async def _gate_one(client: Any, cand: EdgeCandidate) -> str | None:
     unparseable reply) — the three collapse deliberately: from the edge's point
     of view they are one condition, "the gate could not answer"."""
     prompt = GATE_PROMPT.format(
+        desk=desk_line(cand.desk_label),
         thesis=_thesis_text(cand.question_thesis),
         signal=cand.signal_text or "(no text)",
     )
@@ -702,9 +909,11 @@ async def _run_gate(
 def _confirm_prompt(batch: list[tuple[str, EdgeCandidate]]) -> str:
     lines: list[str] = []
     for i, (pid, cand) in enumerate(batch, 1):
+        desk = desk_line(cand.desk_label, suffix="\n")
         lines.append(
             f"{i}. id={pid}\n"
-            f"   THESIS: {_thesis_text(cand.question_thesis) or '(no thesis)'}\n"
+            + (f"   {desk}" if desk else "")
+            + f"   THESIS: {_thesis_text(cand.question_thesis) or '(no thesis)'}\n"
             f"   SIGNAL: {cand.signal_text or '(no text)'}"
         )
     return CONFIRM_PROMPT.format(pairs="\n".join(lines))
@@ -717,7 +926,10 @@ async def _run_confirm(
     confirm_cap: int,
     counters: dict[str, Any],
 ) -> None:
-    """W-B2. Stamps gate-YES candidates IN PLACE. Never drops one."""
+    """W-B2. Stamps gate-YES candidates IN PLACE. Never drops one — the
+    dropping (CW-1) is :func:`_apply_confirm_block`'s job, kept separate so
+    the leg that ASKS and the leg that ACTS stay independently readable and
+    independently testable."""
     targets = [c for c in candidates if c.gate == "yes"]
     if not targets:
         return
@@ -727,7 +939,9 @@ async def _run_confirm(
         # builder refused an Anthropic component). The leg did not RUN, which
         # is not the same as it having failed — stamping 'unavailable' here
         # would fabricate an outage. Left unstamped, and silent by design:
-        # this is the shipped default, not a fault.
+        # this is the shipped default, not a fault. In BLOCKING mode this
+        # means every gate survivor is written 'unconfirmed', never dropped:
+        # an unwired leg must not silence the plane.
         return
     if confirm_cap <= 0:
         return
@@ -772,6 +986,28 @@ async def _run_confirm(
     counters["bearing_confirm_calls"] = calls
 
 
+def _apply_confirm_block(
+    candidates: list[EdgeCandidate],
+    *,
+    blocking: bool,
+    counters: dict[str, Any],
+) -> list[EdgeCandidate]:
+    """CW-1. Drop the confirm-NO candidates, tally the two written bands.
+
+    Pure and separate from the leg that asked, so "what the model said" and
+    "what we did about it" are two readable facts. In ``advisory`` mode
+    nothing is dropped and the tallies still ride the receipt — that is how a
+    reverted deploy stays measurable rather than merely quiet."""
+    kept: list[EdgeCandidate] = []
+    for cand in candidates:
+        if blocking and cand.confirm == "no":
+            counters["bearing_confirm_blocked"] += 1
+            continue
+        counters[f"bearing_watch_{cand.watch}"] += 1
+        kept.append(cand)
+    return kept
+
+
 async def run_bearing_pipeline(
     candidates: list[EdgeCandidate],
     *,
@@ -780,18 +1016,26 @@ async def run_bearing_pipeline(
     gate_ref: str,
     gate_cap: int,
     confirm_cap: int,
+    confirm_mode: Any = DEFAULT_BEARING_CONFIRM_MODE,
     counters: dict[str, Any],
 ) -> list[EdgeCandidate]:
     """Both legs over one run's would-be edges. Returns what should be WRITTEN.
 
     OFF (the shipped default) returns the input list UNTOUCHED and makes no
     call, resolves no component and constructs no client — so a gate-off run is
-    the 3.2.0 run, byte for byte, plus the receipt's inert counters."""
+    the 3.2.0 run, byte for byte, plus the receipt's inert counters.
+
+    ON, the survivors are the gate-YES set MINUS the confirm-NO set (CW-1),
+    each survivor carrying ``data.bearing_watch`` = 'confirmed'/'unconfirmed'
+    so an adjudicated edge and an un-adjudicated one are never one population.
+    """
     counters.update(bearing_counter_defaults())
     if not gate_enabled(mode):
         return candidates
     counters["bearing_gate_mode"] = "on"
     counters["bearing_gate_ref"] = gate_ref
+    blocking = confirm_blocking(confirm_mode)
+    counters["bearing_confirm_mode"] = "blocking" if blocking else "advisory"
     if not candidates:
         return candidates
 
@@ -805,9 +1049,11 @@ async def run_bearing_pipeline(
     await _run_confirm(
         kept, deps=deps, confirm_cap=max(0, int(confirm_cap)), counters=counters
     )
+    kept = _apply_confirm_block(kept, blocking=blocking, counters=counters)
     logger.info(
         "claim_watch.bearing_gate.done candidates=%d kept=%d yes=%d gated_out=%d "
-        "errors=%d deferred=%d confirm(yes=%d no=%d unavailable=%d deferred=%d) "
+        "errors=%d deferred=%d confirm(mode=%s yes=%d no=%d unavailable=%d "
+        "deferred=%d blocked=%d) watch(confirmed=%d unconfirmed=%d) "
         "ref=%s prompt=%s",
         len(candidates),
         len(kept),
@@ -815,10 +1061,14 @@ async def run_bearing_pipeline(
         counters["bearing_gated_out"],
         counters["bearing_gate_errors"],
         counters["bearing_gate_deferred"],
+        counters["bearing_confirm_mode"],
         counters["bearing_confirm_yes"],
         counters["bearing_confirm_no"],
         counters["bearing_confirm_unavailable"],
         counters["bearing_confirm_deferred"],
+        counters["bearing_confirm_blocked"],
+        counters["bearing_watch_confirmed"],
+        counters["bearing_watch_unconfirmed"],
         gate_ref,
         GATE_PROMPT_VERSION,
     )

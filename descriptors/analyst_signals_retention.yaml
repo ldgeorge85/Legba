@@ -1,0 +1,66 @@
+# W1-E BIND — Signals Retention analyst descriptor (D4 / migration 0036 /
+# deterministic_handlers/signals_retention.py).
+#
+# The `signals_retention` SUB_HANDLER has been in SUB_HANDLERS and had a live
+# `retention_policies` row (seeded 2026-07-28: ttl_days=0, keep_classes=
+# {retain_always, evidence_hold}, batch_limit=5000) since migration 0036 —
+# but until this file, zero descriptors of any state referenced it (verified:
+# `analyst_descriptors` has no row with descriptor_id or
+# body->method->sub_handler = 'signals_retention'; analyst_traces has zero
+# rows). Its sibling `analyst_traces_retention` (S-6, same shim-onto-
+# `_retention_sweep` shape) DOES have a bound descriptor
+# (descriptors/analyst_analyst_traces_retention.yaml) — this file closes that
+# asymmetry by mirroring it exactly.
+#
+# DISABLED BY DEFAULT: ttl_days defaults to 0 (no-op) per the seeded
+# retention_policies row — this ships inert. An operator opts in later via
+# method.options.ttl_days (X-1 channel), LEGBA_SIGNALS_RETENTION_TTL_DAYS, or
+# a forced-run option. See deterministic_handlers/signals_retention.py and
+# _retention_sweep.py for the full precedence + keep-class semantics.
+#
+# State: draft in-tree, same convention as analyst_traces_retention —
+# registration + the operator's activate flip are deploy steps out of this
+# pass's no-deploy remit.
+
+identity:
+  id: signals_retention
+  name: Signals Retention
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: w1e_built_but_unbound
+
+subscription:
+  # No `targets` block -> META analyst: one global sweep per cadence tick
+  # over the whole signals table. The handler reads directly via
+  # deps.pg_pool (same shape as analyst_traces_retention / cross_source_dedup).
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: signals_retention
+  # id == sub_handler name too, so either of dapr_actors.py's two resolution
+  # paths (explicit method.sub_handler, or the identity.id fallback) works.
+  # Ships with no options block -> stays inert (ttl_days=0) until an operator
+  # opts in explicitly, same posture as analyst_traces_retention.
+
+cadence:
+  # Offset from the other daily maintenance sweeps (fact_decay_scan "52 4",
+  # analyst_traces_retention "37 5", legacy fact_decay "23 */8") so they
+  # never share a tick.
+  fallback_schedule: "18 5 * * *"
+  cooldown_seconds: 3600
+
+outputs: []

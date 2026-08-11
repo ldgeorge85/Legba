@@ -42,8 +42,10 @@ from legba.data.filters.dedupe import (
     Tier3Config,
     Tier4Config,
     TierToggle,
+    _is_channel_post,
     _normalized_levenshtein,
     _safe_name,
+    normalize_wire_title,
 )
 from legba.data.sources._contract import Signal
 
@@ -931,3 +933,120 @@ async def test_integration_all_four_tiers_end_to_end(real_redis, real_qdrant):
     assert tier_hits[2] == 1
     assert tier_hits[3] == 1
     assert tier_hits[4] == 1
+
+
+# =============================================================================
+# CW-7 — canonicalizer variant classes
+#
+# K-4 R3's sampling turned up duplicate populations tier 1 and tier 2 could
+# not see. Two are cheap and fixed here; the third is measured rather than
+# guessed at.
+# =============================================================================
+
+
+def test_canonical_url_strips_the_www_label():
+    assert (
+        Dedupe4TierHandler.canonical_url("https://www.example.com/a")
+        == Dedupe4TierHandler.canonical_url("https://example.com/a")
+        == "https://example.com/a"
+    )
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["www2.example.com", "www3.example.com", "wwwtest.example.com",
+     "wwwx.example.com"],
+)
+def test_only_the_www_label_is_stripped(host):
+    """``www2`` and friends are genuinely different origins on plenty of
+    sites; collapsing them would mint FALSE duplicates, which is destructive
+    in a way a missed duplicate is not."""
+    url = f"https://{host}/a"
+    assert Dedupe4TierHandler.canonical_url(url) == url
+
+
+def test_www_stripping_is_idempotent_and_never_empties_the_host():
+    once = Dedupe4TierHandler.canonical_url("https://www.example.com/a?b=1")
+    assert Dedupe4TierHandler.canonical_url(once) == once
+    assert "www." in Dedupe4TierHandler.canonical_url("https://www./a")
+
+
+@pytest.mark.parametrize(
+    "title, expected",
+    [
+        ("(LEAD) Yoon says talks will continue", "Yoon says talks will continue"),
+        ("(2nd LD) Yoon says talks will continue", "Yoon says talks will continue"),
+        ("(3rd LD-RTR) Yoon says talks will continue",
+         "Yoon says talks will continue"),
+        ("UPDATE 1-Oil rises on supply fears", "Oil rises on supply fears"),
+        ("URGENT: Quake hits southwestern Japan", "Quake hits southwestern Japan"),
+        ("(Update) Strikes reported near the port", "Strikes reported near the port"),
+        ("(Eds: adds quotes) Cabinet clears the bill", "Cabinet clears the bill"),
+        ("(CORRECTED) Minister resigns", "Minister resigns"),
+        ("(LEAD) (2nd LD) Stacked revision", "Stacked revision"),
+    ],
+)
+def test_wire_revision_markers_are_stripped(title, expected):
+    assert normalize_wire_title(title) == expected
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Cabinet clears the bill (with conditions)",
+        "Oil rises as OPEC+ meets (analysis)",
+        "A perfectly ordinary headline",
+        "Reuters UPDATE on the situation is expected",
+    ],
+)
+def test_a_mid_title_parenthetical_is_part_of_the_headline(title):
+    """Anchored at the START only. A parenthetical inside a headline is
+    content, and stripping those would collapse different stories."""
+    assert normalize_wire_title(title) == title
+
+
+def test_a_title_that_is_nothing_but_markers_keeps_its_text():
+    """An empty tier-2 key would collapse every such story onto one
+    another — worse than the duplicate it was trying to catch."""
+    assert normalize_wire_title("(URGENT)") == "(URGENT)"
+    assert normalize_wire_title("") == ""
+
+
+def test_a_wire_revision_and_its_original_share_a_content_key():
+    original = _signal(title="Oil rises on supply fears", body="Same body.")
+    revision = _signal(
+        title="(LEAD) Oil rises on supply fears", body="Same body."
+    )
+    assert (
+        Dedupe4TierHandler.normalized_content(original)
+        == Dedupe4TierHandler.normalized_content(revision)
+    )
+
+
+def test_a_genuinely_different_story_still_keys_apart():
+    a = _signal(title="Oil rises on supply fears", body="Body A.")
+    b = _signal(title="(LEAD) Oil falls on demand fears", body="Body A.")
+    assert (
+        Dedupe4TierHandler.normalized_content(a)
+        != Dedupe4TierHandler.normalized_content(b)
+    )
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("https://t.me/ansarollah1/426510", True),
+        ("https://www.t.me/somechannel/1", True),
+        ("https://telegram.me/x/2", True),
+        ("https://www.reuters.com/world/story", False),
+        ("", False),
+    ],
+)
+def test_channel_posts_are_detected_so_the_class_can_be_counted(url, expected):
+    """The publisher-channel class is DETECTED AND COUNTED, NOT RESOLVED. A
+    t.me post and the publisher's article are the same document, but nothing
+    cheap connects them — different host, different path, often a rewritten
+    headline and only an excerpt of the body. Guessing would mint FALSE alias
+    links, so the population is measured instead and the number is what a
+    decision to build the real fix would rest on."""
+    assert _is_channel_post(_signal(url=url)) is expected

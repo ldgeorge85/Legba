@@ -41,16 +41,41 @@
 #
 set -euo pipefail
 
-REPO_ROOT="/usr/local/deployments/active/legba"
+# The checkout to mount. Defaults to the main checkout, which is what the
+# operator and the nightly cron run. A WORKTREE agent must point this at its
+# own tree (`LEGBA_REPO_ROOT=$PWD bash scripts/run_tests_in_container.sh`) --
+# a hardcoded path here is how worktree agents kept "verifying" their branch
+# against main's code and reporting green for changes that were never loaded.
+# Host path == container path is load-bearing (the conftests resolve a
+# REPO_ROOT that must match the bind mount), so the mount and -w follow this
+# one variable and nothing else needs to change.
+REPO_ROOT="${LEGBA_REPO_ROOT:-/usr/local/deployments/active/legba}"
 BASE_IMAGE="legba/legba-runtime-dapr:latest"
 TEST_IMAGE="legba/legba-test:latest"
 
-# Build the test image if it is missing.
-if ! docker image inspect "${TEST_IMAGE}" >/dev/null 2>&1; then
+# Everything the recipe needs on TOP of the runtime base image:
+#   pytest<9        -- 9.x trips a CPython AST SystemError during collection.
+#   pytest-asyncio  -- asyncio_mode=auto in pyproject.
+#   pytest-randomly -- the nightly's second, SHUFFLED pass (R7). Ordered runs
+#                      must therefore pass `-p no:randomly` to stay ordered.
+#   ruff            -- the nightly lint ratchet, run through this same image so
+#                      lint and tests can never disagree about the interpreter.
+TEST_PIP_LINE="'pytest>=8,<9' pytest-asyncio pytest-randomly ruff"
+
+# Build the test image if it is missing OR predates a package added above.
+# `docker image inspect` only answers "does the tag exist", so an image built
+# before pytest-randomly/ruff joined the list would otherwise be reused
+# forever and the shuffled pass would silently run in file order.
+_test_image_current() {
+  docker image inspect "${TEST_IMAGE}" >/dev/null 2>&1 || return 1
+  docker run --rm --entrypoint python "${TEST_IMAGE}" -c \
+    'import pytest, pytest_asyncio, pytest_randomly, ruff' >/dev/null 2>&1
+}
+if ! _test_image_current; then
   echo ">> Building ${TEST_IMAGE} from ${BASE_IMAGE} ..." >&2
   docker build -t "${TEST_IMAGE}" - <<EOF
 FROM ${BASE_IMAGE}
-RUN pip install 'pytest>=8,<9' pytest-asyncio
+RUN pip install ${TEST_PIP_LINE}
 EOF
 fi
 
@@ -80,6 +105,19 @@ LEGBA_TEST_STRICT="${LEGBA_TEST_STRICT:-1}"
 DOCKER_RUN+=(-e "LEGBA_TEST_STRICT=${LEGBA_TEST_STRICT}")
 
 DOCKER_RUN+=(--entrypoint python "${TEST_IMAGE}")
+
+# LINT MODE (R7) — `run_tests_in_container.sh --lint [paths...]` runs ruff in
+# this same image instead of pytest. It lives here, rather than as its own
+# script, so lint and tests can never drift onto different interpreters or a
+# different checkout: one image, one mount, one REPO_ROOT. It returns BEFORE
+# the substrate bootstrap below because ruff is a pure static pass — it needs
+# no Postgres, no AGE container, and must stay runnable on a rig where those
+# are down. `--no-cache` keeps the run from depending on (or writing) a
+# .ruff_cache in a shared checkout.
+if [ "${1:-}" = "--lint" ]; then
+  shift
+  exec "${DOCKER_RUN[@]}" -m ruff check --no-cache "${@:-.}"
+fi
 
 # Ensure the DISPOSABLE Postgres+AGE fixture for tests/journal_w1, w2, w4
 # is up before pytest runs (TEST_DEBT_RECON.md Bucket C). This is a

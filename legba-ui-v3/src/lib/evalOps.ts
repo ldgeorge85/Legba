@@ -688,6 +688,82 @@ export interface DimensionEval {
   correctness_vs_reference: number | null
   n_labeled: number
   faithfulness_flagged: boolean
+  /**
+   * M-1 — the PRIMARY correctness axis: the OPERATOR gold-set verdicts
+   * (`correctness_labels`), judge-independent and NEVER pooled with
+   * faithfulness or with the deterministic source-overlap axis above.
+   *
+   * `operator_sufficient` is false while the unit has fewer scored verdicts
+   * than the server's floor. The gold set is hand-labelled and does not scale
+   * by construction — most units carry n=1 — so the number is shown WITH its n
+   * and marked indicative, never rendered as a measured rate.
+   */
+  correctness_operator?: number | null
+  n_operator_scored?: number
+  operator_sufficient?: boolean
+  /** M-2 — WHICH judge produced `faithfulness`. Null = pre-split-key. */
+  judge_pipeline_version?: string | null
+}
+
+/**
+ * M-1 — one bounded unit's row on `GET /api/v1/v3/eval/correctness`.
+ *
+ * `display` is composed SERVER-side (`correctness_axis.describe`) so the
+ * tiny-n honesty contract — the mix and the status always travel with the
+ * number — lives in ONE place and the UI renders it verbatim rather than
+ * reformatting a ratio out of its evidence.
+ */
+export interface UnitCorrectnessRow {
+  unit: string
+  correctness: number | null
+  n_labels: number
+  n_scored: number
+  n_unresolvable: number
+  mix: Record<string, number>
+  sufficient: boolean
+  min_labels: number
+  status: string
+  display: string
+  correctness_vs_reference: number | null
+  n_reference_labels: number
+  reference_status: string | null
+  faithfulness: number | null
+  judge_pipeline_version: string | null
+}
+
+/** `GET /v3/eval/correctness` body. */
+export interface UnitCorrectnessBoard {
+  available: boolean
+  fleet: UnitCorrectnessRow | null
+  units: UnitCorrectnessRow[]
+  scored_at: string | null
+  labeling: { weeks?: Array<{ week: string; sampled: number; labeled: number }>; weeks_pinned?: number }
+  honesty_note: string
+}
+
+/**
+ * The operator-correctness segment for a dimension badge.
+ *
+ * Returns '' when the unit has no scored verdicts — absence is absent, not
+ * zero. Otherwise ALWAYS carries the n, and appends `, indicative` below the
+ * server's sufficiency floor, so a single verdict can never read as a rate.
+ */
+export function operatorSegment(ev: DimensionEval | null | undefined): string {
+  if (!ev) return ''
+  const n = ev.n_operator_scored ?? 0
+  if (typeof ev.correctness_operator !== 'number' || n === 0) return ''
+  const qualifier = ev.operator_sufficient === true ? '' : ', indicative'
+  return `operator ${ev.correctness_operator.toFixed(2)} (n=${n}${qualifier})`
+}
+
+/**
+ * The honest tiny-n label for a `/v3/eval/correctness` row — rendered wherever
+ * a bare number would otherwise be tempting. Falls back to the server-composed
+ * `display`, which already carries the verdict mix and the status sentence.
+ */
+export function correctnessLabel(row: UnitCorrectnessRow | null | undefined): string {
+  if (!row) return 'unmeasured'
+  return row.display || 'unmeasured'
 }
 
 /**
@@ -800,6 +876,12 @@ export function insufficientLabel(reason: string | null | undefined): string {
  * The per-dimension eval badge — the honest idiom (mirrors labels_api
  * `_compose_badge`): a measured "faithfulness X | correctness Y (n=k)" ONLY when
  * a number is present, else the verbatim "unmeasured". Never invents a number.
+ *
+ * M-1: the OPERATOR correctness segment appends AFTER the `(n=…)` that belongs
+ * to the source-overlap axis, carrying its own n — the two correctness axes
+ * have different tables, different denominators, and are never merged into one
+ * "correctness" figure. A dimension with only operator verdicts is measured,
+ * not unmeasured, so the segment alone is enough to leave the empty state.
  */
 export function evalBadge(ev: DimensionEval | null | undefined): string {
   if (!ev) return 'unmeasured'
@@ -810,8 +892,10 @@ export function evalBadge(ev: DimensionEval | null | undefined): string {
   if (typeof ev.correctness_vs_reference === 'number') {
     parts.push(`correctness ${ev.correctness_vs_reference.toFixed(2)}`)
   }
-  if (parts.length === 0) return 'unmeasured'
-  return `${parts.join(' | ')} (n=${ev.n_labeled ?? 0})`
+  const operator = operatorSegment(ev)
+  if (parts.length === 0) return operator || 'unmeasured'
+  const measured = `${parts.join(' | ')} (n=${ev.n_labeled ?? 0})`
+  return operator ? `${measured} | ${operator}` : measured
 }
 
 /** Relative-time formatter shared by the ops panels. */

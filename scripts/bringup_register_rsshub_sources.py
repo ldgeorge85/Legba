@@ -23,8 +23,32 @@ started 503-ing, so that one descriptor was re-pointed at RFI's verified
 native RSS feed (``https://www.rfi.fr/fr/afrique/rss``) instead. It is still
 registered by this same script (nothing about registration itself changed —
 just its ``config.url``), so it stays in ``SOURCE_FILES`` below; see the
-descriptor's own header comment for the full story. The other nine feeds,
-including the sibling ``source_rsshub_rfi_ameriques.yaml``, are unaffected.
+descriptor's own header comment for the full story. The sibling
+``source_rsshub_rfi_ameriques.yaml`` is unaffected.
+
+NOTE (2026-08-03): ``source_rsshub_rfa_korea.yaml`` came off the sidecar the
+same way, for a different reason. Reported "frozen since 07-28" after 151
+consecutive empty polls, it turned out the route was never broken —
+``/rfa/english/news/korea`` returned 200 with 38 dated items matching the
+upstream section page exactly, and that section had simply published nothing
+since 21 July (RFA's Korea service now emits two or three articles a month).
+The fix was scope, not plumbing: it now polls RFA's verified native
+whole-service English feed (``https://www.rfa.org/english/rss2.xml``), which
+carries every Korea item plus six other Indo-Pacific beats, and its
+``scope.geo`` dropped to ``[]`` so a pan-Asian feed can't fallback-stamp North
+Korea onto un-geocoded Tibet/Pacific stories. It stays in ``SOURCE_FILES``
+below for the same reason rfi_afrique does. CAUTION for whoever runs this
+script against a live instance: both of those ids have ``active`` heads in
+production while their files declare ``draft``, and ``register_descriptor``
+only walks FORWARD along the lifecycle FSM — it will report
+``failed: no legal FSM path active -> draft`` for them rather than updating
+anything. Land those two edits through the registry's normal update path,
+carrying ``state: active`` and the OLD head version in the body.
+
+The AP world-news re-route (``source_rsshub_apnews_world.yaml``) is a NEW
+sidecar feed from the 2026-08-03 batch and is registered by
+scripts/bringup_register_source_batch_2026_08.py, not here — it belongs with
+the Niger coverage descriptors that shipped alongside it.
 
 Ships INERT / activation is the operator's:
   * Every descriptor ships ``identity.state: draft``, so bulk registration

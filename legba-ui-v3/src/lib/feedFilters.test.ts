@@ -25,6 +25,9 @@ import {
   persistFeedViews,
   upsertFeedView,
   removeFeedView,
+  serverFilterParams,
+  FINDINGS_SERVER_FACETS,
+  SIGNALS_SERVER_FACETS,
 } from './feedFilters'
 
 /** Build a minimal finding row for the matcher tests. */
@@ -173,6 +176,115 @@ describe('matchesFilter', () => {
     const sig = finding({ id: 's', source: 'signal', severity: null })
     expect(matchesFilter(sig, deriveRowVerdict(sig, 0), parseFilterInput('kind:signal'))).toBe(true)
     expect(matchesFilter(row, verdict, parseFilterInput('kind:signal'))).toBe(false)
+  })
+})
+
+describe('minconf — the effective-confidence floor facet', () => {
+  it('keeps rows at or above the floor and drops the ones below it', () => {
+    const above = finding({ id: 'a', confidence: 0.9, effective_confidence: 0.62 })
+    const below = finding({ id: 'b', confidence: 0.9, effective_confidence: 0.41 })
+    const f = parseFilterInput('minconf:0.5')
+    expect(matchesFilter(above, deriveRowVerdict(above, 0), f)).toBe(true)
+    expect(matchesFilter(below, deriveRowVerdict(below, 0), f)).toBe(false)
+  })
+
+  it('gates on the SURFACED (critic-folded) confidence, not the raw one', () => {
+    // Raw confidence clears 0.5; the critic folded it to 0.3 — the fold wins.
+    const demoted = finding({ confidence: 0.9, effective_confidence: 0.3 })
+    expect(matchesFilter(demoted, deriveRowVerdict(demoted, 0), parseFilterInput('minconf:0.5'))).toBe(
+      false,
+    )
+  })
+
+  it('an ungraded row cannot clear a floor, and a garbage floor never over-filters', () => {
+    const ungraded = finding({ confidence: null, effective_confidence: null })
+    expect(matchesFilter(ungraded, deriveRowVerdict(ungraded, 0), parseFilterInput('minconf:0.5'))).toBe(
+      false,
+    )
+    expect(matchesFilter(ungraded, deriveRowVerdict(ungraded, 0), parseFilterInput('minconf:abc'))).toBe(
+      true,
+    )
+  })
+
+  it('accepts the `floor:` alias and is single-valued (last pick wins)', () => {
+    const p = parseFilterInput('floor:0.5 minconf:0.7')
+    expect(p.chips).toEqual([{ key: 'minconf', value: '0.7' }])
+    expect(serializeFilter(p)).toBe('minconf:0.7')
+  })
+})
+
+describe('serverFilterParams — the facets the REST routes answer themselves', () => {
+  const NOW = Date.parse('2026-06-10T00:00:00Z')
+
+  it('pushes an EXACT desk/producer, and refuses a hand-typed partial', () => {
+    const opts = {
+      supports: FINDINGS_SERVER_FACETS,
+      exactTargets: new Set(['country_g20_br']),
+      exactAnalysts: new Set(['energy_security']),
+      now: NOW,
+    }
+    expect(
+      serverFilterParams(parseFilterInput('target:country_g20_br analyst:energy_security'), opts),
+    ).toEqual({ target_id: 'country_g20_br', analyst_id: 'energy_security' })
+    // `target:braz` is a client-side SUBSTRING match; pushing it as an exact
+    // `target_id=braz` would return an empty page and read as "no results".
+    expect(serverFilterParams(parseFilterInput('target:braz analyst:escal'), opts)).toEqual({})
+  })
+
+  it('pushes only the real severity vocabulary — `severity:none` stays client-side', () => {
+    const opts = { supports: FINDINGS_SERVER_FACETS, now: NOW }
+    expect(serverFilterParams(parseFilterInput('severity:critical'), opts)).toEqual({
+      severity: 'critical',
+    })
+    expect(serverFilterParams(parseFilterInput('severity:none'), opts)).toEqual({})
+  })
+
+  it('converts a relative window into an absolute `since`, and drops an unparseable one', () => {
+    const opts = { supports: FINDINGS_SERVER_FACETS, now: NOW }
+    expect(serverFilterParams(parseFilterInput('last:7d'), opts)).toEqual({
+      since: new Date(NOW - 7 * 86_400_000).toISOString(),
+    })
+    expect(serverFilterParams(parseFilterInput('last:forever'), opts)).toEqual({})
+  })
+
+  it('honours what each route actually supports (signals take no analyst/severity)', () => {
+    const filter = parseFilterInput('target:brazil analyst:energy_security severity:high last:1d')
+    const shared = {
+      exactTargets: new Set(['brazil']),
+      exactAnalysts: new Set(['energy_security']),
+      now: NOW,
+    }
+    expect(Object.keys(serverFilterParams(filter, { ...shared, supports: FINDINGS_SERVER_FACETS })).sort())
+      .toEqual(['analyst_id', 'severity', 'since', 'target_id'])
+    expect(Object.keys(serverFilterParams(filter, { ...shared, supports: SIGNALS_SERVER_FACETS })).sort())
+      .toEqual(['since', 'target_id'])
+  })
+
+  it('never pushes free text (the route matches whole tokens; typing would blank the list)', () => {
+    expect(
+      serverFilterParams(parseFilterInput('cou'), { supports: FINDINGS_SERVER_FACETS, now: NOW }),
+    ).toEqual({})
+  })
+
+  it('every pushed param is a narrowing the client matcher ALSO enforces', () => {
+    // A row the server would exclude must also fail the client pass, so the two
+    // halves of the filter can never disagree.
+    const opts = {
+      supports: FINDINGS_SERVER_FACETS,
+      exactTargets: new Set(['country_g20_br']),
+      now: NOW,
+    }
+    const f = parseFilterInput('target:country_g20_br severity:critical')
+    expect(serverFilterParams(f, opts)).toEqual({
+      target_id: 'country_g20_br',
+      severity: 'critical',
+    })
+    const wrongTarget = finding({ target_id: 'country_g20_us', severity: 'critical' })
+    const wrongSeverity = finding({ target_id: 'country_g20_br', severity: 'low' })
+    const match = finding({ target_id: 'country_g20_br', severity: 'critical' })
+    expect(matchesFilter(wrongTarget, deriveRowVerdict(wrongTarget, 0), f, NOW)).toBe(false)
+    expect(matchesFilter(wrongSeverity, deriveRowVerdict(wrongSeverity, 0), f, NOW)).toBe(false)
+    expect(matchesFilter(match, deriveRowVerdict(match, 0), f, NOW)).toBe(true)
   })
 })
 

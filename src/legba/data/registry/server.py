@@ -250,6 +250,25 @@ def create_app(
     from .source_quality_api import build_source_quality_router
     app.include_router(build_source_quality_router(deps), prefix="/api/v1/v3")
 
+    # S-1 — the expected-vs-actual PRODUCTION gauge. Joins the /system/*
+    # freshness family (staleness-debt / analyst-cadence / source-firing) and
+    # answers what none of those can: not "is it running" but "did it produce
+    # what its own descriptor and history promised". Same judgment function
+    # the alert plane's production_deficit trigger class pages on — the
+    # source_freshness precedent, one implementation and two readers, so a
+    # threshold cannot mean one thing here and another on the phone. Its own
+    # module rather than another block inside the 2.2k-line v3_api.
+    from .production_gauge_api import build_production_gauge_router
+    app.include_router(build_production_gauge_router(deps), prefix="/api/v1/v3")
+
+    # Continuity P2 — the situation TRAJECTORY ledger read. Additive route, no
+    # panel (the UI is Phase 3); it is what the situation_escalation alert links
+    # to, and what makes "how did this frame get here" answerable without
+    # reconstructing it from prose. Its own module rather than another block
+    # inside the 2.2k-line v3_api.
+    from .situation_trajectory_api import build_situation_trajectory_router
+    app.include_router(build_situation_trajectory_router(deps), prefix="/api/v1/v3")
+
     # P4-1/P4-2 — reified narratives + source-echo propagation graph (A11).
     # Read-only surface over the migration-0102 derived tables the
     # narrative_mapper analyst refreshes; the data surface for a future UI
@@ -340,6 +359,14 @@ def create_app(
     # brokers, new-hostile edges, proxy chains), selection-aware by entity.
     from .graph_structure_api import build_graph_structure_router
     app.include_router(build_graph_structure_router(deps), prefix="/api/v1")
+
+    # K-G4 — the graph VIEWER surface: anchored 1-hop ego over `entity_edges`
+    # (/graph/ego) plus per-edge evidence (/graph/edge/{id}). Mounted after the
+    # structure router; the paths do not collide (`/graph/structure`,
+    # `/graph/path` vs `/graph/ego`, `/graph/edge/{id}`). This is the relational
+    # walk the AGE probe's measurements pointed at — see graph_walk_api.py.
+    from .graph_walk_api import build_graph_walk_router
+    app.include_router(build_graph_walk_router(deps), prefix="/api/v1")
 
     # Runtime + analyst telemetry endpoints (E-3) — target/analyst
     # roster + per-actor source cursors + analyst run/output/critique

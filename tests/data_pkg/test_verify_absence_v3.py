@@ -19,7 +19,7 @@ Coverage maps to the design doc §3.6:
   * an unbounded/unscoped absence → unsupported;
   * the SAME absence prose graded across repeated (mock-deterministic) runs →
     the SAME verdict (the anti-0.0/0.2/1.0 guard);
-  * the critique payload stamps ``branch_versions.absence == 'absence.v2'``;
+  * the critique payload stamps ``branch_versions.absence == 'absence.v3'``;
   * a finding with ZERO absence spans is byte-identical vs pre-V3 (the pooled-
     ratio + judge-call-count invariant) — the regression that non-absence claims
     are unaffected;
@@ -314,7 +314,7 @@ async def test_absence_variance_regression(monkeypatch):
 
 
 async def test_absence_branch_version_stamped(monkeypatch):
-    """The critique payload carries ``branch_versions.absence == 'absence.v2'``
+    """The critique payload carries ``branch_versions.absence == 'absence.v3'``
     (and the citation_support profile version), so a recalibration is a visible,
     greppable per-kind version bump."""
     monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
@@ -326,8 +326,8 @@ async def test_absence_branch_version_stamped(monkeypatch):
     rep = await verify_finding_faithfulness(body=body, citations=citations, judge_llm=judge)
     payload = build_faithfulness_critique_payload(rep, analyzed_output_id=uuid4())
     verification = payload["data"]["verification"]
-    assert verification["branch_versions"]["absence"] == "absence.v2"
-    assert verification["branch_versions"]["citation_support"] == "citsupp.v4"
+    assert verification["branch_versions"]["absence"] == "absence.v3"
+    assert verification["branch_versions"]["citation_support"] == "citsupp.v5"
     # branch_scores surfaces both kinds' sub-ratios (never an opaque single number).
     assert verification["branch_scores"]["absence"]["checkable"] == 1
     assert verification["branch_scores"]["citation_support"]["checkable"] == 2

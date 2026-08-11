@@ -113,6 +113,31 @@ async def _run(conn, **kw):
     return await reextract.run(conn, **kw)
 
 
+async def _my_candidates(conn, source: str = "src.reextract") -> int:
+    """How many of THIS FILE's rows meet `run()`'s candidate predicate.
+
+    ORDER DEPENDENCE, and the fix. `run()` sweeps the whole `signals` table —
+    its candidate predicate is exactly ``payload ? 'archived_text'`` with no
+    tenant or source scope — so ``res["candidates_scanned"]`` is a count over
+    the SUITE's substrate, not over the test's. `clean_slate` deletes this
+    file's own rows, which is why the number looked stable in file order; it
+    cannot delete the archived-text rows a dozen OTHER files leave behind, so
+    under `--randomly-seed` the count drifted and
+    `test_clean_rows_never_touched_or_counted` (1 -> 2) and
+    `test_dry_run_reports_and_writes_nothing` (2 -> 3) both failed on a
+    correct scan. Neither is a product bug.
+
+    Restating the same predicate scoped to this file's `source_id` says what
+    the tests actually mean — "of MY rows, exactly N are candidates" — and is
+    true in every order. Keep this predicate in step with `_CANDIDATES_SQL`.
+    """
+    return await conn.fetchval(
+        "SELECT count(*) FROM signals "
+        " WHERE source_id = $1 AND payload ? 'archived_text'",
+        source,
+    )
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_dry_run_reports_and_writes_nothing(conn, clean_slate, tmp_path):
@@ -132,7 +157,14 @@ async def test_dry_run_reports_and_writes_nothing(conn, clean_slate, tmp_path):
     )
 
     res = await _run(conn, archive_root_override=tmp_path)
-    assert res["candidates_scanned"] == 2
+    # Both of MY rows carry archived_text, so both are candidates (see
+    # `_my_candidates` for why the global counter cannot say this).
+    assert await _my_candidates(conn) == 2
+    assert res["candidates_scanned"] >= 2, "the sweep must have reached my rows"
+    # garbage_found / by_pattern / by_host stay exact and global on purpose:
+    # only this file inserts wall-pattern text, so they are already order-proof
+    # in practice, and re-scoping them through the `samples` list would be
+    # WEAKER — that list is capped at 50 and could truncate my rows out.
     assert res["garbage_found"] == 1
     assert res["by_pattern"] == {"javascript is disabled": 1}
     assert res["by_host"] == {"www.lemonde.fr": 1}
@@ -309,7 +341,12 @@ async def test_clean_rows_never_touched_or_counted(conn, clean_slate, tmp_path):
     )
 
     res = await _run(conn, apply=True, archive_root_override=tmp_path)
-    assert res["candidates_scanned"] == 1   # only the archived_text-bearing row
+    # THE POINT OF THIS TEST: of the two rows inserted above, only the one
+    # bearing archived_text is a candidate — the payload-less row is not merely
+    # skipped, it is never selected. Scoped to this file's rows so the whole
+    # suite's archived-text rows cannot move the number (see `_my_candidates`).
+    assert await _my_candidates(conn) == 1   # only the archived_text-bearing row
+    assert res["candidates_scanned"] >= 1, "the sweep must have reached my rows"
     assert res["garbage_found"] == 0
     assert res["stripped"] == 0
     assert res["upgraded"] == 0

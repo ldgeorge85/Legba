@@ -2,8 +2,10 @@
 #
 # A first-class `deterministic`-kind analyst over the SHARED raw signal pool.
 # It is target-agnostic: dedup is an observation-level property (same content
-# via source A and B), not a per-target interpretation, so the subscription has
-# no per-target predicate — it sees the whole `signal` stream.
+# via source A and B), not a per-target interpretation — so it declares NO
+# `subscription.targets` block and runs as ONE global sweep per cadence tick.
+# (Saying "target-agnostic" in a comment is not what makes it so; omitting the
+# targets block is. See the note in `subscription` below.)
 #
 # Method:
 #   * kind = deterministic — pure code, NO LLM, token usage always zero.
@@ -43,12 +45,33 @@ identity:
   owner: p09_cross_source_dedup
 
 subscription:
-  # Target-agnostic: dedup runs over the whole shared raw signal pool. No
-  # per-target predicate — interpretation is target-owned, observation (and its
-  # dedup) is shared.
-  targets:
-    data_types: [signal]
-    time_window: 24h
+  # NO `targets` block → META analyst: ONE global sweep per cadence tick over the
+  # whole shared raw signal pool, directly via deps.pg_pool. Same shape as
+  # analyst_signal_embedder / analyst_entity_resolution, which sweep the same
+  # pool for the same reason.
+  #
+  # This block USED to say `targets: {data_types: [signal], time_window: 24h}`
+  # with no predicate — and the runtime reads "selector present, no predicate" as
+  # "fan out to EVERY active target" (AnalystActor._cadence_targets). So the
+  # comment above it said target-agnostic while the YAML underneath asked for 44
+  # copies, each re-scanning the entire pool with an identical query: 43 of the
+  # 44 were pure waste. It made this the largest analyst in the fleet — 5,496
+  # runs and 61.9 of 73.6 analyst-hours per day, and the single dominant Postgres
+  # load — for output that was structurally zero.
+  #
+  # `target_id` never narrowed anything: the handler reads it once, to suffix the
+  # finding title. Dedup is an observation-level property (same content via
+  # source A and B), not a per-target interpretation.
+  #
+  # KNOWN CONSEQUENCE: dropping `targets` also removes this analyst from the
+  # REACTIVE plane (no per-target TriggerRegistration → no `coalesced_fire`), so
+  # it now runs on the 15-minute cadence only. That is sufficient by measurement:
+  # each run examines up to 500 content-hash groups and 500 semantic candidates,
+  # i.e. ~48k of each per day against an ingest rate near 4k signals/day, and the
+  # sweep is idempotent so nothing is lost by arriving a few minutes later.
+  other_analysts: []
+  substrate:
+    direct_queries: true
 
 mapping:
   fields: []

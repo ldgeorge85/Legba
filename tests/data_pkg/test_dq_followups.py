@@ -435,22 +435,38 @@ async def test_fu4_read_candidates_unions_cosource_signal_text(pg_pool):
 
     src = f"SpainFU4{uuid4().hex[:6]}"
     tgt = f"MoroccoFU4{uuid4().hex[:6]}"
-    sig = uuid4()
+    # K-G2 put a qualification bar on selection: THREE independent publishers is
+    # what carries this pair over it (a single-sourced co-mention scores 0.0 and
+    # is correctly invisible). The sports frame lives in ONE of them, which is
+    # exactly the condition this test exists to check.
+    tag = uuid4().hex[:6]
+    sigs = []
     async with pg_pool.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO signals (id, source_id, owner_tenant, modality, payload, "
-            "fetched_at) VALUES ($1,'src','default','text',$2::jsonb, now())",
-            sig,
-            json.dumps({
-                "title": f"World Cup last-16: {src} face {tgt}",
-                "summary": "A knockout fixture at the tournament.",
-            }),
-        )
+        for i in range(3):
+            sid = uuid4()
+            await conn.execute(
+                "INSERT INTO signals (id, source_id, owner_tenant, modality, "
+                "payload, content_hash, fetched_at) "
+                "VALUES ($1,$2,'default','text',$3::jsonb,$4, now())",
+                sid,
+                f"source.pub{tag}{i}.feed",
+                json.dumps({
+                    "title": (
+                        f"World Cup last-16: {src} face {tgt}" if i == 0
+                        else f"Report {i}: {src} and {tgt}"
+                    ),
+                    "summary": (
+                        "A knockout fixture at the tournament." if i == 0 else ""
+                    ),
+                }),
+                f"hash-{sid}",
+            )
+            sigs.append(sid)
         await conn.execute(
             "INSERT INTO proposed_edges (source_entity, target_entity, "
             "relationship_type, confidence, evidence_text, status, derived_from) "
             "VALUES ($1,$2,'co_occurs',0.7,$3,'pending',$4::uuid[])",
-            src, tgt, f"{src} and {tgt} met on Tuesday", [sig],
+            src, tgt, f"{src} and {tgt} met on Tuesday", sigs,
         )
         cands = await _read_candidates(conn, limit=50)
 
@@ -604,29 +620,49 @@ async def test_fu5a_run_arbiter_opens_cross_person_leader_dispute(pg_pool):
 
     country = f"Arbstan{uuid4().hex[:8]}"
     p1, p2 = f"LeaderA{uuid4().hex[:6]}", f"LeaderB{uuid4().hex[:6]}"
-    async with pg_pool.acquire() as conn:
-        for person, cred, days in ((p1, 0.9, 30), (p2, 0.9, 0)):
-            await conn.execute(
-                "INSERT INTO facts (id, subject, predicate, value, source_type, "
-                "source_credibility, confidence, produced_at, valid_from, data, "
-                "derived_from) VALUES ($1,$2,'leader of',$3,'seed',$4,0.9, now(), "
-                "now() - ($5||' days')::interval, "
-                "'{\"role\":\"head_of_government\"}'::jsonb, $6::uuid[])",
-                uuid4(), person, country, cred, str(days), [uuid4()],
+    try:
+        async with pg_pool.acquire() as conn:
+            for person, cred, days in ((p1, 0.9, 30), (p2, 0.9, 0)):
+                await conn.execute(
+                    "INSERT INTO facts (id, subject, predicate, value, source_type, "
+                    "source_credibility, confidence, produced_at, valid_from, data, "
+                    "derived_from) VALUES ($1,$2,'leader of',$3,'seed',$4,0.9, now(), "
+                    "now() - ($5||' days')::interval, "
+                    "'{\"role\":\"head_of_government\"}'::jsonb, $6::uuid[])",
+                    uuid4(), person, country, cred, str(days), [uuid4()],
+                )
+            counts = await arb._run_arbiter(pg_pool)
+            # A contention group keyed on the COUNTRY side (bracketed with the
+            # office) opened for this dispute.
+            grp = await conn.fetchrow(
+                "SELECT subject_key, predicate_key, value_count FROM fact_contention "
+                "WHERE subject_key LIKE $1 AND status <> 'collapsed'",
+                f"{country.lower()}%",
             )
-        counts = await arb._run_arbiter(pg_pool)
-        # A contention group keyed on the COUNTRY side (bracketed with the office)
-        # opened for this dispute.
-        grp = await conn.fetchrow(
-            "SELECT subject_key, predicate_key, value_count FROM fact_contention "
-            "WHERE subject_key LIKE $1 AND status <> 'collapsed'",
-            f"{country.lower()}%",
-        )
-        # Both facts got the detect-only contested marker.
-        marked = await conn.fetchval(
-            "SELECT count(*) FROM facts WHERE lower(value)=lower($1) AND contested",
-            country,
-        )
+            # Both facts got the detect-only contested marker.
+            marked = await conn.fetchval(
+                "SELECT count(*) FROM facts WHERE lower(value)=lower($1) AND contested",
+                country,
+            )
+    finally:
+        # CLOSE the fixture's disputed pair (own rows only; close, never
+        # delete — the contention group's supporting_fact_ids still point
+        # here). Left OPEN, these two rows are a standing same-office
+        # two-holder dispute in the SHARED seed slice, and they are the pair
+        # the 2026-08-09 shuffled nightly (seed 277595060) collapsed inside
+        # test_substrate_export_import's round trip: the whole-slice export
+        # carried both, and the re-home's office-keyed supersession closed
+        # them against each other (2 closed, 1 reopened — of1 == of0 failed
+        # 48 != 49). File order never showed it because
+        # test_fact_contention_surfacing_db's own fixture wipe used to level
+        # the facts table in between — masking, not hygiene.
+        async with pg_pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE facts SET valid_until = now(), updated_at = now() "
+                "WHERE lower(value) = lower($1) AND predicate = 'leader of' "
+                "AND valid_until IS NULL",
+                country,
+            )
     assert counts["groups_open"] >= 1
     assert grp is not None, "a country-keyed leader contention group must open"
     assert grp["value_count"] == 2

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pytest
 
-from legba.data.analysts.deterministic_handlers._entity_canon import (
+from legba.data._entity_canon import (
     COUNTRY_CLASS,
     DEFAULT_CLASS,
     ORGANIZATION_CLASS,
@@ -215,7 +215,7 @@ def test_empty_input_returns_empty_with_class():
 # DQ-H4: demonym collapse + junk reject
 # ---------------------------------------------------------------------------
 
-from legba.data.analysts.deterministic_handlers._entity_canon import (  # noqa: E402
+from legba.data._entity_canon import (  # noqa: E402
     is_demonym,
     is_junk_entity,
 )
@@ -260,40 +260,22 @@ def test_short_legit_entities_survive():
 
 
 # ===========================================================================
-# W1 (defect D7) — shared canon spine: BOTH import paths resolve, hardened junk
-# gate, org-surface gazetteer. The canon now lives at legba.data._entity_canon
-# with the old deterministic_handlers path as a re-export shim; the public API
-# must stay importable + identical from both.
+# W1 (defect D7) — shared canon spine: hardened junk gate, org-surface
+# gazetteer. The canon lives at legba.data._entity_canon; the old
+# deterministic_handlers re-export shim was DELETED 2026-08-02 (phase 1C)
+# once every importer had been repointed at the shared module.
 # ===========================================================================
 
-from legba.data._entity_canon import (  # noqa: E402  (the new shared module)
-    canonicalize_entity as _canon_new,
-    is_demonym as _is_demonym_new,
-    is_junk_entity as _is_junk_new,
-    is_org_surface,
-)
+from legba.data._entity_canon import is_org_surface  # noqa: E402
 from legba.data._entity_canon import (  # noqa: E402
     _DEMONYM_MAP,
     _JUNK_ENTITIES,
 )
 
 
-def test_both_import_paths_are_the_same_objects():
-    """The shim must re-export the SAME function objects as the shared module."""
-    assert _canon_new is canonicalize_entity
-    assert _is_junk_new is is_junk_entity
-    assert _is_demonym_new is is_demonym
-
-
-def test_internal_maps_exposed_from_both_paths():
+def test_internal_maps_are_exposed():
     # _JUNK_ENTITIES + _DEMONYM_MAP are part of the load-bearing public surface
-    # (the 0045 migration mirrors them); reachable through the shim too.
-    from legba.data.analysts.deterministic_handlers._entity_canon import (
-        _DEMONYM_MAP as shim_demonyms,
-        _JUNK_ENTITIES as shim_junk,
-    )
-    assert shim_junk is _JUNK_ENTITIES
-    assert shim_demonyms is _DEMONYM_MAP
+    # (the 0045 migration mirrors them).
     assert "tv" in _JUNK_ENTITIES
     assert _DEMONYM_MAP["chinese"] == "China"
     assert _DEMONYM_MAP["israeli"] == "Israel"

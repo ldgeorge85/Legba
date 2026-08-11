@@ -347,6 +347,11 @@ async def test_run_method_dapr_backend_passes_ref_not_rows(monkeypatch) -> None:
         "analyzed_analyst_id": "country_g20_ir",
         "analyzed_analyst_version": "vdeadbeef",
         "run_id": str(uuid4()),
+        # The analyzed analyst's KIND — what the parent prompt-module
+        # convention derives from (the actor plumbs it from that analyst's
+        # head descriptor). Without a declared path or a kind the optimizer
+        # refuses to invent one and no-ops.
+        "analyzed_analyst_kind": "inline_target",
     }
     await opt.run_method(inputs, options, deps)
 
@@ -397,6 +402,7 @@ async def test_run_method_in_process_backend_inlines_rows() -> None:
         "analyzed_analyst_id": "inline_target.test",
         "analyzed_analyst_version": "vdeadbeef0123456",
         "run_id": str(uuid4()),
+        "analyzed_analyst_kind": "inline_target",
     }
     await opt.run_method(inputs, options, deps)
 

@@ -233,6 +233,159 @@ _GRAPH_MAX_PATHS = 100
 _BROKER_MAX_CAMP = 25
 _BROKER_MAX_RESULTS = 50
 
+#: The families a path walk traverses by DEFAULT — the ones that ASSERT
+#: something. `cooccurrence` is excluded because two entities appearing in one
+#: document is not a relationship, and 8,635 of 12,732 open nexus rows were
+#: exactly that: walking them made the co-mention hairball look like tradecraft.
+#: `structural` joins the default when it is ever populated; it is in the
+#: closed vocabulary (0143) and holds zero rows today.
+_ASSERTING_FAMILIES = ("relation", "reference", "structural")
+
+#: The closed `edge_family` vocabulary (migration 0143's CHECK constraint).
+_EDGE_FAMILIES = frozenset(
+    {"relation", "reference", "cooccurrence", "structural"})
+
+
+def _walk_families(families: list[str] | None) -> list[str]:
+    """Normalize the family filter, dropping unknown values.
+
+    An unknown family is DROPPED rather than raising, because this port is
+    called by LLM tool-use where a hallucinated family must degrade to the
+    default rather than fail a whole consult turn. An all-unknown list falls
+    back to the asserting default for the same reason.
+    """
+    if not families:
+        return list(_ASSERTING_FAMILIES)
+    out = [f for f in (str(x).strip().lower() for x in families)
+           if f in _EDGE_FAMILIES]
+    return out or list(_ASSERTING_FAMILIES)
+
+
+_RESOLVE_ENDPOINTS_SQL = """
+SELECT lower(btrim(t.name)) AS key, public.resolve_entity_name(t.name) AS rid
+  FROM unnest($1::text[]) AS t(name)
+"""
+
+
+async def _resolve_walk_endpoints(conn: Any, names: list[str]) -> dict[str, Any]:
+    """Resolve walk endpoint NAMES to terminal entity ids, in one round trip.
+
+    Goes through ``resolve_entity_name`` (0143) and nowhere else: it matches
+    tombstones so a name the GC merged away lands on its keeper, and it returns
+    NULL for an AMBIGUOUS name rather than picking a profile — the caller warns
+    instead of walking from an entity nobody named.
+    """
+    rows = await conn.fetch(_RESOLVE_ENDPOINTS_SQL, list(names))
+    return {r["key"]: r["rid"] for r in rows}
+
+
+def _endpoint_warnings(slots: dict[str, str], resolved: dict[str, Any]) -> list[str]:
+    """One warning per endpoint that reached no entity. Never a silent empty."""
+    return [
+        f"{slot}_unresolved: {name!r} matches no entity, or matches several "
+        f"(ambiguous) — the walk cannot start from it"
+        for slot, name in slots.items()
+        if resolved.get(name.lower()) is None
+    ]
+
+
+async def _hydrate_node_names(conn: Any, node_ids: Any) -> dict[Any, str]:
+    """id -> canonical_name for the walk's nodes, in one round trip."""
+    ids = [n for n in node_ids if n is not None]
+    if not ids:
+        return {}
+    rows = await conn.fetch(
+        "SELECT id, canonical_name FROM entity_profiles WHERE id = ANY($1::uuid[])",
+        ids)
+    return {r["id"]: r["canonical_name"] for r in rows}
+
+
+#: The signed path walk, id-keyed. `$1` src, `$2` dst, `$3` hops, `$4` families.
+#:
+#: The walk continues FROM the first edge's DST. Seeding `head` with the source
+#: made hop 2+ re-expand from the origin and fabricate chains (64,136 "paths"
+#: where 1,517 existed on live data); the recursive arm always advances to
+#: `e.dst_id`, and so must the seed.
+_PATH_WALK_SQL = """
+WITH RECURSIVE walk AS (
+    SELECT
+        e.dst_id                          AS head,
+        ARRAY[e.src_id, e.dst_id]         AS visited,
+        ARRAY[e.id]                       AS edge_ids,
+        ARRAY[e.src_id, e.dst_id]         AS node_path,
+        ARRAY[e.polarity]::smallint[]     AS polarities,
+        e.polarity::int                   AS pol_product,
+        e.confidence                      AS min_conf,
+        1                                 AS hops
+    FROM entity_edges e
+    WHERE e.valid_until IS NULL
+      AND e.superseded_by IS NULL
+      AND e.src_id = $1
+      AND e.edge_family = ANY($4::text[])
+    UNION ALL
+    SELECT
+        e.dst_id,
+        w.visited || e.dst_id,
+        w.edge_ids || e.id,
+        w.node_path || e.dst_id,
+        w.polarities || e.polarity,
+        w.pol_product * e.polarity,
+        least(w.min_conf, e.confidence),
+        w.hops + 1
+    FROM walk w
+    JOIN entity_edges e ON e.src_id = w.head
+    WHERE e.valid_until IS NULL
+      AND e.superseded_by IS NULL
+      AND e.edge_family = ANY($4::text[])
+      AND w.hops < $3
+      AND w.head <> $2
+      AND NOT (e.dst_id = ANY(w.visited))
+)
+SELECT edge_ids, node_path, polarities, pol_product, min_conf, hops
+FROM walk
+WHERE head = $2
+{pol_clause}
+ORDER BY hops ASC, min_conf DESC
+LIMIT {limit_param}
+"""
+
+#: The broker walk. `$1` camp-A ids, `$2` camp-B ids, `$3` hops, `$4` families,
+#: `$5` row cap.
+_BROKER_WALK_SQL = """
+WITH RECURSIVE walk AS (
+    SELECT
+        e.dst_id                     AS head,
+        ARRAY[e.src_id, e.dst_id]    AS visited,
+        ARRAY[e.id]                  AS edge_ids,
+        ARRAY[e.src_id, e.dst_id]    AS node_path,
+        1                            AS hops
+    FROM entity_edges e
+    WHERE e.valid_until IS NULL
+      AND e.superseded_by IS NULL
+      AND e.src_id = ANY($1::uuid[])
+      AND e.edge_family = ANY($4::text[])
+    UNION ALL
+    SELECT
+        e.dst_id,
+        w.visited || e.dst_id,
+        w.edge_ids || e.id,
+        w.node_path || e.dst_id,
+        w.hops + 1
+    FROM walk w
+    JOIN entity_edges e ON e.src_id = w.head
+    WHERE e.valid_until IS NULL
+      AND e.superseded_by IS NULL
+      AND e.edge_family = ANY($4::text[])
+      AND w.hops < $3
+      AND NOT (w.head = ANY($2::uuid[]))
+      AND NOT (e.dst_id = ANY(w.visited))
+)
+SELECT edge_ids, node_path
+FROM walk
+WHERE head = ANY($2::uuid[])
+LIMIT $5
+"""
+
 
 class PostgresQdrantSubstrateQueryPort:
     """Production :class:`SubstrateQueryPort` over pg_pool + qdrant_client.
@@ -2021,35 +2174,52 @@ class PostgresQdrantSubstrateQueryPort:
         max_hops: int = 3,
         polarity_product: int | None = None,
         limit: int = 30,
+        families: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Ranked signed PATHS from ``subject`` to ``obj`` over open nexuses.
+        """Ranked signed PATHS from ``subject`` to ``obj`` over open edges.
 
-        Walks the OPEN nexus graph (``valid_until IS NULL AND superseded_by
-        IS NULL``) with a recursive CTE, treating each open nexus as a
-        directed ``subject → object`` edge (the ``intermediary`` cut-out, if
+        Walks the OPEN ``entity_edges`` graph (``valid_until IS NULL AND
+        superseded_by IS NULL``) with a recursive CTE, treating each open edge
+        as a directed ``src → dst`` edge (the ``intermediary`` cut-out, if
         present, is a property of the edge, not a separate node) carrying a
         POLARITY sign (+1 / -1 / 0).  Returns paths of 1..``max_hops`` hops,
         each with the running **polarity product** — the structural-balance
         sign of the whole chain (an even number of -1 edges → +1 net
         "the enemy of my enemy"; odd → -1).
 
-        The nexus graph is CYCLIC, so each branch carries the path-so-far as
-        a ``text[]`` of ``lower(node)`` names; a candidate next hop whose
-        object is already in the path is pruned (the VISITED-SET guard) so
-        traversal terminates with no reliance on ``max_hops``.  ``max_hops``
-        is clamped to :data:`_GRAPH_MAX_HOPS`; the frontier and the returned
-        set are clamped to :data:`_GRAPH_MAX_PATHS`.
+        The graph is CYCLIC, so each branch carries the path-so-far as a
+        ``uuid[]`` of node ids; a candidate next hop already on the path is
+        pruned (the VISITED-SET guard) so traversal terminates with no reliance
+        on ``max_hops``.  ``max_hops`` is clamped to :data:`_GRAPH_MAX_HOPS`;
+        the frontier and the returned set are clamped to
+        :data:`_GRAPH_MAX_PATHS`.
 
-        When ``polarity_product`` (∈ {-1, 0, 1}) is supplied, only paths
-        whose net sign matches are returned — e.g. ``-1`` surfaces net-
-        antagonistic chains, ``+1`` net-supportive ones.  The filter is
-        applied IN SQL, before the ``LIMIT`` cutoff (W2-T6 / M5): the old
-        Python-side post-filter could silently drop matching paths whenever
-        more terminal paths existed than the over-provisioned fetch, because
-        matches ranking past the cutoff never reached Python.  Paths are
-        ranked shortest-first (fewest hops), then by descending
-        min-confidence (the weakest link), so the tightest, best-evidenced
-        chains lead.
+        When ``polarity_product`` (∈ {-1, 0, 1}) is supplied, only paths whose
+        net sign matches are returned.  The filter is applied IN SQL, before
+        the ``LIMIT`` cutoff (W2-T6 / M5): a Python-side post-filter silently
+        dropped matching paths ranking past the fetch.  Paths are ranked
+        shortest-first, then by descending min-confidence (the weakest link).
+
+        W3-A — CUT OVER FROM ``nexuses``, AND MADE FAMILY-AWARE. Two changes,
+        and the second matters more than the store swap:
+
+        * **Identity.** The walk was keyed on ``lower(subject)`` =
+          ``lower(object)`` text joins, so a merge silently severed a chain
+          (the two halves named the loser and the keeper) and one name borne by
+          two profiles fused two actors into one hop. It now joins on
+          ``src_id``/``dst_id`` foreign keys and hits
+          ``idx_entity_edges_out``. ``nodes`` still returns display names for
+          every existing consumer; ``node_ids`` carries the identity used.
+        * **A co-mention is not a path.** 8,635 of 12,732 open nexus rows are
+          ``co occurs with``, so the old walk's chains were overwhelmingly
+          "these two nouns appeared in the same document, twice in a row" —
+          the co-mention hairball presented as tradecraft. ``families``
+          defaults to :data:`_ASSERTING_FAMILIES` (``relation`` +
+          ``reference``); pass ``["cooccurrence"]`` explicitly to walk it.
+
+        An endpoint that resolves to no entity now returns a ``warnings`` entry
+        instead of an empty ``paths`` list, because on an id-keyed walk the two
+        are otherwise indistinguishable.
         """
         s = (subject or "").strip()
         o = (obj or "").strip()
@@ -2068,71 +2238,38 @@ class PostgresQdrantSubstrateQueryPort:
             if polarity_product is not None and int(polarity_product) in (-1, 0, 1)
             else None
         )
+        fams = _walk_families(families)
 
-        # Recursive CTE. The base step seeds every open edge leaving
-        # ``subject``; the recursive step extends a frontier path by one open
-        # edge whose subject = the path's current head, pruning any hop whose
-        # object is already on the path (VISITED-SET guard) and any path that
-        # has reached ``obj`` (a terminal path is not extended further).
-        # The optional polarity filter is a terminal-SELECT predicate — in SQL
-        # BEFORE the LIMIT, so the cutoff can never hide matching paths
-        # (COALESCE: a NULL-polarity edge chain nets to 0, matching the
-        # Python-side treatment it replaces).
-        pol_clause = ""
-        params: list[Any] = [s, o, hops]
-        if pol_filter is not None:
-            params.append(pol_filter)
-            pol_clause = f"AND COALESCE(pol_product, 0) = ${len(params)}"
-        params.append(clamped_limit)
-        limit_param = f"${len(params)}"
-        sql = f"""
-        WITH RECURSIVE walk AS (
-            SELECT
-                n.id                              AS edge_id,
-                lower(n.subject)                  AS head,
-                ARRAY[lower(n.subject), lower(n.object)] AS visited,
-                ARRAY[n.id]                       AS edge_ids,
-                ARRAY[n.subject, n.object]        AS node_path,
-                ARRAY[n.polarity]::smallint[]     AS polarities,
-                n.polarity::int                   AS pol_product,
-                n.confidence                      AS min_conf,
-                1                                 AS hops
-            FROM nexuses n
-            WHERE n.valid_until IS NULL
-              AND n.superseded_by IS NULL
-              AND lower(n.subject) = lower($1)
-            UNION ALL
-            SELECT
-                n.id,
-                lower(n.object),
-                w.visited || lower(n.object),
-                w.edge_ids || n.id,
-                w.node_path || n.object,
-                w.polarities || n.polarity,
-                w.pol_product * n.polarity,
-                least(w.min_conf, n.confidence),
-                w.hops + 1
-            FROM walk w
-            JOIN nexuses n
-              ON lower(n.subject) = w.head
-            WHERE n.valid_until IS NULL
-              AND n.superseded_by IS NULL
-              AND w.hops < $3
-              AND lower(w.node_path[array_upper(w.node_path, 1)]) <> lower($2)
-              AND NOT (lower(n.object) = ANY(w.visited))
-        )
-        SELECT edge_ids, node_path, polarities, pol_product, min_conf, hops
-        FROM walk
-        WHERE lower(node_path[array_upper(node_path, 1)]) = lower($2)
-        {pol_clause}
-        ORDER BY hops ASC, min_conf DESC
-        LIMIT {limit_param}
-        """
-        # The recursive frontier itself is bounded by the visited-set guard +
-        # the hop cap; the LIMIT caps the materialized terminal set (already
-        # polarity-filtered, so no over-provisioning is needed).
         async with self._pool.acquire() as conn:
+            ends = await _resolve_walk_endpoints(conn, [s, o])
+            warnings = _endpoint_warnings({"subject": s, "object": o}, ends)
+            if warnings:
+                # FAIL LOUD. An unresolvable endpoint on an ID-keyed walk is
+                # indistinguishable from "not connected" unless it is SAID —
+                # this is the confidently-empty-answer class `graph_paths`
+                # already guards with GRAPH_MISS_WARNINGS.
+                return {
+                    "subject": subject, "object": obj, "max_hops": hops,
+                    "polarity_product_filter": pol_filter,
+                    "edge_families": fams,
+                    "paths": [], "refs": [], "warnings": warnings,
+                }
+            src_id, dst_id = ends[s.lower()], ends[o.lower()]
+
+            pol_clause = ""
+            params: list[Any] = [src_id, dst_id, hops, fams]
+            if pol_filter is not None:
+                params.append(pol_filter)
+                pol_clause = f"AND COALESCE(pol_product, 0) = ${len(params)}"
+            params.append(clamped_limit)
+            sql = _PATH_WALK_SQL.format(
+                pol_clause=pol_clause, limit_param=f"${len(params)}")
+            # The recursive frontier is bounded by the visited-set guard + the
+            # hop cap; the LIMIT caps the materialized terminal set (already
+            # polarity-filtered, so the cutoff cannot hide a matching path).
             records = await conn.fetch(sql, *params)
+            names = await _hydrate_node_names(
+                conn, {n for r in records for n in (r["node_path"] or [])})
 
         paths: list[dict[str, Any]] = []
         refs: list[str] = []
@@ -2142,8 +2279,12 @@ class PostgresQdrantSubstrateQueryPort:
             for e in edge_ids:
                 if e not in refs:
                     refs.append(e)
+            node_ids = list(r["node_path"] or [])
             paths.append({
-                "nodes": list(r["node_path"] or []),
+                # `nodes` stays the DISPLAY-NAME list every consumer already
+                # reads; `node_ids` is the identity the walk actually used.
+                "nodes": [names.get(n, str(n)) for n in node_ids],
+                "node_ids": [str(n) for n in node_ids],
                 "edge_ids": edge_ids,
                 "polarities": [int(p) for p in (r["polarities"] or [])],
                 "polarity_product": net,
@@ -2157,8 +2298,10 @@ class PostgresQdrantSubstrateQueryPort:
             "object": obj,
             "max_hops": hops,
             "polarity_product_filter": pol_filter,
+            "edge_families": fams,
             "paths": paths,
             "refs": refs,
+            "warnings": [],
         }
 
     # ------------------------------------------------------------------
@@ -2173,6 +2316,7 @@ class PostgresQdrantSubstrateQueryPort:
         max_hops: int = 3,
         polarity_product: int | None = None,
         limit: int = 30,
+        families: list[str] | None = None,
     ) -> dict[str, Any]:
         """Proxy / cut-out chains from ``subject`` to ``obj`` — INDIRECT only.
 
@@ -2192,6 +2336,7 @@ class PostgresQdrantSubstrateQueryPort:
             max_hops=max_hops,
             polarity_product=polarity_product,
             limit=_GRAPH_MAX_PATHS,
+            families=families,
         )
         if base.get("error"):
             return {
@@ -2201,11 +2346,22 @@ class PostgresQdrantSubstrateQueryPort:
                 "refs": [],
                 "error": base["error"],
             }
+        if base.get("warnings"):
+            # Propagate the miss rather than reporting "no proxy chains".
+            return {
+                "subject": subject, "object": obj,
+                "max_hops": base["max_hops"],
+                "polarity_product_filter": base["polarity_product_filter"],
+                "edge_families": base["edge_families"],
+                "chains": [], "refs": [], "warnings": base["warnings"],
+            }
         clamped_limit = max(1, min(int(limit), _GRAPH_MAX_PATHS))
 
         # A single-edge path is "proxy" only if that edge reifies an
         # intermediary cut-out; pull the intermediary for the 1-hop edges so
         # we can keep the A→via→B reified proxies and drop bare A→B edges.
+        # The cut-out is an entity ID now, so it is NAMED by a join instead of
+        # returned as whatever string the producer happened to write.
         single_edge_ids: list[str] = [
             p["edge_ids"][0]
             for p in base["paths"]
@@ -2215,8 +2371,12 @@ class PostgresQdrantSubstrateQueryPort:
         if single_edge_ids:
             async with self._pool.acquire() as conn:
                 irows = await conn.fetch(
-                    "SELECT id, intermediary FROM nexuses "
-                    "WHERE id = ANY($1::uuid[])",
+                    """
+                    SELECT e.id, p.canonical_name AS intermediary
+                      FROM entity_edges e
+                      LEFT JOIN entity_profiles p ON p.id = e.intermediary_id
+                     WHERE e.id = ANY($1::uuid[])
+                    """,
                     single_edge_ids,
                 )
             intermediary_by_edge = {
@@ -2250,8 +2410,10 @@ class PostgresQdrantSubstrateQueryPort:
             "object": obj,
             "max_hops": base["max_hops"],
             "polarity_product_filter": base["polarity_product_filter"],
+            "edge_families": base["edge_families"],
             "chains": chains,
             "refs": refs,
+            "warnings": [],
         }
 
     # ------------------------------------------------------------------
@@ -2265,20 +2427,33 @@ class PostgresQdrantSubstrateQueryPort:
         camp_b: list[str],
         max_hops: int = 3,
         limit: int = 50,
+        families: list[str] | None = None,
     ) -> dict[str, Any]:
         """Entities that SIT ON paths between two entity sets (brokers).
 
-        A broker is an intermediate node that lies on a path from some
-        member of ``camp_a`` to some member of ``camp_b`` (and is itself in
-        neither camp).  Walks the open nexus graph from every ``camp_a``
+        A broker is an intermediate node that lies on a path from some member
+        of ``camp_a`` to some member of ``camp_b`` (and is itself in neither
+        camp).  Walks the open ``entity_edges`` graph from every ``camp_a``
         seed (same recursive CTE + VISITED-SET guard + hop cap as
-        :meth:`query_paths`); for every walk that terminates on a
-        ``camp_b`` member, the INTERIOR nodes of the path are credited as
-        brokers.  Brokers are ranked by how many distinct A→B paths run
-        through them (betweenness-flavored degree), then named.
+        :meth:`query_paths`); for every walk that terminates on a ``camp_b``
+        member, the INTERIOR nodes of the path are credited as brokers.
+        Brokers are ranked by how many distinct A→B paths run through them
+        (betweenness-flavored degree), then named.
 
         Both camps are clamped to :data:`_BROKER_MAX_CAMP` members and the
         result to :data:`_BROKER_MAX_RESULTS` brokers.
+
+        W3-A — CUT OVER FROM ``nexuses``. The tally key is the entity ID, so
+        two surfaces of one actor (an alias, or a name the GC has since merged)
+        can no longer be counted as two separate brokers, each with half the
+        path count — the specific error a brokerage RANKING must not make,
+        since it demotes the very node the measure exists to find.  Family
+        semantics are :meth:`query_paths`'s: a broker sitting on a chain of
+        co-mentions brokers nothing, so ``cooccurrence`` is off by default.
+
+        A camp member that resolves to no entity is reported in ``warnings``
+        and excluded, never silently dropped: a ranking over half a camp is a
+        different answer from one over all of it.
         """
         a_names = [str(x).strip() for x in (camp_a or []) if str(x).strip()]
         b_names = [str(x).strip() for x in (camp_b or []) if str(x).strip()]
@@ -2294,79 +2469,67 @@ class PostgresQdrantSubstrateQueryPort:
             }
         hops = max(1, min(int(max_hops), _GRAPH_MAX_HOPS))
         clamped_limit = max(1, min(int(limit), _BROKER_MAX_RESULTS))
-        a_lower = [n.lower() for n in a_names]
-        b_lower = [n.lower() for n in b_names]
+        fams = _walk_families(families)
 
         # Walk from every camp_a seed; keep terminal paths that land on a
         # camp_b member. The interior nodes (everything between the first and
         # last) are the brokers. VISITED-SET guard + hop cap as above.
-        sql = """
-        WITH RECURSIVE walk AS (
-            SELECT
-                lower(n.object)                          AS head,
-                ARRAY[lower(n.subject), lower(n.object)]  AS visited,
-                ARRAY[n.id]                              AS edge_ids,
-                ARRAY[n.subject, n.object]               AS node_path,
-                1                                        AS hops
-            FROM nexuses n
-            WHERE n.valid_until IS NULL
-              AND n.superseded_by IS NULL
-              AND lower(n.subject) = ANY($1::text[])
-            UNION ALL
-            SELECT
-                lower(n.object),
-                w.visited || lower(n.object),
-                w.edge_ids || n.id,
-                w.node_path || n.object,
-                w.hops + 1
-            FROM walk w
-            JOIN nexuses n
-              ON lower(n.subject) = w.head
-            WHERE n.valid_until IS NULL
-              AND n.superseded_by IS NULL
-              AND w.hops < $3
-              AND NOT (w.head = ANY($2::text[]))
-              AND NOT (lower(n.object) = ANY(w.visited))
-        )
-        SELECT edge_ids, node_path
-        FROM walk
-        WHERE head = ANY($2::text[])
-        LIMIT $4
-        """
         async with self._pool.acquire() as conn:
+            resolved = await _resolve_walk_endpoints(conn, a_names + b_names)
+            a_ids = [resolved[n.lower()] for n in a_names
+                     if resolved.get(n.lower()) is not None]
+            b_ids = [resolved[n.lower()] for n in b_names
+                     if resolved.get(n.lower()) is not None]
+            # A camp member that resolves to nothing is NAMED, not dropped
+            # silently: a broker set computed over half a camp is a different
+            # answer from one computed over all of it, and the caller has to be
+            # able to tell those apart.
+            warnings = [
+                f"camp member {n!r} matches no entity, or matches several "
+                f"(ambiguous) — excluded from the walk"
+                for n in a_names + b_names if resolved.get(n.lower()) is None
+            ]
+            if not a_ids or not b_ids:
+                return {
+                    "camp_a": a_names, "camp_b": b_names, "max_hops": hops,
+                    "edge_families": fams, "brokers": [], "refs": [],
+                    "warnings": warnings or [
+                        "neither camp resolved to any entity"],
+                }
             records = await conn.fetch(
-                sql, a_lower, b_lower, hops, _GRAPH_MAX_PATHS
-            )
+                _BROKER_WALK_SQL, a_ids, b_ids, hops, fams, _GRAPH_MAX_PATHS)
+            names = await _hydrate_node_names(
+                conn, {n for r in records for n in (r["node_path"] or [])})
 
-        # Tally interior nodes (exclude the camp endpoints themselves).
-        broker_paths: dict[str, int] = {}
-        broker_display: dict[str, str] = {}
-        broker_refs: dict[str, set[str]] = {}
-        camp_set = set(a_lower) | set(b_lower)
+        # Tally interior nodes (exclude the camp endpoints themselves). The
+        # tally key is the entity ID now, so two surfaces of one actor can no
+        # longer be counted as two different brokers — which is exactly the
+        # error a brokerage ranking must not make.
+        broker_paths: dict[Any, int] = {}
+        broker_refs: dict[Any, set[str]] = {}
+        camp_set = set(a_ids) | set(b_ids)
         for r in records:
             node_path = list(r["node_path"] or [])
             edge_ids = [str(e) for e in (r["edge_ids"] or [])]
-            interior = node_path[1:-1]  # drop the A endpoint and B endpoint
-            for node in interior:
-                key = node.lower()
-                if key in camp_set:
+            for node in node_path[1:-1]:  # drop both camp endpoints
+                if node in camp_set:
                     continue
-                broker_paths[key] = broker_paths.get(key, 0) + 1
-                broker_display.setdefault(key, node)
-                broker_refs.setdefault(key, set()).update(edge_ids)
+                broker_paths[node] = broker_paths.get(node, 0) + 1
+                broker_refs.setdefault(node, set()).update(edge_ids)
 
         ranked = sorted(
             broker_paths.items(), key=lambda kv: kv[1], reverse=True
         )[:clamped_limit]
         refs: list[str] = []
         brokers: list[dict[str, Any]] = []
-        for key, count in ranked:
-            edge_ids = sorted(broker_refs.get(key, set()))
+        for node_id, count in ranked:
+            edge_ids = sorted(broker_refs.get(node_id, set()))
             for e in edge_ids:
                 if e not in refs:
                     refs.append(e)
             brokers.append({
-                "entity": broker_display.get(key, key),
+                "entity": names.get(node_id, str(node_id)),
+                "entity_id": str(node_id),
                 "path_count": count,
                 "edge_ids": edge_ids,
             })
@@ -2375,8 +2538,10 @@ class PostgresQdrantSubstrateQueryPort:
             "camp_a": a_names,
             "camp_b": b_names,
             "max_hops": hops,
+            "edge_families": fams,
             "brokers": brokers,
             "refs": refs,
+            "warnings": warnings,
         }
 
     # ==================================================================
@@ -2422,6 +2587,31 @@ class PostgresQdrantSubstrateQueryPort:
         only (``superseded_by IS NULL``).
         """
         clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
+        # B-8 — a NARROWED read that names a non-producer must not answer with a
+        # bare empty. On 2026-08-03 the journal's planner asked for
+        # ``analyst_id='country_assessor'`` — a state='draft' analyst that has
+        # produced nothing for months — got `rows: []`, and narrated it as "the
+        # assessment engine produced no country-level rows in the last 48 hours"
+        # on a day with 1,562 successful runs and 131 fresh country_composition
+        # findings. The read was CORRECT and the sentence was FALSE, because an
+        # empty answer to the wrong question is indistinguishable from an empty
+        # engine unless the tool says so. Now it says so, and says what to ask
+        # instead — the narrator can recover inside the same gather loop.
+        if analyst_id is not None and analyst_id not in _ASSESSMENT_PRODUCER_ANALYSTS:
+            live = ", ".join(_ASSESSMENT_PRODUCER_ANALYSTS)
+            return {
+                "rows": [],
+                "refs": [],
+                "count": 0,
+                "disagreements": None,
+                "unavailable": (
+                    f"'{analyst_id}' is not a live assessment producer, so this "
+                    f"empty result says NOTHING about whether the engine is "
+                    f"producing — it only says you asked for an analyst that "
+                    f"writes nothing today. Live producers: {live}. Re-read with "
+                    f"no analyst_id to see the whole live assessment surface."
+                ),
+            }
         clauses: list[str] = ["f.kind = 'finding'", "f.superseded_by IS NULL"]
         params: list[Any] = []
         if analyst_id is not None:
@@ -2495,7 +2685,16 @@ class PostgresQdrantSubstrateQueryPort:
         # surface so the journal can narrate the divergence honestly (the two P4
         # products judge over different windows) — it is NEVER a gate and NEVER
         # computed at compose-write. Fully fail-safe: any error (incl. the import)
-        # degrades to `disagreements: []` and never breaks the assessments read.
+        # degrades to `disagreements: null` and never breaks the assessments read.
+        #
+        # B-8: `null` and `[]` are DIFFERENT answers and are now kept different.
+        # `[]` means "measured, and the two products agree". `null` means "not
+        # measured" — no countries in this read to reconcile, or the reconcile
+        # itself failed. Collapsing them is how one bad `analyst_id` produced BOTH
+        # halves of the 08-03 false claim: the disagreement scan derives its
+        # targets FROM the returned rows, so an empty read short-circuited it to
+        # `[]`, and `[]` read as "no disagreements exist" rather than "nothing was
+        # compared".
         disagreements = await self._reconcile_scorecard_disagreements(rows, refs)
         return {
             "rows": rows,
@@ -2508,12 +2707,26 @@ class PostgresQdrantSubstrateQueryPort:
         self,
         rows: list[dict[str, Any]],
         refs: list[str],
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, Any]] | None:
         """Reconcile the assessment countries' scorecards vs their live
         ``country_composition`` heads (H-2 / B0-5). Returns a bounded list of
         divergence rows (each a ``ScorecardDisagreement`` dump + ``target_id``);
         appends the contested finding ids to ``refs`` (deduped) so the journal
-        may cite them. Fully fail-safe — any error yields ``[]``, never raising.
+        may cite them. Fully fail-safe — never raises.
+
+        B-8 — the return is TRISTATE, deliberately:
+
+          * a non-empty list — measured, and these are the divergences;
+          * ``[]``          — measured, and the two products agree;
+          * ``None``        — NOT measured (no countries in this read to
+                              reconcile, or the reconcile failed).
+
+        The last case used to be ``[]`` as well, which is how one wrong
+        ``analyst_id`` on 08-03 produced both halves of a false claim: this scan
+        derives its targets FROM the rows above it, so an empty read
+        short-circuited it, and the caller could not tell "they agree" from
+        "nothing was compared". An absence must never render as a finding of
+        agreement.
         """
         try:
             from ..data.registry.scorecard_reconcile import (
@@ -2526,7 +2739,7 @@ class PostgresQdrantSubstrateQueryPort:
                 if r.get("target_id") and str(r["target_id"]) != "world"
             })[:_DISAGREEMENT_MAX_TARGETS]
             if not country_targets:
-                return []
+                return None  # nothing to compare — NOT "they agree"
             async with self._pool.acquire() as conn:
                 # Latest scorecard head per target — bands.dimensions carries each
                 # dimension's band + reason (insufficient-evidence = excluded).
@@ -2615,9 +2828,16 @@ class PostgresQdrantSubstrateQueryPort:
                     seen.add(fid)
                     refs.append(fid)
             return disagreements
-        except Exception as exc:  # noqa: BLE001 — degrade to honest empty, never break the read
-            logger.debug("get_assessments.disagreements_unavailable err=%s", exc)
-            return []
+        except Exception as exc:  # noqa: BLE001 — degrade to honest absence, never break the read
+            # WARNING, not DEBUG (B-8): a swallowed reconcile failure used to
+            # render as "no disagreements" at DEBUG level, i.e. invisible in
+            # production and indistinguishable from a real reconciliation.
+            logger.warning(
+                "get_assessments.disagreements_unavailable err=%s "
+                "(returning null — NOT an empty list; the journal must not "
+                "narrate this as agreement)", exc,
+            )
+            return None
 
     async def get_graph_structure(
         self,
@@ -3248,9 +3468,15 @@ class PostgresQdrantSubstrateQueryPort:
         """
         clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
         async with self._pool.acquire() as conn:
+            # 2026-08-02 — `valid_until IS NULL` here for the same reason the
+            # consolidation read below has always carried it: a SOFT-CLOSED row
+            # (migration 0120: tool-JSON envelopes + empty stubs) must leave the
+            # journal's own memory, or the repair is cosmetic and the narrator
+            # goes on being fed a tool-call envelope as if it were prose.
             prior_entry = await conn.fetchrow(
                 "SELECT id, title, body, period_start, period_end, produced_at "
                 "FROM journal_entries WHERE entry_kind = 'entry' "
+                "  AND valid_until IS NULL "
                 "ORDER BY period_end DESC, produced_at DESC LIMIT 1"
             )
             consolidation = await conn.fetchrow(
@@ -3300,6 +3526,7 @@ class PostgresQdrantSubstrateQueryPort:
             history_rows = await conn.fetch(
                 "SELECT id, title, body, period_end, produced_at "
                 "FROM journal_entries WHERE entry_kind = 'entry' "
+                "  AND valid_until IS NULL "
                 "ORDER BY period_end DESC, produced_at DESC LIMIT $1",
                 min(clamped_limit, 8),
             )
@@ -3401,6 +3628,9 @@ class PostgresQdrantSubstrateQueryPort:
                     "       produced_at, data "
                     "FROM journal_entries "
                     "WHERE entry_kind = 'lens' AND analyst_id = ANY($1::text[]) "
+                    # Soft-closed lens rows (mig 0120 empty stubs) stay out of
+                    # the chorus the diff reads — same rule as the entry tier.
+                    "  AND valid_until IS NULL "
                     "  AND produced_at >= $2 "
                     "ORDER BY produced_at DESC "
                     "LIMIT $3",

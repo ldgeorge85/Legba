@@ -20,6 +20,24 @@
 #   4. baseline_deviation — last-24h desk signal volume / high-sev finding
 #                           count exceeded the trailing 28-day same-desk
 #                           mean+2σ baseline (rising edge only). medium.
+#   5. watchlist_hit      — an operator-defined standing watch (the watchlist
+#                           table, mig 0105) matched a verified finding.
+#   6. geo_convergence    — signals from >=3 distinct source families
+#                           converged in one geographic bin (folded 07-29 from
+#                           the standalone geo_convergence_scan analyst).
+#   7. production_deficit — S-1: a producing loop (analyst cadence, analyst
+#                           output, source signal production, declared backlog
+#                           drain) has produced nothing against ITS OWN
+#                           declared cadence + trailing history. The only
+#                           class whose subject is this engine rather than the
+#                           world. Judgment in
+#                           legba.data.registry.production_gauge, shared with
+#                           GET /api/v1/v3/system/production-gauge. Pages at
+#                           medium+ only, once on appearance and again per
+#                           escalation rung; recovery is silent. Thresholds
+#                           are `gauge_*` method.options (see
+#                           handler_options.HANDLER_OPTIONS) so precision is
+#                           retunable with no deploy.
 #
 # Statefulness: durable per-transition watermarks in alert_trigger_watermarks
 # (migration 0091) — the same transition NEVER refires, and each class's

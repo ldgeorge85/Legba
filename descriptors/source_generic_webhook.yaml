@@ -1,0 +1,68 @@
+# W1-E BIND — Generic inbound-webhook source descriptor (P-06;
+# src/legba/data/sources/generic_webhook.py). The reference PUSH-source
+# implementation: an upstream system POSTs JSON to
+# /api/v1/webhooks/<source_id>; the handler verifies an optional shared
+# secret, parses one target-agnostic Signal, and hands it to the standard
+# emit_signal path (baseline + canonical write + NATS publish — same as poll
+# sources). No external dependency (no Ed25519, no partner SDK).
+#
+# For multi-domain scale this is the lowest-friction way to onboard a new
+# domain's data: any upstream system that can POST JSON gets ingested without
+# a bespoke adapter. It is already exercised end-to-end by the core runtime
+# test suite (tests/runtime/test_inbound_drain.py,
+# test_source_actor_acquisition.py, test_boot_wiring.py), not just its own
+# unit tests (tests/data_pkg/test_source_generic_webhook* via
+# test_source_actor_acquisition.py) — this is production-quality reference
+# code, not a stub.
+#
+# `shared_secret` is left UNSET below (None) deliberately — this ships
+# draft/inert; an operator flipping this to active MUST set
+# config.shared_secret (a real value, not a vault ref — GenericWebhookConfig
+# takes it as a plain field) so a random POST can't inject signals. Route
+# mounting itself is tied to a live actor for this source_id (draft states
+# get no live actor per the standing convention), so there is no exposed
+# endpoint while this stays draft.
+#
+# State: draft — registration + the operator's activate flip (INCLUDING
+# setting shared_secret) are deploy steps out of this pass's no-deploy remit.
+
+identity:
+  id: source.generic_webhook.default
+  name: Generic Inbound Webhook (reference push source)
+  kind: generic_webhook
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: w1e_built_but_unbound
+  created: "2026-08-03T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [push, webhook, generic, structured]
+  source_class: analysis
+
+acquisition: push
+# Push sources never get a cadence schedule (they're inbound-driven; `pull`
+# is a no-op generator per the handler's own docstring).
+
+config:
+  shared_secret: null      # OPERATOR FLIP: set a real secret before activating
+  modality: structured
+  id_field: id
+  url_field: url
+  media_ref_field: null
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1
+      config: {}
+    - kind: dedupe_tier_2
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+
+subscription_policy: open

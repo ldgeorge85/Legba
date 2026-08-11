@@ -5,6 +5,255 @@ on `main` — so this file is the release record. Entries are dated (newest firs
 written against the docs as they shipped; [docs/STATUS.md](docs/STATUS.md) remains the
 always-current truth-in-labeling table.
 
+## 2026-08-10
+
+**The clearing train — the whole tracked queue, knocked out in one wave.** Four
+agents and an evening: every open work item that didn't require an operator
+decision shipped together.
+
+- **The deferred repoint finally lands.** Migration 0185 replaces the twice-deferred
+  0183: the seventh collision shape (case-differing-namesake stayers occupying mover
+  destinations) is solved by computing the mover set to closure before any write —
+  set-based demotion passes with a proven bound — plus a transitive name-map closure
+  its own replay demanded. Proven on a full copy of live data (idempotent, third-run
+  byte-identical) before the train applied it live: 3,218 edges folded onto keepers,
+  no errors, seconds.
+- **claim_watch 4.1.0**: watched questions that no consumer ever reads now raise
+  their own review flags (a detect surface where there was none — armed live); the
+  bearing gate demands the signal speak to the thesis's named consequence, not just
+  the upstream event; publisher article-id URLs canonicalize (62 duplicate groups
+  measured, zero cross-story collapses); a URL-date audit script for the stale-feed
+  class.
+- **Verify stamp `2026-08-10/1`**: the numeral-fingerprint suppression now also
+  withdraws when the claim and quote assert opposite prose directions for the same
+  subject — six bounded direction axes, withdraw-only, replay-proven to flip exactly
+  the adjudicated case with zero collateral.
+- **The nightly suite's last order-dependences rooted**: an alert-scan spike stream
+  aging into other files' windows, a UUID-ordered OFFSET coin flip, a three-way
+  seed-batch collision — and a fixture time bomb defused the same day it armed (a
+  pinned clock crossed a decay floor at 10:48Z; eight tests would have paged that
+  night). Both remaining condemned-class suite wipes retired behind hermetic
+  fixtures. Three historical failing seeds replay clean.
+- **Findings stop titling themselves with their own date stamp** (the As-of header
+  is skipped by the title fallback), and the journal's tool-call leak guard learned
+  the JSON-lines transcript shape that slipped past it.
+
+## 2026-08-09
+
+**The solidity train, closing the three-day soak's findings.** A full unattended-days
+review found the core healthy and every alarm decomposable — this train fixes what the
+review actually found, so the board is clean before any direction decision:
+
+- **The gauge stops crying wolf.** All five false pages had one shape: honest quiet
+  misread as deficit. Voided forecasts now count as drained work (the standing false
+  CRITICAL); sparse publishers judge against the feed's own `newest_entry_ts` — a feed
+  holding nothing newer than our last ingest reads *upstream-quiet with evidence*, a
+  feed with fresh unconverted content still pages (`conversion_stall`); and an ACTIVE
+  descriptor with zero polls in the window pages loudly instead of vanishing into
+  ungauged — the shape a silently-stopped source actually has. Live result: 8 paging
+  loops → exactly 1, and the survivor is the deliberate operator-policy page.
+- **Two verify-precision fixes under stamp `2026-08-09/1`**: the numeral fingerprint is
+  endpoint-aware (matching digits with divergent range endpoints no longer suppress a
+  hard fail — replay flips only the adjudicated case, 58 hard fails byte-stable), and
+  an unassessable critique publishes *no* faithfulness score instead of a perfect 1.0.
+- **Seven unit rubrics parse again** — the voice pass had injected the same
+  unescaped-quote phrase into seven eval rubrics at the same column; all fixed in tree
+  and re-PUT live.
+- **The nightly suite's remaining order-dependence is rooted, not allowlisted**: a
+  calibration test helper left two open head scorecards per desk (one phantom alert per
+  scan, forever), a seed fixture left a contested-leader pair standing for the export
+  round-trip to collapse, and eighteen stale allowlist entries retired. Full-suite
+  replays under the exact historical failing seeds now grade PASS.
+- **The situation trajectory ledger produces.** Its tracker had been registered but
+  never activated; activation went through the audited FSM route, the first run seeded
+  all twelve situations, and real transition events landed on the next tick.
+
+## 2026-08-05 (second train)
+
+**The precision train, answering the first clean measurement.** Panel round 4 — the
+first acceptance round with a healthy cross-family judge throughout — held for the
+fifth time, but for the first time it *named* every cause: pass-side integrity held at
+zero on every cut, while failure precision sat near 50% on five identified judge
+blindnesses. This train ships the answer, replay-proven against the round's own
+14-hard-fail census before deploying:
+
+- **A quote that confirms can no longer refute.** Word-numerals, digits, units and
+  percent forms normalize before a hard fail can ground ("sixteen lives and thirty-six
+  injuries" is confirmed, not contradicted, by "16 people were killed, and another 36
+  were injured"). Replay: hard census 14 → 11 with all six panel-correct fails intact.
+- **Zero-claim critiques can no longer score** — bodies whose claims fail to segment
+  publish an explicit `unassessable` state instead of a perfect 1.0, floor-graded
+  critiques publish PROVISIONAL under a ceiling (22.9% of a measured week was
+  floor-only masquerading as adjudicated), and the escalation gate caps on the
+  published score it turns out it never actually capped on.
+- **Contradiction between findings is computed, not hoped for**: a claim-level check
+  across each desk's verified set feeds the composition's Tension section, calibrated
+  from 57 false pairs to zero on 1,592 real claims with the Hormuz case still firing.
+- **The buried-lead detector costs something now**; severity and salience render beside
+  confidence in composition inputs, so consequence has numbers on the page.
+- **Three integrity gauges**: judge availability (replays the 26-hour outage as
+  critical-and-paging), prompt drift, and state drift between tree and registry.
+- The machine-coded-row and continuity-routing bypasses to the judge are closed; three
+  citation-marker spellings stop reading as uncited; the trajectory ledger (G-2,
+  migration 0184) lands — situations' run-over-run evolution becomes queryable.
+- `verify.py` shed 270 lines into three new judge-subsystem bricks under a
+  twice-ratcheted ceiling.
+
+Judge stamp → `2026-08-05/1`. Round 5 measures the first day on which every named
+failure-precision defect has a shipped fix behind it.
+
+## 2026-08-05
+
+**The convergence train.** Everything the measurement hold protected, landing together
+at a clean day boundary (judge stamp → `2026-08-04/1`):
+
+- **Verify residuals (W1-D)**: the four adjudicated xfails go green — the judge sees the
+  citing outlet, plain watch-bullet headings grade, `_metadata_dominant` admits the
+  verified+residual case, and an enumerated-denial check catches quote-affirms hard
+  fails (chosen over a small model by replaying two stamped days: 1/24 fired, exactly
+  the adjudicated row, zero false demotions).
+- **The voice wave (Phase V)**: every read opens with an as-of line copied from a
+  printed slice header (run date + window — the prompt can no longer drift from the
+  query that built it); the template sentences are banned WITH a replacement judgment
+  shape; compositions become ≤3 paragraphs of argument ordered by consequence with a
+  Tension section that covers factual disagreement and a Coverage footer; machine
+  internals (microsecond timestamps, internal scores) are barred from prose; absence
+  claims carry collection scoping. Eleven descriptor prompts re-stamped in one pass —
+  the eight bounded units plus the non-unit analysts, whose model output now parses
+  through an enforced contract (a tool-plan preamble can never become a finding title
+  again) and whose retrieved evidence renders dated and marked RETRIEVED.
+- **The judge reads the article (R1-0)**: `archived_text` now leads the judge's
+  source-text chain — previously the analyst read the full archived article while the
+  judge graded against a ~545-char teaser on 6,512 measured citations.
+- **The graph readers migrate**: `/entities/graph`, entity detail, paths/brokers,
+  mining/balance (family-aware), and grounding all read `entity_edges`; the facts
+  population backfills (mig 0180); the proposed-edges merge-propagation defects close
+  (mig 0181); the parked endpoints are adjudicated without guessing (mig 0182).
+- Wiring: cross-target union runs, source-discovery dispatch, the optimizer
+  prompt-path convention, and WS auth out of the query string (deprecation window).
+  Entity quality: the compass-direction gate and the NER person-class ladder.
+- Two regrowth ceilings breached by merge arithmetic were paid at their seams in the
+  same train (slice rendering out of `inline_target`, the first judge-subsystem brick
+  out of `verify`), both ceilings re-seeded down.
+
+Context for the record: the verify judge's hosted endpoint was down on a billing wall
+for ~30 hours spanning the prior measurement day (every critique in that window carries
+an honest `judge_status='deterministic'` marker); the acceptance panel ran anyway,
+measured the floor, and held for the fourth time. This train ships the fixes the panel
+could not measure; round 4 measures the converged system on the first clean judge day.
+
+## 2026-08-03
+
+**Wave 1 of the residuals program.** The engine review's remaining ❌ items, built by five
+parallel agents against a pinned base. Four slices integrated and deployed in one train;
+the fifth (verify residuals, incl. the `2026-08-04/1` judge stamp) is built but holds for
+the acceptance panel's third round, so the stamped measurement day is never truncated
+mid-flight.
+
+- **Correctness has a real denominator.** The correctness scorer read a dead table with
+  one stale row while the operator's gold-set verdicts surfaced nowhere. The gold-set
+  arithmetic now lives in one module shared by the scorer, the eval scoreboard, the
+  scorecard fold, the v3 route (`/v3/eval/correctness`), and GEPA's gate — displayed as
+  its own axis with honest tiny-n labeling, structurally barred from pooling into
+  faithfulness calibration. Every faithfulness aggregate now splits by
+  `judge_pipeline_version`; prior judge populations get their own annotated readout,
+  never summed into the current stamp's headline.
+- **A hung activate degrades instead of freezing the plane.** Actor turns run under a
+  deadline with a heal breaker (the 08-01 outage mechanism); reconciler per-actor heals
+  time out to skip-and-retry. Container logs now ship to rotated host-side files that
+  survive recreates, and `analyst_traces` records tool arguments (bounded,
+  secret-redacted) — the prior justification for not recording them cited a table column
+  that does not exist. `loop_watchdog.sh` is retired: never correctly wired, and its
+  remediation (force-recreating the Dapr scheduler) was the exact SIGKILL its grace
+  period exists to prevent.
+- **Three wired-but-never-fired limbs are real.** The journal gets a bounded PROPOSE
+  phase after narration — it was previously offered the propose tool only before it had
+  reasoned and punished for using it after (zero invocations ever; five warranted
+  proposals found in a six-day replay). `review_flags` fires now that the hypothesis
+  consumption edge its walk starts from is actually written. `contention_flip` compared
+  disjoint id populations (fact ids against signal ids) and could never match; bridged
+  along the substrate's own lineage, 1,243 of 2,152 contention groups become walkable.
+- **The built-but-unbound set is adjudicated.** Nine draft descriptors bind the unbound
+  analyst kinds and source adapters (zero live actors until individually activated); one
+  schema field referenced since birth but never declared is declared; and
+  `cross_source_dedup` is struck from the "unbound" list — it was live all along with
+  143k successful runs.
+
+Migration 0170 (correctness-axis promotion, comment-only). Judge pipeline stamp
+unchanged at `2026-08-03/1` — the bump ships with the gated verify slice.
+
+**Wave 2, the same night.** Four more slices, one train:
+
+- **The graph is walkable.** `/graph/ego` + `/graph/edge/{id}` over `entity_edges`
+  (anchored 1-hop ego, 5.5 ms on the highest-degree node, family/confidence/time
+  filters in the index condition) and a Graph Walk panel in the workstation shell:
+  expand-on-click, edge-evidence detail, families visually distinct — relation solid
+  and polarity-coloured (the only family with a real signed distribution), reference
+  dashed, cooccurrence faint and off by default so co-mentions cannot bury claims.
+  No depth parameter by design: every hop is a fresh anchored ego.
+- **The corpus can forget.** OpenSearch had no delete path and 41.5% of it (75,871
+  docs) pointed at purged rows — served verbatim, contrary to the review's assumed
+  mitigation. Now: transactional tombstones (migration 0175), a retention drain that
+  re-verifies each row is gone before deleting, gauge-visible backlog, and a dry-run
+  backfill for the historical population. Migration 0176 soft-closes the 200
+  capital-metonymy facts, their 171 value rows and 40 stranded contention groups —
+  and the contention arbiter gains the metonymy gate without which the cohort would
+  have rebuilt itself.
+- **A rename can no longer silently change an analyst.** Descriptor string
+  resolution fails loud at all three layers (boot, registry validation, runtime
+  dispatch). The live audit: of 339 string references, 17 are real module-path
+  reads — all prompts — and two dead references were found and fixed in-tree,
+  including a prompt package that never existed. The `registry/api.py` kernel
+  (bearer gate, deps bundle, sunset stamp) moved to a leaf module with re-exports,
+  ceiling ratcheted down, byte-identically verified.
+- Canonicalizer variant folds verified live and instrumented for the first time
+  (26 www keys, 823 wire-revision titles folded); claim_watch's dedupe counters now
+  say so.
+
+## 2026-08-02
+
+**The engine review, and the hardening it demanded.** A six-plane component-by-component
+review of the entire engine (acquisition, substrate, analysis, coherence, products,
+runtime) ran against the live system, alongside a code-organization analysis and a
+pre-declared acceptance readout of the 07-31 verify-path fixes. Its central finding: this
+engine's characteristic failure is **silent absence, not error** — a census of twelve
+capabilities that were wired, green, and had never run, or died traceless. What deployed
+the same day:
+
+- **Dead runs now write a trace.** `analyst_traces` was `status='success'` on all
+  186,435 rows ever — a run that died wrote nothing, which is how two incidents hid.
+  Every started run now lands a row; failures carry the error class, retry bucket, and
+  attempt count.
+- **The 08-01 outage class is closed at the schema layer.** The strict-mode wire-string
+  coercion fix is generalized to every identity model (10 enum fields across 6 classes
+  plus 9 stack families), with a drift guard that fails the suite if a future
+  strict-mode model grows an uncovered enum field.
+- **The LLM heartbeat now completes something.** The old probe accepted a `/v1/models`
+  200 from a server that hadn't completed a request in 19 hours. The new probe demands a
+  real completion every 10 minutes and a long-context needle hit hourly; an empty 200
+  counts as failure.
+- **Cold activation is a deploy gate.** A smoke script forces one unit run end-to-end
+  after every deploy and asserts the trace row, not the transport 200 — the exact check
+  that would have caught 08-01. (Its own first live run found a bug in itself: a
+  whitespace strip mangled the poll watermark and misreported a success as a failure.
+  Fixed; failure-path poll errors now surface instead of masquerading.)
+- **The scheduler's OOM cliff is gone.** The reminder store's etcd sat at 91% of its
+  container memory limit, pinned by default revision retention — one growth step from
+  taking down every reminder in the system. Limit raised, retention made time-based,
+  history compacted and defragmented: 380 MB → 38 MB with 335 live keys.
+- The verify-path acceptance readout **failed its own pre-declared gates** and is
+  recorded as such: the pass-side fixes adjudicated clean, but the new
+  absence-contradiction check fires on off-target and machine-coded rows at ~46%
+  precision. A precision train landed and deployed the same day — target-scope filtering
+  on violators, body screening on composition slices, machine-coded-row exclusion,
+  carve-out clauses handed to the adjudicator, persisted hard-fail quotes, a
+  refutes-vs-resolves check on demotions — measured against the live ledger to remove 20
+  of the 27 false hard fails while keeping the genuine catches. The gate still does not
+  declare until a re-run passes on a fresh day of stamped verdicts. Honest measurement is
+  the product; this entry is part of that. (The train also cleared one panel finding as a
+  false alarm: the "citationless under-fires 12×" claim was a mis-projection — the audit
+  queried one JSONB level too high; the guard had been honest all along.)
+
 ## 2026-07-31
 
 **The sweep and its repairs.** A seven-agent data-quality audit of the full pipeline —

@@ -64,13 +64,27 @@ async def test_grounding_preamble_excludes_ingestion_junk(pg_pool):
             "($1, 'leader of', 'Some Junk', 1.0, 'ingestion', $2)",
             subj, vf,
         )
-        # Signed nexuses: the seed conflict edge survives; the reified/promoted
-        # 'agent' lane is an analysis product, excluded from ground truth.
+        # Signed edges: the seed conflict edge survives; the reified/promoted
+        # 'agent' lane is an analysis product, excluded from ground truth; and
+        # (W3-A) a curated row tiered `cooccurrence` is excluded too — a
+        # co-mention is not a relationship however trusted its producer.
+        ids = {}
+        for name in (subj, "United States", "Everything", "Co Mentioned"):
+            ids[name] = await conn.fetchval(
+                """INSERT INTO entity_profiles (canonical_name, entity_class,
+                     entity_type, data)
+                   VALUES ($1, 'organization', 'organization', '{}'::jsonb)
+                   RETURNING id""", name)
         await conn.execute(
-            "INSERT INTO nexuses (subject, rel_type, object, polarity, confidence, source_type, valid_from) "
-            "VALUES ($1, 'in active conflict with', 'United States', -1, 0.95, 'seed', $2), "
-            "($1, 'controls', 'Everything', 1, 1.0, 'agent', $2)",
-            subj, vf,
+            """INSERT INTO entity_edges (src_id, dst_id, edge_type, edge_family,
+                 polarity, confidence, source_type, valid_from)
+               VALUES ($1, $2, 'in active conflict with', 'relation', -1, 0.95,
+                       'seed', $5),
+                      ($1, $3, 'controls', 'relation', 1, 1.0, 'agent', $5),
+                      ($1, $4, 'co occurs with', 'cooccurrence', 0, 1.0,
+                       'curated', $5)""",
+            ids[subj], ids["United States"], ids["Everything"],
+            ids["Co Mentioned"], vf,
         )
 
     resolver = SubstrateGroundingResolver(pg_pool=pg_pool)
@@ -85,7 +99,8 @@ async def test_grounding_preamble_excludes_ingestion_junk(pg_pool):
 
     nexus_objects = {n.object for n in nexuses}
     assert "United States" in nexus_objects        # seed active-conflict survives
-    assert "Everything" not in nexus_objects       # agent nexus dropped
+    assert "Everything" not in nexus_objects       # agent edge dropped
+    assert "Co Mentioned" not in nexus_objects     # curated co-mention dropped
 
     preamble = build_grounding_preamble(
         facts, nexuses, now=datetime(2026, 6, 19, tzinfo=timezone.utc),

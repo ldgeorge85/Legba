@@ -18,6 +18,7 @@ from uuid import uuid4
 import pytest
 
 from legba.data.provenance.models import FindingPayload
+from legba.data.provenance.verify import PROVISIONAL_SCORE_CEILING
 from legba.runtime.actor_critic import verify_inline_target_finding
 
 
@@ -116,8 +117,15 @@ async def test_verify_seam_scope_guard_non_inline_target_noop():
 
 
 async def test_verify_seam_all_resolved_high_score():
-    """A fully-cited finding → faithfulness 1.0, overall_score 1.0 → the gate
-    leaves effective_confidence == confidence (no demotion)."""
+    """A fully-cited finding → faithfulness 1.0.
+
+    Q-1(c): the PUBLISHED ``overall_score`` is 0.85, not 1.0 — no LLM judge is
+    wired in this seam test, so the verdict is the deterministic floor's alone and
+    publishes as PROVISIONAL. The floor found nothing wrong; it is not equipped to
+    say nothing IS wrong, and 1.0 from a floor asserted exactly that. The gate
+    still leaves this finding's 0.8 confidence undemoted (0.8 < 0.85), which is
+    the behaviour the test was written to protect.
+    """
     conn = _FakeConn()
     fid = uuid4()
     sid = str(uuid4())
@@ -133,7 +141,11 @@ async def test_verify_seam_all_resolved_high_score():
     )
     assert result["faithfulness_score"] == 1.0
     data = _insert_data_dict(conn)
-    assert data["overall_score"] == 1.0
+    assert data["overall_score"] == PROVISIONAL_SCORE_CEILING
+    assert data["data"]["verification"]["provisional"] is True
+    assert data["data"]["verification"]["score_state"] == "scored"
+    # The gate leg this test exists for: 0.8 confidence survives the fold.
+    assert min(0.8, data["overall_score"]) == 0.8
 
 
 # ---------------------------------------------------------------------------

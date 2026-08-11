@@ -51,12 +51,19 @@ identical content SURVIVES under the survivor id, so we re-point instead):
 * ``trigger_state.seen_signal_ids`` (jsonb) — LEFT ALONE, safe by semantics:
   it is membership-only dedup memory for pending trigger fires; a deleted id
   simply never recurs, and rows are transient per-target state.
-* OpenSearch corpus docs (``_id`` = signal id) and Qdrant embedding points —
-  out-of-DB sidecar indexes; orphaned loser docs are TOLERATED (same posture as
-  the ``signals_retention`` purge): every read path joins hits back to
-  ``signals`` and drops missing rows, and the identical content remains
-  reachable under the survivor's doc. ``--ids-out`` dumps the deleted ids as
-  JSON for an optional later sidecar cleanup.
+* OpenSearch corpus docs (``_id`` = signal id) — TOMBSTONED, no longer tolerated
+  (W2-C, 2026-08-03). Every loser id is INSERTed into ``corpus_tombstones``
+  (migration 0175) in the same transaction as its delete, and the
+  ``corpus_retention`` sweep drains that queue against OpenSearch. The old
+  posture here — "orphaned loser docs are TOLERATED, every read path joins hits
+  back to ``signals``" — was measurably wrong on both halves: the 07-28 run of
+  THIS script produced 75,871 of the corpus's 75,871 orphans (41.5% of the
+  index), and ``substrate_query_port.read_document`` does NO join back to
+  ``signals``, so it served those docs verbatim.
+* Qdrant embedding points — still out-of-DB sidecars left in place; a stale point
+  is harmless once neither side of a link can reference it, and a re-embed
+  overwrites in place (the point id IS the signal id). ``--ids-out`` still dumps
+  the deleted ids as JSON.
 
 SAFETY RAILS
 ------------
@@ -101,6 +108,10 @@ import os
 from typing import Any
 
 import asyncpg
+
+# Same config the indexer and the drain read, so a deployment that overrides
+# LEGBA_DATA_OPENSEARCH_INDEX tombstones against the index it actually writes.
+from legba.data.config import OpenSearchConfig
 
 #: Retention classes that are NEVER deleted regardless of duplication —
 #: mirrors the ``signals_retention`` policy row's ``keep_classes`` (the C2
@@ -363,6 +374,22 @@ async def _apply_batch(
             "DELETE FROM signals WHERE id IN (SELECT loser_id FROM _collapse_map)"
         ))
 
+        # 7) tombstone each loser's OpenSearch corpus doc, in the SAME
+        # transaction as the delete above (see migration 0175). The 07-28 run of
+        # this script is where 75,871 of the corpus's orphans came from — the
+        # header note below used to say those were "TOLERATED" and pointed at
+        # `--ids-out` for "an optional later sidecar cleanup". This is that
+        # cleanup, made automatic and transactional: the corpus_retention sweep
+        # drains the queue, so a collapse can no longer leave the index behind.
+        counters["corpus_tombstoned"] += _count(await conn.execute(
+            """
+            INSERT INTO corpus_tombstones (doc_id, index_name, reason)
+            SELECT loser_id, $1, 'intrasource_collapse' FROM _collapse_map
+            ON CONFLICT (doc_id) DO NOTHING
+            """,
+            OpenSearchConfig.from_env().index,
+        ))
+
 
 async def _dry_run_reference_counts(
     conn: asyncpg.Connection, loser_ids: list[Any],
@@ -417,7 +444,7 @@ async def run(
         "aliases_repointed": 0, "aliases_deleted": 0,
         "canonical_repointed": 0, "array_rows_repointed": 0,
         "archive_repointed": 0, "archive_left_in_place": 0,
-        "object_ref_mirrored": 0,
+        "object_ref_mirrored": 0, "corpus_tombstoned": 0,
     }
     for table, col in ARRAY_REFS:
         counters[f"array_{table}_{col}"] = 0

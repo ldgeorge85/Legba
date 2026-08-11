@@ -1,0 +1,77 @@
+# W1-E BIND — Firecrawl source descriptor (L-139; src/legba/data/sources/
+# firecrawl.py). Firecrawl (firecrawl.dev) is a commercial SaaS that turns
+# arbitrary web pages into clean, LLM-friendly markdown (JS rendering,
+# anti-bot handling, crawl/map/scrape). Complements the generic scraper kind
+# (raw HTML) for the orthogonal case where the CLEANED markdown is the
+# product.
+#
+# Directly relevant to source discovery at multi-domain scale:
+# discovery/materializer.py's own module docstring names Firecrawl as the
+# intended "crawl flavor" sibling to query_source_discovery's static
+# feed-list flavor ("the firecrawl/CT crawl flavor plugs in the same way")
+# — i.e. this and query_source_discovery (see
+# descriptors/source_query_source_discovery_template.yaml and
+# W1E_UNBOUND_EVIDENCE.md) are two halves of the same intended
+# auto-discovery direction.
+#
+# KEYED + METERED — gated on a real, paid API key (Firecrawl bills per
+# credit). config.api_key_secret is a vault SecretRef, unresolved here.
+# seed_urls ships EMPTY deliberately — no target-specific crawl scope is
+# fabricated in this pass (per the no-seed-data-in-the-repo convention); an
+# operator sets real seed_urls (or include_paths + mode: map) when scoping
+# an actual crawl. mode defaults to "scrape" (single-URL) rather than the
+# heavier "crawl" mode, so an accidental activation with real creds but no
+# seed_urls does the least possible damage/spend.
+#
+# State: draft — registration + the operator's activate flip (loading the
+# real API key + real seed_urls, and accepting the per-credit cost) are
+# deploy/operator steps out of this pass's no-deploy remit.
+
+identity:
+  id: source.firecrawl.default
+  name: Firecrawl (KEYED, METERED — needs a real paid API key)
+  kind: firecrawl
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: w1e_built_but_unbound
+  created: "2026-08-03T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [crawl, markdown, structured, discovery]
+  source_class: analysis
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "0 8 * * *"
+  cooldown_seconds: 3600
+  jitter_seconds: 120
+
+config:
+  api_key_secret:
+    factory_kind: secret
+    raw: "source.firecrawl.api_key"
+  seed_urls: []          # OPERATOR FLIP: no crawl scope until real URLs are set
+  mode: scrape            # least-damage default; "crawl"/"map" cost more credits
+  max_depth: 1
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1
+      config: {}
+    - kind: dedupe_tier_2
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: geocode
+      config: {}
+
+subscription_policy: open

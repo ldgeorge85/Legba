@@ -580,6 +580,42 @@ def test_guard_does_not_false_positive_on_a_long_legitimate_entry():
     assert _is_tool_call_leak(entry) is False
 
 
+def test_guard_catches_the_json_lines_transcript_shape():
+    # THE 2026-08-10 08:30Z live leak, verbatim shape: one tool-call object
+    # per LINE. Whole-string json.loads rejects it as "extra data", so the
+    # original predicate published it as an entry body. The JSON-lines branch
+    # must catch it — including the apparatus's own {"error": ...} echo line.
+    leaked = (
+        '{"tool":"get_lens_reads","args":{}}\n'
+        '{"tool":"get_lens_reads","args":{"page":2}}\n'
+        '{"error":"Invalid arguments for tool get_lens_reads"}'
+    )
+    assert _is_tool_call_leak(leaked) is True
+
+
+def test_json_lines_branch_never_fires_with_a_prose_line_present():
+    # One line of prose anywhere = analysis, kept. The property the whole
+    # guard family is built on.
+    mixed = (
+        '{"tool":"get_lens_reads","args":{}}\n'
+        "The lens reads disagree sharply about the Sahel this cycle.\n"
+        '{"error":"Invalid arguments for tool get_lens_reads"}'
+    )
+    assert _is_tool_call_leak(mixed) is False
+
+
+def test_json_lines_branch_needs_at_least_two_lines():
+    # A single JSON-object line is the whole-string path's jurisdiction: its
+    # key rules apply, and its 120-char min-prose floor still governs. This
+    # single object is over the floor with non-leak keys → not a leak.
+    single = (
+        '{"unrelated_key": "a long enough value to clear the min-prose floor", '
+        '"other": "the whole-string path owns this shape, not the lines branch"}'
+    )
+    assert len(single) >= 120
+    assert _is_tool_call_leak(single) is False
+
+
 # --- full arc: retry recovers ----------------------------------------------
 
 

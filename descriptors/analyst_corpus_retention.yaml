@@ -1,0 +1,122 @@
+# corpus_retention — the OpenSearch corpus DELETE path (W2-C).
+#
+# corpus_indexer's mirror. That sweep projects signals INTO
+# `legba_signals_corpus`; this one takes them OUT when their substrate row is
+# gone. Until 2026-08-03 the second half did not exist in any form: the
+# OpenSearchStore had no delete surface at all, so every signals purge in the
+# platform's history left its documents behind — measured exhaustively that day,
+# 75,871 of 182,648 corpus docs (41.5%) referenced rows that no longer existed,
+# and `read_document` served them verbatim because that path does no Postgres
+# existence check. The handler is fully built at
+# legba.data.analysts.deterministic_handlers.corpus_retention.
+#
+# THE QUEUE, NOT A DELETE AT EACH SITE. Three call sites delete signals; each one
+# records INTENT into `corpus_tombstones` (migration 0175) in the SAME
+# transaction as its DELETE, so the two land together or not at all. This sweep
+# drains that queue. Putting a fallible network call inside those transactions
+# instead would risk either aborting a good purge or committing it and losing the
+# delete — which is exactly the orphan being fixed.
+#
+# THE DRAIN NEVER TRUSTS THE TOMBSTONE. A tombstone is a CLAIM that a row is
+# gone; the handler re-verifies it (anti-join against `signals`) and refuses any
+# doc whose row is alive, counting it as `skipped_row_alive`. A mistaken or stale
+# tombstone therefore cannot destroy a live document.
+#
+# Target-agnostic + META: corpus consistency is a property of the shared pool,
+# not a per-target interpretation. The subscription declares NO `targets`
+# selector, so the cadence heartbeat is a SINGLE global sweep per tick (not a
+# per-target fan-out). The handler pulls the tombstone queue directly via
+# deps.pg_pool and ignores the materialized input slice.
+#
+# Method:
+#   * kind = deterministic — the deterministic kind dispatcher module:run_method.
+#     NO LLM block and no per-day token budget — the run is pure Python over
+#     corpus_tombstones → an OpenSearch bulk delete.
+#   * sub_handler = corpus_retention — injected into the run options at fire
+#     time. The sweep is idempotent (deleting an already-absent doc is a success,
+#     which is what makes the retry free) and forward-progressing (stamps
+#     purged_at on confirmed rows, bumps `attempts` on the rest and gives up
+#     after 5 so one poison id cannot consume the budget every tick). The runtime
+#     deps-builder connects an OpenSearchStore into
+#     deps.extras["corpus_retention_os"]; if it can't (dep missing / OS
+#     unreachable) the sweep no-ops that tick and the queue is untouched.
+#
+# The per-run summary FindingPayload (examined / deleted / pending /
+# skipped_row_alive) is the cadence receipt — exactly how corpus_indexer /
+# signal_summarizer keep a summary while side-writing directly. corpus_retention
+# is marked TRACE_ONLY in deterministic.py (its real product is the OpenSearch
+# delete), so the receipt lands in the trace, not in analyst_outputs.
+#
+# The BACKLOG is separately visible to the S-1 production gauge as the declared
+# `corpus_tombstone_drain` backlog_drain loop (production_gauge.BACKLOG_DRAINS),
+# owned by this analyst — so a queue that stops draining pages, rather than
+# quietly growing the way the orphan population did for a month.
+#
+# SHIPS `active` AND IS STILL INERT ON ARRIVAL. Unlike signals_retention (which
+# ships draft + ttl_days=0 because it deletes SUBSTRATE), this sweep's unit of
+# work is the tombstone queue, and migration 0175 creates that table EMPTY. A
+# freshly deployed corpus_retention therefore finds nothing and no-ops every
+# tick. It begins deleting only when something fills the queue: a live purge
+# (which now tombstones transactionally) or the operator running
+# `scripts/seed_corpus_orphan_tombstones.py --apply`, which queues the 75,871
+# historical orphans. There is no ttl knob to get wrong and no window in which
+# it can surprise anyone.
+
+identity:
+  id: corpus_retention
+  name: Corpus Retention
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: active
+  owner: corpus_retention
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick over the
+  # whole tombstone queue, directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: corpus_retention
+  # Deterministic kind, NO LLM block: this sweep uses OpenSearch (the delete
+  # plane), not an LLM. The runtime deps-builder connects an OpenSearchStore into
+  # deps.extras["corpus_retention_os"] whenever the bound sub_handler is
+  # corpus_retention; degrade-not-break if it can't (the sweep no-ops that tick).
+
+cadence:
+  # ── deterministic kind → token-budget-EXEMPT ──
+  #
+  # method.kind=deterministic carries no LLM block and no budget_tokens_per_day
+  # (deleting spends zero tokens). META analyst: no subscription.targets, so the
+  # cadence heartbeat is a SINGLE global sweep per tick, NOT a fan-out.
+  #
+  # fallback_schedule = "23-59/15 * * * *" — every 15 min (fires :23/:38/:53),
+  # OFFSET from every other maintenance cron so they never fire on the same tick,
+  # and specifically 16 minutes after corpus_indexer's :07 so the two halves of
+  # the corpus plane never contend for the same OpenSearch tick:
+  #   corpus_indexer "7-59/15"        · signal_embedder "11-59/15"
+  #   signal_summarizer "13-59/15"    · reenrich_translation "14-59/15"
+  #   corpus_retention (this) "23-59/15"
+  #
+  # At the default 2000-doc batch this drains the 75,871-doc backfill in ~5h and
+  # then idles on the small ongoing purge rate.
+  fallback_schedule: "23-59/15 * * * *"
+  # Idempotent forward-progressing sweep — a short re-fire floor is plenty.
+  cooldown_seconds: 600
+
+# No extra output sinks: the deterministic kind's default OUTPUT_KIND writes a
+# per-run summary finding (suppressed to the trace via the TRACE_ONLY map). The
+# deletes land directly against the OpenSearch legba_signals_corpus index.
+outputs: []

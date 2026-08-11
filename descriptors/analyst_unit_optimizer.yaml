@@ -85,6 +85,14 @@ eval:
     # method.system_prompt, NOT a Python prompt module. So:
     #   * parent_prompt_module_path stays legba.prompts.inline_target.v1 — used
     #     ONLY as the dspy STUDENT-module skeleton that gives GEPA its structure.
+    #     This value is now actually READ: the actor plumbs it into the run
+    #     options (`_inject_optimizer_prompt_options`). Until that landed it was
+    #     dead config — the kind's convention default won and built
+    #     `legba.prompts.leadership_transition.v1` from the ANALYST id, a module
+    #     that has never existed, and only `parent_system_prompt_source:
+    #     descriptor` below kept GEPA from optimizing the placeholder text that
+    #     came back. The convention now derives from the analyzed analyst's
+    #     KIND, which is how prompt packages are named (K5_BLAST_RADIUS §3.2).
     #   * parent_system_prompt_source: descriptor — the worker loads the REAL
     #     baseline text (for the operator diff snapshot) from the ANALYZED unit's
     #     method.system_prompt, NOT by importing legba.prompts.*. This forks from

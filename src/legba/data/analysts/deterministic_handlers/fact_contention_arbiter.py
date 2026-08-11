@@ -27,7 +27,10 @@ Pipeline (idempotent, safe to re-run hourly; the scan IS the backfill):
      "Kyiv"/"Kiev" are ONE value, not two.
   3. JUNK-GATE every cluster by reusing the ``fact_extractor`` gates
      (``is_junk_entity`` / ``_is_inverted_relation`` / ``_is_reflexive_after_canon``
-     / ``_is_nongeo_containment_inversion``). A junk cluster is EXCLUDED from the
+     / ``_is_nongeo_containment_inversion`` / ``_is_capital_metonymy``). ALL of
+     them — a gate the fact plane enforces and this list omits is a class that
+     re-forms here forever, which is exactly what CW-6's capital metonymy did
+     until 2026-08-03. A junk cluster is EXCLUDED from the
      dispute and recorded with ``is_junk=true`` + ``junk_reason``
      (OPERATOR-REPORTABLE — never silently dropped). The live
      Poland -> {Berlin, Russian} ``located in`` case junk-gates out (both fail the
@@ -128,6 +131,7 @@ from uuid import UUID
 
 from ..._entity_canon import is_junk_entity
 from ...filters.fact_extractor import (
+    _is_capital_metonymy,             # CW-6 — capital-as-government gate
     _is_inverted_relation,
     _is_nongeo_containment_inversion,
     _is_possessive_fragment,          # FU5b — surfacing junk gate
@@ -263,6 +267,16 @@ def _junk_reason(subject: str, predicate: str, value: str) -> str | None:
         return "inverted_relation"
     if _is_nongeo_containment_inversion(subject, predicate, value):
         return "nongeo_containment_inversion"
+    # CW-6 — a capital standing in for its government ("Madrid border with
+    # France", "Washington member of NATO"). The fact plane started rejecting
+    # these on 2026-08-03; this gate was NOT updated with it, so the contention
+    # plane kept clustering the class and K-4 R3 kept harvesting 0/20-scoring
+    # questions out of it ("which value of 'border with' for 'madrid' is
+    # correct?"). Adding it here is what stops the class RE-FORMING after
+    # migration 0176 closes the history — the gates this function reuses are
+    # only battle-tested if they are all actually here.
+    if _is_capital_metonymy(subject, predicate, value):
+        return "capital_metonymy"
     return None
 
 

@@ -89,6 +89,7 @@ describe('resolvePanel', () => {
       'system_optimizer',
       'system_dead_letter',
       'system_consult',
+      'system_graph_walk',
     ]
     for (const panel_id of all) {
       const result = resolvePanel(makeReg({ panel_id }))

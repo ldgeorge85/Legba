@@ -344,14 +344,32 @@ async def test_engine_enabled_false_is_a_hard_kill_switch(pg_pool):
 @pytest.mark.asyncio
 async def test_engine_batch_size_edit_bounds_the_scan(pg_pool):
     """Editing batch_size on the row (not options) bounds how many rows a
-    single sweep purges — proof batching is genuinely read from config."""
+    single sweep purges — proof batching is genuinely read from config.
+
+    ORDER DEPENDENCE. The sweep is a GLOBAL purge over `signals`: it takes the
+    oldest `batch_size` rows past the TTL, whoever owns them. This test used to
+    assert `remaining == 3` for its own tenant, which silently assumed the two
+    purged rows were ITS two. Under `--randomly-seed` a sibling file's older
+    rows were purged instead, all five of this tenant's rows survived, and the
+    assertion failed at 5 == 3 — on a sweep that had done exactly the right
+    thing and had already been proved to do it by the `signals_purged == 2`
+    line above. What "batching bounds the scan" actually claims is a statement
+    about the TABLE (a delta of exactly batch_size), plus a statement about
+    this tenant that holds however the bound is spent. Both are asserted below.
+
+    The TTL is also 100 rather than 30 days now. It only ever needed to be low
+    enough to catch this test's own 120-day rows; at 30 it made every row in
+    the shared DB older than a month eligible, so this test DELETED up to two
+    rows belonging to whichever file ran before it. Narrowing it keeps the
+    collateral to rows nothing else plausibly owns.
+    """
     tenant = f"polbatch_{uuid4().hex[:8]}"
     now = datetime.now(tz=timezone.utc)
     old_ids = [uuid4() for _ in range(5)]
 
     async with pg_pool.acquire() as conn:
         await conn.execute(
-            "UPDATE retention_policies SET ttl_days = 30, batch_size = 2 "
+            "UPDATE retention_policies SET ttl_days = 100, batch_size = 2 "
             "WHERE policy_name = 'signals_retention'"
         )
         for i, sid in enumerate(old_ids):
@@ -365,16 +383,31 @@ async def test_engine_batch_size_edit_bounds_the_scan(pg_pool):
 
     deps = StandardDeps(pg_pool=pg_pool)
     try:
+        async with pg_pool.acquire() as conn:
+            total_before = await conn.fetchval("SELECT count(*) FROM signals")
+
         res = await _retention_sweep.handle_policy(
             "signals_retention", [], {"sub_handler": "signals_retention"}, deps
         )
         assert res.finding.data["signals_purged"] == 2  # bounded by batch_size
 
         async with pg_pool.acquire() as conn:
+            total_after = await conn.fetchval("SELECT count(*) FROM signals")
             remaining = await conn.fetchval(
                 "SELECT count(*) FROM signals WHERE owner_tenant=$1", tenant
             )
-        assert remaining == 3  # 5 - 2, batching leaves the rest for next tick
+
+        # THE bound, stated over the table the sweep actually operates on: one
+        # tick removed exactly batch_size rows and stopped. True in any order.
+        assert total_before - total_after == 2, (
+            "one sweep must purge exactly batch_size rows, not the whole backlog"
+        )
+        # And this tenant's own five: the sweep may have spent its budget here
+        # or elsewhere, but it can never have taken more than the budget.
+        assert 5 - remaining <= 2, (
+            f"batching must leave the rest for the next tick; {5 - remaining} purged"
+        )
+        assert remaining >= 3
     finally:
         async with pg_pool.acquire() as conn:
             await conn.execute("DELETE FROM signals WHERE owner_tenant=$1", tenant)

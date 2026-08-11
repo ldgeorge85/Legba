@@ -59,6 +59,7 @@ from .models import (
     PromptModuleCandidatePayload,
     ScorecardPayload,
     SituationPayload,
+    SituationUpdatePayload,
 )
 
 
@@ -107,6 +108,14 @@ class OutputKind(str, Enum):
     # resolves them), and NO band ever exists without a real basis id — an
     # insufficient-evidence dimension carries an empty-but-explicit basis.
     SCORECARD = "scorecard"
+    # The 13th kind — CONTINUITY PHASE 2's dated trajectory read. Lands in the
+    # generic `analyst_outputs` table, one row per `situation_tracker` cycle,
+    # carrying that cycle's delta claim for every open situation that picked up
+    # new verified evidence. Goes through the FULL faithfulness verify gate via
+    # the composition (sub-claim) citation bridge: "this escalates the situation
+    # we were already watching" is a claim about the world, and the ledger rows
+    # in `situation_events` point back at THIS row for their grading.
+    SITUATION_UPDATE = "situation_update"
 
 
 class _TraceOnly:
@@ -331,6 +340,9 @@ _JOURNAL_URI       = "iglu:legba/journal/jsonschema/1-0-0"
 # P4-T2 banded per-country verdict — lands in the generic `analyst_outputs`
 # table (no dedicated table / DB default), so the URI is declared here only.
 _SCORECARD_URI     = "iglu:legba/scorecard/jsonschema/1-0-0"
+# Continuity P2 trajectory read — generic `analyst_outputs` table (no dedicated
+# table / DB default), so the URI is declared here only.
+_SITUATION_UPDATE_URI = "iglu:legba/situation_update/jsonschema/1-0-0"
 
 
 KIND_REGISTRY: dict[OutputKind, OutputKindSpec] = {
@@ -432,6 +444,16 @@ KIND_REGISTRY: dict[OutputKind, OutputKindSpec] = {
         # META producer: one side-written row per active G20 country. The
         # {target_id}-less subject mirrors the journal pattern.
         nats_subject_pattern="analyst.{analyst_id}.scorecard",
+    ),
+    OutputKind.SITUATION_UPDATE: OutputKindSpec(
+        kind=OutputKind.SITUATION_UPDATE,
+        table="analyst_outputs",           # generic table (NOT `situations`)
+        payload_model=SituationUpdatePayload,
+        schema_uri=_SITUATION_UPDATE_URI,
+        # META producer (a global sweep over open situations): target_id is None
+        # → renders as `_`, so the {target_id}-less subject is correct (the
+        # journal / scorecard pattern).
+        nats_subject_pattern="analyst.{analyst_id}.situation_update",
     ),
 }
 

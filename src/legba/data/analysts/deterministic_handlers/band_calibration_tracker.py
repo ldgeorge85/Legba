@@ -94,6 +94,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
 from ...provenance.models import FindingPayload
+from ...provenance.verify import JUDGE_PIPELINE_VERSION
 from ....runtime.analyst_method import AnalystMethodResult
 from . import scorecard_banding
 from .alert_trigger_scan import classify_band_transition
@@ -250,7 +251,10 @@ def _rate_block(outcomes: Mapping[str, int]) -> dict[str, Any]:
 
 
 def summarize_claims(
-    rows: list[Mapping[str, Any]], *, lookback_days: int
+    rows: list[Mapping[str, Any]],
+    *,
+    lookback_days: int,
+    population: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Fold claim rows into the cumulative band-calibration aggregate.
 
@@ -259,6 +263,11 @@ def summarize_claims(
     counts, the confirmed/reverted split, and rates with honest-None on empty
     denominators. Split three ways: overall, by direction (deteriorations vs
     improvements), by dimension.
+
+    ``population`` is the judge-pipeline boundary block (P3 §5a): which stamp
+    these rates describe and how many claims were EXCLUDED rather than pooled.
+    It is carried through verbatim so a reader can never mistake a
+    single-pipeline rate for an all-time one.
     """
     horizons = {f"{d}d": f"outcome_{d}" for d in HORIZON_DAYS}
 
@@ -301,10 +310,49 @@ def summarize_claims(
         "horizons": {label: overall[label] for label in horizons},
         "by_direction": by_direction,
         "by_dimension": by_dimension,
+        # WHICH judge population these rates describe, and what was excluded to
+        # keep them one population (P3 §5a — the split key finally has a reader).
+        "population": dict(population) if population else None,
         # The honesty contract, machine-checkable + verbatim.
         "no_brier": True,
         "honesty_note": HONESTY_NOTE,
     }
+
+
+def summarize_prior_populations(
+    rows: list[Mapping[str, Any]],
+    *,
+    lookback_days: int,
+) -> list[dict[str, Any]]:
+    """M-2 — one aggregate PER superseded judge pipeline, never merged.
+
+    ``rows`` are the claims the current-stamp filter excluded, each carrying its
+    own ``judge_pipeline_version`` (``None`` = logged before the split key
+    existed — a real population, not a gap). Returns one block per stamp with
+    that stamp's own ``claims_total`` and horizon rates, largest first.
+
+    This is the difference between "we refuse to pool" and "we refuse to show
+    you": the headline stays one population, and the history stays legible
+    beside it. Nothing here is ever added to or averaged with the headline —
+    each block stands alone, and the reader does the comparing.
+    """
+    grouped: dict[Any, list[Mapping[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(row.get("judge_pipeline_version"), []).append(row)
+
+    out: list[dict[str, Any]] = []
+    for version, sub in grouped.items():
+        # Reuse the SAME fold as the headline — a prior population must be
+        # computed identically or the comparison is meaningless.
+        summary = summarize_claims(sub, lookback_days=lookback_days)
+        out.append({
+            "judge_pipeline_version": version,
+            "pre_stamp": version is None,
+            "claims_total": summary["claims_total"],
+            "horizons": summary["horizons"],
+        })
+    out.sort(key=lambda b: (-int(b["claims_total"]), str(b["judge_pipeline_version"])))
+    return out
 
 
 def build_finding(
@@ -357,6 +405,35 @@ def build_finding(
                 f"(n_scored={h.get('scored')}, "
                 f"excluded: insufficient={h.get('excluded_insufficient')} "
                 f"unresolvable={h.get('excluded_unresolvable')})"
+            )
+    pop = summary.get("population")
+    if isinstance(pop, Mapping):
+        body_lines.append(
+            f"population: judge_pipeline_version={pop.get('judge_pipeline_version')} "
+            f"excluded_pre_stamp={pop.get('excluded_pre_stamp')} "
+            f"excluded_other_pipeline={pop.get('excluded_other_pipeline')} "
+            "(rates cover ONE judge pipeline; cross-swap claims are excluded, "
+            "never pooled)"
+        )
+        # M-2 — each excluded pipeline as its OWN readout. Reporting only the
+        # excluded COUNT would have turned a working readout into a blank one
+        # the day the split filter went live (every existing claim is
+        # NULL-stamped, mig 0122 having correctly refused to backfill).
+        for prior in (pop.get("prior_populations") or []):
+            if not isinstance(prior, Mapping):
+                continue
+            label = (
+                "pre-stamp" if prior.get("pre_stamp")
+                else str(prior.get("judge_pipeline_version"))
+            )
+            rates = " ".join(
+                f"{h}:persistence={(prior.get('horizons') or {}).get(h, {}).get('persistence_rate')}"
+                f"/n={(prior.get('horizons') or {}).get(h, {}).get('scored')}"
+                for h in sorted(prior.get("horizons") or {})
+            )
+            body_lines.append(
+                f"prior_population[{label}]: claims={prior.get('claims_total')} "
+                f"{rates} (its OWN population — never summed into the headline)"
             )
     body_lines.append(f"honesty: {HONESTY_NOTE}")
     if warnings:
@@ -459,10 +536,10 @@ _INSERT_CLAIM_SQL = """
     INSERT INTO band_calibration_claims
         (desk, dimension, from_band, to_band, direction, transition_at,
          scorecard_row_id, prev_scorecard_row_id, resolution_spec,
-         horizon_14_at, horizon_28_at)
+         horizon_14_at, horizon_28_at, judge_pipeline_version)
     VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::uuid, $8::uuid, $9,
             $6::timestamptz + interval '14 days',
-            $6::timestamptz + interval '28 days')
+            $6::timestamptz + interval '28 days', $10)
     ON CONFLICT (desk, dimension, scorecard_row_id) DO NOTHING
 """
 
@@ -522,6 +599,12 @@ async def _scan_and_log_claims(
                             row["row_id"],
                             prev_row["row_id"],
                             RESOLUTION_SPEC,
+                            # The population SPLIT KEY, stamped at LOG time —
+                            # the judge that graded the faithfulness the band
+                            # rests on. Resolution happens 14/28 days later,
+                            # possibly under a different judge; this is what
+                            # lets the aggregate refuse to pool across a swap.
+                            JUDGE_PIPELINE_VERSION,
                         )
                         if isinstance(res, str) and res.endswith("1"):
                             logged += 1
@@ -624,10 +707,49 @@ async def _resolve_due_claims(conn: Any, *, now: datetime) -> dict[str, int]:
 # (c) Aggregate pull for the summary finding
 # ---------------------------------------------------------------------------
 
+# The aggregate is scoped to ONE judge population. Bands rest on
+# faithfulness-gated findings, so pooling claims graded by different judges
+# reports a rate for a population that never existed — and the live history
+# straddles a swap (07-30 20:14Z) that moved mean faithfulness +7pp.
 _AGG_SQL = """
     SELECT dimension, direction, outcome_14, outcome_28
       FROM band_calibration_claims
      WHERE transition_at > now() - make_interval(days => $1)
+       AND judge_pipeline_version = $3
+     ORDER BY transition_at
+     LIMIT $2
+"""
+
+# What the filter left out, so the readout can SAY so rather than quietly
+# shrinking. `NULL` = logged before the split key existed; a non-null mismatch
+# = logged under a superseded judge pipeline.
+_AGG_EXCLUDED_SQL = """
+    SELECT
+        count(*) FILTER (WHERE judge_pipeline_version IS NULL)::int  AS pre_stamp,
+        count(*) FILTER (WHERE judge_pipeline_version IS NOT NULL
+                           AND judge_pipeline_version <> $2)::int    AS other_stamp
+      FROM band_calibration_claims
+     WHERE transition_at > now() - make_interval(days => $1)
+"""
+
+# M-2 — the EXCLUDED claims, kept as ANNOTATED PRIOR POPULATIONS rather than a
+# bare count.
+#
+# Migration 0122 added the split key and deliberately never backfilled it ("a
+# guessed stamp would fabricate the very comparability this column exists to
+# deny"), which is right — and it means that on the day the current-stamp filter
+# goes live EVERY existing claim is NULL-stamped and the headline rates go to
+# n=0. Reporting only `excluded_pre_stamp=777` turns a working readout into a
+# blank one and calls that honesty.
+#
+# It is not the only honest option. Each prior pipeline is its OWN population
+# with its OWN rates: reported side by side, labelled, and never summed or
+# averaged into the headline. The operator keeps the history, and nothing pools.
+_AGG_PRIORS_SQL = """
+    SELECT judge_pipeline_version, dimension, direction, outcome_14, outcome_28
+      FROM band_calibration_claims
+     WHERE transition_at > now() - make_interval(days => $1)
+       AND (judge_pipeline_version IS NULL OR judge_pipeline_version <> $3)
      ORDER BY transition_at
      LIMIT $2
 """
@@ -635,9 +757,41 @@ _AGG_SQL = """
 
 async def _pull_claims_for_summary(
     conn: Any, *, lookback_days: int
-) -> list[dict[str, Any]]:
-    rows = await conn.fetch(_AGG_SQL, int(lookback_days), _MAX_AGG_ROWS)
-    return [
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """``(claims for the CURRENT judge population, population-boundary block)``.
+
+    P3 §5a — the `judge_pipeline_version` stamp had writers and no readers, so
+    the split key split nothing. This is the reader: the rates describe one
+    judge pipeline, and the boundary block reports exactly what that cost.
+    """
+    rows = await conn.fetch(
+        _AGG_SQL, int(lookback_days), _MAX_AGG_ROWS, JUDGE_PIPELINE_VERSION
+    )
+    exc = await conn.fetchrow(
+        _AGG_EXCLUDED_SQL, int(lookback_days), JUDGE_PIPELINE_VERSION
+    )
+    pre_stamp = int(exc["pre_stamp"]) if exc else 0
+    other_stamp = int(exc["other_stamp"]) if exc else 0
+    prior_rows = await conn.fetch(
+        _AGG_PRIORS_SQL, int(lookback_days), _MAX_AGG_ROWS, JUDGE_PIPELINE_VERSION
+    )
+    boundary = {
+        "judge_pipeline_version": JUDGE_PIPELINE_VERSION,
+        "excluded_pre_stamp": pre_stamp,
+        "excluded_other_pipeline": other_stamp,
+        "prior_populations": summarize_prior_populations(
+            prior_rows, lookback_days=lookback_days
+        ),
+        "note": (
+            "Rates cover ONE judge pipeline. Claims graded by a superseded "
+            "judge, or logged before the split key existed, are excluded "
+            "rather than pooled — a band rests on faithfulness, and mixing "
+            "judges reports a rate for a population that never existed. Each "
+            "excluded pipeline is reported as its OWN population below, with "
+            "its own n and its own rates; nothing is summed across them."
+        ),
+    }
+    claims = [
         {
             "dimension": r["dimension"],
             "direction": r["direction"],
@@ -646,6 +800,7 @@ async def _pull_claims_for_summary(
         }
         for r in rows
     ]
+    return claims, boundary
 
 
 # ---------------------------------------------------------------------------
@@ -685,19 +840,25 @@ async def handle(
         # later scorecard rows only; never overwrites; skips voided).
         resolved_by_horizon = await _resolve_due_claims(conn, now=now)
         # (c) The cumulative aggregate for the honest summary finding.
-        claim_rows = await _pull_claims_for_summary(
+        claim_rows, population = await _pull_claims_for_summary(
             conn, lookback_days=lookback_days
         )
 
-    summary = summarize_claims(claim_rows, lookback_days=lookback_days)
+    summary = summarize_claims(
+        claim_rows, lookback_days=lookback_days, population=population
+    )
     logger.info(
         "band_calibration_tracker.tick logged=%d resolved=%s claims_total=%d "
-        "scanned=%d skipped_non_directional=%d",
+        "scanned=%d skipped_non_directional=%d judge_pipeline_version=%s "
+        "excluded_pre_stamp=%d excluded_other_pipeline=%d",
         scan["logged"],
         resolved_by_horizon,
         summary["claims_total"],
         scan["scanned_rows"],
         scan["skipped_non_directional"],
+        population["judge_pipeline_version"],
+        population["excluded_pre_stamp"],
+        population["excluded_other_pipeline"],
     )
     finding = build_finding(
         summary=summary,

@@ -22,16 +22,6 @@ from legba.data._entity_canon import (
     is_junk_entity,
 )
 
-# The public API must be reachable through the back-compat shim too.
-from legba.data.analysts.deterministic_handlers._entity_canon import (
-    identity_fold as identity_fold_shim,
-)
-
-
-def test_identity_fold_reexported_from_shim():
-    assert identity_fold_shim is identity_fold
-
-
 # ---------------------------------------------------------------------------
 # The required fold groups — every surface form of one referent folds equal.
 # ---------------------------------------------------------------------------

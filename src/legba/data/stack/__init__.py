@@ -11,7 +11,12 @@ This package contains the family-by-family handler implementations:
 
   * `legba.data.stack.llm`       — LLM provider handlers (L-120; this drop).
   * `legba.data.stack.vector`    — Vector store handlers (L-121; future).
-  * `legba.data.stack.embedding` — Embedding service handlers (L-122; future).
+  * Embedding service handlers (L-122) — NONE in-tree. The pre-reshape
+    in-process `BgeM3EmbeddingHandler` (BAAI/bge-m3 via `sentence-transformers`)
+    retired at L-205 when the embedding path moved to the hosted `bge-m3`
+    endpoint (`embed.primary.openai_compat`, vLLM `/v1/embeddings`); the empty
+    `legba.data.stack.embedding` namespace it left behind was deleted
+    2026-08-02. Git history preserves the module for archaeology.
   * `legba.data.stack.proxy`     — Proxy pool handlers (L-123; future).
   * `legba.data.stack.nats`      — NATS handlers (L-124; future).
   * `legba.data.stack.postgres`  — Postgres handlers (L-125; future).

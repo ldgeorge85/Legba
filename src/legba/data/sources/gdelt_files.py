@@ -82,6 +82,7 @@ from uuid import uuid4
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .._fips_iso import fips_to_iso2
 from ._contract import Signal, SourceContext, SourceHandler, SourceHealth
 from ._egress import guarded_async_client
 
@@ -595,8 +596,25 @@ def row_to_signal(row: dict[str, str], *, ctx: SourceContext, export_url: str) -
         "raw_body": row,
     }
 
+    # B-6 — the FIPS/ISO boundary. ``ActionGeo_CountryCode`` is FIPS 10-4;
+    # ``signals.geo`` is ISO 3166-1 alpha-2, because that is what a country desk
+    # subscribes on (``geo && ARRAY['XX']``). The two codelists are both two
+    # uppercase letters and agree about half the time, so passing the raw value
+    # through never failed — it just delivered Germany's stories to Gambia's desk
+    # (FIPS ``GM``), China's to Switzerland's (``CH``), Russia's to Serbia's
+    # (``RS``), and dropped the United Kingdom's on the floor entirely (FIPS
+    # ``UK``; ISO says ``GB``, so no desk matched). Measured live 2026-08-03:
+    # 1,617 rows wrong-countried, 129 of them onto a desk that exists.
+    #
+    # Translate at the boundary — this is the last point where the value is known
+    # to be FIPS. An untranslatable code (subdivision, uninhabited territory, or
+    # one of GDELT's occasional non-FIPS oddities) yields NOTHING rather than a
+    # guess: geo stays empty and the geocode filter resolves it from the row's
+    # own lat/lon, which is the more trustworthy signal anyway. The raw FIPS value
+    # stays in the payload under its ``_fips``-suffixed key, unaltered.
     geo_code = (row.get("ActionGeo_CountryCode") or "").strip().upper()
-    geo = [geo_code] if _FIPS_RE.match(geo_code) else []
+    iso2 = fips_to_iso2(geo_code) if _FIPS_RE.match(geo_code) else None
+    geo = [iso2] if iso2 else []
 
     return Signal(
         signal_id=uuid4(),

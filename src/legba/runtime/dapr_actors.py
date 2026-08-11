@@ -100,16 +100,21 @@ from ..data.analysts.deterministic_handlers.finding_supersession import (
     fold_prior_correlation_heads,
 )
 from ..data.provenance.bearing import record_bearing_edge
+from ..data.provenance.budget import record_judge_calls_budget
 from ..data.provenance.consumption import record_output_consumption
+from ..data.situations.trajectory import record_situation_events
 from ..data.provenance.writes import write_analyst_output
 from ..data.run_accounting import (
     bind_run_accounting as _bind_run_accounting,
     current_llm_calls as _current_llm_calls,
     current_tool_calls as _current_tool_calls,
+    llm_call_watermark as _llm_call_watermark,
+    llm_calls_since as _llm_calls_since,
     reset_run_accounting as _reset_run_accounting,
 )
 from ..data.schemas.analyst import AnalystDescriptor
 from ..data.schemas.target import TargetDescriptor
+from .actor_turn import TurnBudgetExceeded, bounded_turn_op
 from .analyst_method import AnalystMethodResult, LLMAnalystRunner
 from .budget import BudgetEnforcer
 from .dapr_cron import cron_to_reminder_timing
@@ -246,6 +251,85 @@ def _cadence_cooldown_blocks(
 #: AND what was dropped, so a knob that silently failed to take effect is a
 #: query away rather than an invisible non-event.
 HANDLER_OPTIONS_RECEIPT_PHASE = "handler_options"
+
+
+async def _analyst_kind_for_id(conn: Any, analyst_id: str) -> str | None:
+    """The ``identity.kind`` of the head descriptor for ``analyst_id``.
+
+    ``analyst_descriptors`` carries the kind as its own column, so this is a
+    single indexed lookup. Returns ``None`` (never raises) when the analyst is
+    unknown or the read fails — the caller degrades to "no convention path",
+    which is a loud no-op, not a guess.
+    """
+    try:
+        row = await conn.fetchrow(
+            "SELECT kind FROM analyst_descriptors "
+            "WHERE descriptor_id = $1 AND is_head = TRUE",
+            analyst_id,
+        )
+    except Exception as exc:                                    # pragma: no cover
+        logger.warning(
+            "dapr_actors.analyst.kind_lookup_failed analyst_id=%s err=%s",
+            analyst_id, exc,
+        )
+        return None
+    if row is None:
+        return None
+    kind = row["kind"]
+    return str(kind) if kind else None
+
+
+async def _inject_optimizer_prompt_options(
+    conn: Any,
+    options: dict[str, Any],
+    descriptor: Any,
+    *,
+    actor_id: str = "",
+) -> None:
+    """Plumb an OPTIMIZER descriptor's ``eval.optimizer`` prompt config into
+    the run ``options``.
+
+    The optimizer kind resolves the parent prompt module GEPA evolves from
+    ``options['parent_prompt_module_path']``, and NOTHING ever wrote the
+    descriptor's declared ``eval.optimizer.parent_prompt_module_path`` there —
+    ``_merge_descriptor_options`` only reads ``method.options``. So the
+    declared value was dead config and the kind's convention default always
+    won. That default was built from the analyzed ANALYST id while prompt
+    packages are named by KIND, so ``unit_optimizer`` (analyzing
+    ``leadership_transition``, kind ``inline_target``) resolved
+    ``legba.prompts.leadership_transition.v1`` — a module that has never
+    existed. Verified live: descriptor said ``legba.prompts.inline_target.v1``,
+    the workflow input carried the dead path (K5_BLAST_RADIUS §3.2).
+
+    Also resolves the ANALYZED analyst's kind so the convention has something
+    correct to build from when a descriptor declares no path at all.
+
+    ``setdefault`` merge, matching the rest of the options ladder: an explicit
+    per-run value beats the descriptor. Never raises.
+    """
+    eval_block = getattr(descriptor, "eval", None)
+    cfg = getattr(eval_block, "optimizer", None) if eval_block is not None else None
+    if not isinstance(cfg, dict):
+        return
+    declared = cfg.get("parent_prompt_module_path")
+    if isinstance(declared, str) and declared.strip():
+        options.setdefault("parent_prompt_module_path", declared.strip())
+    if "analyzed_analyst_kind" in options:
+        return
+    analyzed = options.get("analyzed_analyst_id") or cfg.get("analyzed_analyst_id")
+    if not analyzed:
+        return
+    kind = await _analyst_kind_for_id(conn, str(analyzed))
+    if kind:
+        options["analyzed_analyst_kind"] = kind
+    else:
+        logger.warning(
+            "dapr_actors.analyst.optimizer.analyzed_kind_unresolved actor_id=%s "
+            "analyzed_analyst_id=%s — the prompt-module convention cannot be "
+            "derived; the optimizer will no-op unless the descriptor declares "
+            "eval.optimizer.parent_prompt_module_path",
+            actor_id, analyzed,
+        )
 
 
 def _merge_descriptor_options(
@@ -1557,7 +1641,30 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
     async def _on_activate(self) -> None:
         actor_id = self.id.id
         logger.info("dapr_actors.analyst.activate actor_id=%s", actor_id)
-        deps = await _resolve_analyst_deps(actor_id)
+        # S-6 — THE 2026-08-01 HANG POINT, BOUNDED. `_resolve_analyst_deps`
+        # falls through to a registry fetch on a cache miss, and it caches
+        # nothing on failure (no negative caching, no circuit breaker), so a
+        # saturated registry turns every activation into an unbounded wait.
+        # Dapr actors are turn-based with reentrancy disabled, so that wait
+        # holds this actor's turn FOREVER and every cadence reminder and
+        # coalesced fire behind it queues on a turn that will never complete —
+        # the zombie turn, which is what converted a parse bug into a
+        # fleet-wide 35-minute freeze. Bounding it means the turn terminates:
+        # we lose this activation (the reconciler's ENSURE_ACTIVE retries it
+        # next resync, idempotently) but the queue behind it drains.
+        try:
+            deps = await bounded_turn_op(
+                _resolve_analyst_deps(actor_id),
+                op="analyst.activate.resolve_deps",
+                actor_id=actor_id,
+            )
+        except TurnBudgetExceeded:
+            logger.warning(
+                "dapr_actors.analyst.activate.deps_timeout actor_id=%s — "
+                "turn released un-activated; reconcile ENSURE_ACTIVE retries",
+                actor_id,
+            )
+            return
         if deps is None:
             logger.warning(
                 "dapr_actors.analyst.activate.no_deps actor_id=%s "
@@ -1608,16 +1715,33 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
         if schedule:
             try:
                 due, period = cron_to_reminder_timing(schedule)
-                await self.register_reminder(
-                    name="run_cadence",
-                    state=b"{}",
-                    due_time=due,
-                    period=period,
+                # S-6: the other unbounded call in this turn — reminder
+                # registration is an HTTP round-trip to daprd, and daprd talks
+                # to a single dapr-scheduler whose embedded etcd has degraded
+                # before. A wedged sidecar must not convert into a held turn.
+                await bounded_turn_op(
+                    self.register_reminder(
+                        name="run_cadence",
+                        state=b"{}",
+                        due_time=due,
+                        period=period,
+                    ),
+                    op="analyst.activate.register_reminder",
+                    actor_id=actor_id,
                 )
                 logger.info(
                     "dapr_actors.analyst.reminder.registered "
                     "actor_id=%s due=%s period=%s",
                     actor_id, due, period,
+                )
+            except TurnBudgetExceeded:
+                # Distinct from the malformed-cron case below: the expression
+                # is fine, the sidecar did not answer. Logged separately so a
+                # scheduler-plane problem is never read as a descriptor typo.
+                logger.warning(
+                    "dapr_actors.analyst.reminder.timeout actor_id=%s expr=%r "
+                    "— cadence NOT registered this pass; ENSURE_ACTIVE retries",
+                    actor_id, schedule,
                 )
             except Exception as exc:
                 logger.warning(
@@ -1833,11 +1957,52 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
         _kind, descriptor_id, _tail = _split_actor_id(self.id.id)
         return descriptor_id
 
+    def _union_target_ids(self, sub_targets: Any) -> list[str] | None:
+        """The explicit target set a UNION analyst reads in ONE run, or
+        ``None`` when this subscription is not a union.
+
+        ``subscription.targets.id_list`` (W1-E) is the descriptor-side
+        declaration of "read these N targets together". The only kind that
+        consumes it today is ``cross_target_raw``, whose ``READ_SLICE``
+        resolves the same list off the descriptor and reads the union in a
+        single pass — so the cadence heartbeat must fire ONE run, not one per
+        listed target.
+
+        A subscription that declares BOTH ``id_list`` and ``predicate`` is a
+        misconfiguration, not a refinement: ``READ_SLICE`` prefers ``id_list``
+        over the per-run ``target_filter`` unconditionally, so predicate
+        fan-out would produce N identical union runs. ``id_list`` wins here to
+        keep the actor and READ_SLICE agreeing on one meaning, and the ignored
+        predicate is logged rather than silently dropped (#95).
+        """
+        id_list = getattr(sub_targets, "id_list", None)
+        if not id_list:
+            return None
+        ids = [str(t) for t in id_list if str(t)]
+        if not ids:
+            return None
+        pred = getattr(sub_targets, "predicate", None)
+        if pred:
+            logger.warning(
+                "dapr_actors.analyst.cadence.union_predicate_ignored "
+                "actor_id=%s id_list=%d predicate=%r — id_list wins (READ_SLICE "
+                "prefers it); drop one of the two in the descriptor",
+                self.id.id, len(ids), pred,
+            )
+        return ids
+
     async def _cadence_targets(self) -> list[str] | None:
         """Active targets this analyst's ``subscription.targets`` selector
         matches — the per-target cadence heartbeat set. ``None`` (or empty)
-        means this is a META analyst with no target binding, so the caller
-        does a single global run instead.
+        means the caller does ONE global run instead of a per-target fan-out.
+
+        ``None`` covers two shapes, both of which want a single run:
+
+          * a META analyst with no ``subscription.targets`` binding at all
+            (discovery, cross-target meta, optimizer), and
+          * a UNION analyst — ``subscription.targets.id_list`` naming an
+            explicit target set that the KIND reads in ONE pass
+            (``cross_target_raw``). See :meth:`_union_target_ids`.
 
         Evaluates the optional Starlark predicate (ANALYST_SUBSCRIPTION
         surface, e.g. ``has_tag("g20")``) against each active target's scope,
@@ -1850,6 +2015,23 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
         sub_targets = getattr(sub, "targets", None) if sub is not None else None
         if sub_targets is None:
             return None  # meta analyst — global cadence
+        # UNION CARVE-OUT (W1-E follow-up). A descriptor that declares
+        # `subscription.targets.id_list` is naming ONE run over an explicit
+        # target set, not N per-target runs: the kind's READ_SLICE
+        # (cross_target_raw) resolves that same id_list itself and reads the
+        # union in a single pass. Without this branch the block below fell
+        # through to "selector, no predicate -> ALL active targets" and fanned
+        # out one run PER target, each of which then re-resolved the identical
+        # union inside READ_SLICE — N redundant, byte-identical cross-target
+        # runs. Returning None routes to the caller's single global run
+        # (target_filter=None), which is exactly the shape READ_SLICE wants.
+        union_ids = self._union_target_ids(sub_targets)
+        if union_ids is not None:
+            logger.info(
+                "dapr_actors.analyst.cadence.union actor_id=%s union_targets=%d",
+                self.id.id, len(union_ids),
+            )
+            return None
         pred = getattr(sub_targets, "predicate", None)
         try:
             async with deps_bundle.deps.pg_pool.acquire() as conn:
@@ -2223,6 +2405,24 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
         # concurrent actor on this event loop gets its own. Flushed into the
         # ``analyst_traces`` row at receipt time; reset in the finally below.
         _acct_token = _bind_run_accounting()
+        # §31.1 failure-trace state, hoisted OUT of the run body so the
+        # except-handler below can always read it. Both are re-bound deeper in
+        # the try; a run that dies before reaching them (a slice read that
+        # raises, a deps resolution blowup) still gets a trace stating zero
+        # attempts rather than a NameError swallowing the whole handler.
+        attempts_made = 0
+        max_attempts: int | None = None
+        # True once ``receipt_chain.record(...)`` has landed THIS run's row.
+        # ``analyst_traces`` is keyed PRIMARY KEY (run_id), so a failure trace
+        # written after a successful one would violate the PK — and an
+        # exception CAN still be raised past the receipt write (the verify
+        # pass, the critique finalizer, the escalation hook all run after it).
+        _trace_written = False
+        # S-4: how many LLM calls the account held when the receipt was flushed.
+        # Hoisted for the same reason as the two above — the judge-metering block
+        # reads it, and a run that never reaches the receipt write must find 0
+        # rather than a NameError.
+        _acct_watermark = 0
         try:
             async with deps_bundle.deps.pg_pool.acquire() as conn:
                 if inputs_override is not None:
@@ -2435,6 +2635,15 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                     "analyst_id": deps_bundle.descriptor.identity.id,
                     "analyst_version": deps_bundle.descriptor.identity.version,
                     "run_id": run_id,
+                    # PHASE-V D8a: the window this run's slice was ACTUALLY cut
+                    # with, from the same resolver `_read_substrate_slice` uses.
+                    # `inline_target._render_user_prompt` prints it in the slice
+                    # header so the unit states its real window instead of one
+                    # written into prompt prose that can (and did) drift from the
+                    # descriptor by 48 hours.
+                    "slice_window_hours": resolve_slice_window_hours(
+                        deps_bundle.descriptor
+                    ),
                 }
                 # Stage 4 (gather_only): thread the descriptor's
                 # ``subscription.substrate.gather_only`` flag so the inline_target
@@ -2521,6 +2730,15 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                     options["sub_handler"] = (
                         getattr(deps_bundle.descriptor.method, "sub_handler", None)
                         or deps_bundle.descriptor.identity.id
+                    )
+                # OPTIMIZER-kind prompt config. Same class of gap as the
+                # sub_handler injection above: the optimizer kind reads its
+                # parent prompt module from ``options`` and nothing ever put
+                # the descriptor's declared value there. See
+                # `_inject_optimizer_prompt_options`.
+                if deps_bundle.descriptor.identity.kind == "optimizer":
+                    await _inject_optimizer_prompt_options(
+                        conn, options, deps_bundle.descriptor, actor_id=actor_id,
                     )
                 # X-1 — descriptor-declared handler options. THE channel that
                 # makes every deterministic handler's ``options.get(knob,
@@ -2687,7 +2905,6 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                 # behavior (3 attempts, exponential backoff up to 60s).
                 method_result = None
                 last_exc: BaseException | None = None
-                attempts_made = 0
                 max_attempts = transient_policy.max_attempts
                 for attempt in range(1, max_attempts + 1):
                     attempts_made = attempt
@@ -3141,7 +3358,13 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                     # additive. Both were declared-but-never-written columns:
                     # every ``analyst_traces`` row all-time carried ``[]``, so
                     # a receipt could not evidence that a model was called.
+                    #
+                    # S-4: take the WATERMARK at the same instant as the flush.
+                    # Everything the account records past this point is the
+                    # post-receipt leg — today, the faithfulness judge — and is
+                    # appended back onto this row once verify has answered.
                     _acct_llm_calls = _current_llm_calls()
+                    _acct_watermark = _llm_call_watermark()
                     _acct_tool_calls = [
                         *(getattr(method_result, "tool_calls", None) or []),
                         *_current_tool_calls(),
@@ -3181,6 +3404,9 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                             tool_calls=_acct_tool_calls or None,
                         )
                     )
+                    # §31.1: this run's row is now on disk. Anything that
+                    # raises past here must NOT re-trace it (PK on run_id).
+                    _trace_written = True
 
                 # L-175 trace-finalizer: when the analyst's output kind is
                 # CRITIQUE, also write a row to ``analyst_critiques`` so the
@@ -3262,6 +3488,18 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                             and deps_bundle.descriptor.identity.kind == "journal_assessor"
                             and _descriptor_declares_verify(deps_bundle.descriptor)
                         )
+                        # Continuity P2 (plan D3): the SITUATION_UPDATE kind goes
+                        # through the FULL gate. Its delta claim ("this escalates
+                        # the situation we were watching") is an assertion about
+                        # the world resting on cited evidence, so it is graded
+                        # exactly like a composition — same sub-claim citation
+                        # bridge, same floor. An honest-empty cycle writes no
+                        # citations key and no-ops in the helper's scope guard.
+                        or (
+                            output_kind == OutputKind.SITUATION_UPDATE
+                            and deps_bundle.descriptor.identity.kind == "situation_tracker"
+                            and _descriptor_declares_verify(deps_bundle.descriptor)
+                        )
                     )
                 ):
                     try:
@@ -3282,6 +3520,35 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                             "dapr_actors.analyst.verify.failed actor_id=%s "
                             "run_id=%s err=%s", actor_id, run_id, exc,
                         )
+
+                # Continuity P2 — the SITUATION TRAJECTORY ledger (migration
+                # 0184). Data-driven, no kind switch (the ``consumed_edges``
+                # contract): a kind that stamps ``situation_events`` gets those
+                # rows materialized with the just-written row as
+                # ``source_output_id``, which the handler could not supply
+                # because the actor mints output ids.
+                #
+                # DELIBERATELY AFTER THE VERIFY PASS, AND GATED ON IT. The ledger
+                # is append-only with no UPDATE and no DELETE, so a row written
+                # on the strength of an ungraded claim is permanent, and the
+                # trajectory reads (the composition register, the /v3 route)
+                # surface the newest row as THE state with no confidence filter
+                # of their own. Writing first and gating on read would therefore
+                # make a fabricated delta the durable answer everywhere. A claim
+                # that did not clear the floor lands its finding (demoted, as
+                # every other kind's does) and writes NO trajectory; the gap is
+                # exactly what the ``situation_trajectory_ledger`` backlog drain
+                # measures, so refusing here is visible rather than silent.
+                _situation_events = getattr(
+                    method_result, "situation_events", None
+                )
+                if _situation_events and output_row is not None:
+                    await record_situation_events(
+                        conn,
+                        events=_situation_events,
+                        source_output_id=output_row.id,
+                        verification=verification_block,
+                    )
 
                 # C2b (P4-6) — the structural_claims verify PROFILE. A
                 # CLAIM-BEARING structural analyst (STRUCTURAL_CLAIMS_VERIFY_
@@ -3323,6 +3590,71 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                         logger.warning(
                             "dapr_actors.analyst.structural_verify.failed "
                             "actor_id=%s run_id=%s err=%s", actor_id, run_id, exc,
+                        )
+
+                # S-4 — METER THE JUDGE LEG.
+                #
+                # The defect: the Cerebras judge appeared in NO llm_call receipt,
+                # NO budget row and NO cost estimate, so the keystone verify gate
+                # — running on an external, paid, rate-limited API — had no token
+                # count, no duration, no finish_reason and no cost. Any decision
+                # about judge VOLUME was unmeasurable.
+                #
+                # The cause was never a missing chokepoint: the judge's
+                # chat_complete accounted itself exactly like every other call.
+                # The receipt was just FLUSHED TOO EARLY — the trace row is
+                # written above, before verify, because V-B's absence-slice check
+                # reads this run's input_row_refs back over this same conn. Every
+                # judge call therefore landed in the still-bound account after the
+                # snapshot and was dropped at reset.
+                #
+                # So: take the tail recorded since the flush watermark, tag it,
+                # and (a) APPEND it to the trace row's llm_calls — an UPDATE that
+                # does NOT touch the receipt chain, since llm_calls is not in
+                # compute_receipt_hash's payload — and (b) meter it into
+                # budget_ledger under its own `judge:<component>` dimension.
+                #
+                # NOT in the verify hot path: this runs strictly AFTER the judge
+                # has answered, on the same already-open connection, as two
+                # statements against a leg whose own latency is seconds of remote
+                # inference. Best-effort throughout — accounting must never fail a
+                # run that produced a durable finding and a durable verdict.
+                if _trace_written and deps_bundle.receipt_chain is not None:
+                    try:
+                        judge_calls = _llm_calls_since(_acct_watermark)
+                        for _entry in judge_calls:
+                            # The population tag. Everything recorded after the
+                            # receipt flush is by construction the post-finding
+                            # verify leg, so this is true by position, not by
+                            # guessing at component ids — and it survives a judge
+                            # re-point (the route ladder repoints component_id at
+                            # will) because it does not depend on one.
+                            _entry["leg"] = "verify_judge"
+                        if judge_calls:
+                            appended = await deps_bundle.receipt_chain.append_llm_calls(
+                                run_id=run_id, calls=judge_calls,
+                            )
+                            ledger_rows = await record_judge_calls_budget(
+                                conn,
+                                analyst_id=deps_bundle.descriptor.identity.id,
+                                calls=judge_calls,
+                            )
+                            logger.info(
+                                "dapr_actors.analyst.judge_metered actor_id=%s "
+                                "run_id=%s calls=%d receipted=%d ledger_rows=%d "
+                                "tokens=%d",
+                                actor_id, run_id, len(judge_calls), appended,
+                                len(ledger_rows),
+                                sum(int(r.get("total_tokens") or 0)
+                                    for r in judge_calls),
+                            )
+                    except Exception as exc:  # pragma: no cover — instrumentation
+                        logger.warning(
+                            "dapr_actors.analyst.judge_metering.failed "
+                            "actor_id=%s run_id=%s err=%s — the finding and its "
+                            "critique are durable; only the judge's receipt/"
+                            "ledger entry was lost for this run",
+                            actor_id, run_id, exc,
                         )
 
                 # Publish analyst-output event per L-191:
@@ -3507,6 +3839,34 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                 from ..data.schemas.analyst import RetryBlock
                 retry_block = RetryBlock()
 
+            # §31.1 — DURABLE DEATH RECEIPT. Before touching the actor record,
+            # land the ``analyst_traces`` row for this run. The trace was
+            # previously written on the success path ONLY, so a dead run left
+            # nothing but a log line and the run history kept showing the last
+            # SUCCESSFUL run — traceless death has now hidden two incidents
+            # (an analyst can be failing every tick for 19h while every
+            # staleness read reports the fleet healthy). The helper never
+            # raises: this handler is already carrying ``exc`` and a failing
+            # trace write must not mask it.
+            if not _trace_written:
+                _trace_written = await _write_failure_trace(
+                    deps_bundle.receipt_chain,
+                    run_id=run_id,
+                    analyst_id=deps_bundle.descriptor.identity.id,
+                    analyst_version=deps_bundle.descriptor.identity.version,
+                    cadence_trigger=str(payload.get("trigger_kind", "method")),
+                    # ``target_id`` is resolved deep in the run body and is
+                    # unbound on most failure paths; the caller-supplied
+                    # ``target_filter`` is the same value for a targeted run
+                    # and is bound before the try.
+                    target_id=target_filter,
+                    exc=exc,
+                    bucket_kind=bucket_kind,
+                    attempts_made=attempts_made,
+                    max_attempts=max_attempts,
+                    run_started_at=now,
+                )
+
             if bucket_kind == "budget":
                 # BudgetExhausted raised mid-call (uncommon — usually
                 # caught by precall_check). Honor budget_policy.
@@ -3658,6 +4018,8 @@ from .actor_payload import (  # noqa: F401  -- re-export: public API stability (
     _resolve_effective_output_kind,
     _select_output_payload,
     _write_critique_trace_record,
+    _write_failure_trace,
+    TRACE_STATUS_FAILED,
 )
 
 
@@ -3683,6 +4045,7 @@ from .actor_substrate_slice import (  # noqa: F401  -- re-export: public API sta
     _select_graph_structure_items,
     _SLICE_INTERESTING_KIND_LABELS,
     _read_substrate_slice,
+    resolve_slice_window_hours,
 )
 
 
@@ -3694,6 +4057,7 @@ __all__ = [
     "TargetActorInterface",
     "_AnalystDeps",
     "_attach_option_receipt",
+    "_inject_optimizer_prompt_options",
     "_merge_descriptor_options",
     "_PAYLOAD_SELECTORS",
     "_TargetDeps",
@@ -3718,6 +4082,8 @@ __all__ = [
     "_split_actor_id",
     "_worker_actor_id",
     "_write_critique_trace_record",
+    "_write_failure_trace",
+    "TRACE_STATUS_FAILED",
     "_FANOUT_CHUNK",
     "_set_analyst_demoted",
     "_set_global_demoted",

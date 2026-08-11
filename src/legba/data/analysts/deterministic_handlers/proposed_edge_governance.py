@@ -46,8 +46,8 @@ from uuid import UUID
 from ...provenance.models import FindingPayload, NexusPayload
 from ...provenance.writes import write_nexus
 from ....runtime.analyst_method import AnalystMethodResult
-# W2 shared canon spine — prefer the new shared module path (the old
-# deterministic_handlers/_entity_canon is now a re-export shim). canonicalize_entity
+# W2 shared canon spine — the ONE canon at legba.data._entity_canon (the old
+# deterministic_handlers/_entity_canon re-export shim is gone). canonicalize_entity
 # normalizes a promoted endpoint; is_junk_entity drops true junk; is_demonym is
 # retained for the existing centrality-inflation gate.
 from ..._entity_canon import (
@@ -60,6 +60,14 @@ from ..._entity_canon import (
 # conn; the canon must not) so a fragment/alias endpoint rewrites to its elected
 # entity_profiles keeper BEFORE the nexus write. Degrade-not-break: never raises.
 from ..._entity_resolve import resolve_keeper
+# K-G2 retention thresholds — the bar, the floor and the staleness window all
+# live with the score that defines them, so this handler and the reifier can
+# never disagree about what "below bar" means.
+from ..edge_qualification import (
+    MIN_INDEPENDENT_SOURCES,
+    RECOMMENDED_BAR,
+    RETENTION_STALE_DAYS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +92,13 @@ DEFAULT_MAX_PROMOTIONS_PER_RUN: int = 200
 
 DEFAULT_MAX_REJECTIONS_PER_RUN: int = 2000
 """Bounds the per-run rejection work (a single bulk UPDATE, but capped)."""
+
+DEFAULT_MAX_RETIREMENTS_PER_RUN: int = 5000
+"""Bounds the per-run K-G2 retirement work. Sized against the arrival rate:
+~9,941 candidates/day arrive and ~92% of them can never qualify, so at two runs
+a day this keeps pace with the sediment without any single tick holding a long
+write. Migration 0160 clears the standing backlog; this only has to keep it
+clear."""
 
 # Canonical neutral predicate for a bare co-occurrence (the vocabulary's
 # CoOccursWith; write_nexus normalizes it to the lowercase-spaced row form).
@@ -292,16 +307,64 @@ async def _reject_stale_thin(
         return 0
 
 
+async def _retire_below_bar_stale(
+    conn: Any,
+    *,
+    bar: float,
+    min_sources: int,
+    stale_days: int,
+    limit: int,
+) -> int:
+    """K-G2 age-out: below the qualification bar AND stale → ``status='retired'``.
+
+    THE ONGOING HALF of migration ``0160``. That migration cleared the standing
+    backlog once; without this, the sediment simply rebuilds at ~9,941 arrivals a
+    day, 92.1% of them single-sourced.
+
+    This is a SEPARATE rule from :func:`_reject_stale_thin`, not a replacement,
+    because the two age out different populations:
+
+      * ``_reject_stale_thin`` fires on raw ``confidence`` and ``produced_at``.
+        A row above confidence 0.45 that never promoted is never touched by it,
+        however thin its actual sourcing.
+      * this rule fires on EARNED EVIDENCE (independent sources, publisher
+        diversity, salience, desk relevance) and measures staleness from the
+        NEWEST BACKING SIGNAL — so a candidate that gains support restarts its
+        clock, and a syndicated pile-up cannot look like corroboration.
+
+    The statement comes from :func:`~..edge_qualification.retirement_update_sql`,
+    the same generator the migration inlined, so the one-shot and the recurring
+    rule cannot drift apart. Bounded per run (oldest first, so it converges);
+    ``stale_days <= 0`` DISABLES it, matching the sibling leg's convention.
+    """
+    if stale_days <= 0:
+        return 0
+    from ..edge_qualification import retirement_update_sql
+
+    result = await conn.execute(
+        retirement_update_sql(
+            bar=bar, min_sources=min_sources, stale_days=stale_days, limit=limit
+        )
+    )
+    try:
+        return int(result.split()[-1]) if result else 0
+    except (ValueError, IndexError):  # pragma: no cover - defensive
+        return 0
+
+
 def _build_finding(
     *,
     promoted: int,
     rejected: int,
     candidates: int,
     target_id: str | None,
+    retired: int = 0,
 ) -> FindingPayload:
     title = (
         f"Proposed-edge governance: {promoted} promoted, {rejected} rejected"
     )
+    if retired:
+        title = f"{title}, {retired} retired"
     if target_id:
         title = f"{title} for {target_id}"
     tags = ["deterministic", "proposed_edge_governance"]
@@ -309,10 +372,13 @@ def _build_finding(
         tags.append("edges_promoted")
     if rejected:
         tags.append("edges_rejected")
+    if retired:
+        tags.append("edges_retired")
     return FindingPayload(
         title=title[:2048],
         body=(
-            f"promoted={promoted} rejected={rejected} candidates={candidates}"
+            f"promoted={promoted} rejected={rejected} retired={retired} "
+            f"candidates={candidates}"
         )[:65536],
         confidence=1.0,
         evidence=[],
@@ -321,6 +387,7 @@ def _build_finding(
             "sub_handler": "proposed_edge_governance",
             "promoted_count": promoted,
             "rejected_count": rejected,
+            "retired_count": retired,
             "candidates": candidates,
         },
     )
@@ -339,12 +406,26 @@ async def handle(
       * ``reject_min_age_days``    (int,   default 30; <=0 disables rejection)
       * ``max_promotions_per_run`` (int,   default 200)
       * ``max_rejections_per_run`` (int,   default 2000)
+      * ``retire_bar``             (float, default 0.42 — the K-G2 bar)
+      * ``retire_min_sources``     (int,   default 2)
+      * ``retire_stale_days``      (int,   default 30;  <=0 disables retirement)
+      * ``max_retirements_per_run``(int,   default 5000)
     """
     promote_min = float(options.get("promote_min_confidence", DEFAULT_PROMOTE_MIN_CONFIDENCE))
     reject_max = float(options.get("reject_max_confidence", DEFAULT_REJECT_MAX_CONFIDENCE))
     reject_age = int(options.get("reject_min_age_days", DEFAULT_REJECT_MIN_AGE_DAYS))
     max_promotions = int(options.get("max_promotions_per_run", DEFAULT_MAX_PROMOTIONS_PER_RUN))
     max_rejections = int(options.get("max_rejections_per_run", DEFAULT_MAX_REJECTIONS_PER_RUN))
+    retire_bar = float(options.get("retire_bar", RECOMMENDED_BAR))
+    retire_min_sources = int(
+        options.get("retire_min_sources", MIN_INDEPENDENT_SOURCES)
+    )
+    retire_stale_days = int(
+        options.get("retire_stale_days", RETENTION_STALE_DAYS)
+    )
+    max_retirements = int(
+        options.get("max_retirements_per_run", DEFAULT_MAX_RETIREMENTS_PER_RUN)
+    )
 
     analyst_id = str(options.get("analyst_id") or "proposed_edge_governance")
     analyst_version = str(options.get("analyst_version") or "")
@@ -361,6 +442,7 @@ async def handle(
 
     promoted = 0
     rejected = 0
+    retired = 0
     candidates = 0
     pool = getattr(deps, "pg_pool", None) if deps is not None else None
     if pool is not None:
@@ -395,12 +477,23 @@ async def handle(
                     min_age_days=reject_age,
                     limit=max_rejections,
                 )
+                # K-G2 — the ONGOING half of migration 0160. Runs last so a row
+                # this tick promoted or rejected is already out of the pending
+                # pool and cannot be counted twice.
+                retired = await _retire_below_bar_stale(
+                    conn,
+                    bar=retire_bar,
+                    min_sources=retire_min_sources,
+                    stale_days=retire_stale_days,
+                    limit=max_retirements,
+                )
         except Exception as exc:
             logger.warning("proposed_edge_governance.failed err=%s", exc)
 
     finding = _build_finding(
         promoted=promoted,
         rejected=rejected,
+        retired=retired,
         candidates=candidates,
         target_id=str(target_id) if target_id else None,
     )

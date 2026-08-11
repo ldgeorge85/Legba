@@ -31,7 +31,14 @@ from pathlib import Path
 import pytest
 
 
-REPO_ROOT = Path("/usr/local/deployments/active/legba")
+# The checkout UNDER TEST, not a hardcoded one. scripts/run_tests_in_container.sh
+# bind-mounts the repo at the same path inside and out (`-v $R:$R -w $R`), so
+# resolving off __file__ gives the main checkout under cron and the WORKTREE
+# under a branch agent — which is the only way these assertions can guard a
+# change before it merges. Hardcoding the main checkout meant a worktree run
+# validated main's Dockerfiles and reported on files the branch had not
+# touched (6 of the nightly's documented "worktree-only" failures).
+REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCKER_DIR = REPO_ROOT / "docker"
 UI_DIR = REPO_ROOT / "legba-ui-v3"
 
@@ -42,7 +49,12 @@ PYTHON_IMAGES = [
         "legba-registry",
         DOCKER_DIR / "Dockerfile.registry",
         "legba-registry",
-        ["fastapi", "uvicorn", "asyncpg", "pynacl", "nats-py"],
+        # pycountry is here because of the 2026-08-04 outage: it was in
+        # pyproject.toml and in Dockerfile.runtime but not in the registry's
+        # explicit pip list, so `/typed` 500'd for every options-bearing
+        # deterministic analyst for 14h. The registry installs from that list,
+        # NOT from pyproject, so pyproject agreeing proves nothing.
+        ["fastapi", "uvicorn", "asyncpg", "pynacl", "nats-py", "pycountry"],
     ),
     (
         "legba-runtime-dapr",
@@ -105,10 +117,22 @@ def test_python_dockerfile_shape(
     ), f"{name} dockerfile missing ENTRYPOINT [{entrypoint_token!r}]"
 
     # Sanity: each declared dep token appears in the pip install line(s).
+    #
+    # COMMENTS ARE STRIPPED FIRST, and that is the whole point. These
+    # Dockerfiles carry long comments explaining why each dep is present — so a
+    # substring search over the raw body is satisfied by the PROSE ABOUT a
+    # dependency and passes happily when the dependency itself has been
+    # deleted. Measured: removing `"pycountry>=24.6"` from the install list
+    # while leaving the paragraph that explains it left this test green, which
+    # is precisely the 14h outage it was just extended to make impossible.
+    installed = "\n".join(
+        ln for ln in body.splitlines() if not ln.lstrip().startswith("#")
+    )
     for tok in must_have:
-        assert tok in body, (
+        assert tok in installed, (
             f"{name} dockerfile expected to install {tok!r} (subset of "
-            f"pyproject.toml deps relevant to this image); not found"
+            f"pyproject.toml deps relevant to this image); not found in any "
+            f"non-comment line"
         )
 
 

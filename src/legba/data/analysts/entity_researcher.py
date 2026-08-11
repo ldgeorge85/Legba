@@ -277,18 +277,32 @@ def _parse_batch(content: str, batch: list[CandidatePair]) -> list[Verdict]:
 
 
 async def _load_cached(conn, pair_keys: list[str]) -> dict[str, Verdict]:
-    """Fetch already-decided verdicts for these pair_keys (the re-adjudication
-    cache). Returns {} if the table is absent or nothing is cached."""
+    """Fetch already-DECIDED verdicts for these pair_keys (the re-adjudication
+    cache). Returns {} if the table is absent or nothing is cached.
+
+    ``relationship_reifier``'s alias-pair PROPOSALS are excluded (K-G2). They
+    share the table because it is the right table — an order-independent
+    pair_key over a same/not_same/unsure vocabulary — but they are observations,
+    not decisions: the typer was asked to type a relationship and answered a
+    side question about identity. Letting one into this cache would SUPPRESS the
+    real LLM adjudication of exactly the pair it was raised to surface, which is
+    the opposite of the point. ``ALIAS_PAIR_MODEL_ID`` is written by nothing
+    else, so this exclusion is provably a no-op for every pre-existing row.
+    """
     if not pair_keys:
         return {}
+    from .reifier_alias_pairs import ALIAS_PAIR_MODEL_ID
+
     rows = await conn.fetch(
         """
         SELECT pair_key, entity_a, entity_b, verdict, confidence,
                justification, decided_by, model_id
           FROM entity_judgement
          WHERE pair_key = ANY($1::text[])
+           AND COALESCE(model_id, '') <> $2
         """,
         list(pair_keys),
+        ALIAS_PAIR_MODEL_ID,
     )
     out: dict[str, Verdict] = {}
     for r in rows:
@@ -504,6 +518,17 @@ class MergeReport:
     merged: int
     skipped: int
     pairs: tuple[tuple[str, str], ...]  # (keeper_id, loser_id) applied
+    #: K-G1 — what the in-transaction `entity_edges` fold did across this batch.
+    #: A merge that moves edges must never be invisible in the receipt, which is
+    #: precisely the failure mode of the legacy name-keyed sweep (best-effort,
+    #: 200 losers/run, `except Exception: warning`).
+    edges_repointed: int = 0
+    edges_superseded: int = 0
+    edges_self_closed: int = 0
+
+
+#: The counter keys `merge_pair` accumulates into (K-G1).
+EDGE_FOLD_KEYS = ("repointed", "superseded", "self_closed")
 
 
 async def elect_keeper(conn, id_a: str, id_b: str) -> tuple[str, str] | None:
@@ -543,11 +568,21 @@ async def elect_keeper(conn, id_a: str, id_b: str) -> tuple[str, str] | None:
 async def merge_pair(
     conn, keeper_id: str, loser_id: str, *,
     reason: str = "", decided_by: str = "llm",
+    edge_fold: dict[str, int] | None = None,
 ) -> bool:
     """Tombstone-merge ``loser_id`` into ``keeper_id`` (reversible). Resolves both
     ids to their terminal survivors first (never chains onto a tombstone, never
     forms a cycle). Idempotent: a loser already pointing at the keeper is a no-op
-    success. Returns True when a merge was applied."""
+    success. Returns True when a merge was applied.
+
+    K-G1: the loser's ``entity_edges`` are folded onto the keeper INSIDE the same
+    transaction that sets ``merged_into`` (migration 0143), so the merge and the
+    edge repoint are one atomic act — a merge either moves its edges or does not
+    happen. This replaces nothing yet: ``_compact_merged_edges`` keeps sweeping
+    the legacy name-keyed ``nexuses``/``facts`` surfaces until their readers
+    migrate. Pass ``edge_fold`` (a mutable ``{repointed, superseded,
+    self_closed}`` accumulator) to surface the fold in the caller's receipt.
+    """
     if not keeper_id or not loser_id:
         return False
     keeper = str(await conn.fetchval("SELECT resolve_entity($1::uuid)", keeper_id))
@@ -594,6 +629,17 @@ async def merge_pair(
             "UPDATE entity_profiles "
             "SET merged_into = $2::uuid, data = $3::jsonb, updated_at = now() "
             "WHERE id = $1::uuid", loser, keeper, _json.dumps(ldata_new))
+
+        # K-G1 — repoint the loser's id-keyed edges onto the terminal survivor.
+        # MUST run AFTER the merged_into UPDATE above: the fold reads
+        # resolve_entity(loser) and only sees the redirect once it is set (the
+        # same transaction sees its own uncommitted write). Coalesces duplicates,
+        # closes would-be self-edges, and supersedes reversibly.
+        fold = await conn.fetchrow(
+            "SELECT * FROM fold_entity_edges($1::uuid)", loser)
+        if edge_fold is not None and fold is not None:
+            for k in EDGE_FOLD_KEYS:
+                edge_fold[k] = edge_fold.get(k, 0) + int(fold[k] or 0)
     return True
 
 
@@ -636,6 +682,7 @@ async def execute_merges(
     verdict_by_key = {v.pair_key: v for v in verdicts}
     applied: list[tuple[str, str]] = []
     skipped = 0
+    edge_fold: dict[str, int] = {k: 0 for k in EDGE_FOLD_KEYS}
 
     for key, pair in by_key.items():
         v = verdict_by_key.get(key)
@@ -660,12 +707,17 @@ async def execute_merges(
         decided_by = "rule" if (v is None or pair.band == "auto_merge"
                                 and v.verdict != "same") else "llm"
         if await merge_pair(conn, keeper_id, loser_id, reason=reason,
-                            decided_by=decided_by):
+                            decided_by=decided_by, edge_fold=edge_fold):
             applied.append((keeper_id, loser_id))
         else:
             skipped += 1
 
-    return MergeReport(merged=len(applied), skipped=skipped, pairs=tuple(applied))
+    return MergeReport(
+        merged=len(applied), skipped=skipped, pairs=tuple(applied),
+        edges_repointed=edge_fold["repointed"],
+        edges_superseded=edge_fold["superseded"],
+        edges_self_closed=edge_fold["self_closed"],
+    )
 
 
 # ===========================================================================
@@ -718,6 +770,12 @@ class ResearchReport:
     #: up to N {name, side, correct_class, why} for the finding — mirrors
     #: ``reclass_sample``'s shape.
     class_correction_sample: tuple[dict, ...] = ()
+    #: K-G1 — the in-transaction `entity_edges` fold, per run. Zero until the
+    #: backfills land; non-zero thereafter whenever a merge moved an edge. These
+    #: are the receipt side of "a merge never strands an edge again".
+    edges_repointed: int = 0
+    edges_superseded: int = 0
+    edges_self_closed: int = 0
 
     def summary(self) -> str:
         verb = "would merge" if self.mode == "dry_run" else "merged"
@@ -742,6 +800,12 @@ class ResearchReport:
                 f" class_correction: {self.class_corrections_flagged} flagged "
                 "by the adjudicator."
             )
+        if self.edges_repointed or self.edges_superseded or self.edges_self_closed:
+            s += (
+                f" edge fold: {self.edges_repointed} repointed, "
+                f"{self.edges_superseded} coalesced, "
+                f"{self.edges_self_closed} self-closed."
+            )
         return s
 
     def to_data(self) -> dict:
@@ -759,6 +823,9 @@ class ResearchReport:
             "reclass_by_class": dict(self.reclass_by_class),
             "class_corrections_flagged": self.class_corrections_flagged,
             "class_correction_sample": list(self.class_correction_sample),
+            "edges_repointed": self.edges_repointed,
+            "edges_superseded": self.edges_superseded,
+            "edges_self_closed": self.edges_self_closed,
         }
 
 
@@ -1423,6 +1490,9 @@ async def run_entity_research(
         adjudicated=len(verdicts),
         same=tally["same"], not_same=tally["not_same"], unsure=tally["unsure"],
         merges_applied=report.merged, merges_skipped=report.skipped,
+        edges_repointed=report.edges_repointed,
+        edges_superseded=report.edges_superseded,
+        edges_self_closed=report.edges_self_closed,
         sample=tuple(sample),
         reclass_examined=reclass_examined, reclass_changed=reclass_changed,
         reclass_sample=tuple(reclass_sample),

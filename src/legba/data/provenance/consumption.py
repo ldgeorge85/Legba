@@ -46,6 +46,29 @@ CONSUMPTION_CONTEXT_PERIPHERY = "composition_periphery"
 CONSUMPTION_CONTEXT_JOURNAL = "journal_slice"
 """A row of the journal's rendered priming slice (post-selection)."""
 
+CONSUMPTION_CONTEXT_QUESTION = "question_addressed"
+"""A STANDING QUESTION (``hypotheses`` row) this output was written to answer.
+
+THE ROLE THE REVIEW-FLAG PLANE WAS WAITING ON. ``claim_watch``'s flag write
+walks FORWARD from a matched question id (``_FORWARD_WALK_SQL``, seeded
+``WHERE oc.consumed_id = <hypothesis_id>``) to find the live products founded
+on it, and flags those for re-review when new evidence bears on the question.
+That walk has returned nothing on every tick it has ever run, and
+``review_flags`` is 0 rows all-time, for one reason: until this context
+existed, the only two producers stamping ``output_consumption``
+(``meta_findings_synthesizer`` basis/periphery, ``journal_assessor``'s journal
+slice) recorded ONLY fact/finding ids — no producer anywhere wrote a row whose
+``consumed_id`` was a hypothesis. Verified live 2026-08-03: 0 rows where
+``output_consumption.consumed_id`` joins ``hypotheses``, at any status, ever.
+The write path was wired and had run thousands of times against a precondition
+nothing satisfied.
+
+Stamped by ``inline_target.run_method`` when it resolves the model's optional
+``addressed_question`` tag against the run's grounding question sink — the one
+consumption point in the codebase where an output demonstrably rests on a
+standing question rather than merely having been shown one.
+"""
+
 _INSERT_SQL = """
 INSERT INTO output_consumption
     (consumer_id, consumed_id, consumed_at, consumer_kind, context)
@@ -102,5 +125,6 @@ __all__ = [
     "CONSUMPTION_CONTEXT_BASIS",
     "CONSUMPTION_CONTEXT_JOURNAL",
     "CONSUMPTION_CONTEXT_PERIPHERY",
+    "CONSUMPTION_CONTEXT_QUESTION",
     "record_output_consumption",
 ]

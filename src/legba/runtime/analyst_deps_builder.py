@@ -356,6 +356,16 @@ async def build_analyst_run_method(
         trio = await _build_signal_salience(
             descriptor, handler, _resolve_primary_llm, pg_pool=pg_pool, deps=deps,
         )
+    elif kind == "situation_tracker":
+        # Continuity P2 — the trajectory ledger's one writer. Same shape as
+        # signal_salience (a global META sweep that BOTH calls the $0-plane LLM
+        # and reads/writes the substrate directly), with one difference that
+        # matters: its output is a GRADED claim, so the host wires it a verify
+        # judge off its descriptor's method.llm.verify block like any
+        # composition.
+        trio = await _build_situation_tracker(
+            descriptor, handler, _resolve_primary_llm, pg_pool=pg_pool, deps=deps,
+        )
     else:
         # Defensive — discover_analyst_kinds returned a kind we didn't
         # switch on. Happens only when a new kind lands without a
@@ -389,26 +399,93 @@ async def build_analyst_run_method(
 # ---------------------------------------------------------------------------
 
 
-def _resolve_prompt_module(spec: str | None) -> str | None:
-    """Resolve a descriptor ``method.prompt_module`` ("module:attr" path) to its
-    system-prompt string, or ``None`` when unset/unresolvable so the runner falls
-    back to the kind default ``_SYSTEM_PROMPT``.
+class PromptModuleResolutionError(RuntimeError):
+    """A descriptor's ``method.prompt_module`` names something that is not there.
 
-    ``legba.runtime.analyst_method:_DEFAULT_SYSTEM`` IS that default (aliased), so
-    honouring it is a no-op for every existing inline_target analyst — only a
-    genuinely custom prompt (e.g. world_assessor's ``_WORLD_ASSESSOR_SYSTEM``)
-    changes the runtime prompt.
+    Raised instead of the old ``return None``, which the callers could not
+    distinguish from "this analyst declares no custom prompt" — so a renamed
+    prompt module did not fail, it swapped the analyst's persona for the kind
+    default and kept running.
     """
-    if not spec or ":" not in spec:
+
+
+def _resolve_prompt_module(spec: str | None, *, analyst_id: str = "?") -> str | None:
+    """Resolve a descriptor ``method.prompt_module`` to its system-prompt string.
+
+    ``method.prompt_module`` carries two different shapes in the live registry,
+    and only one of them is this function's business:
+
+    ``module:ATTR``
+        A system-prompt **constant** — e.g.
+        ``legba.prompts.lens_diff:LENS_DIFF_SYSTEM``. This function IS the
+        consumer, so an unimportable module, a missing attribute, or a
+        non-string attribute is a hard failure and raises
+        :class:`PromptModuleResolutionError`. It previously returned ``None``
+        for all three, and ``None`` means "no custom prompt declared" to every
+        caller: a renamed lens module did not error, it silently handed the
+        lens analyst the generic journal persona. All 46 live descriptors of
+        this shape resolve today, so this raise is dormant until something
+        actually breaks.
+
+    ``module.path`` (no colon)
+        A DSPy prompt **package** — e.g.
+        ``legba.prompts.meta_findings_synthesizer.v1``. Consumed by
+        ``gepa._import_prompt_module``, not here, so returning ``None`` is
+        correct and NOT a failure. But an unimportable one is still a dead
+        reference, and it is invisible on this path precisely because ``None``
+        is the right answer — so it is logged at ERROR with the analyst id.
+        Raising here would take a live analyst down for a string this code
+        path never reads; the registry-validation layer and
+        ``scripts/audit_descriptor_references.py`` are where a dead package
+        gets caught and fixed.
+
+    ``legba.runtime.analyst_method:_DEFAULT_SYSTEM`` IS the kind default
+    (aliased), so honouring it is a no-op for every existing inline_target
+    analyst — only a genuinely custom prompt (e.g. world_assessor's
+    ``_WORLD_ASSESSOR_SYSTEM``) changes the runtime prompt.
+
+    Returns ``None`` when ``spec`` is unset, or when it names a DSPy package
+    rather than a constant.
+    """
+    if not spec:
         return None
+
     import importlib
+
+    if ":" not in spec:
+        try:
+            importlib.import_module(spec)
+        except Exception as exc:
+            logger.error(
+                "analyst_deps.prompt_module.dead analyst_id=%s spec=%s err=%s — "
+                "the descriptor names a prompt package that does not exist; the "
+                "optimizer will read a placeholder for it and this analyst runs "
+                "on its kind default prompt",
+                analyst_id, spec, exc,
+            )
+        return None
 
     mod_name, _, attr = spec.partition(":")
     try:
-        value = getattr(importlib.import_module(mod_name), attr, None)
-    except Exception:
-        return None
-    return value if isinstance(value, str) else None
+        module = importlib.import_module(mod_name)
+    except Exception as exc:
+        raise PromptModuleResolutionError(
+            f"analyst {analyst_id!r} declares prompt_module {spec!r} but "
+            f"{mod_name!r} does not import: {type(exc).__name__}: {exc}"
+        ) from exc
+    if not hasattr(module, attr):
+        raise PromptModuleResolutionError(
+            f"analyst {analyst_id!r} declares prompt_module {spec!r} but "
+            f"{mod_name!r} has no attribute {attr!r}"
+        )
+    value = getattr(module, attr)
+    if not isinstance(value, str):
+        raise PromptModuleResolutionError(
+            f"analyst {analyst_id!r} declares prompt_module {spec!r} but "
+            f"{mod_name}.{attr} is {type(value).__name__}, not str — the "
+            "runtime would drop it and use the kind default prompt"
+        )
+    return value
 
 
 async def _build_inline_target(
@@ -461,7 +538,8 @@ async def _build_inline_target(
     # Python module needed to author a new unit). Both unset → None → the runner
     # uses the kind default _SYSTEM_PROMPT.
     system_prompt = _resolve_prompt_module(
-        getattr(descriptor.method, "prompt_module", None)
+        getattr(descriptor.method, "prompt_module", None),
+        analyst_id=descriptor.identity.id,
     )
     if system_prompt is None:
         inline_prompt = getattr(descriptor.method, "system_prompt", None)
@@ -591,19 +669,26 @@ async def _build_journal_assessor(
         getattr(descriptor.method, "timeout_seconds", 180) or 180
     )
     # Resolve the journal persona system prompt. DELIBERATELY NOT wrapped by
-    # with_preamble — that is the §4.2 headline fix. Unset/unresolvable → None →
-    # the run_method falls back to the kind default (which it loads itself).
+    # with_preamble — that is the §4.2 headline fix. Unset → None → the
+    # run_method falls back to the kind default (which it loads itself).
+    #
+    # K-3: this is the sharpest instance of the swallowed-resolution bug in the
+    # tree. Eight descriptors point here — journal_assessor, journal_consolidator,
+    # chronicle_assessor and the five lens_* voices — each naming its OWN persona
+    # constant. When _resolve_prompt_module returned None on a bad reference, the
+    # belt-and-braces below did not restore the intended voice; it handed a lens
+    # analyst the *journal's* persona and the run looked entirely healthy. A
+    # renamed lens prompt module now raises PromptModuleResolutionError instead.
     system_prompt = _resolve_prompt_module(
-        getattr(descriptor.method, "prompt_module", None)
+        getattr(descriptor.method, "prompt_module", None),
+        analyst_id=descriptor.identity.id,
     )
     if system_prompt is None:
-        # Belt-and-braces: load the persona directly so a misconfigured
-        # prompt_module never silently strips the entire voice (§4.2 caution).
-        try:
-            from legba.prompts.journal_assessor import JOURNAL_SYSTEM
-            system_prompt = JOURNAL_SYSTEM
-        except Exception:  # pragma: no cover — import guard
-            system_prompt = None
+        # Reached only when the descriptor declares NO prompt_module at all.
+        # The journal persona is the right default for that case; it is no
+        # longer reachable by a broken reference.
+        from legba.prompts.journal_assessor import JOURNAL_SYSTEM
+        system_prompt = JOURNAL_SYSTEM
     # The journal may still opt into Tier-1 grounding (it's a META analyst over
     # the global slice) — the GROUND preamble corrects stale-cutoff drift before
     # it narrates (§4.5 point 3). Off (None) unless the descriptor opts in.
@@ -1249,6 +1334,54 @@ async def _build_signal_salience(
     )
 
 
+async def _build_situation_tracker(
+    descriptor: AnalystDescriptor,
+    handler: KindHandler,
+    resolve_llm: Callable[[], Awaitable[LLMProviderHandler]],
+    *,
+    pg_pool: "asyncpg.Pool | None" = None,
+    deps: StandardDeps,
+) -> tuple[Callable[..., Any], Any | None, OutputKind]:
+    """situation_tracker (continuity P2) — the trajectory ledger writer.
+
+    A global META sweep that BOTH calls the LLM (delta adjudication on the $0
+    core plane) AND reads/writes the substrate directly (open situations + their
+    new verified evidence in; one graded ``situation_update`` + append-only
+    ``situation_events`` rows out). ``kind_deps`` carry the resolved primary LLM,
+    the pg_pool and the budget reporter, exactly like ``signal_salience``.
+
+    There is deliberately NO apply/dry-run gate here, unlike signal_salience and
+    entity_researcher. Those two MUTATE existing rows (``signals.salience``,
+    entity merges), so a dry run is the only safe way to prove a model before it
+    rewrites the substrate. This writer only ever APPENDS to a table that starts
+    empty and that nothing reads until it has rows, so the honest first proof is
+    a live probe run whose output can be read back — a dry-run flag here would
+    just be a switch that ships off and gets forgotten.
+    """
+    from ..data.analysts.situation_tracker import SituationTrackerDeps
+
+    llm = await resolve_llm()
+    fields = (
+        "max_situations", "max_evidence", "batch_size", "window_hours",
+        "floor", "dormancy_days", "max_tokens", "temperature", "snippet_chars",
+    )
+    options: dict[str, Any] = {}
+    for name in fields:
+        default = getattr(SituationTrackerDeps, name)
+        raw = _read_method_llm_option(descriptor, name, default=default)
+        options[name] = type(default)(raw)
+    return (
+        handler.run_method,
+        SituationTrackerDeps(
+            llm=llm,
+            pg_pool=pg_pool,
+            budget=getattr(deps, "budget", None),
+            **options,
+        ),
+        handler.output_kind,
+    )
+
+
 async def _build_competing_hypotheses(
     descriptor: AnalystDescriptor,
     handler: KindHandler,
@@ -1425,6 +1558,18 @@ async def _build_deterministic(
 
         deps = await _wire_corpus_indexer_os(
             descriptor, deps, extra_key=_CORPUS_OS_KEY,
+        )
+
+    # corpus_retention — the DELETE half of the same plane (drains the
+    # corpus_tombstones queue). Same store, same degrade-not-break wiring, its
+    # own extras key so neither sweep can be handed the other's handle.
+    if is_deterministic and sub_handler == "corpus_retention":
+        from ..data.analysts.deterministic_handlers.corpus_retention import (
+            OS_DEPS_EXTRA_KEY as _CORPUS_RETENTION_OS_KEY,
+        )
+
+        deps = await _wire_corpus_indexer_os(
+            descriptor, deps, extra_key=_CORPUS_RETENTION_OS_KEY,
         )
 
     # signal_embedder — always-on Qdrant VECTOR PLANE sweep (no LLM; the hosted

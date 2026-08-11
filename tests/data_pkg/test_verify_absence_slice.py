@@ -33,6 +33,7 @@ and was never consulted. Surfaces:
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -56,6 +57,10 @@ class _Response:
         self.usage = None
 
 
+#: A judge prompt's numbered claim entries — ``1. <claim>`` at line start.
+_NUMBERED_CLAIM_RE = re.compile(r"^\d+\.\s", re.MULTILINE)
+
+
 class _StubJudge:
     """Returns a canned payload per SYSTEM prompt, so the slice call is isolated."""
 
@@ -76,11 +81,11 @@ class _StubJudge:
             return _Response(json.dumps(self._slice or {}))
         self.other_calls += 1
         # Every other partition: mark everything supported so the V-B verdict is
-        # the only thing under test.
-        n = messages[0]["content"].count("\n1. ") or 1
-        claims = messages[0]["content"].split("CLAIMS:\n")[-1].strip().splitlines()
-        n = max(len(claims), 1)
-        return _Response(json.dumps({"verdicts": ["supported"] * n}))
+        # the only thing under test. Count NUMBERED entries, not lines — V-G3
+        # gives an annotated claim an indented QUALIFIERS continuation line,
+        # exactly as stage 2 has always done for carve-outs.
+        n = len(_NUMBERED_CLAIM_RE.findall(messages[0]["content"]))
+        return _Response(json.dumps({"verdicts": ["supported"] * max(n, 1)}))
 
 
 class _FakeConn:
@@ -220,7 +225,9 @@ async def test_no_term_collision_verifies_the_absence(monkeypatch) -> None:
     )
     cv = _claim_verdict(report, "tightened sanctions")
     assert cv is not None and cv.verdict == VERDICT_SUPPORTED
-    assert "verified against" in (cv.detail or "")
+    # W1(f): the detail names the slice size it was checked against.
+    assert "checked against" in (cv.detail or "")
+    assert "2-row" in (cv.detail or "")
     assert report.counters["absence_slice_verified"] == 1
     assert judge.slice_calls == 0  # stage 2 never fired
 
@@ -421,3 +428,28 @@ async def test_stage_one_runs_with_the_judge_off(monkeypatch) -> None:
     )
     assert report.counters["absence_slice_candidates"] == 1
     assert report.counters["absence_slice_unresolved"] == 1
+
+
+def test_marker_strip_mirrors_the_verify_regexes() -> None:
+    """K-1 drift guard — the extracted module spells the citation-marker syntax
+    ONCE for itself, so this pins that spelling to ``verify``'s canonical pair.
+
+    ``absence_slice`` imports nothing from ``verify`` (that would close an import
+    cycle), so its ``_CITATION_MARKER_STRIP_RE`` is a local mirror of
+    ``verify._CLAIM_MARKER_RE`` + ``verify._REF_MARKER_RE``, used ONLY to blank
+    markers out of claim prose before screening. If either citation syntax ever
+    changes, the screen must not silently keep stripping the old shape: the two
+    strip paths are asserted byte-identical here over the live marker vocabulary.
+    """
+    from legba.data.provenance import absence_slice as S
+
+    samples = [
+        "No new sanctions [1] designations [12]-[25] affecting Haiti [3]",
+        "No material change since the prior read [[ref:7]] of 2026-08-03",
+        "Mixed [[ref:11]] and [4] markers, plus a bare [ref:9] non-marker",
+        "No markers at all in this claim",
+        "[[ref:1]][[ref:2]][3][4] back-to-back",
+    ]
+    for text in samples:
+        canonical = V._REF_MARKER_RE.sub(" ", V._CLAIM_MARKER_RE.sub(" ", text))
+        assert S._CITATION_MARKER_STRIP_RE.sub(" ", text) == canonical, text

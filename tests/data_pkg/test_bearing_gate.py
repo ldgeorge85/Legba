@@ -74,7 +74,15 @@ def _gate_deps(llm: Any) -> _Deps:
     return _Deps(**{bg.SLM_DEPS_EXTRA_KEY: llm})
 
 
-async def _run(cands, *, deps, mode="on", gate_cap=100, confirm_cap=100):
+async def _run(
+    cands,
+    *,
+    deps,
+    mode="on",
+    gate_cap=100,
+    confirm_cap=100,
+    confirm_mode=bg.DEFAULT_BEARING_CONFIRM_MODE,
+):
     counters: dict[str, Any] = {}
     kept = await bg.run_bearing_pipeline(
         cands,
@@ -83,6 +91,7 @@ async def _run(cands, *, deps, mode="on", gate_cap=100, confirm_cap=100):
         gate_ref=bg.DEFAULT_BEARING_GATE_REF,
         gate_cap=gate_cap,
         confirm_cap=confirm_cap,
+        confirm_mode=confirm_mode,
         counters=counters,
     )
     return kept, counters
@@ -131,8 +140,88 @@ def test_prompt_constants_are_the_tuning_surface():
     so a prompt change without a version bump would make a precision shift
     unattributable."""
     assert "{thesis}" in bg.GATE_PROMPT and "{signal}" in bg.GATE_PROMPT
+    assert "{desk}" in bg.GATE_PROMPT
     assert "{pairs}" in bg.CONFIRM_PROMPT
     assert bg.GATE_PROMPT_VERSION and bg.CONFIRM_PROMPT_VERSION
+
+
+# ---------------------------------------------------------------------------
+# CW-2 — the desk identity reaches BOTH legs
+#
+# K-4 R3: theses that never name their own country scored 0.048, and a US
+# Senate live blog with no Turkey token passed both legs onto the TÜRKIYE
+# desk (pair 06cc3f2f) because the prompt showed a thesis and a signal and
+# nothing else. The desk was known to the matcher the whole time.
+# ---------------------------------------------------------------------------
+
+
+def test_the_measured_seven_exemplars_are_byte_for_byte_untouched():
+    """They ARE the 0.842 measurement. The desk arrives as an ADDED eighth
+    turn plus a system clause, never as an edit to the measured seven."""
+    assert len(bg.GATE_FEWSHOT_TURNS) == 8
+    for user, _ in bg.GATE_FEWSHOT_TURNS[:7]:
+        assert not user.startswith("Desk:")
+    assert bg.GATE_FEWSHOT_TURNS[7][0].startswith("Desk: G20 — Türkiye")
+    assert bg.GATE_FEWSHOT_TURNS[7][1] == "NO"
+
+
+def test_the_prompt_version_moved_with_the_prompt():
+    """A precision shift must always be attributable to the string that
+    produced it — the whole reason the version rides every edge."""
+    assert bg.GATE_PROMPT_VERSION == "fewshot+desk+consequence/3"
+    assert bg.CONFIRM_PROMPT_VERSION == "desk+consequence/3"
+
+
+@pytest.mark.parametrize("desk", ["", "   ", None])
+def test_a_deskless_question_renders_no_desk_line_at_all(desk):
+    """Not "Desk: (none)". A fact_contention question has target_id NULL and
+    must produce byte-for-byte the fewshot/1 user turn the lab measured."""
+    assert bg.desk_line(desk) == ""
+
+
+def test_a_desk_line_is_bounded_and_whitespace_collapsed():
+    assert bg.desk_line("  G20 —  Türkiye\n[country_g20_tr] ") == (
+        "Desk: G20 — Türkiye [country_g20_tr]\n"
+    )
+    assert len(bg.desk_line("x" * 500)) <= bg.MAX_DESK_CHARS + len("Desk: \n")
+
+
+async def test_the_gate_is_told_which_desk_owns_the_thesis():
+    cand = _cand()
+    cand.desk_label = "G20 — Türkiye [country_g20_tr]"
+    llm = _FakeLLM(default="NO")
+    await _run([cand], deps=_gate_deps(llm))
+    assert "Desk: G20 — Türkiye [country_g20_tr]" in llm.prompts[0]
+    assert "Question thesis:" in llm.prompts[0]
+
+
+async def test_the_confirm_is_told_which_desk_owns_each_pair():
+    a = _cand(thesis="T-A")
+    a.desk_label = "Watch — Ukraine [country_watch_ua]"
+    b = _cand(thesis="T-B")            # deskless (a contested-fact question)
+    confirm = _FakeLLM(default="[]")
+    await _run([a, b], deps=_confirm_deps(_FakeLLM(default="YES"), confirm))
+    prompt = confirm.prompts[0]
+    assert "Desk: Watch — Ukraine [country_watch_ua]" in prompt
+    assert prompt.count("Desk:") == 1   # b contributes none
+    assert "T-A" in prompt and "T-B" in prompt
+
+
+async def test_the_desk_is_recorded_on_the_edge_it_judged():
+    """Provenance: an edge judged under a desk must say which one, or a
+    later precision reading cannot separate desk-scoped from deskless."""
+    cand = _cand()
+    cand.desk_label = "Lane — Strait of Hormuz [lane_hormuz]"
+    await _run([cand], deps=_gate_deps(_FakeLLM("YES")))
+    assert cand.data_payload()["bearing_desk"] == (
+        "Lane — Strait of Hormuz [lane_hormuz]"
+    )
+
+
+async def test_a_deskless_edge_carries_no_desk_key():
+    cand = _cand()
+    await _run([cand], deps=_gate_deps(_FakeLLM("YES")))
+    assert "bearing_desk" not in cand.data_payload()
 
 
 # ---------------------------------------------------------------------------
@@ -449,18 +538,128 @@ async def test_confirm_stamps_gate_passed_edges_with_a_verdict_and_reason():
     assert counters["bearing_confirm_yes"] == 1
     assert counters["bearing_confirm_no"] == 1
     assert counters["bearing_confirm_calls"] == 1
+    # CW-1: the 'no' was ASKED and ANSWERED, and it is not in the survivors.
+    assert kept == [a]
 
 
-async def test_confirm_never_blocks_an_edge_even_when_it_says_no():
-    """By the time the confirm runs the gate has already decided. A 'no' is
-    recorded ON the edge for the consumers, it does not retract it."""
+# ----------------------------- CW-1: the confirm leg BLOCKS -----------------
+#
+# K-4 round 3 (planning/K4_LABELS_R3.csv, 120 labeled rows off the LIVE gated
+# stream): confirm-yes 38/57 = 0.667, confirm-no 4/47 = 0.085, absent
+# 6/16 = 0.375. The 7.8x discriminator was being computed and thrown away.
+
+
+async def test_a_confirm_no_now_drops_the_edge():
     cand = _cand()
     confirm = _FakeLLM('[{"id": "e0", "bears": "no", "reason": "no bearing"}]')
-    kept, _ = await _run(
+    kept, counters = await _run(
+        [cand], deps=_confirm_deps(_FakeLLM("YES"), confirm)
+    )
+    assert kept == []
+    assert cand.gate == "yes" and cand.confirm == "no"
+    assert counters["bearing_confirm_blocked"] == 1
+    assert counters["bearing_confirm_mode"] == "blocking"
+    assert counters["bearing_watch_confirmed"] == 0
+
+
+async def test_a_confirm_yes_is_written_as_a_confirmed_watch_hit():
+    cand = _cand()
+    confirm = _FakeLLM('[{"id": "e0", "bears": "yes", "reason": "on thesis"}]')
+    kept, counters = await _run(
         [cand], deps=_confirm_deps(_FakeLLM("YES"), confirm)
     )
     assert kept == [cand]
-    assert cand.gate == "yes" and cand.confirm == "no"
+    assert cand.watch == "confirmed"
+    assert cand.data_payload()["bearing_watch"] == "confirmed"
+    assert counters["bearing_watch_confirmed"] == 1
+    assert counters["bearing_confirm_blocked"] == 0
+
+
+@pytest.mark.parametrize("mode", ["advisory", "ADVISORY", " Advisory "])
+async def test_advisory_mode_restores_the_stamp_only_leg(mode):
+    """The 3.3.0 population is one descriptor PUT away, and it stays
+    MEASURED: the watch tallies ride the receipt either way."""
+    cand = _cand()
+    confirm = _FakeLLM('[{"id": "e0", "bears": "no", "reason": "no bearing"}]')
+    kept, counters = await _run(
+        [cand],
+        deps=_confirm_deps(_FakeLLM("YES"), confirm),
+        confirm_mode=mode,
+    )
+    assert kept == [cand]
+    assert counters["bearing_confirm_mode"] == "advisory"
+    assert counters["bearing_confirm_blocked"] == 0
+    assert counters["bearing_watch_unconfirmed"] == 1
+
+
+@pytest.mark.parametrize("mode", ["", None, "blocking", "nonsense", "off"])
+async def test_anything_but_advisory_reads_blocking(mode):
+    """The opposite default to ``gate_enabled``, deliberately: here the
+    dangerous direction is silently restoring a 0.267 population."""
+    cand = _cand()
+    confirm = _FakeLLM('[{"id": "e0", "bears": "no", "reason": "r"}]')
+    kept, counters = await _run(
+        [cand], deps=_confirm_deps(_FakeLLM("YES"), confirm), confirm_mode=mode
+    )
+    assert kept == []
+    assert counters["bearing_confirm_mode"] == "blocking"
+
+
+@pytest.mark.parametrize(
+    "confirm_llm, why",
+    [
+        (_FakeLLM(RuntimeError("502")), "a core-plane outage"),
+        (_FakeLLM(default="[]"), "a pair the model never bound"),
+    ],
+)
+async def test_an_unresolved_confirm_is_written_unconfirmed_never_blocked(
+    confirm_llm, why
+):
+    """The absent band measured 0.375 — not decision-grade, not noise. And
+    blocking on the ERROR path would convert one core-plane outage into a
+    silent hole in the bearing plane, which is the exact failure the gate leg
+    already refuses. Written, flagged, counted."""
+    cand = _cand()
+    kept, counters = await _run(
+        [cand], deps=_confirm_deps(_FakeLLM("YES"), confirm_llm)
+    )
+    assert kept == [cand], why
+    assert cand.confirm == "unavailable"
+    assert cand.watch == "unconfirmed"
+    assert cand.data_payload()["bearing_watch"] == "unconfirmed"
+    assert counters["bearing_confirm_blocked"] == 0
+    assert counters["bearing_watch_unconfirmed"] == 1
+
+
+async def test_an_over_cap_pair_is_unconfirmed_not_blocked():
+    cands = [_cand() for _ in range(3)]
+    confirm = _FakeLLM(
+        '[{"id": "e0", "bears": "yes", "reason": "r"},'
+        ' {"id": "e1", "bears": "yes", "reason": "r"}]'
+    )
+    kept, counters = await _run(
+        cands, deps=_confirm_deps(_FakeLLM(default="YES"), confirm), confirm_cap=2
+    )
+    assert len(kept) == 3
+    assert counters["bearing_confirm_deferred"] == 1
+    assert counters["bearing_watch_confirmed"] == 2
+    assert counters["bearing_watch_unconfirmed"] == 1
+
+
+async def test_the_unwired_leg_never_silences_the_plane_in_blocking_mode():
+    """The SHIPPED state (no ``method.llm.primary``) must keep writing —
+    'the leg is not wired' is not 'the model said no'."""
+    cands = [_cand() for _ in range(4)]
+    kept, counters = await _run(cands, deps=_gate_deps(_FakeLLM("YES")))
+    assert kept == cands
+    assert counters["bearing_confirm_blocked"] == 0
+    assert counters["bearing_watch_unconfirmed"] == 4
+
+
+async def test_the_confirm_cap_is_sized_to_the_gate_cap():
+    """CW-1 made the confirm a DECIDER, so an over-cap band is now an
+    UN-ADJUDICATED band. A cap below the gate's would manufacture one."""
+    assert bg.DEFAULT_BEARING_CONFIRM_CAP >= bg.DEFAULT_BEARING_GATE_CAP
 
 
 async def test_confirm_only_looks_at_gate_passed_edges():

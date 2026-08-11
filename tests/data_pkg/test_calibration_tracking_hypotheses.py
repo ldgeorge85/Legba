@@ -129,11 +129,27 @@ async def test_calibration_runs_over_seeded_hypotheses(pg_pool):
     data = result.finding.data
     assert data["sub_handler"] == "calibration_tracking"
     assert data["sample_size"] >= 3
-    # D16: subsequent_facts is WEAK — never headline. The headline exogenous
-    # Brier is None (no falsifiable resolutions), and the weak tier carries the
-    # 3 lexical resolutions with its own (diagnostic) Brier.
-    assert data["brier"] is None
-    assert data["insufficient_exogenous"] is True
+
+    # D16: subsequent_facts is WEAK — never headline. Asserted on THIS test's
+    # own rows, because the headline is a property of the whole substrate.
+    #
+    # This used to read `assert data["brier"] is None`, which says "nobody in
+    # the entire shared DB has a falsifiable resolution". That is a statement
+    # about the suite, not about `subsequent_facts`, and under `--randomly-seed`
+    # a sibling file seeded an exogenous resolution first, the headline computed
+    # legitimately, and this failed at `0.64 is None` — while the three rows it
+    # was actually about had been tiered exactly right. The scoped form below is
+    # also the stronger claim: a headline of None is equally consistent with a
+    # sample that was empty, or misclassified into self-consistency, so the old
+    # assertion could not tell "demoted to weak" from "lost".
+    assert not any(cal._is_exogenous(r) for r in mine), (
+        "a lexical subsequent_facts resolution must never count as exogenous"
+    )
+    assert all(cal._is_weak_tier(r) for r in mine), (
+        "all three must land in the WEAK tier, not self-consistency"
+    )
+    # The weak bucket is a lower bound over the shared substrate, which is
+    # order-proof in the direction that matters: my three are IN it.
     assert data["weak_sample_size"] >= 3
     assert data["brier_weak"] is not None
     # Per-analyst breakdown carries our analyst's Brier.

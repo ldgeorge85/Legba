@@ -103,6 +103,18 @@ class _PolicySpec:
 # ---------------------------------------------------------------------------
 
 
+def _corpus_index_name() -> str:
+    """The OpenSearch index a purged signal's doc lives in.
+
+    Read from the SAME config the indexer and the drain read, so a deployment
+    that overrides ``LEGBA_DATA_OPENSEARCH_INDEX`` tombstones against the index
+    it actually writes. Pure dataclass + env read — importing it costs nothing
+    and does NOT require opensearch-py to be installed."""
+    from ...config import OpenSearchConfig
+
+    return OpenSearchConfig.from_env().index
+
+
 async def _purge_signals(
     pool: Any, *, ttl_days: int, batch_limit: int, keep_classes: Sequence[str],
 ) -> dict[str, int]:
@@ -134,6 +146,7 @@ async def _purge_signals(
                     "signals_purged": 0,
                     "entity_links_purged": 0,
                     "aliases_purged": 0,
+                    "corpus_tombstoned": 0,
                 }
 
             # Children FIRST (no FK to signals — explicit cleanup so the
@@ -158,10 +171,34 @@ async def _purge_signals(
                 )
             )
 
+            # The OpenSearch corpus doc for each purged signal (`_id` = the
+            # signal id) is now an ORPHAN: a searchable hit pointing at a row
+            # that no longer exists, which `read_document` will serve verbatim
+            # because that path does no existence check. Record the intent HERE,
+            # inside the same transaction as the DELETE, so the tombstone and the
+            # purge can never disagree; the `corpus_retention` sweep drains the
+            # queue against OpenSearch out of band. Doing the delete inline
+            # instead would put a fallible network call in this transaction — a
+            # timeout would either abort a good purge or commit it and lose the
+            # delete, which is the orphan we are preventing. See migration 0175.
+            tombstoned = _row_count(
+                await conn.execute(
+                    """
+                    INSERT INTO corpus_tombstones (doc_id, index_name, reason)
+                    SELECT id, $2, 'signals_retention'
+                      FROM unnest($1::uuid[]) AS t(id)
+                    ON CONFLICT (doc_id) DO NOTHING
+                    """,
+                    ids,
+                    _corpus_index_name(),
+                )
+            )
+
     return {
         "signals_purged": signals_purged,
         "entity_links_purged": entity_links_purged,
         "aliases_purged": aliases_purged,
+        "corpus_tombstoned": tombstoned,
     }
 
 
@@ -302,6 +339,7 @@ _POLICIES: dict[str, _PolicySpec] = {
             "signals_purged": 0,
             "entity_links_purged": 0,
             "aliases_purged": 0,
+            "corpus_tombstoned": 0,
         },
     ),
     "analyst_traces_retention": _PolicySpec(

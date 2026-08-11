@@ -1,0 +1,89 @@
+# Niger desk (country_watch_ne) coverage pass — 2026-08-03. Ships DRAFT.
+#
+# ActuNiger (actuniger.com) — SOCIÉTÉ section. Sibling of
+# source_actuniger_politique.yaml; read that file's header for the batch
+# rationale (the live 7-day NE count, the paused AP hub, the geo/publisher-
+# origin reasoning, the outlet's credibility posture and the sections that were
+# verified but deliberately not shipped). Only what is specific to THIS section
+# is repeated below.
+#
+# WHY THE SOCIÉTÉ SECTION SPECIFICALLY. On a country_watch desk the
+# security-incident stream matters more than the ministerial diary, and at
+# ActuNiger that stream lands under `societe` rather than under a dedicated
+# security section: army operations and casualties, Boko Haram / ISWAP attacks
+# in Diffa, Garde nationale interdictions, trafficking networks. Shipping
+# politique WITHOUT societe would give the Niger desk a governance feed and no
+# violence feed.
+#
+# VERIFIED LIVE 2026-08-03 by direct fetch: HTTP 200, 50 items, newest item
+# `Mon, 03 Aug 2026 00:39:09 +0000` (same day), 912 Niger/Sahel place-name hits
+# in the payload. Sample headlines seen: the army's 66th anniversary "sous le
+# signe de la résilience"; the OCRTIS dismantling a narcotics network in
+# Agadez; roughly ten soldiers killed in a Boko Haram attack at N'Guigmi.
+# Keyless, no auth wall, served as `application/atom+xml` but structurally
+# RSS 2.0 — feedparser handles either under `parser: auto`.
+#
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after the route is
+# re-verified live on the instance.
+
+identity:
+  id: source.actuniger.societe
+  name: ActuNiger — Société
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: source_batch_2026_08
+  created: "2026-08-03T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  # [NE] = publisher origin, and honest: a Nigerien outlet writing about Niger.
+  # See source_actuniger_politique.yaml's header for why this is right here and
+  # wrong on a global wire.
+  geo: [NE]
+  languages: [fr]
+  tags: [news, world, africa, sahel, niger, francophone, source_batch_2026_08]
+  source_class: reporting
+
+acquisition: poll
+
+cadence:
+  # Hourly, offset five minutes from the politique sibling so the two sections
+  # of one small outlet are never fetched in the same second.
+  schedule:
+    factory_kind: cron
+    raw: "36 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 60
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.actuniger.com/component/joomrss/societe.feed?Itemid=101"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

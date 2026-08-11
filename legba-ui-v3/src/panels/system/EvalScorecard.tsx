@@ -39,6 +39,7 @@ import {
   bandTone,
   buildScorecards,
   calibrationBanner,
+  correctnessLabel,
   critScoreTrend,
   evalBadge,
   insufficientLabel,
@@ -53,6 +54,7 @@ import {
   type DimensionBand,
   type ScorecardRow,
   type ScoreBand,
+  type UnitCorrectnessBoard,
 } from '@/lib/evalOps'
 import type { PanelProps } from '@/types'
 import { RecordLink } from '@/components/inspector/RecordLink'
@@ -178,6 +180,24 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
     queryFn: async () => {
       try {
         return await apiGet<CalibrationScoreboard>('/v3/eval/calibration')
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return null
+        throw e
+      }
+    },
+    refetchInterval: 60_000,
+  })
+
+  // M-1 — the OPERATOR gold-set correctness axis. Its OWN endpoint, not a
+  // section of /eval/calibration: correctness is a human's read of whether a
+  // finding was right; calibration and faithfulness are aggregates over the
+  // pipeline's own judge, and the two are never pooled. A 404 while unwired
+  // reads as "no correctness surface yet", never an error.
+  const { data: correctness } = useQuery<UnitCorrectnessBoard | null>({
+    queryKey: ['eval-correctness'],
+    queryFn: async () => {
+      try {
+        return await apiGet<UnitCorrectnessBoard>('/v3/eval/correctness')
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) return null
         throw e
@@ -365,6 +385,96 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
             <div className="text-slate-600 text-[10px] italic" data-testid="band-calibration-honesty-note">
               {cal!.band_calibration!.honesty_note ??
                 'Ordinal band-persistence stability — not a Brier score.'}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* M-1 — the OPERATOR gold-set correctness axis, the platform's only
+          JUDGE-INDEPENDENT quality signal. Deliberately its own block, beside
+          calibration and never inside it: faithfulness asks "is the prose
+          faithful to its cites?", correctness asks "was the read RIGHT?", and
+          a finding can score high on the first while failing the second — which
+          is exactly what the first gold-set round measured. Every figure here
+          renders the server-composed `display` string verbatim, so the verdict
+          mix and the sufficiency status always travel with the number. */}
+      <div
+        className="bg-surface-100 border border-slate-800 rounded p-2 mb-2 space-y-1.5 text-xs"
+        data-testid="eval-operator-correctness"
+      >
+        <div className="flex items-baseline gap-2 flex-wrap">
+          <span className="text-slate-500 text-[10px] uppercase tracking-wide">
+            operator correctness
+          </span>
+          <InfoTip
+            text={
+              correctness?.honesty_note ??
+              'Operator gold-set correctness is judge-independent and never pooled with faithfulness or calibration.'
+            }
+            className="text-slate-600 text-[10px]"
+            testId="operator-correctness-explain"
+          >
+            gold-set verdicts (judge-independent, never pooled)
+          </InfoTip>
+        </div>
+        {!correctness?.available ? (
+          <div
+            className="text-slate-500 text-[10px] py-1"
+            data-testid="operator-correctness-empty"
+          >
+            no operator verdicts yet — the weekly gold-set worksheet has not been
+            labelled
+          </div>
+        ) : (
+          <>
+            {correctness.fleet && (
+              <div
+                className="text-slate-300 font-mono"
+                data-testid="operator-correctness-fleet"
+              >
+                {correctnessLabel(correctness.fleet)}
+              </div>
+            )}
+            {correctness.units.map((row) => (
+              <div
+                key={row.unit}
+                className="flex items-baseline gap-2 flex-wrap"
+                data-testid={`operator-correctness-${row.unit}`}
+              >
+                <span className="w-40 shrink-0 text-slate-400">
+                  {humanizeId(row.unit)}
+                </span>
+                <span
+                  className={
+                    row.sufficient ? 'text-slate-200' : 'text-slate-400 italic'
+                  }
+                >
+                  {correctnessLabel(row)}
+                </span>
+                {/* The CONTRAST that motivates this axis existing at all —
+                    shown beside it, never averaged into it. */}
+                {typeof row.faithfulness === 'number' && (
+                  <span
+                    className="text-slate-600 text-[10px]"
+                    title={
+                      'Faithfulness is a DIFFERENT measurement (prose vs its own ' +
+                      'cites), graded by the machine judge' +
+                      (row.judge_pipeline_version
+                        ? ` (${row.judge_pipeline_version})`
+                        : ' (pre-split-key population)') +
+                      '. It is never averaged with correctness.'
+                    }
+                  >
+                    faithfulness {row.faithfulness.toFixed(2)}
+                  </span>
+                )}
+              </div>
+            ))}
+            <div
+              className="text-slate-600 text-[10px] italic"
+              data-testid="operator-correctness-honesty-note"
+            >
+              {correctness.honesty_note}
             </div>
           </>
         )}

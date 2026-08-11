@@ -1,0 +1,61 @@
+# W1-E BIND — Adversarial Signals analyst descriptor (L-203 migration of
+# legba.maintenance.adversarial; deterministic_handlers/adversarial_signals.py).
+#
+# Coordinated-inauthentic-behavior detection over the shared raw signal pool:
+# velocity spikes (3+ low-quality sources converging on one entity with no
+# high-quality corroboration), semantic echo (near-identical titles from
+# independent, non-affiliated sources), and provenance clustering (sources
+# sharing ownership_type+geo_origin converging on one entity). No LLM — pure
+# heuristics, flags signals.data.adversarial_flags.
+#
+# Until this file: registered in SUB_HANDLERS but zero descriptors of any
+# state referenced it (verified in-tree and against the live
+# analyst_descriptors table), and analyst_traces has zero rows for it — a
+# built, tested detector with no binding path. As source count grows toward
+# multi-domain scale, coordinated-inauthentic-behavior detection becomes MORE
+# load-bearing, not less — this is the same class of gap as
+# cross_source_dedup (which IS live, 143k+ successful runs) and mirrors that
+# descriptor's shape.
+#
+# State: draft — registration + the operator's activate flip are deploy
+# steps out of this pass's no-deploy remit. No live-DB regression risk from
+# adding this file.
+
+identity:
+  id: adversarial_signals
+  name: Adversarial Signals (Coordinated-Inauthentic-Behavior Detection)
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: w1e_built_but_unbound
+
+subscription:
+  # No `targets` block -> META analyst: ONE global sweep per cadence tick
+  # over the whole shared raw signal pool, directly via deps.pg_pool. Same
+  # shape as analyst_cross_source_dedup.yaml (confirmed live) — CIB detection
+  # is an observation-level property across the pool, not a per-target read.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: adversarial_signals
+
+cadence:
+  # Every 30 min — velocity/echo windows are 4-6h, so a coarser sweep still
+  # catches them; offset from cross_source_dedup's */15 tick.
+  fallback_schedule: "7,37 * * * *"
+  cooldown_seconds: 900
+
+outputs: []

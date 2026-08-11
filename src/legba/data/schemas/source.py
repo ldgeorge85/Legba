@@ -20,7 +20,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .lifecycle import AbstractionLevel, LifecycleState
+from .lifecycle import AbstractionLevel, LifecycleState, WireEnumCoercion
 from .properties import Cron
 
 # Source ids follow the stack-component naming convention `source.<provider>.<purpose>`
@@ -69,7 +69,9 @@ LicenseClass = Literal[
 # ---------------------------------------------------------------------------
 
 
-class SourceIdentity(BaseModel):
+class SourceIdentity(WireEnumCoercion):
+    # strict=True + enum fields ⇒ the wire's bare strings need the mixin's
+    # ``mode='before'`` coercers; see :class:`WireEnumCoercion`.
     model_config = ConfigDict(strict=True, extra="forbid")
 
     id: SourceId

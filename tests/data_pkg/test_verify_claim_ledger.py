@@ -31,6 +31,7 @@ import inspect
 from typing import Any
 from uuid import uuid4
 
+import legba.data.provenance.judge_input_checks as judge_input_checks
 import legba.data.provenance.verify as verify
 from legba.data.provenance.models import CritiquePayload
 from legba.data.provenance.verify import (
@@ -125,10 +126,43 @@ def test_fail_class_mapping_table() -> None:
         # V-D: a judge contradiction with no resolvable verbatim evidence quote
         # — still a failure, but the hard-fail severity was never earned.
         "judge_contradicted_unquoted": FAIL_CLASS_SOFT,
+        # W2: a judge contradiction whose quote RESOLVES but does not REFUTE (it
+        # restates the claim, or comes from the PRIOR READ block the claim diffs
+        # against) — a bad refutation rather than a missing one.
+        "judge_contradicted_unrefuted": FAIL_CLASS_SOFT,
+        # V-G1: the refuting quote is verbatim and real, and lives in an ANALYST
+        # FINDING the claim never cited — overwhelmingly this desk's own
+        # superseded prior read. An update, not a misstatement of evidence.
+        "judge_prior_read_conflict": FAIL_CLASS_SOFT,
+        # V-H4: the claim ENUMERATED what it denies and the refuting quote names
+        # none of those things in full — real evidence, of something the claim
+        # never denied ("business and mortgage defaults" against "sovereign
+        # default pressures").
+        "judge_contradicted_off_scope": FAIL_CLASS_SOFT,
+        # V-I1: the "refuting" quote states the claim's own numbers back to it
+        # under numeral/word-number normalization — it CONFIRMS the claim.
+        "judge_quote_confirms_claim": FAIL_CLASS_SOFT,
+        # V-I4: the refuting quote resolves ONLY inside a GDELT/CAMEO machine
+        # coding — real, resolvable, and not testimony. The class the V-B route
+        # has excluded 2,109 times a day since W1(c).
+        "judge_contradicted_machine_row": FAIL_CLASS_SOFT,
+        # V-I5: the V-B continuity router had already routed this claim out of
+        # slice checking and the judge hard-failed it anyway. One claim cannot
+        # have two authorities.
+        "judge_contradicted_route_excluded": FAIL_CLASS_SOFT,
+        # V-G5: a markerless claim resting on a historical/structural BASELINE
+        # about the world — a premise whose truthmaker no cited row contains.
+        "uncited_world_knowledge": FAIL_CLASS_SOFT,
         # V-C: prose misquoting the platform's OWN metadata (an
         # effective_confidence / tier the cited output's captured column
         # contradicts) — an overclaim about provenance, not a fabricated fact.
         "metadata_mismatch": FAIL_CLASS_SOFT,
+        # R3: the composition led on an input materially less consequential than
+        # its top one. Soft — the facts were right, the ORDER was wrong.
+        "buried_lead_salience": FAIL_CLASS_SOFT,
+        # R2: the input set asserted P and not-P and the composition did not name
+        # the disagreement. Soft (no fabricated fact), and the costliest of them.
+        "unsurfaced_input_contradiction": FAIL_CLASS_SOFT,
     }
     # Unknown reasons degrade conservatively (soft, never a fabricated hard).
     assert fail_class_for_reason("some_future_reason") == FAIL_CLASS_SOFT
@@ -140,9 +174,10 @@ def _reason_literals(node: ast.AST) -> tuple[set[str], bool]:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return {node.value}, False
     if isinstance(node, ast.Name):
-        resolved = getattr(verify, node.id, None)
-        if isinstance(resolved, str):
-            return {resolved}, False
+        for mod in (verify, judge_input_checks):
+            resolved = getattr(mod, node.id, None)
+            if isinstance(resolved, str):
+                return {resolved}, False
         return set(), True  # a local variable — dynamic (originates elsewhere)
     if isinstance(node, ast.IfExp):
         a, da = _reason_literals(node.body)
@@ -162,9 +197,39 @@ def test_fail_class_drift_guard() -> None:
     override seam decides a verdict and ``_apply_claim_overrides`` materializes
     the span/ledger row from it, so the literal reason lives on the override
     construction rather than on the span.
+
+    ``_judge_reason`` (W2, 2026-08-02) is the FOURTH: the judge path's verdict →
+    reason mapping was factored into ONE function so the span arm and the ledger
+    arm cannot disagree (they did — the ledger collapsed both demotion classes to
+    ``judge_unsupported``). Its RETURNS are reason emissions and must count, or
+    factoring the duplication out would have silently blinded this guard.
     """
-    tree = ast.parse(inspect.getsource(verify))
+    # R2/R3 (2026-08-05): the guard follows the CODE. Two reasons are now emitted
+    # from the judge-subsystem brick that owns the checks (``judge_input_checks``)
+    # rather than from verify.py itself, and a guard that only ever parsed one
+    # module would have called them DEAD — i.e. the extraction seam the tree is
+    # deliberately growing would have silently disabled this test's second half.
+    # Any future brick that emits a span reason joins this tuple.
+    trees = [
+        ast.parse(inspect.getsource(mod))
+        for mod in (verify, judge_input_checks)
+    ]
     emitted: set[str] = set()
+    for tree in trees:
+        _collect_emitted_reasons(tree, emitted)
+    _assert_reason_tables_agree(emitted)
+
+
+def _collect_emitted_reasons(tree: ast.Module, emitted: set[str]) -> None:
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not fn.name.endswith("_reason"):
+            continue
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Return) and node.value is not None:
+                lits, _ = _reason_literals(node.value)
+                emitted |= lits
     for node in ast.walk(tree):
         # ``reason = "judge_contradicted" if ... else "judge_unsupported"`` —
         # the ternary feeding UnsupportedSpan/ClaimVerdict via a local variable.
@@ -182,7 +247,13 @@ def test_fail_class_drift_guard() -> None:
             if isinstance(node.func, ast.Name)
             else getattr(node.func, "attr", None)
         )
-        if fname in ("UnsupportedSpan", "_ClaimOverride"):
+        # ANY call carrying a ``reason=`` keyword counts, not just the three
+        # constructors. R2/R3 raise their spans through a shared ``_fold_soft``
+        # helper — factoring the duplicated fold out is exactly the refactor this
+        # guard must survive, and the same lesson W2 already taught it about
+        # ``_judge_reason``. Broadening here can only ever catch MORE emissions,
+        # which is the safe direction for a guard.
+        if fname not in ("failed",):
             for kw in node.keywords:
                 if kw.arg == "reason":
                     lits, _ = _reason_literals(kw.value)
@@ -195,10 +266,12 @@ def test_fail_class_drift_guard() -> None:
                 if kw.arg == "reason":
                     lits, _ = _reason_literals(kw.value)
                     emitted |= lits
+
+def _assert_reason_tables_agree(emitted: set[str]) -> None:
     unmapped = emitted - set(_FAIL_CLASS_BY_REASON)
     assert not unmapped, f"span reasons missing from _FAIL_CLASS_BY_REASON: {unmapped}"
     dead = set(_FAIL_CLASS_BY_REASON) - emitted
-    assert not dead, f"mapped reasons never emitted by verify.py: {dead}"
+    assert not dead, f"mapped reasons never emitted by the verify modules: {dead}"
     assert set(_FAIL_CLASS_BY_REASON.values()) <= {FAIL_CLASS_HARD, FAIL_CLASS_SOFT}
 
 
@@ -396,6 +469,45 @@ async def test_payload_ledger_truncation_flag(monkeypatch) -> None:
 def test_ledger_text_is_bounded() -> None:
     row = ClaimVerdict.supported("x" * 10_000, [1]).as_dict()
     assert len(row["text"]) == verify._CLAIM_VERDICT_TEXT_CHARS
+
+
+async def test_long_claim_survives_ledger_roundtrip_untruncated() -> None:
+    """A >300-char claim reaches the persisted ledger WHOLE (2026-08-02).
+
+    The cap was 300, which cut real adjudication claims mid-sentence: an
+    Americas row lost the word "Argentina" past char 300, so the ledger row
+    named a different dispute than the one the judge graded. This pins the
+    REAL round-trip — verify pass → critique payload → validated model — for a
+    claim in that length band, and asserts the distinguishing tail token (the
+    part the old cap ate) is still there.
+    """
+    # One claim, comfortably past the old 300 cap, with the disambiguating
+    # party named only in the tail — the exact shape that mislabelled live.
+    filler = "and the tribunal recorded the submissions of the parties, "
+    claim = (
+        f"The boundary commission reviewed the {filler * 8}"
+        "which the delegation of Argentina formally contested [1]."
+    )
+    assert len(claim) > verify._CLAIM_VERDICT_TEXT_CHARS * 0.25
+    assert len(claim) > 300
+
+    report = await verify_finding_faithfulness(
+        body=claim, citations=_citations()
+    )
+    assert report.claim_verdicts, "the claim must be graded at all"
+
+    verification = build_faithfulness_critique_payload(
+        report, analyzed_output_id=uuid4()
+    )["data"]["verification"]
+    rows = verification["claim_verdicts"]
+    assert rows, "the ledger must carry the graded claim"
+    assert verification["claim_verdicts_truncated"] is False
+
+    persisted = rows[0]["text"]
+    # Whole claim, not a 300-char stub — and the tail token survives.
+    assert len(persisted) == len(claim)
+    assert "Argentina" in persisted
+    assert persisted == claim
 
 
 # ---------------------------------------------------------------------------

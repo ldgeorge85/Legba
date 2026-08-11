@@ -1,22 +1,42 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``unit_correctness_scorer`` sub-handler — P2-T5.
+"""``unit_correctness_scorer`` sub-handler — P2-T5, rewired M-1 (2026-08-03).
 
-Per-bounded-unit CORRECTNESS-vs-reference scorer. Phase 2 measures each small
-reasoning UNIT individually; this handler answers, per unit, the machine-checkable
-question "did the unit rest its read on the canonical evidence?" by comparing the
-unit's live finding grounding against the operator-authored gold rows in
-``unit_reference_labels`` (migration 0057). It is the DETERMINISTIC, LLM-free,
-$0 floor beneath a later semantic correctness judge — exactly as the calibration
-loop's exogenous Brier is the floor beneath the segregated forecast pilot.
+Per-bounded-unit CORRECTNESS scorer. Phase 2 measures each small reasoning UNIT
+individually; this handler answers, per unit, "was the unit's read RIGHT?" — a
+question DISTINCT from faithfulness (P0-T2), which only asks "is the prose
+faithful to its own cites?". A finding can be perfectly faithful to citations
+that do not support the conclusion the operator would have drawn; the 2026-07-28
+gold-set round measured exactly that gap (operator correctness ≈0.625 against a
+same-window faithfulness ≈0.92).
 
-DISTINCT from FAITHFULNESS (P0-T2): faithfulness asks "is the prose faithful to
-its own cites?"; correctness asks "is the read RIGHT vs a gold answer?". This
-handler reports BOTH per unit (faithfulness = mean of the unit's faithfulness
-critique scores; correctness = the source-id overlap metric below).
+TWO CORRECTNESS AXES, AND THE M-1 REWIRE
+----------------------------------------
+There are two gold tables, and until 2026-08-03 this handler was wired to the
+one that is never fed:
 
-The metric — Source-ID Overlap, canonical-source RECALL (P2-T5 chosen metric)
-----------------------------------------------------------------------------
+* **PRIMARY — the OPERATOR gold set** (``correctness_labels``, mig 0096): the
+  weekly labeling loop's per-finding SEMANTIC verdicts. It is the platform's
+  only JUDGE-INDEPENDENT quality signal, it is the table the operator actually
+  writes to, and it surfaced in exactly one API overlay and nowhere else. The
+  weighting and the tiny-n honesty rules live in :mod:`legba.data.correctness_axis`
+  so this handler, the eval scoreboard, the scorecard, the v3 route and the GEPA
+  gate all read ONE definition.
+* **SECONDARY (diagnostic) — source-id overlap vs ``unit_reference_labels``**
+  (mig 0057): the deterministic, LLM-free, $0 recall metric specified below. It
+  is KEPT, not retired — the math is correct, it costs nothing, and it goes live
+  the instant anyone writes a reference label for a live unit. But it is no
+  longer the headline: the table holds ONE row, for a retired analyst, with zero
+  ``canonical_source_ids``, so by the handler's own null rule it has reported
+  ``None`` every day of its life and would have gone on doing so forever.
+
+The two axes are NEVER pooled or averaged (standing rule, ``labels_api`` P2-5).
+They answer different questions with different evidence: one is a human's read of
+the prose, the other is set overlap on provenance ids. They are reported in
+separate keys, with separate n, and either can be null while the other is not.
+
+THE SECONDARY METRIC — Source-ID Overlap, canonical-source RECALL
+-----------------------------------------------------------------
 
 ATOMIC UNIT = one head finding ``f`` vs one gold-label row ``ℓ`` that share
 ``(unit_analyst_id, target_id)`` (a label with ``target_id IS NULL`` matches the
@@ -72,17 +92,29 @@ is gameable by over-citation — which is why Jaccard rides along and a semantic
 pass is layered on top later; this must not stand ALONE as "right".
 
 Output ``data`` keys:
-    sub_handler         "unit_correctness_scorer"
-    units               {unit: per-unit record}
-    scored_unit_count   int  (units with a non-None correctness)
-    total_gold_labels   int
-    lookback_days       int
-    warnings            [str]
+    sub_handler          "unit_correctness_scorer"
+    units                {unit: per-unit record}
+    correctness_operator float | None  (FLEET headline, all verdicts pooled once)
+    operator_fleet       the full :func:`correctness_axis.score` record
+    scored_unit_count    int  (units with a non-None SECONDARY correctness)
+    operator_scored_unit_count  int  (units with any scored operator verdict)
+    total_gold_labels    int  (``unit_reference_labels`` rows — the secondary axis)
+    total_operator_labels int (``correctness_labels`` rows — the primary axis)
+    lookback_days        int
+    warnings             [str]
 
 Per-unit record:
     unit                        str
     faithfulness                float | None   (mean faithfulness critique score)
-    correctness_vs_reference    float | None   (the headline; None per the null rule)
+    faithfulness_population     {judge_pipeline_version, n_scored,
+                                 excluded_other_pipeline, prior_populations}
+    correctness_operator        float | None   (PRIMARY axis; None = no verdicts)
+    n_operator_labels           int   (verdicts incl. unresolvable)
+    n_operator_scored           int   (verdicts that entered the mean)
+    operator_sufficient         bool  (n_operator_scored >= the floor)
+    operator_mix                {label: count}  (the tiny-n display)
+    operator_status             str
+    correctness_vs_reference    float | None   (SECONDARY/diagnostic axis)
     n_labeled                   int   (gold label ROWS for the unit)
     n_findings                  int   (head findings for the unit in-window)
     correctness_citations_only  float | None   (DIAGNOSTIC)
@@ -92,7 +124,7 @@ Per-unit record:
     per_target                  {target: {match, best_label_id, intersection_size,
                                           gold_size, cited_size, jaccard,
                                           match_citations_only, reason?}}
-    status                      str
+    status                      str   (SECONDARY axis status)
 """
 
 from __future__ import annotations
@@ -102,7 +134,9 @@ import logging
 from typing import Any, Mapping
 from uuid import UUID
 
+from ... import correctness_axis
 from ...provenance.models import FindingPayload
+from ...provenance.verify import JUDGE_PIPELINE_VERSION
 from ....runtime.analyst_method import AnalystMethodResult
 
 logger = logging.getLogger(__name__)
@@ -365,6 +399,14 @@ _LABELS_SQL = """
 # "Faithfulness verify (score X.XX)" and whose confidence IS the faithfulness
 # score. Other critiques (e.g. country_critic) carry a different analyst_id +
 # title, so this never folds an unrelated score in.
+#
+# 2026-08-02 (P3 §5a) — ...and NOT an unrelated JUDGE either. A mean over a
+# window that straddles a judge swap describes a population that never existed:
+# swapping the grading model on 07-30 20:14Z moved mean faithfulness +7pp on
+# its own, which would read here as a unit that got better overnight. The
+# `judge_pipeline_version` stamp was built for exactly this and had no reader.
+# The row's `data` column is the whole CritiquePayload dump, so the stamp sits
+# one level down at `data.data.verification`.
 _FAITHFULNESS_SQL = """
     SELECT confidence
     FROM analyst_outputs
@@ -372,15 +414,76 @@ _FAITHFULNESS_SQL = """
       AND analyst_id = $1
       AND title LIKE 'Faithfulness verify%'
       AND produced_at > NOW() - make_interval(days => $2)
+      AND data->'data'->'verification'->>'judge_pipeline_version' = $3
 """
+
+# What the pipeline filter left out — reported, never silently dropped.
+_FAITHFULNESS_EXCLUDED_SQL = """
+    SELECT count(*)::int AS n
+    FROM analyst_outputs
+    WHERE kind = 'critique'
+      AND analyst_id = $1
+      AND title LIKE 'Faithfulness verify%'
+      AND produced_at > NOW() - make_interval(days => $2)
+      AND COALESCE(
+            data->'data'->'verification'->>'judge_pipeline_version', ''
+          ) <> $3
+"""
+
+# M-2 — the PRIOR populations, ANNOTATED rather than mixed. The current-stamp
+# mean above is the headline; every superseded (or pre-stamp) pipeline gets its
+# OWN mean and its OWN n beside it, so the reader can see that the number moved
+# when the judge changed WITHOUT the two ever being averaged together. A NULL
+# stamp is a real population too — everything graded before the split key
+# existed — and is labelled as such rather than dropped.
+_FAITHFULNESS_PRIORS_SQL = """
+    SELECT data->'data'->'verification'->>'judge_pipeline_version' AS version,
+           count(*)::int AS n_scored,
+           avg(confidence)::float8 AS mean_faithfulness
+    FROM analyst_outputs
+    WHERE kind = 'critique'
+      AND analyst_id = $1
+      AND title LIKE 'Faithfulness verify%'
+      AND produced_at > NOW() - make_interval(days => $2)
+      AND COALESCE(
+            data->'data'->'verification'->>'judge_pipeline_version', ''
+          ) <> $3
+    GROUP BY 1
+    ORDER BY n_scored DESC
+"""
+
+# The PRIMARY axis pull — every operator verdict, one round trip for the whole
+# fleet (the table is small by construction: it is hand-labelled). Grouping and
+# weighting happen in :mod:`legba.data.correctness_axis` so exactly one
+# implementation of the weights exists.
+_OPERATOR_LABELS_SQL = correctness_axis.UNIT_LABELS_SQL
+
+_POPULATION_NOTE = (
+    "Faithfulness means cover ONE judge pipeline. Priors are reported beside "
+    "the headline with their own n and NEVER averaged into it — a mean across "
+    "a judge swap describes a population that never existed."
+)
 
 
 async def _pull_unit(
     conn: Any, unit: str, lookback_days: int
-) -> tuple[dict[Any, dict[str, set[UUID]]], int, dict[Any, list[dict[str, Any]]], int, float | None]:
+) -> tuple[
+    dict[Any, dict[str, set[UUID]]],
+    int,
+    dict[Any, list[dict[str, Any]]],
+    int,
+    float | None,
+    dict[str, Any],
+]:
     """Pull one unit's latest-head findings (by target), gold labels (by target),
-    and mean faithfulness. Returns
-    ``(findings_by_target, n_findings, labels_by_target, n_labeled, faithfulness)``."""
+    and mean faithfulness FOR THE CURRENT JUDGE PIPELINE. Returns
+    ``(findings_by_target, n_findings, labels_by_target, n_labeled,
+    faithfulness, faithfulness_population)``.
+
+    The last element is the honest boundary on the faithfulness mean: which
+    judge pipeline it covers, how many critiques it averaged, and how many were
+    excluded as pre-stamp or superseded-judge rather than pooled across a swap
+    (P3 §5a)."""
     finding_rows = await conn.fetch(_FINDINGS_SQL, unit, lookback_days)
     findings_by_target: dict[Any, dict[str, set[UUID]]] = {}
     for row in finding_rows:
@@ -413,10 +516,47 @@ async def _pull_unit(
         })
     n_labeled = len(label_rows)
 
-    faith_rows = await conn.fetch(_FAITHFULNESS_SQL, unit, lookback_days)
+    faith_rows = await conn.fetch(
+        _FAITHFULNESS_SQL, unit, lookback_days, JUDGE_PIPELINE_VERSION
+    )
     faithfulness = _mean([row["confidence"] for row in faith_rows])
+    excluded_row = await conn.fetchrow(
+        _FAITHFULNESS_EXCLUDED_SQL, unit, lookback_days, JUDGE_PIPELINE_VERSION
+    )
+    prior_rows = await conn.fetch(
+        _FAITHFULNESS_PRIORS_SQL, unit, lookback_days, JUDGE_PIPELINE_VERSION
+    )
+    faithfulness_population = {
+        "judge_pipeline_version": JUDGE_PIPELINE_VERSION,
+        "n_scored": len(faith_rows),
+        "excluded_other_pipeline": (
+            int(excluded_row["n"]) if excluded_row else 0
+        ),
+        # M-2 — priors ANNOTATED, never mixed.
+        "prior_populations": [
+            {
+                "judge_pipeline_version": row["version"],
+                "pre_stamp": row["version"] is None,
+                "n_scored": int(row["n_scored"] or 0),
+                "faithfulness": (
+                    float(row["mean_faithfulness"])
+                    if row["mean_faithfulness"] is not None
+                    else None
+                ),
+            }
+            for row in prior_rows
+        ],
+        "note": _POPULATION_NOTE,
+    }
 
-    return findings_by_target, n_findings, labels_by_target, n_labeled, faithfulness
+    return (
+        findings_by_target,
+        n_findings,
+        labels_by_target,
+        n_labeled,
+        faithfulness,
+        faithfulness_population,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -429,29 +569,49 @@ def _build_finding(
     *,
     lookback_days: int,
     warnings: list[str],
+    operator_fleet: dict[str, Any],
 ) -> FindingPayload:
     scored_units = [r for r in records if r["correctness_vs_reference"] is not None]
+    op_scored_units = [r for r in records if r["n_operator_scored"] > 0]
     total_gold = sum(int(r["n_labeled"]) for r in records)
+    total_operator = sum(int(r["n_operator_labels"]) for r in records)
 
-    if scored_units:
+    # THE HEADLINE is the PRIMARY (operator) axis. The secondary source-overlap
+    # axis moved into the body when M-1 rewired this handler — it had reported
+    # `None` every day of its life, so leading with it hid the one number the
+    # gold-set loop actually produced.
+    if operator_fleet.get("correctness") is not None:
         head = (
-            f"Unit correctness vs reference: {len(scored_units)}/{len(records)} "
-            f"units scored (gold rows={total_gold})"
-        )
-    elif total_gold > 0:
-        head = (
-            f"Unit correctness vs reference: gold present but none scorable "
-            f"(gold rows={total_gold}) — correctness None for all units"
+            "Unit correctness (operator gold set): "
+            f"{correctness_axis.describe(operator_fleet)} across "
+            f"{len(op_scored_units)}/{len(records)} units"
         )
     else:
         head = (
-            "Unit correctness vs reference: 0 gold labels — correctness None for "
-            "all units (honest null)"
+            "Unit correctness (operator gold set): no scorable operator "
+            f"verdicts — {operator_fleet.get('status')} (honest null)"
         )
 
     body_lines = [
+        f"PRIMARY axis (operator gold set, judge-independent, never pooled):",
+        f"  fleet: {correctness_axis.describe(operator_fleet)}",
+    ]
+    body_lines += [
         (
-            f"{r['unit']}: correctness={r['correctness_vs_reference']} "
+            f"  {r['unit']}: correctness_operator={r['correctness_operator']} "
+            f"n_scored={r['n_operator_scored']}/{r['n_operator_labels']} "
+            f"sufficient={r['operator_sufficient']} "
+            f"mix={r['operator_mix']} status={r['operator_status']}"
+        )
+        for r in records
+    ]
+    body_lines.append(
+        "SECONDARY axis (deterministic source-id overlap vs "
+        "unit_reference_labels — DIAGNOSTIC, never pooled with the above):"
+    )
+    body_lines += [
+        (
+            f"  {r['unit']}: correctness={r['correctness_vs_reference']} "
             f"faithfulness={r['faithfulness']} "
             f"n_labeled={r['n_labeled']} n_findings={r['n_findings']} "
             f"scored={r['scored_target_count']}/{r['labeled_target_count']} "
@@ -461,10 +621,20 @@ def _build_finding(
         )
         for r in records
     ]
+    body_lines.append(f"population: {_POPULATION_NOTE}")
 
     tags = ["deterministic", "unit_correctness_scorer"]
+    if not op_scored_units:
+        # HONESTY tag: the PRIMARY axis is null for every unit — say WHY.
+        tags.append(
+            "unit_correctness_no_operator_labels" if total_operator == 0
+            else "unit_correctness_operator_unscorable"
+        )
+    elif not operator_fleet.get("sufficient"):
+        # The number exists but is below the floor — flagged so a downstream
+        # reader cannot mistake an indicative n=8 for a measured rate.
+        tags.append("unit_correctness_operator_tiny_n")
     if not scored_units:
-        # HONESTY tag: the headline is None for every unit — say WHY.
         tags.append(
             "unit_correctness_no_gold" if total_gold == 0
             else "unit_correctness_unscorable"
@@ -479,6 +649,14 @@ def _build_finding(
         data={
             "sub_handler": "unit_correctness_scorer",
             "units": {r["unit"]: r for r in records},
+            # PRIMARY axis, fleet-level: scored over EVERY verdict at once, not
+            # a mean of per-unit means (most units carry n=1 and a mean of means
+            # would weight one verdict like a fully-labelled unit).
+            "correctness_operator": operator_fleet.get("correctness"),
+            "operator_fleet": operator_fleet,
+            "operator_scored_unit_count": len(op_scored_units),
+            "total_operator_labels": total_operator,
+            # SECONDARY axis.
             "scored_unit_count": len(scored_units),
             "total_gold_labels": total_gold,
             "lookback_days": lookback_days,
@@ -501,13 +679,33 @@ async def handle(
 
     A META single global sweep: the cadence actor hands this handler the generic
     signals slice as ``inputs``, which is NOT a correctness input — it is ignored;
-    everything is pulled per-unit from the substrate. ``deps`` (or its pool) being
-    None degrades to the HONEST empty result — every unit reports correctness None
-    with ``status='no gold labels'`` (the table's state today), NOT a stub."""
+    everything is pulled from the substrate. ``deps`` (or its pool) being None
+    degrades to the HONEST empty result on BOTH axes — every unit reports
+    ``correctness_operator`` None with ``operator_status='no operator verdicts'``
+    and ``correctness_vs_reference`` None with ``status='no gold labels'`` — NOT
+    a stub."""
     units = tuple(options.get("units") or _DEFAULT_UNITS)
     lookback_days = int(options.get("lookback_days", _DEFAULT_LOOKBACK_DAYS))
     warnings: list[str] = []
     pool = getattr(deps, "pg_pool", None) if deps is not None else None
+
+    # PRIMARY axis — one round trip for the whole fleet (a hand-labelled table
+    # is small by construction). A failure here degrades to the honest empty
+    # axis (every unit reports `no operator verdicts`), never a stub.
+    operator_by_unit: dict[str, dict[str, Any]] = {}
+    operator_fleet: dict[str, Any] = correctness_axis.score(
+        (), min_labels=correctness_axis.MIN_FLEET_LABELS
+    )
+    if pool is not None:
+        try:
+            async with pool.acquire() as conn:
+                op_rows = await conn.fetch(_OPERATOR_LABELS_SQL)
+            operator_by_unit, operator_fleet = correctness_axis.score_by_unit(
+                op_rows
+            )
+        except Exception as exc:  # noqa: BLE001 — never break the sweep
+            logger.warning("unit_correctness_scorer.operator_pull_failed err=%s", exc)
+            warnings.append("unit_correctness_scorer.operator_pull_failed")
 
     records: list[dict[str, Any]] = []
     for unit in units:
@@ -516,6 +714,13 @@ async def handle(
         n_findings = 0
         n_labeled = 0
         faithfulness: float | None = None
+        faithfulness_population: dict[str, Any] = {
+            "judge_pipeline_version": JUDGE_PIPELINE_VERSION,
+            "n_scored": 0,
+            "excluded_other_pipeline": 0,
+            "prior_populations": [],
+            "note": _POPULATION_NOTE,
+        }
         if pool is not None:
             try:
                 async with pool.acquire() as conn:
@@ -525,6 +730,7 @@ async def handle(
                         labels_by_target,
                         n_labeled,
                         faithfulness,
+                        faithfulness_population,
                     ) = await _pull_unit(conn, unit, lookback_days)
             except Exception as exc:  # noqa: BLE001 — never break the sweep
                 logger.warning(
@@ -533,12 +739,24 @@ async def handle(
                 warnings.append(f"unit_correctness_scorer.pull_failed unit={unit}")
 
         scored = score_unit(findings_by_target, labels_by_target)
+        op_record = operator_by_unit.get(unit) or correctness_axis.score(
+            (), min_labels=correctness_axis.MIN_UNIT_LABELS
+        )
         records.append({
             "unit": unit,
             "faithfulness": faithfulness,
-            # The HONEST headline — None per the null rule whenever nothing is
-            # scorable; a real 0.0 only when a finding cited NONE of the canonical
-            # evidence for its best label.
+            # WHICH judge graded that mean, and what was excluded to keep it one
+            # population — a mean pooled across a judge swap is not a mean of
+            # anything (P3 §5a). Never a bare number without its boundary.
+            "faithfulness_population": faithfulness_population,
+            # PRIMARY AXIS — the operator gold set. Judge-independent, reported
+            # with its n and its verdict mix ALWAYS (tiny-n rule), and never
+            # pooled with faithfulness or with the secondary axis below.
+            **correctness_axis.as_payload(op_record),
+            # SECONDARY (diagnostic) AXIS — deterministic source-id overlap.
+            # None per the null rule whenever nothing is scorable; a real 0.0
+            # only when a finding cited NONE of the canonical evidence for its
+            # best label.
             "correctness_vs_reference": scored["correctness_vs_reference"],
             "n_labeled": n_labeled,
             "n_findings": n_findings,
@@ -552,7 +770,10 @@ async def handle(
         })
 
     finding = _build_finding(
-        records, lookback_days=lookback_days, warnings=warnings
+        records,
+        lookback_days=lookback_days,
+        warnings=warnings,
+        operator_fleet=operator_fleet,
     )
     return AnalystMethodResult(
         finding=finding,

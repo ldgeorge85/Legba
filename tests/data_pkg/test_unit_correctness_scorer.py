@@ -255,21 +255,43 @@ class _FakePool:
 
 
 class _FakeConn:
-    """Routes the handler's three reads to per-unit canned rows by SQL shape."""
+    """Routes the handler's reads to canned rows by SQL shape.
 
-    def __init__(self, data_by_unit):
+    Five shapes now: the FLEET-WIDE operator gold-set pull (M-1, no args — it
+    reads every ``correctness_labels`` row in one trip), then the per-unit
+    reference labels / faithfulness / prior-population / findings reads.
+    """
+
+    def __init__(self, data_by_unit, operator_rows=None):
         self._data = data_by_unit
+        self._operator_rows = operator_rows or []
 
     async def fetch(self, sql, *args):
+        # PRIMARY axis — fleet-wide, takes no args, so route it BEFORE any
+        # per-unit lookup (args[0] would IndexError).
+        if "FROM correctness_labels" in sql:
+            return self._operator_rows
         unit = args[0]
         d = self._data.get(unit, {})
         if "FROM unit_reference_labels" in sql:
             return d.get("labels", [])
+        # The M-2 prior-population rollup also matches `kind = 'critique'`, so
+        # its distinctive GROUP BY must be tested first.
+        if "kind = 'critique'" in sql and "GROUP BY" in sql:
+            return d.get("faithfulness_priors", [])
         if "kind = 'critique'" in sql:
             return d.get("faithfulness", [])
         if "kind = 'finding'" in sql:
             return d.get("findings", [])
         return []
+
+    async def fetchrow(self, sql, *args):
+        # The judge-pipeline exclusion count (P3 §5a) — how many faithfulness
+        # critiques the current-pipeline filter left out.
+        if "COALESCE" in sql and "judge_pipeline_version" in sql:
+            unit = args[0]
+            return {"n": self._data.get(unit, {}).get("faithfulness_excluded", 0)}
+        return None
 
 
 class _FakeDeps:
@@ -321,3 +343,227 @@ async def test_handle_scores_units_over_fake_substrate():
 
     assert result.finding.data["scored_unit_count"] == 1
     assert result.finding.data["total_gold_labels"] == 1
+
+
+# ---------------------------------------------------------------------------
+# P3 §5a — the faithfulness mean names its judge population.
+#
+# The mean is taken over a lookback window that can straddle a judge swap. When
+# the grading model changed on 2026-07-30 20:14Z mean faithfulness moved +7pp
+# on its own, which would read here as every unit improving overnight. The
+# `judge_pipeline_version` stamp existed for exactly this and had no reader.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_faithfulness_mean_reports_its_judge_population():
+    from legba.data.provenance.verify import JUDGE_PIPELINE_VERSION
+
+    data_by_unit = {
+        "escalation": {
+            "findings": [],
+            "labels": [],
+            # Only current-pipeline critiques come back from the filtered read.
+            "faithfulness": [{"confidence": 1.0}, {"confidence": 0.5}],
+            # ...and the fake reports what the filter left behind.
+            "faithfulness_excluded": 11,
+        },
+    }
+    deps = _FakeDeps(_FakePool(_FakeConn(data_by_unit)))
+    result = await ucs.handle(
+        [], {"sub_handler": "unit_correctness_scorer", "units": ["escalation"]}, deps
+    )
+
+    esc = result.finding.data["units"]["escalation"]
+    assert esc["faithfulness"] == 0.75  # mean over the CURRENT pipeline only
+    pop = esc["faithfulness_population"]
+    assert pop["judge_pipeline_version"] == JUDGE_PIPELINE_VERSION
+    assert pop["n_scored"] == 2
+    # The excluded count is REPORTED — a mean over 2 of 13 rows must never look
+    # like a mean over 13.
+    assert pop["excluded_other_pipeline"] == 11
+
+
+@pytest.mark.asyncio
+async def test_faithfulness_population_is_honest_when_the_pull_fails():
+    """A failed pull must still name the pipeline, never imply a measured 0."""
+    from legba.data.provenance.verify import JUDGE_PIPELINE_VERSION
+
+    class _BoomPool:
+        def acquire(self):
+            raise RuntimeError("pull exploded")
+
+    result = await ucs.handle(
+        [],
+        {"sub_handler": "unit_correctness_scorer", "units": ["escalation"]},
+        _FakeDeps(_BoomPool()),
+    )
+    esc = result.finding.data["units"]["escalation"]
+    assert esc["faithfulness"] is None
+    pop = esc["faithfulness_population"]
+    assert pop["judge_pipeline_version"] == JUDGE_PIPELINE_VERSION
+    assert pop["n_scored"] == 0
+
+
+# ---------------------------------------------------------------------------
+# M-1 — the PRIMARY (operator gold-set) axis.
+#
+# The handler read `unit_reference_labels` (1 row, retired analyst, 0 source
+# ids) and reported None every day of its life, while the 8 real operator
+# verdicts in `correctness_labels` surfaced in one API overlay and nowhere
+# else. These pin the rewire: the operator axis is the headline, the
+# source-overlap axis is kept as a named diagnostic, and the two never mix.
+# ---------------------------------------------------------------------------
+
+
+def _op(unit, label):
+    return {"unit_analyst_id": unit, "label": label}
+
+
+@pytest.mark.asyncio
+async def test_operator_axis_is_the_headline_and_carries_its_n():
+    operator_rows = [
+        _op("escalation", "correct"),
+        _op("escalation", "partially_correct"),
+        _op("energy_security", "incorrect"),
+    ]
+    conn = _FakeConn({}, operator_rows=operator_rows)
+    result = await ucs.handle(
+        [],
+        {
+            "sub_handler": "unit_correctness_scorer",
+            "units": ["escalation", "energy_security"],
+        },
+        _FakeDeps(_FakePool(conn)),
+    )
+    data = result.finding.data
+    units = data["units"]
+
+    assert units["escalation"]["correctness_operator"] == 0.75
+    assert units["escalation"]["n_operator_scored"] == 2
+    assert units["escalation"]["operator_mix"]["correct"] == 1
+    assert units["energy_security"]["correctness_operator"] == 0.0
+
+    # Fleet = every verdict pooled once (1.0 + 0.5 + 0.0) / 3.
+    assert data["correctness_operator"] == pytest.approx(0.5)
+    assert data["operator_fleet"]["n_scored"] == 3
+    assert data["total_operator_labels"] == 3
+    assert data["operator_scored_unit_count"] == 2
+
+    # The TITLE leads with the operator axis (it used to lead with a permanent
+    # `None` from the table nobody feeds).
+    assert result.finding.title.startswith("Unit correctness (operator gold set)")
+    assert "correctness 0.50" in result.finding.title
+
+
+@pytest.mark.asyncio
+async def test_tiny_n_is_flagged_never_presented_as_measured():
+    conn = _FakeConn({}, operator_rows=[_op("escalation", "correct")])
+    result = await ucs.handle(
+        [], {"sub_handler": "unit_correctness_scorer", "units": ["escalation"]},
+        _FakeDeps(_FakePool(conn)),
+    )
+    rec = result.finding.data["units"]["escalation"]
+    assert rec["correctness_operator"] == 1.0     # reported...
+    assert rec["operator_sufficient"] is False    # ...but never called measured
+    assert "indicative only" in rec["operator_status"]
+    assert "unit_correctness_operator_tiny_n" in result.finding.tags
+
+
+@pytest.mark.asyncio
+async def test_no_operator_verdicts_is_an_honest_null_with_its_own_tag():
+    result = await ucs.handle(
+        [], {"sub_handler": "unit_correctness_scorer", "units": ["escalation"]},
+        _FakeDeps(_FakePool(_FakeConn({}))),
+    )
+    rec = result.finding.data["units"]["escalation"]
+    assert rec["correctness_operator"] is None
+    assert rec["n_operator_labels"] == 0
+    assert rec["operator_status"] == "no operator verdicts"
+    assert "unit_correctness_no_operator_labels" in result.finding.tags
+    assert "honest null" in result.finding.title
+
+
+@pytest.mark.asyncio
+async def test_the_two_correctness_axes_stay_separate():
+    """A unit can be null on one axis and scored on the other; nothing averages
+    them (labels_api P2-5, the standing never-pool rule)."""
+    conn = _FakeConn({}, operator_rows=[_op("escalation", "incorrect")])
+    result = await ucs.handle(
+        [], {"sub_handler": "unit_correctness_scorer", "units": ["escalation"]},
+        _FakeDeps(_FakePool(conn)),
+    )
+    rec = result.finding.data["units"]["escalation"]
+    assert rec["correctness_operator"] == 0.0        # the operator judged it
+    assert rec["correctness_vs_reference"] is None   # no reference label exists
+    assert rec["n_operator_labels"] == 1
+    assert rec["n_labeled"] == 0                     # a DIFFERENT table's count
+    # Both honesty tags coexist — one per axis.
+    assert "unit_correctness_no_gold" in result.finding.tags
+    assert "unit_correctness_operator_tiny_n" in result.finding.tags
+
+
+@pytest.mark.asyncio
+async def test_operator_pull_failure_degrades_to_the_honest_empty_axis():
+    class _BoomFetchConn(_FakeConn):
+        async def fetch(self, sql, *args):
+            if "FROM correctness_labels" in sql:
+                raise RuntimeError("gold-set pull exploded")
+            return await super().fetch(sql, *args)
+
+    result = await ucs.handle(
+        [], {"sub_handler": "unit_correctness_scorer", "units": ["escalation"]},
+        _FakeDeps(_FakePool(_BoomFetchConn({}))),
+    )
+    rec = result.finding.data["units"]["escalation"]
+    assert rec["correctness_operator"] is None       # never a stubbed 0.0
+    assert "unit_correctness_scorer.operator_pull_failed" in (
+        result.finding.data["warnings"]
+    )
+
+
+# ---------------------------------------------------------------------------
+# M-2 — prior judge populations are ANNOTATED beside the headline, never mixed.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_prior_judge_populations_are_annotated_not_pooled():
+    from legba.data.provenance.verify import JUDGE_PIPELINE_VERSION
+
+    data_by_unit = {
+        "escalation": {
+            "findings": [],
+            "labels": [],
+            "faithfulness": [{"confidence": 0.9}],
+            "faithfulness_excluded": 12,
+            "faithfulness_priors": [
+                {"version": "2026-07-31/1", "n_scored": 8,
+                 "mean_faithfulness": 0.82},
+                {"version": None, "n_scored": 4, "mean_faithfulness": 0.55},
+            ],
+        },
+    }
+    result = await ucs.handle(
+        [], {"sub_handler": "unit_correctness_scorer", "units": ["escalation"]},
+        _FakeDeps(_FakePool(_FakeConn(data_by_unit))),
+    )
+    pop = result.finding.data["units"]["escalation"]["faithfulness_population"]
+
+    # The headline is the CURRENT stamp only — 0.9, not a pooled 0.78.
+    assert result.finding.data["units"]["escalation"]["faithfulness"] == 0.9
+    assert pop["judge_pipeline_version"] == JUDGE_PIPELINE_VERSION
+    assert pop["n_scored"] == 1
+
+    priors = {p["judge_pipeline_version"]: p for p in pop["prior_populations"]}
+    assert priors["2026-07-31/1"]["n_scored"] == 8
+    assert priors["2026-07-31/1"]["faithfulness"] == 0.82
+    assert priors["2026-07-31/1"]["pre_stamp"] is False
+    # A NULL stamp is a real population (everything graded before the split key
+    # existed), labelled as such rather than dropped.
+    assert priors[None]["pre_stamp"] is True
+    assert priors[None]["n_scored"] == 4
+    # The prior n's sum to what the filter excluded — the counters reconcile.
+    assert sum(p["n_scored"] for p in pop["prior_populations"]) == (
+        pop["excluded_other_pipeline"]
+    )

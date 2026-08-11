@@ -1,22 +1,104 @@
-# RSSHub lane — North Korea desk (country_watch_kp). Ships DRAFT (operator activates).
+# North Korea desk (country_watch_kp) + Indo-Pacific. Ships DRAFT (operator activates).
 #
-# Radio Free Asia's Korea news service (RFA — US-government-funded under USAGM but operating under a statutory editorial firewall; NOT state media, mirrors the VOA treatment) bridged to RSS by the self-hosted RSSHub sidecar
-# (docker-compose `rsshub`, profile `sources-extra`). The `rss` handler polls
-# `http://rsshub:1200/rfa/english/news/korea`, which RSSHub renders from rfa.org/english/news/korea (probed
-# 2026-07-24, HTTP 200). Chosen for the North Korea desk — a STARVED non-G7 desk
-# (KP: 4 signals/7d) — because RFA is among the best-sourced English outlets on North Korea (defector networks, inside-DPRK reporting) the global wires cannot match.
+# Radio Free Asia — US-government-funded under USAGM but operating under a
+# statutory editorial firewall; NOT state media, mirrors the VOA treatment.
 #
-# source_class: reporting. Article links in the RSSHub feed are the real
-# rfa.org URLs, so the credibility filter reads host rfa.org (seeded 0.72/wire by the
-# registrar).
+# ---------------------------------------------------------------------------
+# 2026-08-03 DIAGNOSIS — "frozen since 07-28" WAS NOT A BROKEN ROUTE
+# ---------------------------------------------------------------------------
+# Reported symptom: 151 consecutive `empty` poll outcomes since
+# 2026-07-28 09:48Z, `signals_written = 0` every time, health `healthy`,
+# `newest_entry_ts` pinned at 2026-07-21 20:41:21Z. Read alongside the AP
+# country-hub freeze of the same week this looked like the same class of
+# failure. It is not. Measured on 2026-08-03:
+#
+#   * The RSSHub route it was polling, `/rfa/english/news/korea`, returned
+#     HTTP 200 with 38 well-formed items and REAL pubDates — newest
+#     `Tue, 21 Jul 2026 20:41:21 GMT`. The route was never broken.
+#   * The upstream section page it renders was fetched directly and its own
+#     embedded publish_date fields read: 2026-07-21T20:41:21Z,
+#     2026-07-16T17:51:48Z, 2026-06-27T01:59:54Z, 2026-05-21T00:44:51Z,
+#     2026-04-28T21:38:28Z … The RSSHub rendering matched the upstream page
+#     EXACTLY. The bridge was faithful.
+#
+# So the section had genuinely published nothing since 21 July, and the empty
+# polls were dedup working correctly on a feed whose 38 items were all already
+# ingested. RFA's Korea service now publishes on the order of two or three
+# articles a MONTH. Retirement was considered and rejected: a working route
+# with rare but unique DPRK reporting is worth more than a retirement
+# migration, and the gdelt.doc_api precedent (a genuinely dead upstream) does
+# not apply.
+#
+# THE FIX IS SCOPE, NOT PLUMBING. Polling a section that emits twice a month
+# gives the desk nothing most weeks. RFA publishes a NATIVE, keyless,
+# whole-service English feed at `https://www.rfa.org/english/rss2.xml` —
+# VERIFIED LIVE 2026-08-03: HTTP 200, RSS 2.0, 30 items with valid pubDates,
+# newest `Sat, 01 Aug 2026 02:41:56 +0000`, spanning Korea, Myanmar, the South
+# China Sea, Tibet, Uyghur, China and the Pacific. It CONTAINS every Korea item
+# the section feed carried (5 of the 30 are /english/korea/ links, including
+# the 2026-07-21 bridge story) and adds six other beats that map onto desks we
+# already run. This descriptor is re-pointed at it.
+#
+# Two consequences of that re-point, both deliberate:
+#
+#   * THE SIDECAR DEPENDENCY IS GONE. Native feed, so no RSSHub, no
+#     `rsshub` egress-allowlist entry, and no exposure to RSSHub's own upstream
+#     scrape breaking — which is exactly what happened to
+#     source_rsshub_rfi_afrique.yaml on 2026-07-28. The `rsshub_lane` tag is
+#     dropped with it; keeping it would be a lie. The id and filename are
+#     deliberately NOT renamed, following that same rfi_afrique precedent: only
+#     `config.url` and `scope` changed, so the ordinary
+#     re-register-on-content-hash-change mechanics apply and no actor
+#     retirement/re-registration dance is needed. Cosmetically stale, and worth
+#     less than the churn of a rename.
+#
+#   * geo IS NOW EMPTY, AND THAT IS A CORRECTNESS FIX, NOT A DOWNGRADE.
+#     `scope.geo` is the PUBLISHER'S origin, not the story's subject
+#     (data/sources/baseline.py C2): it is parked in
+#     `payload.publisher_origin` and promoted into the indexed `geo` column
+#     ONLY as a post-enrichment fallback when nothing in-body geocoded.
+#     Carrying [KP] on a pan-Asian feed would fallback-stamp NORTH KOREA onto
+#     un-geocoded Tibet, Uyghur and Pacific stories — the same shape of bug
+#     that once had a Turkey desk pulling 900 Anadolu world stories. The KP
+#     desk does not lose the Korea items: it reaches this feed through the
+#     standard auto-wire (kind `rss` + tag `news` + owner_tenant `shared`) and
+#     narrows per signal on its own `geo_match(["KP"])` predicate, fed by the
+#     in-body `geocode` stage below. source.dailynk.english and
+#     source.38north.analysis remain KP-dedicated lanes regardless.
+#
+# EXPECT A SMALL ONE-TIME DUPLICATE on the first poll after the re-point. The
+# RSSHub rendering emitted `https://www.rfa.org/...` links; the native feed
+# emits `https://rfa.org/...` (no `www`). dedupe_tier_1 canonicalizes scheme,
+# host case, query and fragment but does NOT strip a `www.` label, so the
+# handful of already-ingested items still inside the native feed's 30-item
+# window will land once more. Bounded, one-off, and not worth special-casing
+# the canonicalizer for. (Credibility lookup is unaffected — normalize_host
+# DOES strip `www.`, so both forms score off the same `rfa.org` seed.)
+#
+# ALSO VERIFIED, NOT CHOSEN: RFA does publish a native SECTION feed at
+# `https://www.rfa.org/english/news/korea/rss2.xml` (HTTP 200, RSS 2.0) — but
+# it carried only TWO items, so it would have preserved the exact symptom that
+# started this investigation while also shrinking the recovery window. The
+# whole-service feed is strictly better on both counts.
+#
+# ---------------------------------------------------------------------------
+#
+# source_class: reporting. Article links are the real rfa.org URLs, so the
+# credibility filter reads host rfa.org (seeded 0.72/wire by the registrar).
 #
 # state: draft — bulk registration creates NO live actor; activation
-# (draft -> configured -> active) is the operator's after the sidecar is up and
-# the route is verified live on the instance.
+# (draft -> configured -> active) is the operator's. NOTE for whoever lands
+# this: the LIVE head of this id is already `active`, and
+# scripts/_p17_registrar.py::register_descriptor only walks FORWARD along the
+# lifecycle FSM, so re-running the draft-batch registrar over this file would
+# report `failed: no legal FSM path active -> draft` rather than updating it.
+# This edit must go in through the registry's normal update path carrying
+# `state: active` and the OLD head version in the body (the update path
+# re-stamps the version) — the same handling any live descriptor change gets.
 
 identity:
   id: source.rsshub.rfa.korea
-  name: Radio Free Asia — Korea (via RSSHub)
+  name: Radio Free Asia — English (all services)
   kind: rss
   schema_uri: legba/source/1.0.0
   version: "0000000000000000"        # placeholder — registry stamps content hash
@@ -27,16 +109,20 @@ identity:
 
 scope:
   owner_tenant: shared
-  geo: [KP]
+  # EMPTY since 2026-08-03 — pan-Asian feed; [KP] here would fallback-stamp
+  # North Korea onto Tibet/Uyghur/Pacific stories. See the header.
+  geo: []
   languages: [en]
-  tags: [news, world, indo_pacific, korea, north_korea, rsshub_lane]
+  tags: [news, world, indo_pacific, korea, north_korea, china, myanmar, tibet]
   source_class: reporting
 
 acquisition: poll
 
 cadence:
-  # Hourly, staggered minute offset. RSSHub caches upstream (CACHE_EXPIRE=1h by
-  # default), so polling faster just serves cache — hourly is courteous.
+  # Hourly, staggered minute offset — unchanged. The service publishes roughly
+  # every other day, so most polls are 304s; the handler's conditional GET
+  # (ETag / Last-Modified) makes those near-free, and hourly keeps latency low
+  # on the days it does publish.
   schedule:
     factory_kind: cron
     raw: "48 * * * *"
@@ -46,7 +132,7 @@ cadence:
 config:
   url:
     factory_kind: text
-    raw: "http://rsshub:1200/rfa/english/news/korea"
+    raw: "https://www.rfa.org/english/rss2.xml"
 
 pipeline:
   ingestion_filters:
@@ -56,9 +142,11 @@ pipeline:
       config: {}
   enrichment:
     # language_detect FIRST so ner_multilingual can use the detected language.
-    # No fact_extractor: the default RSSHub feed carries title+link (not full
-    # bodies), so relation mining is low-value here — the operator can add the
-    # stage after confirming the route yields article text.
+    # geocode is what actually puts a country on the signal now that scope.geo
+    # is empty — the desks' per-signal geo predicates read that column.
+    # No fact_extractor: the feed carries title+description, not full bodies;
+    # the operator can add the stage after confirming article text on the
+    # instance.
     - kind: language_detect
       config: {}
     - kind: ner_multilingual

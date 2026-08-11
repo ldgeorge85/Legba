@@ -77,6 +77,7 @@ from uuid import UUID, uuid4
 import asyncpg
 
 from legba.data.analysts.deterministic_handlers.scorecard_banding import FAITH_FLOOR
+from legba.data.analysts.question_text import ungrounded_office
 from legba.data.provenance import AnalystContext, HypothesisPayload, write_hypothesis
 from legba.data.registry.scorecard_reconcile import (
     composition_usages,
@@ -610,6 +611,18 @@ async def run_harvest(
     for cls in selected:
         items, counts = await _COLLECTORS[cls](conn, limit=limit)
         for item in items:
+            # CW-8 — an office with nothing to bind it to is not a question
+            # the substrate can answer; it is a slot. Flagged and NOT
+            # harvested, counted under its own reason so a collector that
+            # starts producing them is visible in the report rather than
+            # discovered later in a precision round. Inert for today's
+            # collectors (their theses are machine-built from substrate keys
+            # and always name a subject or a desk) — which is exactly the
+            # posture a guard on a generated surface should have.
+            offices = ungrounded_office(item.question)
+            if offices:
+                counts.skip("ungrounded_office")
+                continue
             if await _already_harvested(conn, item.harvest_class, item.source_id):
                 counts.existing += 1
                 continue

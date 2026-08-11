@@ -11,8 +11,9 @@ Covers the four-part task:
      registration-ready (load + config binds through the RSS handler schema);
   3. the embedded no-auth catalog assigns a vocabulary class to EVERY entry
      (state_media hand-curated, the rest derived from credibility tier);
-  4. the ``narrative_coordination`` unit prompt references source_class /
-     state_media / framing.
+  4. the ``narrative_coordination`` unit prompt does NOT claim source_class —
+     inverted 2026-08-04 by Phase-V D8a, because the field never reaches the
+     unit's prompt; see the test for the full note.
 """
 
 from __future__ import annotations
@@ -56,6 +57,13 @@ EXPECTED_YAML_CLASS: dict[str, str] = {
     "source_irna_english.yaml": "state_media",
     "source_presstv_english.yaml": "state_media",
     "source_ukrinform_english.yaml": "state_media",
+    # W1-E draft binds for the never-bound adapters — class as declared; each gets a
+    # real classification review at activation (none has a live actor yet)
+    "source_common_crawl_news.yaml": "analysis",
+    "source_discord_webhook.yaml": "analysis",
+    "source_firecrawl.yaml": "analysis",
+    "source_generic_webhook.yaml": "analysis",
+    "source_query_source_discovery_template.yaml": "analysis",
     # A7 RSSHub-lane feeds (pre-existing omission from the rsshub merge; all reporting)
     "source_rsshub_aljazeera_drcongo.yaml": "reporting",
     "source_rsshub_apnews_drcongo.yaml": "reporting",
@@ -118,6 +126,19 @@ EXPECTED_YAML_CLASS: dict[str, str] = {
     "source_digitimes.yaml": "reporting",
     "source_wto_news.yaml": "official",
     "source_northernminer.yaml": "reporting",
+    # 2026-08-03 batch — AP world re-route + Niger coverage pass (roadmap B-7).
+    # All reporting: AP is a private newswire cooperative; ActuNiger and Sahel
+    # Intelligence are commercial outlets; Studio Kalangou is an independent
+    # non-profit newsroom (donor-funded, but an NGO operator is not an
+    # `official` government/IGO publisher); France 24 is state-FUNDED but
+    # editorially independent under statute, so it takes the RFI/DW treatment
+    # rather than `state_media`.
+    "source_rsshub_apnews_world.yaml": "reporting",
+    "source_actuniger_politique.yaml": "reporting",
+    "source_actuniger_societe.yaml": "reporting",
+    "source_studiokalangou.yaml": "reporting",
+    "source_sahel_intelligence.yaml": "reporting",
+    "source_france24_afrique.yaml": "reporting",
 }
 
 # 2026-07-29 Ansar Allah decision — source_telegram_ansarallah.yaml (a
@@ -365,16 +386,59 @@ def test_tier_derivation_maps_thinktank_and_gov():
 
 
 # ---------------------------------------------------------------------------
-# 4. The narrative_coordination unit prompt references the class.
+# 4. The narrative_coordination unit prompt does NOT claim a class it is not shown.
 # ---------------------------------------------------------------------------
 
 
-def test_narrative_unit_prompt_references_source_class():
+def test_narrative_unit_prompt_does_not_reference_unrendered_source_class():
+    """INVERTED 2026-08-04 (Phase-V D8a). This test used to require the unit
+    prompt to reference ``source_class`` — and it did, for ~200 words, telling
+    the model to weigh a field the model was never given.
+
+    ``source_class`` is real and load-bearing, but it lives on the SOURCE
+    descriptor (``SourceScope.source_class``, asserted by the rest of this
+    file) and reaches only ``signal_salience``, which joins
+    ``source_descriptors`` to read it. ``inline_target._render_signal`` renders
+    title, ``ingested=``, ``published=``, ``source=`` and the snippet — and
+    nothing else. So the unit was inferring the classification from URLs and
+    asserting it as observed metadata: a live RU finding claimed a frame had
+    crossed "distinct source classes (independent reporting, analysis, official
+    statements, and state-media)", which is a statement about a field that was
+    not in its prompt.
+
+    The prompt now reasons from OUTLET IDENTITY, which the slice does render.
+    If ``source_class`` is ever threaded INTO the slice render, invert this test
+    again — but the prompt and the render must move together, and this test is
+    what keeps them from drifting apart a second time.
+    """
     body = yaml.safe_load((DESCRIPTORS_DIR / "analyst_narrative_coordination.yaml").read_text())
     prompt = body["method"]["system_prompt"]
     lowered = prompt.lower()
-    assert "source_class" in lowered
-    assert "state_media" in lowered
+    assert "source_class" not in lowered
+    # It reasons from what the slice DOES render, and says so.
+    assert "source=" in lowered
+    assert "outlet identity" in lowered
+    # State-linked outlets are still framing evidence, not established fact —
+    # the substance of the old rule, expressed over what the model can see.
     assert "framing" in lowered
-    # It must instruct low-tier-for-facts treatment of state media.
+    assert "state-linked" in lowered
     assert "fact" in lowered
+
+
+def test_signal_render_still_provides_no_source_class():
+    """The other half of the same contract: the prompt is honest only for as
+    long as the render stays this shape."""
+    from legba.data.analysts.inline_target import _render_signal
+
+    rendered = _render_signal(
+        1,
+        {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "title": "A headline",
+            "produced_at": "2026-08-02T14:00:00+00:00",
+            "source_url": "https://example.com/x",
+            "data": {"summary": "Body text.", "published_at": "2026-08-02"},
+        },
+    )
+    assert "source_class" not in rendered
+    assert "source=" in rendered

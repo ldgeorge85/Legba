@@ -7,7 +7,7 @@ A deterministic META analyst on a ~10-minute cadence that watches VERIFIED
 substrate state for TRANSITIONS and side-writes one ``kind='alert'``
 ``analyst_outputs`` row per fired trigger, then fans each outward through the
 shared P1-1 :class:`legba.data.alerts.AlertSinkDispatcher` (ledger row per sink
-outcome + webhook when configured). Six trigger classes:
+outcome + webhook when configured). Seven trigger classes:
 
   1. **band_crossing** — a desk×dimension scorecard band changed vs the
      previous scorecard row (the T1 bands rest ONLY on verified claims, so a
@@ -59,6 +59,24 @@ outcome + webhook when configured). Six trigger classes:
      (now shared across all six classes rather than an isolated per-analyst
      budget). Binning tiers, source-family fold, and scoring rationale:
      :mod:`.geo_convergence_scan`.
+  7. **production_deficit** (S-1, 2026-08-03) — the only class whose subject
+     is THIS ENGINE rather than the world. A producing loop — an analyst's
+     cadence, an analyst's output, a source's signal production, a declared
+     backlog's drain — has produced nothing measured against ITS OWN declared
+     cadence and trailing history. Expectations are derived from descriptors
+     and observed production, so a newly-activated analyst or source is gauged
+     from its first tick with no code change. Fires at ``medium`` and worse
+     only, once on appearance and again on each ESCALATION rung; recovery is
+     silent. Judgment lives in
+     :mod:`legba.data.registry.production_gauge` — the SAME function the
+     ``/v3/system/production-gauge`` route reads, so a threshold cannot mean
+     one thing on the table and another on the phone. Adapter and paging
+     policy: :mod:`._production_deficit_scan`.
+
+     This class exists because the engine's characteristic failure is silent
+     ABSENCE, not error (ENGINE_REVIEW_2026-08-02 §1): five AP feeds polled
+     130 times each over six days, every poll ``success`` and ``healthy``,
+     writing zero signals, and no alert ever fired for any of them.
 
 Statefulness — the no-refire contract
 -------------------------------------
@@ -67,12 +85,17 @@ Every trigger class keeps a durable last-seen watermark in
 deviations upsert one row per desk×dimension / desk×metric whose ``state``
 fingerprints the last-seen value; verified findings append one row per finding
 id (pruned once older than the scan window); contentions upsert one row per
-contention id fingerprinting status + surfaced winner. A transition fires when
+contention id fingerprinting status + surfaced winner; production deficits
+upsert one row per loop fingerprinting the deficit's severity RANK, so an
+ongoing deficit stays silent while an escalation fires. A transition fires when
 — and only when — the live value differs from the watermark, and the watermark
 is advanced ONLY after the alert row landed (a failed write retries next scan).
 The analyst's FIRST-EVER scan of each class seeds watermarks silently (a
 per-class ``_seeded`` marker row) and fires NOTHING — bringing the analyst up
-on a live substrate must not page the operator with history.
+on a live substrate must not page the operator with history. The
+production_deficit seed is loud in the RECEIPT even so (``seeded_deficits``
+plus a WARNING line naming each adopted loop), because for a gauge the
+standing backlog IS the news and a silent adoption could read as "all clear".
 
 Anti-noise at the trigger tier
 ------------------------------
@@ -119,7 +142,13 @@ from ...provenance.kinds import (
 )
 from ...provenance.models import AlertPayload, FindingPayload, severity_from_tags
 from ....runtime.analyst_method import AnalystMethodResult
-from . import _watchlist_scan, geo_convergence_scan, scorecard_banding
+from . import (
+    _production_deficit_scan,
+    _situation_escalation_scan,
+    _watchlist_scan,
+    geo_convergence_scan,
+    scorecard_banding,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +169,16 @@ TRIGGER_WATCHLIST = "watchlist_hit"
 #: alert_trigger_watermarks rows continue under this handler with no
 #: migration and no watermark discontinuity.
 TRIGGER_GEO_CONVERGENCE = "geo_convergence"
+#: S-1 (2026-08-03) — the engine watching ITSELF: a producing loop (analyst
+#: cadence, analyst output, source signal production, declared backlog drain)
+#: that has produced nothing against its own trailing expectation. The only
+#: class whose subject is Legba rather than the world. Judgment lives in
+#: legba.data.registry.production_gauge (shared with the v3 route); see
+#: _production_deficit_scan for the adapter.
+TRIGGER_PRODUCTION_DEFICIT = "production_deficit"
+#: Continuity P2 — a VERIFIED `escalates` row on the trajectory ledger; the
+#: first class whose subject is a FRAME. Bar + judgment: the sibling module.
+TRIGGER_SITUATION_ESCALATION = _situation_escalation_scan.TRIGGER_CLASS
 
 #: Per-class seed marker key — present ⇒ the class completed its first scan.
 SEED_KEY = "_seeded"
@@ -188,6 +227,11 @@ _SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 #: flips/deviations, ahead of geo-convergence formations — the newest fold,
 #: given no established relative order against the other five pre-fold, so
 #: it is conservatively ranked last rather than displacing any of them).
+#: production_deficit takes the same conservative treatment: appended, never
+#: displacing an established pair. It costs it nothing in practice —
+#: apply_desk_cap sorts by SEVERITY first and this class only ever emits
+#: medium/high/critical, so a real production deficit still outranks a
+#: lower-severity world event regardless of where it sits here.
 _CLASS_PRIORITY = {
     TRIGGER_BAND: 0,
     TRIGGER_FINDING: 1,
@@ -195,6 +239,8 @@ _CLASS_PRIORITY = {
     TRIGGER_CONTENTION: 3,
     TRIGGER_BASELINE: 4,
     TRIGGER_GEO_CONVERGENCE: 5,
+    TRIGGER_PRODUCTION_DEFICIT: 6,
+    TRIGGER_SITUATION_ESCALATION: 7,
 }
 
 #: geo_convergence scan window / diversity-bar defaults — the CANONICAL
@@ -680,10 +726,42 @@ async def _scan_verified_findings(
 # Trigger 3 — contention flip (verified-tied fact_contention state change)
 # ---------------------------------------------------------------------------
 
-# Every contention group + its non-junk supporting fact ids + (when one
-# exists) the freshest non-superseded finding that CITES any of those facts
-# and meets the verified bar. The GIN index on analyst_outputs.derived_from
-# carries the && probe; the contention table is small by construction.
+# Every contention group + its non-junk supporting fact ids + the SIGNALS those
+# facts were derived from + (when one exists) the freshest non-superseded
+# finding that RESTS ON the dispute and meets the verified bar. The GIN indexes
+# on analyst_outputs.derived_from and facts.derived_from carry the && probes;
+# the contention table is small by construction.
+#
+# W1-C3 — WHY THE SIGNAL BRIDGE. Until 2026-08-03 this LATERAL matched
+# `f.derived_from && v.fact_ids` alone, and the class had NEVER fired an alert
+# in its life despite 1,606 watermark rows. The reason is not tuning, it is a
+# type mismatch between two id populations that never meet:
+#
+#   * a contention group tracks FACT ids — all 7,602 non-junk
+#     `supporting_fact_ids` live in `facts`;
+#   * a finding's `derived_from` holds SIGNAL ids — of 229,768 refs carried by
+#     findings in the trailing 7 days, 221,268 resolved to `signals`, 7,874 to
+#     other `analyst_outputs`, and **0 to `facts`**. All-time it is 34 of
+#     757,436 (0.0045%).
+#
+# So the join could not fire, and did not: exactly 1 of 2,152 groups with
+# supporting facts had ANY finding citing them, verified or not. That is a
+# structurally impossible predicate reported as a quiet gauge — the worst shape
+# a trigger can have, because "0 alerts" reads as "nothing happened".
+#
+# The bridge is the substrate's own lineage, not a heuristic: a fact carries the
+# signals it was derived from (`facts.derived_from`), and a finding cites those
+# same signals. A finding "rests on" a contested fact when it cites evidence
+# that fact was built from. Measured on the live substrate: 1,243 of 2,152
+# groups (58%) acquire a live finding under the bridge, and the shipped query
+# shape resolves 157 verified-bar findings over the 500-group scan window
+# (vs 0), with no latency regression (9.4s bridged vs 12.5s before).
+#
+# Volume is NOT unbounded by this change: the trigger still fires only on a
+# status/surfaced_fact_id CHANGE against the watermark, and real surface changes
+# run ~40/day fleet-wide (352 all-time supersessions in `surface_history`), so
+# expect low tens of medium-severity candidates/day, further bounded by
+# `apply_desk_cap` (3/desk/scan) + rollup coalescing like every other class.
 _CONTENTIONS_SQL = """
     SELECT c.id::text          AS contention_id,
            c.subject_key       AS subject_key,
@@ -698,13 +776,22 @@ _CONTENTIONS_SQL = """
            vf.eff_conf         AS verified_eff_conf
       FROM fact_contention c
       LEFT JOIN LATERAL (
-          SELECT COALESCE(array_agg(DISTINCT u.fid), '{}'::uuid[]) AS fact_ids
+          SELECT COALESCE(array_agg(DISTINCT u.fid), '{}'::uuid[]) AS fact_ids,
+                 COALESCE(
+                     array_agg(DISTINCT s.sid) FILTER (WHERE s.sid IS NOT NULL),
+                     '{}'::uuid[]
+                 ) AS evidence_ids
             FROM (
               SELECT unnest(fcv.supporting_fact_ids) AS fid
                 FROM fact_contention_values fcv
                WHERE fcv.contention_id = c.id
                  AND NOT fcv.is_junk
             ) u
+            LEFT JOIN LATERAL (
+              SELECT unnest(f2.derived_from) AS sid
+                FROM facts f2
+               WHERE f2.id = u.fid
+            ) s ON TRUE
       ) v ON TRUE
       LEFT JOIN LATERAL (
           SELECT f.id::text AS finding_id,
@@ -722,7 +809,7 @@ _CONTENTIONS_SQL = """
             ) cr ON TRUE
            WHERE f.kind = 'finding'
              AND f.superseded_by IS NULL
-             AND f.derived_from && v.fact_ids
+             AND f.derived_from && (v.fact_ids || v.evidence_ids)
              AND f.analyst_id <> ALL($1::text[])
              AND LEAST(f.confidence, cr.faithfulness_score) >= $2
            ORDER BY f.produced_at DESC, f.id DESC
@@ -1146,6 +1233,16 @@ _UNVERIFIED_REASONS = {
         "deterministic geographic-convergence trigger (source-family "
         "diversity count over binned signals; no LLM prose)"
     ),
+    # S-1: the gauge reads receipts, descriptors and row birth timestamps —
+    # engine telemetry, not a claim about the world. There is nothing to
+    # faithfulness-verify because there is no prose and no assertion about any
+    # desk's substance.
+    TRIGGER_PRODUCTION_DEFICIT: (
+        "deterministic expected-vs-actual production gauge over descriptor "
+        "cadence + trailing production baselines (engine telemetry; no LLM "
+        "prose and no claim about the world)"
+    ),
+    TRIGGER_SITUATION_ESCALATION: _situation_escalation_scan.UNVERIFIED_REASON,
     "rollup": "deterministic per-desk rollup of trigger alerts (no LLM prose)",
 }
 
@@ -1369,6 +1466,11 @@ async def handle(
             )
         ),
     )
+    # S-1: every gauge threshold is a GaugeConfig field under the `gauge_`
+    # option prefix, so the operator retunes precision through descriptor
+    # options with no deploy. Unknown or uncoercible keys keep their default
+    # — a mistyped knob must not take the gauge offline.
+    gauge_config = _production_deficit_scan.config_from_options(options)
 
     candidates: list[AlertCandidate] = []
     silent: list[tuple[str, str, dict[str, Any]]] = []
@@ -1441,6 +1543,41 @@ async def handle(
         }
         if not geo_seeded:
             seeded_classes.append(TRIGGER_GEO_CONVERGENCE)
+
+        # Trigger 7 — production deficit (S-1). Same 4-tuple call shape; the
+        # per-class stats (loops / gauged / deficits / paging / escalations /
+        # recoveries / seeded_deficits) ride the receipt so a scan that pages
+        # NOTHING still records what the gauge measured. That receipt is the
+        # point: "the engine checked 268 loops and 261 were producing" is a
+        # fact worth having in analyst_traces every ten minutes.
+        pd_candidates, pd_silent, pd_seeded, pd_stats = (
+            await _production_deficit_scan.scan_production_deficits(
+                conn, config=gauge_config
+            )
+        )
+        candidates.extend(pd_candidates)
+        silent.extend(pd_silent)
+        counts_by_class[TRIGGER_PRODUCTION_DEFICIT] = {
+            "candidates": len(pd_candidates),
+            **pd_stats,
+        }
+        if not pd_seeded:
+            seeded_classes.append(TRIGGER_PRODUCTION_DEFICIT)
+
+        # Trigger 8 — situation escalation (continuity P2). Same 4-tuple shape.
+        se_candidates, se_silent, se_seeded, se_stats = (
+            await _situation_escalation_scan.scan_situation_escalations(
+                conn, floor=floor,
+            )
+        )
+        candidates.extend(se_candidates)
+        silent.extend(se_silent)
+        counts_by_class[TRIGGER_SITUATION_ESCALATION] = {
+            "candidates": len(se_candidates),
+            **se_stats,
+        }
+        if not se_seeded:
+            seeded_classes.append(TRIGGER_SITUATION_ESCALATION)
 
         # Silent bookkeeping (seeds / no-change refreshes / non-fired state
         # advances) — these represent OBSERVED state, never a fired alert.
@@ -1544,3 +1681,19 @@ __all__ = [
     "classify_band_transition",
     "handle",
 ]
+
+#: The full trigger-class vocabulary this handler emits, in _CLASS_PRIORITY
+#: order. Exported so the drift guard in test_alert_trigger_scan can assert
+#: every class is registered in all four per-class registries (priority,
+#: unverified reason, receipt counts, watermark namespace) — the four places a
+#: new class silently half-lands if any one is missed.
+TRIGGER_CLASSES: tuple[str, ...] = (
+    TRIGGER_BAND,
+    TRIGGER_FINDING,
+    TRIGGER_WATCHLIST,
+    TRIGGER_CONTENTION,
+    TRIGGER_BASELINE,
+    TRIGGER_GEO_CONVERGENCE,
+    TRIGGER_PRODUCTION_DEFICIT,
+    TRIGGER_SITUATION_ESCALATION,
+)
