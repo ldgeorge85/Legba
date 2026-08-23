@@ -145,34 +145,95 @@ LLM_OVERRIDE_ALLOWLIST = frozenset(
 )
 
 
-def _default_max_tokens() -> int:
-    """Per-LLM-call output budget, env-tunable via ``LEGBA_CONSULT_MAX_TOKENS``.
+#: Fallback per-LLM-call output budget — reached ONLY when neither the env
+#: override nor a descriptor cap is present (hand-built test/embedder deps).
+#: The production deps builder always threads the descriptor's
+#: ``method.llm.max_tokens``, so this is not the operative production cap.
+_FALLBACK_MAX_TOKENS = 2048
 
-    The runtime deps builder does NOT override this (it only sizes the LLM
-    handler's ceiling from the descriptor), so this IS the operative per-call
-    cap. The sweet spot balances completeness vs the hosted LLM's per-call
-    timeout: 1024 truncated real "world report" answers mid-string (raw {...}
-    block); 4096 made a broad forced-final's large generation slow enough to hit
-    the provider timeout → ``network error`` → actor retry storm → 504. 2048
-    (~8k chars) lets a thorough answer through while staying inside the provider
-    window. Operators can raise/lower it live (env + recreate, no rebuild)
-    without code changes.
 
-    THE CAP STAYS, and it is no longer a parse hazard: under the plain-markdown
-    FINAL contract (:func:`_parse_sentinel_final`) an over-cap answer degrades
-    to a complete-looking-but-cut markdown answer the operator can read, rather
-    than an unclosed JSON envelope that fails to parse and re-asks for the whole
-    answer under the same cap.
+def _env_max_tokens() -> int | None:
+    """The ``LEGBA_CONSULT_MAX_TOKENS`` emergency override, or None.
+
+    Unset / empty / non-positive / non-numeric all resolve to None so a
+    malformed pin can never zero the budget.
     """
     raw = os.getenv("LEGBA_CONSULT_MAX_TOKENS", "").strip()
-    if raw:
+    if not raw:
+        return None
+    try:
+        val = int(raw)
+    except ValueError:
+        return None
+    return val if val > 0 else None
+
+
+def resolve_output_budget(
+    descriptor_max_tokens: int | None,
+    *,
+    fallback: int = _FALLBACK_MAX_TOKENS,
+) -> int:
+    """Per-LLM-call output budget: DESCRIPTOR-governed, env-OVERRIDABLE.
+
+    Precedence:
+
+      1. ``LEGBA_CONSULT_MAX_TOKENS`` — an EMERGENCY valve only. When it is
+         set AND a descriptor cap exists, the env value wins and the override
+         is logged LOUDLY (WARNING) every resolve, so a forgotten env pin can
+         never silently defeat the descriptor-governed budget.
+      2. the descriptor's ``method.llm.max_tokens`` — the governed production
+         value, threaded by the runtime deps builder
+         (``_build_consult_on_demand`` / ``_build_deep_consult``).
+      3. ``fallback`` — hand-built deps with no descriptor (tests, embedders).
+
+    HISTORY (why the cap used to be 2048, and why it no longer is): under the
+    old NON-STREAMING Anthropic wire call the cap was welded to the provider's
+    HTTP window, not to answer quality — 1024 truncated real "world report"
+    answers mid-string, and 4096 made a broad forced-final's generation slow
+    enough to outrun the provider timeout → ``network error`` → actor retry
+    storm → 504, so 2048 was the survivable sweet spot. The Anthropic handler
+    now STREAMS every generation (the connection stays live for the whole
+    output; see ``stack/llm/anthropic.py:_call_chat_streaming``), which
+    removes the transport coupling entirely: the budget is sized for complete
+    answers (32768 on the consult descriptors) and is governed where the rest
+    of the method knobs live — the descriptor. An over-budget answer is still
+    not a parse hazard: under the plain-markdown FINAL contract
+    (:func:`_parse_sentinel_final`) a cap-cut answer degrades to readable
+    markdown, never an unclosed JSON envelope.
+    """
+    env_val = _env_max_tokens()
+    cap = None
+    if descriptor_max_tokens is not None:
         try:
-            val = int(raw)
-            if val > 0:
-                return val
-        except ValueError:
-            pass
-    return 2048
+            cap = int(descriptor_max_tokens)
+        except (TypeError, ValueError):
+            cap = None
+        if cap is not None and cap <= 0:
+            cap = None
+    if env_val is not None:
+        if cap is not None and env_val != cap:
+            logger.warning(
+                "consult.max_tokens.ENV_OVERRIDE LEGBA_CONSULT_MAX_TOKENS=%d "
+                "OVERRIDES the descriptor-governed output budget "
+                "(method.llm.max_tokens=%d) — emergency valve engaged; unset "
+                "the env var to restore descriptor governance",
+                env_val, cap,
+            )
+        return env_val
+    if cap is not None:
+        return cap
+    return fallback
+
+
+def _default_max_tokens() -> int:
+    """Legacy default for deps built WITHOUT a descriptor.
+
+    Kept as the :class:`ConsultOnDemandDeps.max_tokens` default_factory so
+    hand-built test/embedder deps behave as before (env override → 2048).
+    Production deps come from the runtime builder, which passes the
+    descriptor's cap through :func:`resolve_output_budget` explicitly.
+    """
+    return resolve_output_budget(None)
 
 
 def _default_wall_budget_seconds() -> float:
@@ -1527,7 +1588,11 @@ class ConsultOnDemandDeps:
     resolve_llm_component: (
         Callable[[str], Awaitable[LLMHandlerLike]] | None
     ) = None
-    # Per-LLM-call output budget — env-tunable, see _default_max_tokens().
+    # Per-LLM-call output budget. DESCRIPTOR-governed in production: the
+    # runtime builder passes method.llm.max_tokens through
+    # resolve_output_budget() (LEGBA_CONSULT_MAX_TOKENS demoted to an
+    # emergency override, logged loudly when it wins). The default_factory
+    # only serves hand-built test/embedder deps.
     max_tokens: int = field(default_factory=_default_max_tokens)
     # Wall-clock budget for the tool loop — env-tunable, see
     # _default_wall_budget_seconds(). Caps over-drilling so broad questions
@@ -2090,5 +2155,6 @@ __all__ = [
     "SCHEMA_VERSION",
     "SubstrateQueryPort",
     "build_prompt_module",
+    "resolve_output_budget",
     "run_method",
 ]

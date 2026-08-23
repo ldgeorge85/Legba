@@ -653,10 +653,13 @@ Three properties worth preserving if you modify anything here:
   is a named claim kind with a rubric, not a general "be lenient" adjustment. If
   you add one, add it the same way.
 
-Set your floor deliberately and pin it in configuration. Note that a default of
-`0.0` in code with the real value pinned in your environment is a footgun worth
-checking for on a fresh install — and that if a constant appears in more than
-one place, they will drift.
+Set your floor deliberately and pin it in configuration. This project shipped
+the footgun worth naming: for months the code default was `0.0` while the real
+value was pinned in the reference deployment's environment, so a fresh install
+silently ran an ungated composition. It was raised to `0.50` on 2026-08-15 —
+`meta_findings_synthesizer.DEFAULT_VERIFY_FLOOR`, still overridable both ways
+via `LEGBA_COMPOSITION_VERIFY_FLOOR`. Check your own gates for the same shape,
+and note that if a constant appears in more than one place, they will drift.
 
 ### 5.2 Receipts culture
 

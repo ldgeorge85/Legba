@@ -116,6 +116,37 @@ export type PanelKind =
   // The Journal — Legba's reflective voice + navigable index over the product
   // (JOURNAL_ASSESSOR_PLAN §9, Wave 3)
   | 'system.journal'
+  // GLASS-2 — the three API surfaces that shipped with no consumer.
+  //
+  // The Journal Gate (JOURNAL_ASSESSOR_PLAN §7.4/§7.5): the operator surface for
+  // `journal_proposals` accept/reject. Journal writes are human-gated by
+  // standing rule, and the gate was API-only until this kind existed.
+  | 'system.journal_gate'
+  // The situation register's frames + the append-only trajectory ledger
+  // (Continuity P2 — `/v3/situations/{id}/trajectory`).
+  | 'system.situations'
+  // Reified contested-claim families + the directed source-echo graph
+  // (P4-1/P4-2 — `/v3/narratives`, `/v3/narratives/echo`).
+  | 'system.narratives'
+  // GLASS-3 — the ops deck. Four kinds over seven server surfaces that had no
+  // consumer at all, plus the one new API the track shipped. All four land in
+  // Engine Room, whose rows fold behind a single collapsed header and so cost
+  // nothing against the ≤23 visible-row budget (navGroups.test.ts) that the
+  // GLASS-2 additions had already spent to the last row.
+  //
+  // The production gauge — the whole-engine "did it produce what its descriptor
+  // promised" read (`/v3/system/production-gauge`), including the integrity and
+  // metering bricks and the SAME `pages` predicate the alert plane uses.
+  | 'system.production_gauge'
+  // Judge verdict mix by SERVING PROVIDER (`/v3/system/judge-stats`) — the
+  // track's one new backend surface, making `served_by` provider drift visible.
+  | 'system.judge_stats'
+  // Source health rollup — `/v3/source-quality` + `/v3/system/staleness-debt`,
+  // with the per-source `/quality` drill-down.
+  | 'system.source_health'
+  // The three eval boards that had live routes and no reader:
+  // `/v3/eval/desk_baselines`, `/band_trajectory`, `/analyst_runtime`.
+  | 'system.eval_boards'
   // v4 visual workspace panels (geotemporal / flow / provenance)
   //   (v4.case Casework Board DELETED in S7-T2 — shelved, no pin board reachable)
   | 'v4.map'

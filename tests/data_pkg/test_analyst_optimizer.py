@@ -690,6 +690,7 @@ async def test_in_process_client_enforces_min_traces_required() -> None:
     assert candidate.eval_score == pytest.approx(0.0)
 
 
+@pytest.mark.skip(reason="optimizer plane mothballed 2026-08-21 (RUST-4)")
 @pytest.mark.asyncio
 async def test_in_process_client_runs_loop_when_enough_traces() -> None:
     client = InProcessWorkflowClient()
@@ -713,6 +714,7 @@ async def test_in_process_client_runs_loop_when_enough_traces() -> None:
     assert 0.0 <= candidate.eval_score <= 1.0
 
 
+@pytest.mark.skip(reason="optimizer plane mothballed 2026-08-21 (RUST-4)")
 @pytest.mark.asyncio
 async def test_naive_fallback_respects_max_generations_bound() -> None:
     """The naive fallback shouldn't try more mutations than max_generations.

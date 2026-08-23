@@ -539,6 +539,7 @@ async def test_optimizer_refuses_to_optimize_a_missing_prompt_module():
     assert "leadership_transition" in str(exc_info.value)
 
 
+@pytest.mark.skip(reason="optimizer plane mothballed 2026-08-21 (RUST-4)")
 @pytest.mark.asyncio
 async def test_optimizer_still_loads_a_real_parent_prompt():
     """The success path is untouched — the raise is narrow."""

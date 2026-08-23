@@ -746,7 +746,7 @@ def render_unit_file(
         "verify_line": verify_line,
         "params": (
             f"temp={_descriptor_temperature(body)} "
-            "max_tokens=not-sent model=InnoGPT-1"
+            "max_tokens=not-sent model=gpt-oss-120b"
         ),
     }
 
@@ -1044,7 +1044,7 @@ def render_composition_file(out_dir: Path, token: str) -> dict[str, Any] | None:
     lines.append(
         f"- call params: temperature `{llm.get('temperature')}` (sent), "
         f"max_tokens `{llm.get('max_tokens')}` (NOT sent — vllm.py:118-131), "
-        f"route `{(llm.get('primary') or {}).get('raw')}` -> InnoGPT-1"
+        f"route `{(llm.get('primary') or {}).get('raw')}` -> gpt-oss-120b"
     )
     lines.append("")
     for name in ("_COMPOSITION_SYSTEM", "_REGION_COMPOSITION_SYSTEM",

@@ -31,6 +31,7 @@ cycles).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -57,12 +58,90 @@ class VLLMProviderHandler(LLMProviderHandler):
     handler_version: ClassVar[str] = "0.1.0"
     default_port: ClassVar[int] = 443
 
-    # Self-hosted is zero-list-price by default. Operators can drop in
-    # internal cost-per-1M values to apportion compute against budget caps.
+    # Self-hosted is zero-list-price by default. This class-level table stays
+    # EMPTY on purpose: this handler also serves every hosted PAYG
+    # `.openai_compat` lane (Cerebras, OpenRouter), and one code table cannot
+    # price two endpoints serving the same model name differently. Pricing is
+    # therefore PER-COMPONENT — `price_input_per_m` / `price_output_per_m` on
+    # the component config (see `_component_price`); a component with neither
+    # set costs $0.00 exactly as before (#22, 2026-08-15).
     PRICE_TABLE: ClassVar[Mapping[str, ModelPrice]] = {}
 
     # Default temperature for GPT-OSS-class workloads; callers override.
     _DEFAULT_TEMPERATURE: ClassVar[float] = 1.0
+
+    def __init__(self) -> None:
+        super().__init__()
+        # Per-event-loop concurrency semaphores (see `_call_chat`). asyncio
+        # primitives bind to the loop they are first awaited on, and one
+        # cached handler instance can be driven from more than one loop across
+        # its life, so the semaphore is keyed by (loop id, limit) — a config
+        # change to `max_concurrent` simply starts gating on a fresh
+        # semaphore. Bounded by loops x distinct limits, i.e. a handful.
+        self._concurrency_sems: dict[tuple[int, int], asyncio.Semaphore] = {}
+
+    # ---- Per-component pricing (#22) --------------------------------------
+
+    def _component_price(self) -> ModelPrice | None:
+        """The component config's own USD-per-1M price, or ``None``.
+
+        ``None`` (neither field set) is the self-hosted posture and falls
+        back to ``PRICE_TABLE`` — empty, so $0.00 — byte-identical to the
+        historical behavior. One field set alone prices the other side at
+        0.0 rather than refusing: a free-input promo lane is a real thing,
+        and a half-priced receipt beats a silently unpriced one.
+        """
+        cfg = self._cfg
+        if cfg is None:
+            return None
+        inp = getattr(cfg, "price_input_per_m", None)
+        out = getattr(cfg, "price_output_per_m", None)
+        if inp is None and out is None:
+            return None
+        try:
+            return ModelPrice(
+                input_per_m=float(inp.raw) if inp is not None else 0.0,
+                output_per_m=float(out.raw) if out is not None else 0.0,
+            )
+        except (TypeError, ValueError):  # pragma: no cover — schema-checked
+            logger.warning(
+                "vllm._component_price unparsable price on %s — costing 0.0",
+                self._instance_id,
+            )
+            return None
+
+    # ---- Client concurrency (#21) -----------------------------------------
+
+    def _concurrency_limit(self) -> int | None:
+        """``max_concurrent`` from the component config; ``None`` = unlimited."""
+        cfg = self._cfg
+        raw = getattr(cfg, "max_concurrent", None) if cfg is not None else None
+        if raw is None:
+            return None
+        try:
+            limit = int(raw.raw)
+        except (TypeError, ValueError):  # pragma: no cover — schema-checked
+            return None
+        return limit if limit > 0 else None
+
+    async def _call_chat(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Gate the wire call behind the component's ``max_concurrent``.
+
+        The override wraps ONLY the network hop — payload assembly, response
+        parsing and the R11 receipt accounting all happen outside the gate,
+        so a held slot is always a request actually in flight against the
+        endpoint. No configured limit = the base call, untouched.
+        """
+        limit = self._concurrency_limit()
+        if limit is None:
+            return await super()._call_chat(payload)
+        key = (id(asyncio.get_running_loop()), limit)
+        sem = self._concurrency_sems.get(key)
+        if sem is None:
+            sem = asyncio.Semaphore(limit)
+            self._concurrency_sems[key] = sem
+        async with sem:
+            return await super()._call_chat(payload)
 
     # ---- Endpoint --------------------------------------------------------
 
@@ -203,7 +282,13 @@ class VLLMProviderHandler(LLMProviderHandler):
                                             prompt_tokens + completion_tokens)),
             model=model,
         )
-        usage.cost_estimate_usd = estimate_cost(model, usage, self.PRICE_TABLE)
+        # Per-component price wins when configured (the hosted PAYG lanes);
+        # otherwise the subprovider table, which for vllm is empty = $0.00
+        # (self-hosted, the historical posture).
+        price = self._component_price()
+        usage.cost_estimate_usd = estimate_cost(
+            model, usage, {model: price} if price is not None else self.PRICE_TABLE
+        )
 
         return LLMResponse(
             content=content,

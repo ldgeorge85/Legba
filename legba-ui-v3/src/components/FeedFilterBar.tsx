@@ -4,8 +4,9 @@
  * Carries: removable typed-facet CHIP pills, a free-text / `key:value` input
  * (type `severity:high ` and it becomes a chip), a row of quick facet
  * dropdowns, and the saved-views strip. Verification is a first-class facet —
- * the "verify" dropdown writes `verified:`/`confidence:` chips read against the
- * ICD-203 verdict vocabulary.
+ * the "verify" dropdown writes `verified:`/`judge:`/`confidence:` chips read
+ * against the ICD-203 verdict vocabulary (`judge:` = how the verify pass ran:
+ * llm / deterministic / unsampled, the honest J2 sampling-gate state included).
  *
  * The dropdown row is the feed's DRILL-DOWN surface, and every control on it
  * writes an ordinary chip, so anything the sidebar/map can put on the feed the
@@ -56,20 +57,32 @@ const BAND_OPTS: Array<{ value: string; label: string }> = [
 /** Group the producer options into `<optgroup>`s, preserving the model's order. */
 const PRODUCER_GROUP_ORDER: ProducerClass[] = ['unit', 'composition', 'other']
 
-/** Verification quick-pick → the chip it writes (verified / confidence facet). */
+/** Verification quick-pick → the chip it writes (verified / judge / confidence
+ *  facet). The `judge:` rows are the GLASS-1 server-side facet — llm /
+ *  deterministic / unsampled, with the honest J2 unsampled stratum a
+ *  first-class pick, not a client-side sieve. */
 const VERIFY_OPTS: Array<{ value: string; label: string; chip: FeedChip | null }> = [
   { value: '', label: 'any verification', chip: null },
   { value: 'verified', label: 'verified only', chip: { key: 'verified', value: 'true' } },
   { value: 'unverified', label: 'unverified only', chip: { key: 'verified', value: 'false' } },
+  { value: 'judge-llm', label: 'judge: llm', chip: { key: 'judge', value: 'llm' } },
+  { value: 'judge-deterministic', label: 'judge: deterministic', chip: { key: 'judge', value: 'deterministic' } },
+  { value: 'judge-unsampled', label: 'judge: unsampled', chip: { key: 'judge', value: 'unsampled' } },
   { value: 'conf-high', label: 'confidence: high', chip: { key: 'confidence', value: 'high' } },
   { value: 'conf-moderate', label: 'confidence: moderate', chip: { key: 'confidence', value: 'moderate' } },
   { value: 'conf-low', label: 'confidence: low', chip: { key: 'confidence', value: 'low' } },
 ]
 
+/** The chip keys the verify dropdown owns — picking any option clears them all
+ *  first, so the single-pick select never leaves a stale sibling chip behind. */
+const VERIFY_CHIP_KEYS: ReadonlySet<string> = new Set(['verified', 'judge', 'confidence'])
+
 function currentVerifyValue(chips: FeedChip[]): string {
   const verified = chipValue(chips, 'verified')
   if (verified === 'true') return 'verified'
   if (verified === 'false') return 'unverified'
+  const judge = chipValue(chips, 'judge')
+  if (judge) return `judge-${judge}`
   const conf = chipValue(chips, 'confidence')
   if (conf) return `conf-${conf}`
   return ''
@@ -265,8 +278,8 @@ export function FeedFilterBar({
           title={severityDisabled ? 'signals are raw intake — not verify-assessed' : 'verification facet (ICD-203)'}
           onChange={(e) => {
             const opt = VERIFY_OPTS.find((o) => o.value === e.target.value)
-            // Clear both verification facets, then apply the picked one (if any).
-            let chips = parsed.chips.filter((c) => c.key !== 'verified' && c.key !== 'confidence')
+            // Clear every verification facet, then apply the picked one (if any).
+            let chips = parsed.chips.filter((c) => !VERIFY_CHIP_KEYS.has(c.key))
             if (opt?.chip) chips = mergeChips(chips, [opt.chip])
             setChips(chips)
           }}

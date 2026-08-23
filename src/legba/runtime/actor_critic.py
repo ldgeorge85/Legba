@@ -353,6 +353,8 @@ async def verify_inline_target_finding(
     finding_payload: Any,
     run_id: Any,
     target_id: str | None = None,
+    judge_sample_rate: float | None = None,
+    judge_sample_always: Any = None,
 ) -> dict[str, Any] | None:
     """Run the faithfulness verify pass over a just-emitted FINDING and PERSIST
     the verdict as a ``critique`` so the existing critic-actuation gate folds
@@ -451,10 +453,43 @@ async def verify_inline_target_finding(
 
     from ..data.provenance._core import AnalystContext
     from ..data.provenance.verify import (
+        JudgeSamplingPolicy,
         build_faithfulness_critique_payload,
         verify_finding_faithfulness,
     )
     from ..data.provenance.writes import write_critique
+
+    # J2 (2026-08-15) — the SAMPLING GATE inputs, descriptor-driven. The two
+    # options ride the X-1 channel (method.options → validated kind catalog →
+    # merged run options → this seam). No rate ⇒ no policy ⇒ no gate: the
+    # verify pass judges everything, byte-identical to pre-J2. The decision
+    # itself lives in provenance (JudgeSamplingPolicy — deterministic per
+    # finding id, replayable); this seam only assembles its inputs, including
+    # the identity pair the always-list matches on (finding KIND + analyst id).
+    judge_sampling: JudgeSamplingPolicy | None = None
+    if judge_sample_rate is not None:
+        try:
+            judge_sampling = JudgeSamplingPolicy(
+                finding_id=str(finding_id),
+                kind=str(kind or ""),
+                analyst_id=str(deps.descriptor.identity.id),
+                rate=float(judge_sample_rate),
+                always=(
+                    tuple(str(k) for k in judge_sample_always)
+                    if judge_sample_always is not None
+                    else None
+                ),
+            )
+        except (TypeError, ValueError):
+            # A malformed option never silently widens OR narrows the judged
+            # population — no policy means UNGATED (judge everything), which
+            # is the conservative direction for the gate that certifies.
+            logger.warning(
+                "actor_critic.verify.judge_sampling_malformed finding_id=%s "
+                "rate=%r always=%r — sampling gate skipped (finding judged)",
+                finding_id, judge_sample_rate, judge_sample_always,
+            )
+            judge_sampling = None
 
     try:
         report = await verify_finding_faithfulness(
@@ -485,6 +520,9 @@ async def verify_inline_target_finding(
             # counted soft verify failures. ``None`` for every non-composition
             # kind → the fold is inert.
             eval_block=data.get("eval") if isinstance(data, Mapping) else None,
+            # J2: the sampling gate (None ⇒ ungated — every pre-J2 caller and
+            # replay harness is byte-identical).
+            judge_sampling=judge_sampling,
         )
     except Exception as exc:  # pragma: no cover — verify must never break a run
         logger.warning(

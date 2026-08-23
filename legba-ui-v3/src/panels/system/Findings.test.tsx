@@ -549,6 +549,38 @@ describe('Live Feed — operator-owned filters (defect 2)', () => {
     )
   })
 
+  it('the verification facet writes a chip and pushes it server-side (GLASS-1)', async () => {
+    const fetchMock = stubFetch()
+    render(wrap(feed()))
+    await waitFor(() => expect(screen.getByTestId('finding-f-crit')).toBeInTheDocument())
+
+    fireEvent.change(screen.getByTestId('feed-facet-verify'), { target: { value: 'verified' } })
+
+    await waitFor(() => expect(screen.getByTestId('feed-chip-verified-true')).toBeInTheDocument())
+    // The facet reaches the whole corpus: the page is re-asked WITH the param,
+    // not sieved client-side after the fetch.
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('verified=true'))).toBe(
+        true,
+      ),
+    )
+
+    // The judge picks swap in (the single-pick select clears its sibling chip)
+    // — the J2 unsampled stratum is ONE first-class query param.
+    fireEvent.change(screen.getByTestId('feed-facet-verify'), {
+      target: { value: 'judge-unsampled' },
+    })
+
+    await waitFor(() => expect(screen.getByTestId('feed-chip-judge-unsampled')).toBeInTheDocument())
+    expect(screen.queryByTestId('feed-chip-verified-true')).not.toBeInTheDocument()
+    expect(screen.getByTestId('feed-facet-verify')).toHaveValue('judge-unsampled')
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some((call) => String(call[0]).includes('judge_status=unsampled')),
+      ).toBe(true),
+    )
+  })
+
   it('the effective-confidence floor drops below-floor rows, and composes (AND) with severity', async () => {
     stubFetch()
     render(wrap(feed()))

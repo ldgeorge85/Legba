@@ -216,6 +216,7 @@ class RuntimeReceiptChain:
         llm_calls: list[dict[str, Any]] | None = None,
         tool_calls: list[dict[str, Any]] | None = None,
         error_payload: dict[str, Any] | None = None,
+        prompt_sha256: str | None = None,
     ) -> tuple[str, str]:
         """Compute receipt hash, write analyst_traces row, advance head.
 
@@ -227,6 +228,14 @@ class RuntimeReceiptChain:
         independently. The runtime actor wires this AFTER the analyst-
         output INSERT so the chain row carries ``output_row_refs`` for
         the row(s) just produced (per L-107 §7 lineage-into-chain).
+
+        ``prompt_sha256`` (RUST-5) is the sha256 of the FULL, untruncated
+        prompt — see ``run_accounting.current_prompt_rendered`` — recorded
+        alongside a possibly-capped ``prompt_rendered`` so a truncated row
+        is still byte-verifiable against a re-render. Like ``llm_calls`` /
+        ``tool_calls`` it is NOT part of the receipt-hash payload
+        (supplementary provenance, not chain material) — only
+        ``prompt_rendered`` itself feeds ``compute_receipt_hash``.
         """
         async with self._lock(analyst_id):
             prev = await self._head_locked(analyst_id)
@@ -249,7 +258,7 @@ class RuntimeReceiptChain:
                         run_id, analyst_id, analyst_version,
                         target_id, cadence_trigger,
                         input_row_refs, input_payload,
-                        prompt_module_hash, prompt_rendered,
+                        prompt_module_hash, prompt_rendered, prompt_sha256,
                         intermediate_steps, llm_calls, tool_calls,
                         output_row_refs, output_payload,
                         status, error_payload,
@@ -259,19 +268,19 @@ class RuntimeReceiptChain:
                         $1, $2, $3,
                         $4, $5,
                         $6, $7::jsonb,
-                        $8, $9,
-                        $10::jsonb, $11::jsonb, $12::jsonb,
-                        $13, $14::jsonb,
-                        $15, $16::jsonb,
-                        $17, $18,
-                        $19, $20
+                        $8, $9, $10,
+                        $11::jsonb, $12::jsonb, $13::jsonb,
+                        $14, $15::jsonb,
+                        $16, $17::jsonb,
+                        $18, $19,
+                        $20, $21
                     )
                     """,
                     run_id, analyst_id, analyst_version,
                     target_id, cadence_trigger,
                     list(input_row_refs),
                     json.dumps(input_payload or {}, default=_json_default),
-                    prompt_module_hash, prompt_rendered,
+                    prompt_module_hash, prompt_rendered, prompt_sha256,
                     json.dumps(intermediate_steps or [], default=_json_default),
                     json.dumps(llm_calls or [], default=_json_default),
                     json.dumps(tool_calls or [], default=_json_default),
@@ -360,6 +369,7 @@ class RuntimeReceiptChain:
         llm_calls: list[dict[str, Any]] | None = None,
         tool_calls: list[dict[str, Any]] | None = None,
         error_payload: dict[str, Any] | None = None,
+        prompt_sha256: str | None = None,
     ) -> str:
         """Back-compat wrapper around :meth:`record`.
 
@@ -386,6 +396,7 @@ class RuntimeReceiptChain:
             intermediate_steps=intermediate_steps,
             llm_calls=llm_calls,
             tool_calls=tool_calls,
+            prompt_sha256=prompt_sha256,
             error_payload=error_payload,
         )
         return receipt

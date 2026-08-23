@@ -57,6 +57,12 @@ os.environ.setdefault("LEGBA_REGISTRY_SIGNING_KEY", "66" * 32)
 #: below carries them. Derived, never hardcoded.
 _N_INTEGRITY = len(production_gauge_integrity.INTEGRITY_LOOP_CLASSES)
 
+#: The METERING loops (#21/#22): llm_latency emits exactly one row per read
+#: (ungauged/no_calls_in_window on a blank engine); llm_daily_burn is DYNAMIC —
+#: one row per component with a declared ceiling or money moving, so a blank
+#: engine contributes zero. Hence exactly one fixed row from the family.
+_N_METERING_FIXED = 1
+
 _ROUTE = "/api/v1/v3/system/production-gauge"
 _SRC = "source.gaugeroute.frozen"
 
@@ -357,7 +363,7 @@ async def test_gauge_serves_the_deficit_worst_first(api_app, client, blank):
     # integrity loop is six lines and a test run (its stated cost), not a
     # route-test edit.
     assert body["totals"]["ungauged"] == (
-        1 + len(production_gauge.BACKLOG_DRAINS) + _N_INTEGRITY
+        1 + len(production_gauge.BACKLOG_DRAINS) + _N_INTEGRITY + _N_METERING_FIXED
     )
     assert body["totals"]["by_class"]["backlog_drain"]["ungauged"] == len(
         production_gauge.BACKLOG_DRAINS
@@ -406,7 +412,7 @@ async def test_totals_are_computed_before_filters(api_app, client, blank):
     assert len(filtered["loops"]) == 1
     assert filtered["totals"] == full["totals"]
     assert filtered["totals"]["ungauged"] == (
-        1 + len(production_gauge.BACKLOG_DRAINS) + _N_INTEGRITY
+        1 + len(production_gauge.BACKLOG_DRAINS) + _N_INTEGRITY + _N_METERING_FIXED
     )
     assert filtered["totals"]["loops"] > len(filtered["loops"])
 
@@ -502,5 +508,5 @@ async def test_limit_bounds_the_table_without_touching_the_totals(
     assert len(body["loops"]) == 1
     # Two sources + every declared backlog drain + the integrity loops.
     assert body["totals"]["loops"] == (
-        2 + len(production_gauge.BACKLOG_DRAINS) + _N_INTEGRITY
+        2 + len(production_gauge.BACKLOG_DRAINS) + _N_INTEGRITY + _N_METERING_FIXED
     )

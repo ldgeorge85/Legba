@@ -227,6 +227,13 @@ _EXPECTED_FAIL_CLASSES = {
     # effective_confidence / tier the cited output's captured column
     # contradicts). Soft: an overclaim about provenance, not a fabricated fact.
     "metadata_mismatch": "soft_fail",
+    # RUST-3 (2026-08-21) — the fourth verdict, WITHDRAWN. The judge said the
+    # span asserts nothing and the span carries a checkable particular, so the
+    # declination was not earned. Soft, and identical to the pre-RUST-3
+    # outcome for this token (coerced to unsupported), so no claim that used
+    # to pass can start failing here. An EARNED one never reaches this table:
+    # it is ungraded, no span and no ledger row.
+    "judge_nonpropositional_unearned": "soft_fail",
 }
 
 
@@ -313,7 +320,7 @@ _EXPECTED_PROFILES = {
     # the EVIDENCE is not — every unit citation now renders an ``OUTLET:`` line,
     # which both leads carry (V-H1).
     "citation_support": ("citsupp.v5", False),
-    "absence": ("absence.v3", True),
+    "absence": ("absence.v4", True),
     "synthesis": ("synthesis.v0", False),
     "forward_looking": ("fwd.v0", False),
     "structure": ("structure.v0", False),

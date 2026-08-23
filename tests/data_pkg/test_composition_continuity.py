@@ -51,15 +51,21 @@ from legba.data.registry import scorecard_reconcile
 # inside the ordinary evidence gather also ends in ``LIMIT 1``, so routing on
 # that alone would mis-attribute the basis read.
 _PRIOR_SQL_MARKER = "AS age_hours"
+#: FRAME-2 — the WINDOW LEDGER gather is a FOURTH query family on the per-country
+#: branch. Its severity CASE (generated from the shared rank ladder) appears in no
+#: other query in this kind, so it is the honest discriminator.
+_LEDGER_SQL_MARKER = "CASE f.severity"
 
 
 class _RoutingConn:
     """Fake asyncpg.Connection routing by SQL text.
 
-    READ_SLICE now fires up to three query families on a composition branch —
+    READ_SLICE now fires up to FOUR query families on a composition branch —
     the evidence read(s) over ``analyst_outputs``, the CONTINUITY prior-read over
-    ``analyst_outputs``, and the CONTINUITY register over ``situations`` — so a
-    single canned row list can no longer stand in for all of them.
+    ``analyst_outputs``, the CONTINUITY register over ``situations``, and
+    (FRAME-2) the WINDOW LEDGER over ``analyst_outputs`` — so a single canned row
+    list can no longer stand in for all of them. Ledger rows default to EMPTY so
+    every pre-FRAME-2 test in this file keeps asserting exactly what it did.
     """
 
     def __init__(
@@ -68,16 +74,20 @@ class _RoutingConn:
         slice_rows: list[dict[str, Any]] | None = None,
         prior_rows: list[dict[str, Any]] | None = None,
         situation_rows: list[dict[str, Any]] | None = None,
+        ledger_rows: list[dict[str, Any]] | None = None,
     ) -> None:
         self._slice_rows = slice_rows or []
         self._prior_rows = prior_rows or []
         self._situation_rows = situation_rows or []
+        self._ledger_rows = ledger_rows or []
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
 
     async def fetch(self, query: str, *params: Any) -> list[dict[str, Any]]:
         self.calls.append((query, params))
         if "FROM situations" in query:
             return [dict(r) for r in self._situation_rows]
+        if _LEDGER_SQL_MARKER in query:
+            return [dict(r) for r in self._ledger_rows]
         if _PRIOR_SQL_MARKER in query:
             return [dict(r) for r in self._prior_rows]
         return [dict(r) for r in self._slice_rows]
@@ -725,10 +735,15 @@ def test_continuity_clause_is_lettered_into_each_prompt_rule_sequence():
     identically while still slotting into its own rule lettering."""
     # Phase-V: region and world each gained a COVERAGE rule (D6 — the unit
     # roll-call became a footer), which pushed their continuity slot down one
-    # letter. The country and thematic sequences are unchanged.
-    assert "(i) CONTINUITY —" in synth._COMPOSITION_SYSTEM
-    assert "(j) CONTINUITY —" in synth._REGION_COMPOSITION_SYSTEM
-    assert "(k) CONTINUITY —" in synth._WORLD_OVER_REGIONS_SYSTEM
+    # letter.
+    #
+    # VOICE-4 then inserted a CORRELATION rule into country/region/world (it
+    # already existed on thematic), pushing each of those three down one MORE
+    # letter. Thematic gained no new lettered rule — its correlation rule was
+    # extended in place — so its slot is unchanged.
+    assert "(j) CONTINUITY —" in synth._COMPOSITION_SYSTEM
+    assert "(k) CONTINUITY —" in synth._REGION_COMPOSITION_SYSTEM
+    assert "(l) CONTINUITY —" in synth._WORLD_OVER_REGIONS_SYSTEM
     assert "(j) CONTINUITY —" in synth._THEMATIC_COMPOSITION_SYSTEM
     # Still ahead of the JSON-shape instruction in every prompt.
     for prompt in _COMPOSITION_PROMPTS:

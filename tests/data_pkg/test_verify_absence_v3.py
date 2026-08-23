@@ -19,7 +19,7 @@ Coverage maps to the design doc §3.6:
   * an unbounded/unscoped absence → unsupported;
   * the SAME absence prose graded across repeated (mock-deterministic) runs →
     the SAME verdict (the anti-0.0/0.2/1.0 guard);
-  * the critique payload stamps ``branch_versions.absence == 'absence.v3'``;
+  * the critique payload stamps ``branch_versions.absence == 'absence.v4'``;
   * a finding with ZERO absence spans is byte-identical vs pre-V3 (the pooled-
     ratio + judge-call-count invariant) — the regression that non-absence claims
     are unaffected;
@@ -36,6 +36,7 @@ import pytest
 
 from legba.data.provenance.verify import (
     CLAIM_KIND_ABSENCE,
+    _ABSENCE_JUDGE_SYSTEM,
     CLAIM_KIND_CITATION_SUPPORT,
     CLAIM_KIND_FORWARD_LOOKING,
     CLAIM_KIND_STRUCTURE,
@@ -68,8 +69,8 @@ class _PartitionJudge:
     """Judge stub that answers each judge route differently, keyed on the
     system prompt.
 
-    V3 partitions the graded claims into an absence call (system prompt names
-    'ABSENCE / NEGATIVE claims') and a shared unit/composition call; the M14
+    V3 partitions the graded claims into an absence call (the dedicated
+    ``_ABSENCE_JUDGE_SYSTEM`` rubric) and a shared unit/composition call; the M14
     whole-finding null-result route keeps its own survey rubric (system names
     'NULL-RESULT'). This stub returns ``absence_json`` / ``survey_json`` /
     ``shared_json`` per route, so a test can drive each branch's verdict
@@ -95,7 +96,11 @@ class _PartitionJudge:
                             system=None, **kw):
         self.calls += 1
         sys = system or ""
-        if "ABSENCE / NEGATIVE claims" in sys:
+        # RUST-2: route by prompt IDENTITY, not by a substring of its text. The
+        # absence rubric was rewritten wholesale on 2026-08-21 and a stub keyed
+        # on a phrase inside it silently mis-routed every absence call to the
+        # shared arm; identity survives the next rewrite too.
+        if sys == _ABSENCE_JUDGE_SYSTEM:
             self.absence_calls += 1
             self.last_absence_system = sys
             return _Response(self._absence)
@@ -215,7 +220,7 @@ async def test_absence_judge_supported(monkeypatch):
     assert judge.shared_calls == 1
     assert judge.absence_calls == 1
     assert judge.survey_calls == 0
-    assert "ABSENCE / NEGATIVE claims" in judge.last_absence_system
+    assert judge.last_absence_system == _ABSENCE_JUDGE_SYSTEM
     assert rep.faithfulness_score == pytest.approx(1.0)
     assert not any(s.reason.startswith("judge_") for s in rep.unsupported_spans)
     # The absence sub-score is recorded (never hidden).
@@ -314,7 +319,7 @@ async def test_absence_variance_regression(monkeypatch):
 
 
 async def test_absence_branch_version_stamped(monkeypatch):
-    """The critique payload carries ``branch_versions.absence == 'absence.v3'``
+    """The critique payload carries ``branch_versions.absence == 'absence.v4'``
     (and the citation_support profile version), so a recalibration is a visible,
     greppable per-kind version bump."""
     monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
@@ -326,7 +331,7 @@ async def test_absence_branch_version_stamped(monkeypatch):
     rep = await verify_finding_faithfulness(body=body, citations=citations, judge_llm=judge)
     payload = build_faithfulness_critique_payload(rep, analyzed_output_id=uuid4())
     verification = payload["data"]["verification"]
-    assert verification["branch_versions"]["absence"] == "absence.v3"
+    assert verification["branch_versions"]["absence"] == "absence.v4"
     assert verification["branch_versions"]["citation_support"] == "citsupp.v5"
     # branch_scores surfaces both kinds' sub-ratios (never an opaque single number).
     assert verification["branch_scores"]["absence"]["checkable"] == 1

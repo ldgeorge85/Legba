@@ -122,6 +122,25 @@ const KIND_GROUP: Partial<Record<PanelKind, NavGroupId>> = {
   // duty, not an analysis read) — pinned explicitly rather than left to the
   // prefix fallback so the intent survives a fallback change.
   'system.goldset': 'operations',
+  // The Journal Gate (GLASS-2) sits beside it for the same reason: working the
+  // `journal_proposals` queue is an operator DUTY over a queue — the human half
+  // of the standing "journal writes are human-gated" rule — not an analytical
+  // read of the product. Engine Room also costs no structural sidebar row
+  // (its rows fold behind one collapsed header), which matters because the
+  // ≤23-row budget is fully spent; but the placement is the reason, not the
+  // arithmetic — this would sit next to Weekly Grading either way.
+  'system.journal_gate': 'operations',
+  // GLASS-3's ops deck. These would reach Engine Room through the `system.*`
+  // prefix fallback anyway; they are pinned for the same reason Weekly Grading
+  // and the Journal Gate are — so the INTENT survives a change to the fallback,
+  // rather than the placement being an accident of prefix order. All four are
+  // operator instrumentation (what the engine produced, who served the judge,
+  // which sources are earning their keep, how the boards moved), which is what
+  // Engine Room is for.
+  'system.production_gauge': 'operations',
+  'system.judge_stats': 'operations',
+  'system.source_health': 'operations',
+  'system.eval_boards': 'operations',
 
   // Everything else system.* (settings, status, actor_health, dead_letter,
   // governor, audit, budget, stream_lag) → Engine Room via PREFIX_GROUP.

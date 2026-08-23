@@ -1808,6 +1808,17 @@ the live unit findings (live: parent 0.34 → candidate 0.29, delta −0.05). It
 or non-positive delta — an insufficient-sample / judge-unavailable delta is
 honest-null, never faked to 0.0.
 
+**MOTHBALLED (RUST-4, decision 2026-08-21).** The GEPA optimizer plane above is
+honest history, not current operation: one real `dspy_gepa` compile ever ran
+(2026-08-10), its candidate landed below the promotion bar (faithfulness delta
+−0.5354 against a +0.03 floor), and the manual VOICE-4 prompt wave shipped in
+its place. Code, tests, and the `legba-dapr-workflow-worker` image all stay —
+the worker still hosts the actively-used `deep_consult_workflow` — but both
+optimizer descriptors are annotated `state: paused` and
+`optimizer.py::run_method` refuses loud (`OptimizerMothballedError`) rather
+than running. Details, evidence, and the restore path: `docs/SEAMS.md` #53,
+`planning/RUST4_EVIDENCE_2026-08-21.md`.
+
 ## 11. How it scales
 
 The architecture's scaling story is the same inversion told three ways.

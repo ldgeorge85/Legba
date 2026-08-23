@@ -21,18 +21,24 @@ regression that re-anchors recovery at offset 0 is a red test.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
-from legba.data.analysts.inline_target import _coerce_finding
+from legba.data.analysts.inline_target import _coerce_finding, _coerce_indicators
 from legba.data.analysts.output_contract import (
     OutputContractError,
     extract_json_object,
     is_unusable_output,
+    repair_confidence_word_token,
     strip_tool_plan_preamble,
 )
 
 FALLBACK = "Assessment for target"
+
+#: Raw completion bytes for the five cells that evidenced the "0. nine"
+#: confidence token — see the V-P1 section below.
+_CONFIDENCE_WORD_TOKEN_FIXTURES = Path(__file__).parent / "fixtures" / "confidence_word_token"
 
 #: The contract the corroborator emits, verbatim in shape (abridged body).
 _CONTRACT = {
@@ -289,3 +295,106 @@ def test_is_unusable_output_keeps_one_line_of_prose() -> None:
     assert is_unusable_output("```json\n{\n}\n```") is True
     assert is_unusable_output("{\nsomething happened\n}") is False
     assert is_unusable_output("A single sentence of analysis.") is False
+
+
+# ---------------------------------------------------------------------------
+# V-P1 — the confidence digit-then-number-word token ("0. nine")
+# ---------------------------------------------------------------------------
+#
+# THE DEFECT THESE TESTS ENCODE. The core plane occasionally spells out the
+# confidence value's fractional digit ("0. nine" instead of "0.9"). "0." is
+# not a valid JSON number on its own, so BOTH ``_coerce_finding``'s primary
+# parse and ``parse_finding_envelope``'s "find it anywhere" recovery raised
+# on the same token and fell through to ``_unstructured_finding`` — landing
+# a 0.9-confidence coordination call at a flat 0.30 with an EMPTY
+# ``indicators`` array. Measured in ``planning/VOICE_REPLAY_2026-08-20/
+# runs/REVISION_RESULT_2026-08-21.md`` §5: five cells, all five spelling out
+# "nine", all five a confident coordination-positive call — three in the
+# 2026-08-21 narrative replay (``narrative_coordination``), two more in the
+# frozen 2026-08-20 corpus (``disruption_status``, ``internal_stability``).
+# The fixtures below are those five cells' raw completion bytes,
+# byte-for-byte.
+
+
+def test_repair_confidence_word_token_maps_zero_through_nine() -> None:
+    """The bounded word list the fractional digit can spell out — not a
+    general English-number parser, just this contract's own value shape."""
+    words = (
+        "zero", "one", "two", "three", "four",
+        "five", "six", "seven", "eight", "nine",
+    )
+    for digit, word in enumerate(words):
+        text = f'"confidence": 0. {word},'
+        assert repair_confidence_word_token(text) == f'"confidence": 0.{digit},'
+
+
+def test_repair_confidence_word_token_is_a_noop_on_well_formed_input() -> None:
+    """``0.9`` has no whitespace after the dot — the pattern never matches
+    it, so the overwhelmingly common case is byte-for-byte untouched."""
+    text = '{"confidence": 0.9, "title": "x"}'
+    assert repair_confidence_word_token(text) == text
+
+
+def test_repair_confidence_word_token_leaves_body_prose_alone() -> None:
+    """Anchored on the ``"confidence":`` key — a body sentence that happens
+    to spell out a number in the same shape is never touched."""
+    text = '{"body": "risk fell to 0. nine on the index", "confidence": 0. nine}'
+    repaired = repair_confidence_word_token(text)
+    assert repaired == (
+        '{"body": "risk fell to 0. nine on the index", "confidence": 0.9}'
+    )
+
+
+# The evidenced token shape is IDENTICAL across all five cells: a digit, a
+# literal ".", exactly one space, then the word — see the fixture bytes
+# under fixtures/confidence_word_token/. No other whitespace variant (e.g.
+# a space before the dot) was found in any of the five, so none is invented
+# here.
+_CONFIDENCE_WORD_TOKEN_CASES = [
+    # (fixture filename, label, model's own `indicators` array survives coercion whole)
+    ("nar_jp_0818__old__s2.txt", "nar_jp_0818 OLD s2 (frozen arm)", True),
+    ("nar_jp_0818__v2r2__s5.txt", "nar_jp_0818 v2r2 s5", True),
+    ("nar_jp_0817__v2r4__s8.txt", "nar_jp_0817 v2r4 s8", True),
+    ("dis_hormuz_0818__new__s2.txt", "dis_hormuz_0818 new s2", True),
+    # int_ar_0807's OWN indicators carry non-ISO dates ("21 August 2026") —
+    # a separate, pre-existing IndicatorEntry validation drop, unrelated to
+    # this defect. The DS-1 prose-derivation fallback fires instead and
+    # still yields a non-empty array: the "indicators must never come back
+    # EMPTY" property this fix is about still holds, via the sibling path.
+    ("int_ar_0807__new__s1.txt", "int_ar_0807 new s1", False),
+]
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "label", "structured_indicators_survive_whole"),
+    _CONFIDENCE_WORD_TOKEN_CASES,
+    ids=[c[1] for c in _CONFIDENCE_WORD_TOKEN_CASES],
+)
+def test_confidence_word_token_cells_land_the_intended_confidence_and_indicators(
+    fixture_name: str, label: str, structured_indicators_survive_whole: bool,
+) -> None:
+    """The exact raw bytes of the five evidenced cells, through the REAL
+    parse entry point (``_coerce_finding``) — confidence 0.9 recovered AND
+    the sibling ``indicators`` array survives, rather than degrading to the
+    0.30/empty-indicators salvage the defect used to produce.
+    """
+    raw = (_CONFIDENCE_WORD_TOKEN_FIXTURES / fixture_name).read_text(encoding="utf-8")
+    assert raw.count("0. nine") == 1, f"{label}: fixture lost the evidenced token"
+
+    finding = _coerce_finding(raw, fallback_title=FALLBACK)
+
+    assert finding.confidence == pytest.approx(0.9), label
+    assert "unstructured" not in finding.tags, label
+    assert "coerce_failed" not in finding.tags, label
+
+    indicators = finding.data.get("indicators")
+    assert indicators, f"{label}: indicators array is empty — the exact defect this fixes"
+
+    if structured_indicators_survive_whole:
+        # The model's OWN structured array, run through the same coercer a
+        # well-formed parse would use — proof the fix landed the real
+        # structured entries, not a lossy prose-derived stand-in.
+        well_formed = json.loads(raw.replace("0. nine", "0.9"))
+        expected = _coerce_indicators(well_formed["indicators"])
+        assert expected, f"{label}: test fixture setup is broken"
+        assert indicators == expected, label

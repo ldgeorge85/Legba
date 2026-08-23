@@ -207,7 +207,110 @@ def test_credibility_seed_rows_consistent_and_flagged():
 # ---------------------------------------------------------------------------
 
 
-async def test_catalog_registers_head_rows_and_credibility_rows(migrated_pg):
+async def _catalog_rows(pg: PostgresStore, ids: list[str]) -> set[tuple[str, str]]:
+    """Every ``(descriptor_id, version)`` currently stored for ``ids``.
+
+    The unit the scoped teardown below works in: a set difference against a
+    pre-run snapshot is exactly "the rows this test wrote".
+    """
+    async with pg.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT descriptor_id, version FROM source_descriptors "
+            "WHERE descriptor_id = ANY($1::text[])",
+            ids,
+        )
+    return {(r["descriptor_id"], r["version"]) for r in rows}
+
+
+@pytest.fixture()
+async def retired_catalog_descriptors(migrated_pg):
+    """Retire EXACTLY the ``source_descriptors`` rows the wrapped test writes.
+
+    THE ROOTED CAUSE OF FIVE NIGHTLY ALLOWLIST ENTRIES (task #23).
+    ``source_descriptors`` is ONE table shared by the whole single-process
+    suite — ``migrated_pg`` is session-scoped. The registration test below
+    writes the entire embedded catalog into it: 35-50 ACTIVE ``is_head`` rows
+    spanning all four ``scope.source_class`` values, each with the catalog
+    entry's ``geo`` tags. Nothing removed them again.
+
+    ``collection_gap._match_candidate_sources`` — the "reuse before create"
+    cross-reference behind every ``collection_requirements`` proposal — reads
+    that table GLOBALLY: *any* ``is_head`` source whose ``scope.source_class``
+    is one of the dimension's wanted classes and whose ``scope.geo`` is empty
+    or overlaps the desk. So from the moment this module had run, five sibling
+    tests in ``tests/data_pkg/test_collection_requirements.py`` were reading
+    35-50 candidate sources they never seeded:
+
+        test_match_candidate_sources_prefers_non_active_and_respects_geo
+        test_match_candidate_sources_no_geo_filter_when_desk_has_none
+        test_attach_candidates_fillable_with_suggested_fetch_url
+        test_attach_candidates_unfillable_when_nothing_matches
+        test_handle_drains_source_request_backlog
+
+    …and exactly those five, no others: the file's other candidate-reading
+    tests survive because the catalog rows are ``active`` (the ORDER BY puts
+    them last, and an active candidate never contributes a
+    ``suggested_fetch_url``). Reproduce the pre-fix behaviour by deleting this
+    fixture and running
+
+        bash scripts/run_tests_in_container.sh \\
+          tests/data_pkg/test_source_catalog_bringup.py \\
+          tests/data_pkg/test_collection_requirements.py -p no:randomly
+
+    — those five fail, and the victim file alone passes (21 passed). It hides
+    in FILE order only because ``test_collection_requirements`` sorts before
+    ``test_source_catalog_bringup``; pytest-randomly sorts MODULES by a
+    seed-keyed crc32 with no regard for directory, so roughly every other seed
+    inverts them. That is why the 2026-08-09 sweep saw three quiet nights and
+    the entries refired on 08-14/15.
+
+    SCOPED, NOT A WIPE: only ``(descriptor_id, version)`` pairs absent from
+    the pre-run snapshot are removed, so an operator-owned head that was
+    already present (``register_catalog``'s ``_STICKY_OFF_STATES`` preserve
+    path) survives untouched. ``source_credibility`` rows are deliberately
+    left alone: they are ON CONFLICT DO NOTHING seeds over a migration-0014
+    baseline this test asserts is preserved, and nothing reads them as a
+    global.
+
+    SELF-VERIFYING: the teardown asserts the table is back to its snapshot.
+    An ERROR on this fixture is the regression pin — it fires the moment the
+    retirement stops covering what the registration writes (a new catalog id
+    shape, a second write path), instead of leaving it to a shuffled nightly
+    weeks later.
+    """
+    ids = [e.id for e in CATALOG]
+    pg = PostgresStore(migrated_pg)
+    await pg.connect()
+    try:
+        before = await _catalog_rows(pg, ids)
+        try:
+            yield
+        finally:
+            # The FAILURE path leaks just as hard as the success one — a test
+            # that dies half way through registration still leaves whatever it
+            # got as far as writing.
+            mine = await _catalog_rows(pg, ids) - before
+            if mine:
+                async with pg.acquire() as conn:
+                    await conn.executemany(
+                        "DELETE FROM source_descriptors "
+                        "WHERE descriptor_id = $1 AND version = $2",
+                        sorted(mine),
+                    )
+            left = await _catalog_rows(pg, ids)
+            assert left == before, (
+                "catalog descriptor retirement is no longer scoped to what "
+                f"the test wrote — {sorted(left ^ before)} differ from the "
+                "pre-run snapshot; the collection_requirements "
+                "order-dependency is back"
+            )
+    finally:
+        await pg.close()
+
+
+async def test_catalog_registers_head_rows_and_credibility_rows(
+    migrated_pg, retired_catalog_descriptors
+):
     pg = PostgresStore(migrated_pg)
     await pg.connect()
     reg = DescriptorRegistry(pg)

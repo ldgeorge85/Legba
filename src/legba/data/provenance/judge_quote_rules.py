@@ -19,6 +19,9 @@ The rules, oldest first (each block below carries its own rationale):
   carry a hard fail (``_quote_is_refutable_evidence``).
 * **V-G3** — a quote landing on a clause the claim already EXEMPTS refutes
   nothing (``_quote_hits_a_carve_out``).
+* **RUST-1** — what the judge SEES is what the corpus SCORES: a span copied
+  verbatim from the rendered evidence map resolves even when the rendering
+  escaped it (``_unescape_judge_quote`` / ``_canonical_judge_quote``).
 
 ``verify`` imports these ONE WAY and re-exports every name, so
 ``verify._quote_refutes`` and friends resolve exactly as before. Nothing here
@@ -144,19 +147,125 @@ def _normalize_quote_text(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip().casefold()
 
 
+# ---------------------------------------------------------------------------
+# RUST-1 (2026-08-20) — THE EVIDENCE-BYTES DEFECT. The judge was SHOWN the
+# evidence map as ``json.dumps(...)`` with the default ``ensure_ascii=True``,
+# while ``quote_corpus`` was built from the UNESCAPED values. So what the judge
+# saw and what its quote was scored against were two different byte streams:
+# every non-ASCII char shipped as a ``\\uXXXX`` escape (``é`` → ``\\u00e9``)
+# and every newline as the two literal characters ``\\n``. A judge that copied
+# a span VERBATIM from what it was shown — the exact behavior the quote rule
+# demands — could never resolve it when the span contained non-ASCII or
+# crossed a line break; for Cyrillic/Arabic/CJK sources EVERY character was an
+# escape. Measured over 14 days on the 2026-08-15/1 stamp: 36% of
+# contradiction attempts failed to resolve their quote (77
+# ``judge_contradicted_unquoted`` vs 114+21 resolved) — the most compliant
+# judge behavior was the one being punished.
+#
+# TWO SIDES, ONE FIX (both under the 2026-08-20/1 stamp):
+#   * verify's render sites pass ``ensure_ascii=False``, so non-ASCII is shown
+#     as the bytes the corpus scores;
+#   * the QUOTE side (here) un-escapes JSON string escapes — ``\\uXXXX`` (incl.
+#     surrogate pairs), ``\\n``/``\\t``/``\\r`` and friends — that survive in
+#     the judge's RETURNED span before resolution. Newlines inside evidence
+#     values are STILL shown as the two-char ``\\n`` (JSON always escapes
+#     control characters), and history graded under the old rendering returned
+#     ``\\uXXXX`` spans, so the quote-side unescape fixes resolution for BOTH
+#     renderings and cannot break stored history: the raw form is always tried
+#     FIRST, and the unescaped form only ever ADDS a resolution.
+# ---------------------------------------------------------------------------
+
+#: One JSON string escape as it survives in a judge's returned quote: a
+#: surrogate PAIR first (an astral char the old rendering split in two), then a
+#: lone ``\\uXXXX``, then the short escapes. Invalid/incomplete sequences match
+#: nothing and pass through untouched — un-escaping must never corrupt a quote
+#: that merely CONTAINS a backslash.
+_JSON_ESCAPE_RE = re.compile(
+    r"\\u([Dd][89ABab][0-9A-Fa-f]{2})\\u([Dd][C-Fc-f][0-9A-Fa-f]{2})"
+    r"|\\u([0-9A-Fa-f]{4})"
+    r"|\\([\"\\/bfnrt])"
+)
+
+#: The two-char escapes' decoded forms (JSON spec, table in RFC 8259 §7).
+_JSON_SHORT_ESCAPES = {
+    '"': '"', "\\": "\\", "/": "/",
+    "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t",
+}
+
+
+def _unescape_judge_quote(text: str) -> str:
+    """RUST-1 — decode JSON string escapes left LITERAL in a judge's quote.
+
+    A judge that copies ``caf\\u00e9`` or ``line one\\nline two`` verbatim from
+    the shown evidence map, and emits it as spec-compliant JSON, hands the
+    parser those backslash sequences as LITERAL characters. This restores the
+    bytes the corpus actually scores. Identity for any text without a
+    backslash; never raises.
+    """
+    if "\\" not in text:
+        return text
+
+    def _decode(m: re.Match[str]) -> str:
+        if m.group(1) is not None:  # surrogate pair → one astral char
+            hi, lo = int(m.group(1), 16), int(m.group(2), 16)
+            return chr(0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00))
+        if m.group(3) is not None:
+            return chr(int(m.group(3), 16))
+        return _JSON_SHORT_ESCAPES[m.group(4)]
+
+    return _JSON_ESCAPE_RE.sub(_decode, text)
+
+
 def _quote_resolves(quote: Any, corpus: str) -> bool:
     """True when ``quote`` is a long-enough VERBATIM run of the shown evidence.
 
     ``corpus`` is the already-normalized evidence the judge was handed for this
     partition. Surrounding quotation marks / ellipses are tolerated; everything
     else must match, so a paraphrase or an invented span fails.
+
+    RUST-1: the raw form is tried FIRST (pure-ASCII single-line behavior is
+    byte-identical); a quote that fails raw gets ONE more try with its JSON
+    string escapes decoded (see :func:`_unescape_judge_quote`) — the form of a
+    span copied verbatim from the rendered evidence map. Un-escaping only ever
+    shortens, so the min-chars floor applies to each form on its own terms.
     """
     if not isinstance(quote, str):
         return False
     cleaned = _normalize_quote_text(quote).strip("\"'“”‘’ .…")
-    if len(cleaned) < _JUDGE_QUOTE_MIN_CHARS:
+    if len(cleaned) >= _JUDGE_QUOTE_MIN_CHARS and cleaned in corpus:
+        return True
+    unescaped = _normalize_quote_text(_unescape_judge_quote(quote)).strip(
+        "\"'“”‘’ .…"
+    )
+    if unescaped == cleaned:
         return False
-    return cleaned in corpus
+    return len(unescaped) >= _JUDGE_QUOTE_MIN_CHARS and unescaped in corpus
+
+
+def _canonical_judge_quote(quote: Any, corpus: str) -> Any:
+    """RUST-1 — the form of the judge's quote the severity chain should reason on.
+
+    When the RAW quote does not resolve against ``corpus`` but its un-escaped
+    form DOES, return the un-escaped form — so every downstream test
+    (restatement, refutation, carve-outs, the numeral fingerprint) and the
+    PERSISTED audit quote all see the bytes the evidence actually contains
+    rather than ``caf\\u00e9``. A quote that resolves raw, contains no
+    backslash, or resolves in neither form is returned unchanged — the
+    canonicalization can only ever turn an unresolvable quote into a
+    resolvable one, never the reverse. Never raises.
+    """
+    if not isinstance(quote, str) or "\\" not in quote:
+        return quote
+    cleaned = _normalize_quote_text(quote).strip("\"'“”‘’ .…")
+    if len(cleaned) >= _JUDGE_QUOTE_MIN_CHARS and cleaned in corpus:
+        return quote
+    unescaped = _unescape_judge_quote(quote)
+    if unescaped == quote:
+        return quote
+    norm = _normalize_quote_text(unescaped).strip("\"'“”‘’ .…")
+    if len(norm) >= _JUDGE_QUOTE_MIN_CHARS and norm in corpus:
+        return unescaped
+    return quote
 
 
 # ---------------------------------------------------------------------------

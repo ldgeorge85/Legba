@@ -158,6 +158,7 @@ def test_validate_activity_runs_synchronously() -> None:
     assert "insufficient_traces" in out["reason"]
 
 
+@pytest.mark.skip(reason="optimizer plane mothballed 2026-08-21 (RUST-4)")
 def test_compile_activity_returns_candidate_dict() -> None:
     """The sync compile activity returns the result as a JSON-able dict
     with the load-bearing OptimizerWorkflowResult fields."""

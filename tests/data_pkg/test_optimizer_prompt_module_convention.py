@@ -107,6 +107,7 @@ def test_the_tree_actually_has_optimizer_descriptors() -> None:
     }
 
 
+@pytest.mark.skip(reason="optimizer plane mothballed 2026-08-21 (RUST-4)")
 @pytest.mark.asyncio
 async def test_every_optimizer_resolves_a_prompt_module_that_imports() -> None:
     """For EVERY optimizer-bearing descriptor: resolve as production does,
@@ -198,6 +199,7 @@ async def test_an_explicit_per_run_value_beats_the_descriptor() -> None:
     assert options["parent_prompt_module_path"] == "legba.prompts.predictor.v1"
 
 
+@pytest.mark.skip(reason="optimizer plane mothballed 2026-08-21 (RUST-4)")
 def test_convention_is_the_kind_not_the_analyst_id() -> None:
     """The regression itself, stated as an assertion.
 

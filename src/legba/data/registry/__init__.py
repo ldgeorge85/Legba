@@ -155,6 +155,11 @@ try:
         stack_health_subject,
         stack_subject,
     )
+    from .vault_events import (
+        VAULT_TOPIC_PREFIX,
+        vault_event_payload,
+        vault_subject,
+    )
 
     _L111_EXPORTS = [
         "CredentialResolverProtocol",
@@ -180,6 +185,9 @@ try:
         "stack_event_payload",
         "stack_health_subject",
         "stack_subject",
+        "VAULT_TOPIC_PREFIX",
+        "vault_event_payload",
+        "vault_subject",
     ]
 except ImportError:  # pragma: no cover — L-111 still in flight
     _L111_EXPORTS = []

@@ -71,10 +71,18 @@ subscription:
   # it reads the region_composition HEADS (meta=True, so include_meta) verify-
   # floored, DEGRADES a region with no head to that region's country reads, and
   # NAMES a region with no read at all as a gap.
+  # FRAME-1 (2026-08-20, ratified): the window on these SOURCES is an
+  # ADMISSIBILITY HORIZON, not a freshness cliff. 24h was a wall-clock gate over
+  # an 11h-cooldown cadence that HOLDS on a quiet desk: on 2026-08-20 the BF
+  # units had last fired 42h earlier, the trailing-24h slice was mechanically
+  # empty, and the product printed "No source findings to synthesize" over seven
+  # heads carrying the window's major story. 336h (14 days) admits each unit's
+  # NEWEST head — the head-fold already yields exactly one per (unit, desk) — and
+  # the composition now prints each head's date + age and states its staleness.
   other_analysts:
     - id: region_composition
       data_types: [finding]
-      time_window: 24h
+      time_window: 336h
     # B0-4 (MASTER_PLAN 2026-07-10): the cross-region THEMATIC composition —
     # the world's one LEGAL cited cross-region object. Its target-LESS head is
     # admitted by _assemble_world_region_slice as a labeled `thematic` block,
@@ -83,7 +91,7 @@ subscription:
     # only and structurally could not carry a claim spanning two regions.
     - id: escalation_composition
       data_types: [finding]
-      time_window: 24h
+      time_window: 336h
   substrate:
     direct_queries: false        # reads via the kind's READ_SLICE, not ad-hoc SQL
 

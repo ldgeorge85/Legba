@@ -155,6 +155,7 @@ from .output_contract import (
     OutputContractError,
     is_unusable_output,
     parse_finding_envelope,
+    repair_confidence_word_token,
     strip_tool_plan_preamble,
 )
 # QW1-B DESK GROUNDING — the composition CONTINUITY idiom one floor down. The
@@ -1950,6 +1951,7 @@ def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
     Robust to:
       * markdown code fences (```json ... ```).
       * trailing text after the JSON object.
+      * a "0. nine"-shaped confidence token, repaired before parsing.
       * malformed JSON — falls back to an "unstructured" finding whose
         body carries the raw LLM output so the operator can re-curate.
       * field-shape errors — same fallback.
@@ -1989,6 +1991,8 @@ def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
                         end = i + 1
                         break
             candidate = candidate[:end]
+        # V-P1: repair a "0. nine"-shaped confidence token before parsing.
+        candidate = repair_confidence_word_token(candidate)
         parsed = json.loads(candidate)
     except (json.JSONDecodeError, ValueError) as exc:
         # V-N1: the scan above is anchored at offset 0, so a model that emitted
@@ -1998,7 +2002,7 @@ def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
         # the 0.3 unstructured fallback with the plan sentence as the TITLE and
         # the model's own title/confidence/evidence/tags discarded. Look for the
         # contract ANYWHERE before degrading.
-        recovered = parse_finding_envelope(raw)
+        recovered = parse_finding_envelope(repair_confidence_word_token(raw))
         if recovered is None:
             logger.warning("inline_target.finding.parse_failed err=%s", exc)
             return _unstructured_finding(

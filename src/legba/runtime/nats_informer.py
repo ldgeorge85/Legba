@@ -47,6 +47,26 @@ next call instead of the next container recreate. Both informers share
 :class:`_NatsSubjectInformer` — the fetch loop's re-bind/backoff self-heal is
 hard-won incident logic (the 2026-06-11 dropped-consumer outage) and must not
 be duplicated per subject family.
+
+RUST-5 — the VAULT-ROTATION third
+----------------------------------
+
+A third lifecycle event class the runtime never consumed: rotating a secret in
+the credential vault (``CredentialVault.store_secret``) changed what
+``ctx.secrets.resolve(secret_id)`` returns, but the handler caches resolved
+the plaintext ONCE at build time and kept serving it — a rotated credential
+stayed inert (same failure shape as S-2's stack-component PUT) until a
+container recreate. The registry now publishes
+``vault.secret.rotated.<secret_id>`` on ``LEGBA_VAULT_EVENTS`` (see
+:mod:`legba.data.registry.vault_events`); :class:`NatsVaultRotationInformer`
+binds it and calls :func:`legba.runtime.llm_handler_cache.evict_all_llm_handlers`
+on every message. Unlike the stack informer this does NOT target one cache
+entry — a secret_id cannot be mapped back to the component_id(s) that
+reference it without a registry-side reverse lookup that doesn't exist (see
+``vault_events.py`` for why), so it takes the coarser, still-correct sweep:
+rotations are rare operator-initiated events, not a hot path, so a
+process-wide handler-cache drop is an acceptable cost for guaranteed
+correctness.
 """
 
 from __future__ import annotations
@@ -60,6 +80,7 @@ from ..data.nats import NatsStore
 from ..data.registry.streams import (
     DESCRIPTOR_EVENTS_STREAM,
     STACK_EVENTS_STREAM,
+    VAULT_EVENTS_STREAM,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -76,6 +97,13 @@ DESCRIPTOR_SUBJECT_FILTER = "descriptor.>"
 #: streams, and one wedged consumer must not stall the other.
 DEFAULT_STACK_CONSUMER_DURABLE_PREFIX = "legba-runtime-stack"
 STACK_SUBJECT_FILTER = "stack.component.>"
+
+#: RUST-5 — the vault-rotation informer's durable prefix + subject filter.
+#: Its own durable, same reasoning as the stack informer's: a wedged vault
+#: consumer must not stall descriptor reconcile or stack eviction, and
+#: vice versa.
+DEFAULT_VAULT_CONSUMER_DURABLE_PREFIX = "legba-runtime-vault"
+VAULT_SUBJECT_FILTER = "vault.secret.>"
 
 #: Stack actions that CANNOT change a component's body, and so must not evict.
 #: ``health_changed`` is published by the latching health prober on every
@@ -466,6 +494,62 @@ class NatsStackComponentInformer(_NatsSubjectInformer):
         return True
 
 
+class NatsVaultRotationInformer(_NatsSubjectInformer):
+    """RUST-5 — ``vault.secret.>`` → process-wide LLM handler-cache eviction.
+
+    The third lifecycle-event consumer (after the descriptor and stack
+    informers), for the credential vault. Unlike
+    :class:`NatsStackComponentInformer` it does not parse the subject at
+    all — a secret_id cannot be mapped to the component_id(s) that reference
+    it without a reverse lookup the registry doesn't do (see
+    ``vault_events.py``), so EVERY message on this subject calls
+    ``evict_all`` unconditionally. Coarser than the per-component stack
+    sweep, but correct, and rotations are rare operator actions, not a hot
+    path — see the module docstring's "RUST-5" section for the full
+    reasoning.
+
+    ``evict_all`` is injected — production passes
+    :func:`legba.runtime.llm_handler_cache.evict_all_llm_handlers`; tests
+    pass a spy. Returns the number of cache entries dropped (0 is the
+    ordinary case between rotations, and is NOT an error).
+    """
+
+    _durable_prefix = DEFAULT_VAULT_CONSUMER_DURABLE_PREFIX
+
+    def __init__(
+        self,
+        nats_store: NatsStore,
+        *,
+        evict_all: Callable[[], int],
+        consumer_label: str = DEFAULT_CONSUMER_LABEL,
+        stream: str = VAULT_EVENTS_STREAM,
+        subject_filter: str = VAULT_SUBJECT_FILTER,
+    ) -> None:
+        super().__init__(
+            nats_store,
+            stream=stream,
+            subject_filter=subject_filter,
+            consumer_label=consumer_label,
+        )
+        self._evict_all = evict_all
+
+    def _dispatch(self, subject: str) -> bool:
+        evicted = self._evict_all()
+        self.stats.enqueued += 1
+        self.stats.evicted += evicted
+        if evicted:
+            logger.info(
+                "vault_informer.evicted subject=%s handlers=%d — the next "
+                "LLM call re-resolves the live credential",
+                subject, evicted,
+            )
+        else:
+            logger.debug(
+                "vault_informer.no_cached_handlers subject=%s", subject,
+            )
+        return True
+
+
 def parse_stack_subject(subject: str) -> tuple[str, str] | None:
     """``(action, component_id)`` from ``stack.component.<action>.<kind>.<id>``.
 
@@ -505,10 +589,13 @@ def _parse_descriptor_id_from_subject(subject: str) -> str | None:
 __all__ = [
     "DEFAULT_CONSUMER_LABEL",
     "DEFAULT_STACK_CONSUMER_DURABLE_PREFIX",
+    "DEFAULT_VAULT_CONSUMER_DURABLE_PREFIX",
     "DESCRIPTOR_SUBJECT_FILTER",
     "STACK_SUBJECT_FILTER",
+    "VAULT_SUBJECT_FILTER",
     "InformerStats",
     "NatsReconcileInformer",
     "NatsStackComponentInformer",
+    "NatsVaultRotationInformer",
     "parse_stack_subject",
 ]

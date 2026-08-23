@@ -392,48 +392,63 @@ async def test_example_yaml_loader_round_trip(api_app):
 async def test_source_list_projection_assurance_grade(api_app, client):
     _, _, pg_store = api_app
     desc_id = f"source.rss.assurance_{uuid4().hex[:8]}"
+    # RETIRE the registered descriptor on the way out, failure path included.
+    # This registration was the polluter behind the 2026-08-17/18 nightly
+    # shuffled FAILs: the head stayed in the session-shared source_descriptors
+    # table, and test_collection_requirements' candidate assertions are
+    # statements about that whole table, so its clean_slate sentinel
+    # (correctly) refused to run them. Scoped to exactly the rows this test
+    # created, per the m23 idiom — a suite-wide wipe here would make THIS
+    # file the polluter.
+    try:
 
-    # Register a real source descriptor through the REST lifecycle.
-    r = await client.post(
-        "/api/v1/registry/descriptors/source", json=_source_body(desc_id),
-    )
-    assert r.status_code == 201, r.text
-
-    def _row(payload: list[dict[str, Any]]) -> dict[str, Any]:
-        matches = [x for x in payload if x["descriptor_id"] == desc_id]
-        assert len(matches) == 1
-        return matches[0]
-
-    # Ungraded: the additive field is present and null (shape stays additive —
-    # every pre-P3-1 field is untouched).
-    r = await client.get("/api/v1/registry/sources")
-    assert r.status_code == 200, r.text
-    row = _row(r.json())
-    assert row["assurance_grade"] is None
-    assert row["kind"] == "rss"  # pre-existing projection intact
-
-    # A PRIVATE rating must NOT surface in the public projection.
-    async with pg_store.acquire() as conn:
-        await upsert_rating(
-            conn,
-            _spec(desc_id, rater="annex:acme", reliability="A", credibility="1"),
-            method="operator",
-            visibility_class="private",
+        # Register a real source descriptor through the REST lifecycle.
+        r = await client.post(
+            "/api/v1/registry/descriptors/source", json=_source_body(desc_id),
         )
-    r = await client.get("/api/v1/registry/sources")
-    assert _row(r.json())["assurance_grade"] is None
+        assert r.status_code == 201, r.text
 
-    # A public catalog rating surfaces as the display grade.
-    async with pg_store.acquire() as conn:
-        await upsert_rating(conn, _spec(desc_id))
-    r = await client.get("/api/v1/registry/sources")
-    assert _row(r.json())["assurance_grade"] == "B2"
+        def _row(payload: list[dict[str, Any]]) -> dict[str, Any]:
+            matches = [x for x in payload if x["descriptor_id"] == desc_id]
+            assert len(matches) == 1
+            return matches[0]
 
-    # Detail view carries the same stamp; route now reports registered=true.
-    r = await client.get(f"/api/v1/registry/sources/{desc_id}")
-    assert r.status_code == 200, r.text
-    assert r.json()["assurance_grade"] == "B2"
+        # Ungraded: the additive field is present and null (shape stays additive —
+        # every pre-P3-1 field is untouched).
+        r = await client.get("/api/v1/registry/sources")
+        assert r.status_code == 200, r.text
+        row = _row(r.json())
+        assert row["assurance_grade"] is None
+        assert row["kind"] == "rss"  # pre-existing projection intact
 
-    r = await client.get(f"/api/v1/v3/sources/{desc_id}/assurance")
-    assert r.status_code == 200, r.text
-    assert r.json()["registered"] is True
+        # A PRIVATE rating must NOT surface in the public projection.
+        async with pg_store.acquire() as conn:
+            await upsert_rating(
+                conn,
+                _spec(desc_id, rater="annex:acme", reliability="A", credibility="1"),
+                method="operator",
+                visibility_class="private",
+            )
+        r = await client.get("/api/v1/registry/sources")
+        assert _row(r.json())["assurance_grade"] is None
+
+        # A public catalog rating surfaces as the display grade.
+        async with pg_store.acquire() as conn:
+            await upsert_rating(conn, _spec(desc_id))
+        r = await client.get("/api/v1/registry/sources")
+        assert _row(r.json())["assurance_grade"] == "B2"
+
+        # Detail view carries the same stamp; route now reports registered=true.
+        r = await client.get(f"/api/v1/registry/sources/{desc_id}")
+        assert r.status_code == 200, r.text
+        assert r.json()["assurance_grade"] == "B2"
+
+        r = await client.get(f"/api/v1/v3/sources/{desc_id}/assurance")
+        assert r.status_code == 200, r.text
+        assert r.json()["registered"] is True
+    finally:
+        async with pg_store.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM source_descriptors WHERE descriptor_id = $1",
+                desc_id,
+            )

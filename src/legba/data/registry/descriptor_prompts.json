@@ -13,18 +13,18 @@
       "source": "analyst_cross_doc_corroborator.yaml"
     },
     "disruption_status": {
-      "chars": 14787,
-      "sha256": "b230256552ec33663242f217eeee14ca075a6fa465a323b41c78812c2fa52973",
+      "chars": 24566,
+      "sha256": "b1afc795f18e86bc46a8f03ca331b4db81f884f815fdd4def0aa1f49fdec97b3",
       "source": "analyst_disruption_status.yaml"
     },
     "economic_coercion": {
-      "chars": 13061,
-      "sha256": "8dc49009bba85b4fde60294c98dc923ab1b2cc566998417f2fc1e56c34394935",
+      "chars": 23043,
+      "sha256": "4812fe490249f9475baad0803e120ade94e77fb70ff759d4feb2632a5e1c01aa",
       "source": "analyst_economic_coercion.yaml"
     },
     "energy_security": {
-      "chars": 11103,
-      "sha256": "fa8b453e63d9b803a1ab515568ac15da343eb76952d64d7f53fad3687ba1cacb",
+      "chars": 20338,
+      "sha256": "73297c8a73f99ad0fa5e9c54870f0f243edef3b207f1d3a1f2afb26e62a2b6df",
       "source": "analyst_energy_security.yaml"
     },
     "entity_researcher": {
@@ -33,33 +33,33 @@
       "source": "analyst_entity_researcher.yaml"
     },
     "escalation": {
-      "chars": 11102,
-      "sha256": "7d546cb09121fd57ce9d260a6a40c09e519c20cf5ba9d91ab8db1a99ad686aa0",
+      "chars": 20157,
+      "sha256": "8adbf14e2a7276707406efb902bfbd786d65d20e89728ba8c56357f1fb87bf2d",
       "source": "analyst_escalation.yaml"
     },
     "internal_stability": {
-      "chars": 11110,
-      "sha256": "b4bfb4c9165bdf7deff6bd0310d85367bf75b6e8f941aedd4021575462f0765a",
+      "chars": 20904,
+      "sha256": "6edf3d5cebb53f24a47d3c41d946a21e334f5d74f15a5780d0774872333135fa",
       "source": "analyst_internal_stability.yaml"
     },
     "leadership_transition": {
-      "chars": 11096,
-      "sha256": "33f842b6e27ba8872fdf0516cea58228bbfff60108500df7182e72276ba3fc70",
+      "chars": 21705,
+      "sha256": "ef1e65d0d133023f882ca7bcf620762374f1dcd65b84a27404ca02b289e5fa5d",
       "source": "analyst_leadership_transition.yaml"
     },
     "military_posture": {
-      "chars": 13077,
-      "sha256": "d27f4930162f802926ba2864d2086d23089e2c6247dd057400a83f8ed1ae6b62",
+      "chars": 25077,
+      "sha256": "730b5529897ecda0a1c83701ec5009601f4338dd66225dc94b447ca60d79954d",
       "source": "analyst_military_posture.yaml"
     },
     "narrative_coordination": {
-      "chars": 12115,
-      "sha256": "2b655f20155d7d8dd7e0327f2399ebdbb6e885dc3accb90983b1f75457c56e35",
+      "chars": 13762,
+      "sha256": "ca03ad2fef66eca7dde1551c9556c097b6f43d3253befacd35a2cb89dd7e0766",
       "source": "analyst_narrative_coordination.yaml"
     },
     "proliferation_watch": {
-      "chars": 11626,
-      "sha256": "bdcb727bf5976c3dcbc6a7ee9aab260f5e5c4f1c078f0ed5676919e5a85a053d",
+      "chars": 23479,
+      "sha256": "497d4ac8eb71dbf86c4f9001903e1c817534c1fd0c966fc503d2dc8202956a1c",
       "source": "analyst_proliferation_watch.yaml"
     },
     "signal_salience": {
@@ -184,7 +184,7 @@
     },
     "analyst:country_optimizer": {
       "source": "analyst_country_optimizer.yaml",
-      "state": "active"
+      "state": "paused"
     },
     "analyst:country_predictor": {
       "source": "analyst_country_predictor.yaml",
@@ -424,7 +424,7 @@
     },
     "analyst:unit_optimizer": {
       "source": "analyst_unit_optimizer.yaml",
-      "state": "active"
+      "state": "paused"
     },
     "analyst:world_assessor": {
       "source": "analyst_world_assessor.yaml",

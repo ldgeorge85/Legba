@@ -100,6 +100,15 @@ const SystemInspector = lazy(() => import('@/components/inspector/InspectorPanel
 
 // The Journal — Legba's reflective voice + navigable index (Wave 3).
 const SystemJournal = lazy(() => import('@/panels/system/Journal'))
+// GLASS-2 — the three unconsumed API surfaces get their consumers.
+const SystemJournalGate = lazy(() => import('@/panels/system/JournalGate'))
+// GLASS-3 — the ops deck.
+const SystemProductionGauge = lazy(() => import('@/panels/system/ProductionGauge'))
+const SystemJudgeStats = lazy(() => import('@/panels/system/JudgeStats'))
+const SystemSourceHealth = lazy(() => import('@/panels/system/SourceHealth'))
+const SystemEvalBoards = lazy(() => import('@/panels/system/EvalBoards'))
+const SystemSituationTrajectory = lazy(() => import('@/panels/system/SituationTrajectory'))
+const SystemNarratives = lazy(() => import('@/panels/system/Narratives'))
 
 // v4 visual workspace panels (selection-linked singletons).
 const V4Map = lazy(() => import('@/panels/v4/MapPanel'))
@@ -428,6 +437,69 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     Component: SystemJournal,
   },
 
+  // --- GLASS-2: consumers for the three API surfaces that had none ---
+  // The Journal Gate — `journal_proposals` accept/reject, the human gate that
+  // the standing rule requires and that was reachable only by curl until now.
+  // Engine Room (navGroups KIND_GROUP), beside Weekly Grading: both are
+  // operator DUTIES over a queue, not analytical reads. Personal-only — a
+  // gate that applies registry writes is single-operator by construction.
+  'system.journal_gate': {
+    definition: def('system.journal_gate', 'system_journal_gate', 'system', null, 'Journal Gate', false, ['personal'], 'Gavel'),
+    Component: SystemJournalGate,
+  },
+  // The situation register's frames + the trajectory ledger. Mounted as
+  // Provenance's "Trajectory" tab (merged/Provenance.tsx) and registered here
+  // as a standalone kind so ⌘K and saved layouts resolve it — hidden from the
+  // sidebar (HIDDEN_KINDS below) because the ≤23-row budget is fully spent and
+  // a tab is the blessed way to land a surface without re-arguing it.
+  'system.situations': {
+    definition: def('system.situations', 'system_situations', 'system', null, 'Situation Trajectory', false, ['personal', 'cis'], 'TrendingUp'),
+    Component: SystemSituationTrajectory,
+  },
+  // Reified contested-claim families + the source-echo graph. Same deal:
+  // Provenance's "Narratives" tab, registered + hidden for standalone resolve.
+  'system.narratives': {
+    definition: def('system.narratives', 'system_narratives', 'system', null, 'Narratives', false, ['personal', 'cis'], 'Waypoints'),
+    Component: SystemNarratives,
+  },
+
+  // --- GLASS-3: the ops deck --------------------------------------------
+  // Four VISIBLE Engine Room rows, deliberately not hidden and not folded into
+  // tabs. The ≤23-row budget (navGroups.test.ts) measures NON-Engine-Room rows
+  // only — Engine Room's own rows collapse behind one header — so these cost
+  // the budget nothing, and the budget's "earn it, fold, or hide" terms do not
+  // bind here the way they bound `system.situations`/`system.narratives`.
+  // Personal-only: every one of them reads operational internals (provider
+  // routing, source ledgers, run timings) that the `cis` mode has no use for.
+  //
+  // The whole-engine production read + its integrity/metering bricks. Leads the
+  // deck because it is the one that PAGES: its `pages` flag is the same
+  // predicate the alert plane's production_deficit trigger fires on, so this
+  // panel and the operator's phone cannot disagree.
+  'system.production_gauge': {
+    definition: def('system.production_gauge', 'system_production_gauge', 'system', null, 'Production Gauge', false, ['personal'], 'Gauge'),
+    Component: SystemProductionGauge,
+  },
+  // The judge's verdict mix by serving provider — the track's one new API.
+  'system.judge_stats': {
+    definition: def('system.judge_stats', 'system_judge_stats', 'system', null, 'Judge Stats', false, ['personal'], 'Scale'),
+    Component: SystemJudgeStats,
+  },
+  // Source quality + staleness debt in one rollup, with a per-source drill.
+  'system.source_health': {
+    definition: def('system.source_health', 'system_source_health', 'system', null, 'Source Health', false, ['personal'], 'HeartPulse'),
+    Component: SystemSourceHealth,
+  },
+  // Desk baselines / band trajectory / analyst runtime. A separate kind rather
+  // than three more tabs on `system.eval_scorecard`: that panel is already 833
+  // lines and answers "is this ANALYST getting better", while these three are
+  // engine-level boards (a desk's statistical band, a verdict's drift, a run's
+  // wall time) that an operator reads on a different errand.
+  'system.eval_boards': {
+    definition: def('system.eval_boards', 'system_eval_boards', 'system', null, 'Eval Boards', false, ['personal'], 'LayoutDashboard'),
+    Component: SystemEvalBoards,
+  },
+
   // --- v4 visual workspace panels (singletons; selection-linked) ---
   'v4.map': {
     definition: def('v4.map', 'v4_map', 'system', null, 'World Map', false, ['personal', 'cis'], 'Globe2'),
@@ -558,6 +630,18 @@ const HIDDEN_KINDS: ReadonlySet<PanelKind> = new Set<PanelKind>([
   'system.entity_graph',
   'system.notable_structure',
   'system.wall_movers',
+  // GLASS-2 adds two entries for the U-3 merge-alias reason, in the forward
+  // direction: `system.situations` and `system.narratives` are NEW surfaces
+  // that land as tabs of the merged Provenance panel (Why / Lineage / Flow /
+  // Trajectory / Narratives) rather than as sidebar rows. The ≤23-visible-row
+  // budget (navGroups.test.ts) is spent to the last row, and that test's own
+  // terms for the next panel are "earn it, fold into a tab, or hide" — these
+  // fold, which is also where they belong: both answer "how did this get
+  // here" (a frame's state, a claim's carriage) alongside the three tabs
+  // already there. Registered-but-hidden keeps them fully reachable
+  // standalone via ⌘K and any saved layout, exactly like the merge aliases.
+  'system.situations',
+  'system.narratives',
 ])
 for (const k of HIDDEN_KINDS) {
   PANEL_REGISTRY[k].definition.hidden = true

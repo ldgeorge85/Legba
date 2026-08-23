@@ -614,8 +614,10 @@ async def load_absence_slice_rows(conn: Any, run_id: Any) -> list[SliceRow] | No
     ``None`` is the HONEST unavailable answer (no run_id, no trace row — pruned
     by the retention sweep — or a read error); ``[]`` is a real empty slice.
     Resolves both substrate conventions: a UNIT slice's rows are ``signals``
-    (screened by TITLE), a composition's are ``analyst_outputs`` (screened by
-    BODY — W1(b)). Bounded by :data:`_ABSENCE_SLICE_TITLE_CAP`. Never raises.
+    (screened by TITLE **and BODY** — the 2026-08-21 rider; the signal leg used
+    to hardcode ``'' AS body`` and so screened the one surface the evidence is
+    usually not on), a composition's are ``analyst_outputs`` (screened by BODY —
+    W1(b)). Bounded by :data:`_ABSENCE_SLICE_TITLE_CAP`. Never raises.
     """
     if conn is None or run_id is None:
         return None
@@ -630,7 +632,32 @@ async def load_absence_slice_rows(conn: Any, run_id: Any) -> list[SliceRow] | No
             return []
         rows = await conn.fetch(
             "SELECT COALESCE(payload->>'title', '') AS title, "
-            "       '' AS body, "
+            # SALIENCE-rider (2026-08-21) — the SIGNAL leg used to hardcode
+            # ``'' AS body``, so this screen read TITLES ONLY: the one surface
+            # the evidence is usually not on. Measured on `pro_ir_0817`, the
+            # decisive proliferation row sat body-only at slice position [76]
+            # and the claim's content terms ("delivery", "enrichment",
+            # "weaponization", "proliferation") matched ZERO of the 120 titles —
+            # the backstop could not see what beat it. The projection below is
+            # the RENDER precedence (``inline_target._BODY_FIELD_PRECEDENCE``),
+            # i.e. the same text the analyst actually read, so the screen and
+            # the desk are looking at one surface.
+            #
+            # ``raw_body`` is jsonb-guarded: on GDELT rows it is an OBJECT, and
+            # ``->>`` would stringify the whole JSON blob into the screen text.
+            "       COALESCE("
+            "         NULLIF(payload->>'distilled_body', ''),"
+            "         NULLIF(payload->>'text_en', ''),"
+            "         NULLIF(payload->>'text', ''),"
+            "         NULLIF(payload->>'archived_text', ''),"
+            "         CASE WHEN jsonb_typeof(payload->'raw_body') = 'string'"
+            "              THEN NULLIF(payload->>'raw_body', '') END,"
+            "         NULLIF(payload->>'summary', ''),"
+            "         NULLIF(payload->>'description', ''),"
+            "         NULLIF(payload->>'content_text', ''),"
+            "         NULLIF(payload->>'snippet', ''),"
+            "         ''"
+            "       ) AS body, "
             "       COALESCE(source_id, '') AS source_id, "
             "       COALESCE(raw_provenance->>'kind', '') AS provenance_kind, "
             "       'signal' AS row_kind "
@@ -656,7 +683,17 @@ async def load_absence_slice_rows(conn: Any, run_id: Any) -> list[SliceRow] | No
         kind = _row_field(r, "row_kind", "signal") or "signal"
         # W1(b): a COMPOSED row's title names the topic, never the verdict — screen
         # and show its BODY, falling back to the title only when the body is empty.
-        text = (body[:_ABSENCE_SLICE_BODY_CHARS] if kind == "output" else "") or title
+        # SALIENCE-rider: a SIGNAL row screens on TITLE + BODY. Title stays first
+        # so every pre-rider title match is preserved byte-for-byte and this can
+        # only ADD candidates, never remove one; the body then makes a body-only
+        # hit reachable at all. Bounded by the same 500-char cap the composed leg
+        # uses, so a long article cannot dominate the screen's term statistics.
+        if kind == "output":
+            text = body[:_ABSENCE_SLICE_BODY_CHARS] or title
+        else:
+            text = " ".join(
+                part for part in (title, body[:_ABSENCE_SLICE_BODY_CHARS]) if part
+            )
         if not text:
             continue
         out.append(

@@ -1,0 +1,41 @@
+{
+  "title": "Chinese state media push coordinated Yasukuni criticism",
+  "body": "*As of 2026-08-17; slice covers the trailing 72h to that date; 98 signals.*\n\n**BLUF:** A coordinated Chinese state‑media narrative condemning Japan’s Yasukuni Shrine visits and framing the shrine as a “spiritual tool and symbol of Japanese militarism” appears across multiple distinct outlets in this window.\n\n## What changed\n- This window contains several Chinese‑state outlets (CGTN, Xinhua, TASS) publishing near‑identical characterisations of Yasukuni Shrine on 15‑16 August 2026, none of which were present in earlier desk reads (no prior grounding provided) [24][34][51][49].\n\n## Why it matters\n- The repeated phrasing “spiritual tool and symbol of Japanese militarism” across independent Chinese news agencies signals a synchronized propaganda push aimed at Japan, potentially amplifying regional diplomatic pressure and shaping international perception of Japan’s wartime memory issues.  By aligning their language, these outlets increase the salience of the critique and may influence foreign audiences and domestic Japanese discourse.\n\n## What would change this read\n- Observation of a dedicated analysis of Japanese public‑opinion responses to foreign propaganda (a class of “public‑opinion‐impact studies”) would be needed to assess the narrative’s effectiveness; this desk does not collect that class of reporting.\n\n## Indicators\n- Synchronized narrative across Chinese state media on Yasukuni Shrine criticism (triggered).\n",
+  "confidence": 0. nine,
+  "evidence": [24, 34, 51, 49],
+  "tags": ["severity:moderate", "topic:narrative_coordination"],
+  "indicators": [
+    {
+      "id": "synchronized-hashtag-surge",
+      "statement": "Coordinated surge of an identical hashtag/slogan across many accounts in a short window",
+      "status": "not_observed",
+      "horizon_date": "2026-08-31",
+      "first_seen": "2026-08-17",
+      "citations": []
+    },
+    {
+      "id": "cross-platform-message-cloning",
+      "statement": "Near-identical framing appearing simultaneously across two or more platforms/outlets",
+      "status": "triggered",
+      "horizon_date": "2026-09-16",
+      "first_seen": "2026-08-17",
+      "citations": ["24","34","51","49"]
+    },
+    {
+      "id": "state-media-amplification",
+      "statement": "State or state-linked media amplifies the narrative in lockstep with the online push",
+      "status": "not_observed",
+      "horizon_date": "2026-09-16",
+      "first_seen": "2026-08-17",
+      "citations": []
+    },
+    {
+      "id": "inauthentic-account-cluster",
+      "statement": "A cluster of new/low-history/bot-like accounts drives a measurable share of the volume",
+      "status": "not_observed",
+      "horizon_date": "2026-08-31",
+      "first_seen": "2026-08-17",
+      "citations": []
+    }
+  ]
+}

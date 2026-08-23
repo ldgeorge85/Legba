@@ -10,7 +10,26 @@ routes (all bearer-gated, mounted under ``/api/v1``):
   * ``POST /journal_proposals/{id}/accept`` — accept + APPLY via the existing
                                               write/lifecycle path (idempotent on
                                               replay — never double-applies).
+                                              Takes an OPTIONAL decision_reason.
   * ``POST /journal_proposals/{id}/reject`` — reject; REQUIRES a decision_reason.
+
+THE DECISION REASON, on BOTH sides (GLASS-3). ``decision_reason`` has existed on
+the row since migration 0048, but only ``reject`` ever wrote it: the accept path
+set ``status``/``decided_by``/``decided_at`` and hardcoded ``decision_reason=None``
+on the way out, with no body model to carry one. The audit trail was therefore
+asymmetric by construction — every refusal explained itself and every APPLIED
+change, the half that actually mutates the substrate, could not. An operator
+reviewing the queue afterwards could read why the journal was told no and never
+why it was told yes.
+
+Accept now takes the same reason, with one deliberate difference: it is OPTIONAL
+where reject's is REQUIRED. The asymmetry is kept because it is real — a refusal
+is only legible through its reason, whereas an accept is already fully described
+by the applied diff the ``applied`` audit returns. Making it mandatory would buy
+a compliance field full of "ok" and break every existing caller (the panel posts
+``{}``); making it available means the reasons that DO matter get recorded and
+read back. An omitted, empty, or whitespace-only reason stores NULL — the honest
+"none given", never an empty string masquerading as one.
 
 §7.5 SAFEGUARDS for self_revision:
   (a) the list + the detail surfaced to the operator carries OBJECTIVE EVIDENCE —
@@ -114,6 +133,39 @@ class DecisionOut(BaseModel):
 
 class RejectBody(BaseModel):
     decision_reason: str = Field(..., min_length=1)
+
+
+class AcceptBody(BaseModel):
+    """The OPTIONAL reason recorded alongside an accept.
+
+    Mirrors ``RejectBody`` except for the requirement, and the whole body is
+    optional besides — ``POST`` with no body at all is the pre-existing contract
+    and stays valid, so no existing caller breaks."""
+
+    decision_reason: str | None = Field(default=None, max_length=2048)
+
+
+def _clean_reason(raw: str | None) -> str | None:
+    """Normalize a supplied reason to text-or-NULL.
+
+    An omitted, empty, or whitespace-only reason must store SQL NULL, never
+    ``''``: a column that can hold an empty string acquires a third state that
+    reads as "a reason was given" to every ``IS NOT NULL`` check downstream."""
+    if raw is None:
+        return None
+    cleaned = raw.strip()
+    return cleaned[:2048] if cleaned else None
+
+
+def _with_operator_note(machine_reason: str, operator_note: str | None) -> str:
+    """Compose the archive reason for an accept that FAILED after being claimed.
+
+    The machine's reason leads — it is why the row is archived rather than
+    accepted — and the operator's note follows it, so a decision trail never
+    silently drops the human half. Truncated as a whole to the column's 2048."""
+    if not operator_note:
+        return machine_reason[:2048]
+    return f"{machine_reason} [operator's accept note: {operator_note}]"[:2048]
 
 
 # ---------------------------------------------------------------------------
@@ -266,25 +318,32 @@ def build_journal_proposals_router(deps: RegistryAPIDeps) -> APIRouter:
     @router.post("/journal_proposals/{proposal_id}/accept", response_model=DecisionOut)
     async def accept_proposal(
         proposal_id: UUID,
+        body: AcceptBody | None = Body(default=None),
         actor: str = Depends(require_bearer),
     ) -> DecisionOut:
         """Accept + APPLY. The journal suggested; the human (here) causes.
 
         Idempotent (§7.4): the pending→accepted transition is atomic; only the
         winner applies. A self_revision touching the protected section auto-rejects
-        (the diff is never applied; the row archives with the reason)."""
+        (the diff is never applied; the row archives with the reason).
+
+        The optional ``decision_reason`` is recorded on the SAME atomic claim that
+        flips the status, so a row can never exist as accepted-without-the-reason-
+        the-operator-gave: either the whole decision lands or none of it does."""
+        reason = _clean_reason(body.decision_reason if body else None)
         async with _pg().acquire() as conn:
             # ATOMIC claim: flip pending→accepted, returning the row ONLY if we
             # won the transition. A replayed accept finds status != 'pending'.
             claimed = await conn.fetchrow(
                 f"""
                 UPDATE journal_proposals
-                   SET status = 'accepted', decided_by = $2, decided_at = now(),
+                   SET status = 'accepted', decided_by = $2,
+                       decision_reason = $3, decided_at = now(),
                        updated_at = now()
                  WHERE id = $1 AND status = 'pending'
              RETURNING {_COLS}
                 """,
-                proposal_id, actor,
+                proposal_id, actor, reason,
             )
             if claimed is None:
                 # Either the id doesn't exist, or it was already decided (replay).
@@ -318,10 +377,16 @@ def build_journal_proposals_router(deps: RegistryAPIDeps) -> APIRouter:
                 )
             except ProtectedSectionViolation as exc:
                 # §7.5(b) — auto-reject: archive WITH the reason, apply NOTHING.
+                # The machine's reason leads (it is why the row archived), but the
+                # operator's own note is carried after it rather than overwritten —
+                # discarding what the human typed is the exact gap this closes.
                 await conn.execute(
                     "UPDATE journal_proposals SET status = 'archived', "
                     "decision_reason = $2, updated_at = now() WHERE id = $1",
-                    proposal_id, f"auto-rejected (protected section): {exc}"[:2048],
+                    proposal_id,
+                    _with_operator_note(
+                        f"auto-rejected (protected section): {exc}", reason
+                    ),
                 )
                 raise HTTPException(
                     status_code=409,
@@ -333,21 +398,22 @@ def build_journal_proposals_router(deps: RegistryAPIDeps) -> APIRouter:
                 await conn.execute(
                     "UPDATE journal_proposals SET status = 'archived', "
                     "decision_reason = $2, updated_at = now() WHERE id = $1",
-                    proposal_id, f"apply failed: {exc}"[:2048],
+                    proposal_id,
+                    _with_operator_note(f"apply failed: {exc}", reason),
                 )
                 raise HTTPException(
                     status_code=422, detail=f"apply failed: {exc}"
                 ) from exc
 
             logger.info(
-                "journal_proposals.accepted id=%s kind=%s by=%s applied=%s",
-                proposal_id, proposal_kind, actor, applied,
+                "journal_proposals.accepted id=%s kind=%s by=%s applied=%s reason=%r",
+                proposal_id, proposal_kind, actor, applied, reason,
             )
             return DecisionOut(
                 id=str(claimed["id"]),
                 status="accepted",
                 decided_by=actor,
-                decision_reason=None,
+                decision_reason=reason,
                 applied=applied,
                 replayed=False,
             )

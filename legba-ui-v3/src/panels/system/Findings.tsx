@@ -11,8 +11,8 @@
  *    tails. This is the S7-T4 fix for the old `source=all` mode that mixed raw
  *    signals into finished compositions.
  *  - **One FilterBar** (`FeedFilterBar`) — typed `key:value` chips
- *    (severity/verified/confidence/target/kind/analyst/last/minconf) + free
- *    text, with verification as a FIRST-CLASS facet on the ICD-203 verdict
+ *    (severity/verified/judge/confidence/target/kind/analyst/last/minconf) +
+ *    free text, with verification as a FIRST-CLASS facet on the ICD-203 verdict
  *    vocabulary. The whole filter + stream + sort serialize to a saved view AND
  *    to the `#view=` URL hash (addressable, no router).
  *  - **Latest-per-situation.** Superseded near-dups are hidden by default
@@ -44,9 +44,13 @@
  *    producer (units · compositions · other), output kind, severity,
  *    verification and an effective-confidence floor, all AND-combined, all
  *    shown as removable chips, all persisted for the session. Facets the REST
- *    routes can answer (`target_id`, `analyst_id`, `severity`, `since`) are
- *    pushed server-side by `serverFilterParams` so they reach past the loaded
- *    page; the rest filter client-side. No new API routes.
+ *    routes can answer (`target_id`, `analyst_id`, `severity`, `verified`,
+ *    `judge_status`, `since`) are pushed server-side by `serverFilterParams`
+ *    so they reach past the loaded page — the GLASS-1 verification facet
+ *    included, so the page fill and next_cursor count the FILTERED population
+ *    instead of a client-side sieve over fetched pages; the rest filter
+ *    client-side (and the same predicates still gate live-tail rows, which
+ *    never pass through the REST filter). No new API routes.
  *
  * 3. **Selecting is not filtering.** The feed's desk filter used to be DERIVED
  *    from the global selection, so opening a row in the Inspector (selection →

@@ -203,6 +203,50 @@ async def clean_slate(pg_pool):
         await conn.execute(
             "DELETE FROM source_descriptors WHERE owner = $1", _ANALYST
         )
+        # ------------------------------------------------------------------
+        # THE PRECONDITION THIS FILE'S CANDIDATE-MATCHING HALF RESTS ON, made
+        # explicit (task #23 regression pin).
+        #
+        # `_match_candidate_sources` reads `source_descriptors` GLOBALLY — any
+        # `is_head` row whose `scope.source_class` is one of the wanted classes
+        # and whose `scope.geo` is empty or overlaps the desk. The deletes
+        # above only retire THIS file's own rows (`owner = _ANALYST`), so a
+        # sibling that leaves such a row behind silently joins every candidate
+        # set here. That is exactly what
+        # `test_source_catalog_bringup::test_catalog_registers_head_rows_and_
+        # credibility_rows` did until it grew a scoped teardown: it registered
+        # 35-50 ACTIVE catalog heads into the session-shared DB and left them,
+        # putting five of this file's tests on the nightly's shared-state
+        # allowlist for a week.
+        #
+        # We do NOT delete them — an unscoped wipe here would just make this
+        # file the polluter instead. We NAME them, so the next leak arrives as
+        # one legible sentence pointing at the descriptor ids rather than as
+        # five `assert True is False` diffs in a shuffled nightly.
+        # ------------------------------------------------------------------
+        foreign = await conn.fetch(
+            "SELECT descriptor_id, owner, "
+            "       body -> 'scope' ->> 'source_class' AS source_class "
+            "  FROM source_descriptors "
+            " WHERE is_head "
+            "   AND (body -> 'scope' ->> 'source_class') IS NOT NULL "
+            "   AND owner IS DISTINCT FROM $1 "
+            " ORDER BY descriptor_id",
+            _ANALYST,
+        )
+        assert not foreign, (
+            "a sibling test left candidate-matchable source_descriptors heads "
+            "in the session-shared DB; every candidate assertion in this file "
+            "is a statement about that whole table, so they are now reading "
+            f"{len(foreign)} sources they never seeded. Retire them where they "
+            "are written (scoped to the rows that test created), not here: "
+            + ", ".join(
+                f"{r['descriptor_id']}(owner={r['owner']}, "
+                f"class={r['source_class']})"
+                for r in foreign[:10]
+            )
+            + (" …" if len(foreign) > 10 else "")
+        )
     yield
 
 

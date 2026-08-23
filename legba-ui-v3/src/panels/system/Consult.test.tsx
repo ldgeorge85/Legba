@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import ConsultPanel from './Consult'
+import { useConsultSessions } from '@/state/consultSession'
 import type { PanelRegistration } from '@/types'
 
 function reg(overrides: Partial<PanelRegistration> = {}): PanelRegistration {
@@ -65,6 +66,11 @@ class FakeEventSource {
 beforeEach(() => {
   vi.restoreAllMocks()
   localStorage.clear()
+  // The conversation now lives in a MODULE-level store (GLASS-4), so it
+  // outlives a `render()` the way it outlives an unmount in the app. Clearing
+  // localStorage no longer isolates these tests — the slices have to go too,
+  // or each test inherits the previous one's transcript.
+  useConsultSessions.setState({ panels: {} })
   FakeEventSource.instances = []
   vi.stubGlobal('EventSource', FakeEventSource as unknown as typeof EventSource)
   // Deterministic request id.

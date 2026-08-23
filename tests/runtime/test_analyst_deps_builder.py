@@ -597,7 +597,8 @@ async def test_optimizer_builds(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_consult_on_demand_builds_with_substrate_port() -> None:
+async def test_consult_on_demand_builds_with_substrate_port(monkeypatch) -> None:
+    monkeypatch.delenv("LEGBA_CONSULT_MAX_TOKENS", raising=False)
     descriptor = _llm_descriptor(
         AnalystKind.CONSULT_ON_DEMAND, method_kind="react_loop",
         prompt_module="legba.prompts.consult_on_demand.v1",
@@ -631,6 +632,10 @@ async def test_consult_on_demand_builds_with_substrate_port() -> None:
     assert isinstance(kind_deps, ConsultOnDemandDeps)
     assert kind_deps.llm is llm
     assert kind_deps.substrate is substrate
+    # The per-call output budget is DESCRIPTOR-governed: _llm_block() carries
+    # method.llm.max_tokens=1024, and with the emergency env override absent
+    # that value (not the kind-internal 2048 default) reaches the deps.
+    assert kind_deps.max_tokens == 1024
     assert output_kind == OutputKind.FINDING
 
 

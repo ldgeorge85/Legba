@@ -768,3 +768,717 @@ export async function fetchTimeline(
   const qs = params.toString()
   return apiGet<TimelineResponse>(`/v3/timeline${qs ? `?${qs}` : ''}`)
 }
+
+// ---------------------------------------------------------------------------
+// Journal proposals — THE HUMAN GATE (JOURNAL_ASSESSOR_PLAN §7.4 / §7.5).
+//
+// The journal SUGGESTS into `journal_proposals`; a human DISPOSES. Until this
+// train the three routes had no UI at all, so the standing "journal writes are
+// human-gated" rule was reachable only by curl. Mirrors
+// `src/legba/data/registry/journal_proposals_api.py` 1:1.
+// ---------------------------------------------------------------------------
+
+/** §7.5(a) — the OBJECTIVE evidence attached to a `self_revision` proposal: the
+ *  journal's OWN recent calibration + critic track record, so a beautifully
+ *  argued self-revision is judged against what it has actually earned rather
+ *  than against its prose. Present ONLY on `proposal_kind === 'self_revision'`
+ *  (null everywhere else — never fabricated). Mirrors `CalibrationEvidence`. */
+export interface ProposalSelfRevisionEvidence {
+  available: boolean
+  forecast_unproven: boolean
+  calibration_thin: boolean
+  brier_skill_score: number | null
+  journal_critic_mean: number | null
+  journal_critic_n: number
+}
+
+/** The three gated classes. `correction` retires a stale fact through the
+ *  supersession path, `change` patches a descriptor/stack head, `self_revision`
+ *  promotes a new system prompt for an analyst. Mirrors the apply worker's
+ *  dispatch (`journal_proposals_apply.apply_accepted_proposal`). */
+export type ProposalKind = 'correction' | 'change' | 'self_revision' | string
+
+/** `pending` is the only actionable state; `archived` is where an apply failure
+ *  or a §7.5(b) auto-reject lands (NOT an operator verdict). */
+export type ProposalStatus =
+  | 'pending'
+  | 'accepted'
+  | 'rejected'
+  | 'archived'
+  | string
+
+/** One `journal_proposals` row. Mirrors `ProposalOut`. */
+export interface JournalProposal {
+  id: string
+  proposal_kind: ProposalKind
+  proposed_by_analyst_id: string
+  run_id: string | null
+  rationale: string
+  /** The operation accepting would APPLY — the shape varies by kind; see
+   *  `lib/journalGate.ts`, which renders it as what it would DO. */
+  diff: Record<string, unknown>
+  cited_substrate_refs: string[]
+  status: ProposalStatus
+  decided_by: string | null
+  decision_reason: string | null
+  decided_at: string | null
+  produced_at: string
+  self_revision_evidence: ProposalSelfRevisionEvidence | null
+}
+
+/** `GET /journal_proposals` envelope. Mirrors `ProposalsListOut`. */
+export interface JournalProposalsResponse {
+  proposals: JournalProposal[]
+}
+
+/** The recorded outcome of an accept/reject. `applied` is the apply worker's
+ *  audit on a FRESH accept (null on reject and on a replay); `replayed` is true
+ *  when the row was already decided — the idempotent no-op path, which is a
+ *  real outcome the operator must see, not an error. Mirrors `DecisionOut`. */
+export interface ProposalDecision {
+  id: string
+  status: ProposalStatus
+  decided_by: string | null
+  decision_reason: string | null
+  applied: Record<string, unknown> | null
+  replayed: boolean
+}
+
+export async function fetchJournalProposals(
+  opts: { status?: ProposalStatus; limit?: number } = {},
+): Promise<JournalProposalsResponse> {
+  const params = new URLSearchParams()
+  if (opts.status) params.set('status', opts.status)
+  if (opts.limit != null) params.set('limit', String(opts.limit))
+  const qs = params.toString()
+  return apiGet<JournalProposalsResponse>(`/journal_proposals${qs ? `?${qs}` : ''}`)
+}
+
+/** Accept + APPLY. The journal proposed; this call is the human CAUSING it.
+ *  Non-2xx throws an `ApiError` that must be surfaced verbatim — a 409 is the
+ *  §7.5(b) protected-section auto-reject and a 422 is an apply failure; both
+ *  leave the row `archived`, and neither is a success. */
+export async function acceptJournalProposal(
+  id: string,
+  decisionReason?: string,
+): Promise<ProposalDecision> {
+  // OPTIONAL by design, unlike reject's. The asymmetry is the server's: a
+  // refusal is only legible through its reason, whereas an accept is already
+  // described by the diff it applied. Blank/whitespace is normalized to NULL
+  // server-side, so sending `{}` (the shape this call used before the reason
+  // existed) stays exactly as valid as it was.
+  const reason = decisionReason?.trim()
+  return apiPost<ProposalDecision>(
+    `/journal_proposals/${encodeURIComponent(id)}/accept`,
+    reason ? { decision_reason: reason } : {},
+  )
+}
+
+/** Reject → `rejected`, WITH the server-required decision reason (the API 422s
+ *  on an empty one; the panel blocks the click before it gets that far). */
+export async function rejectJournalProposal(
+  id: string,
+  decisionReason: string,
+): Promise<ProposalDecision> {
+  return apiPost<ProposalDecision>(
+    `/journal_proposals/${encodeURIComponent(id)}/reject`,
+    { decision_reason: decisionReason },
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Situation register + trajectory (Continuity P2) — the frames, and how each
+// one MOVED. Mirrors `situation_trajectory_api.py` + the `/situations` read.
+// ---------------------------------------------------------------------------
+
+/** One frame in the register, as `GET /api/v1/situations` serves it. A partial
+ *  of the server's `SituationRow` — only the fields this surface renders. */
+export interface SituationFrame {
+  id: string
+  name: string
+  status: string
+  category: string
+  last_event_at: string | null
+  event_count: number
+  intensity_score: number
+  target_id: string | null
+  produced_at: string
+}
+
+export interface SituationsPage {
+  data: SituationFrame[]
+  next_cursor: string | null
+}
+
+/** One append-only trajectory ledger row, exactly as written — the route
+ *  synthesizes NOTHING across rows. Mirrors `TrajectoryEventOut`. */
+export interface TrajectoryEvent {
+  id: string
+  /** `escalates` | `de_escalates` | `broadens` | `unchanged_checkpoint`. */
+  delta: string
+  /** EVIDENCE time — the newest backing finding's `produced_at`, NOT the time
+   *  the tracker ran (that is `created_at`). */
+  occurred_at: string | null
+  state_from: string
+  state_to: string
+  why: string
+  /** The NEW findings that moved it. Empty only on `unchanged_checkpoint`. */
+  derived_from: string[]
+  /** The graded `situation_update` finding whose prose asserted this delta. */
+  source_output_id: string
+  created_at: string | null
+}
+
+/** Mirrors `SituationTrajectoryOut`. The honesty contract lives in the shape:
+ *  `measured: false` means "we could not look", `measured: true` with an empty
+ *  `events` means "nothing recorded", and `state: null` is never backfilled
+ *  with a fabricated default. `lib/trajectoryModel.ts` keeps the three apart. */
+export interface SituationTrajectory {
+  situation_id: string
+  name: string
+  state: string | null
+  events: TrajectoryEvent[]
+  measured: boolean
+}
+
+export async function fetchSituationFrames(
+  opts: { limit?: number; state?: string } = {},
+): Promise<SituationsPage> {
+  const params = new URLSearchParams()
+  if (opts.limit != null) params.set('limit', String(opts.limit))
+  if (opts.state) params.set('state', opts.state)
+  const qs = params.toString()
+  return apiGet<SituationsPage>(`/situations${qs ? `?${qs}` : ''}`)
+}
+
+/** An UNKNOWN situation is a 404 (an `ApiError`) — deliberately distinct from a
+ *  known frame with an empty ledger, which is a 200 with `events: []`. */
+export async function fetchSituationTrajectory(
+  situationId: string,
+  opts: { limit?: number } = {},
+): Promise<SituationTrajectory> {
+  const qs = opts.limit != null ? `?limit=${opts.limit}` : ''
+  return apiGet<SituationTrajectory>(
+    `/v3/situations/${encodeURIComponent(situationId)}/trajectory${qs}`,
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Reified narratives (P4-1 / P4-2; A11) — contested-claim families + the
+// directed source-echo graph. Mirrors `narratives_api.py`.
+// ---------------------------------------------------------------------------
+
+/** One reified contested-claim family. Mirrors `NarrativeOut`. */
+export interface Narrative {
+  contention_id: string
+  subject_key: string
+  predicate_key: string
+  status: string
+  surfaced_value: string | null
+  variant_count: number
+  carrier_source_count: number
+  publish_dated_source_count: number
+  signal_count: number
+  fact_count: number
+  first_seen_at: string | null
+  last_seen_at: string | null
+  span_hours: number | null
+  lead_source_id: string | null
+  lead_first_seen_at: string | null
+  max_echo_lag_hours: number | null
+  carriers: Array<Record<string, unknown>>
+  variants: Array<Record<string, unknown>>
+  opened_at: string | null
+  contention_surfaced_at: string | null
+  computed_at: string | null
+}
+
+/** One directed source-echo edge. Mirrors `PropagationEdgeOut`. DESCRIPTIVE
+ *  co-carriage timing only — see `honesty_note` on the envelope. */
+export interface NarrativeEchoEdge {
+  leader_source_id: string
+  follower_source_id: string
+  co_carried: number
+  lead_count: number
+  follow_within_count: number
+  echo_ratio: number | null
+  median_lag_hours: number | null
+  mean_lag_hours: number | null
+  min_lag_hours: number | null
+  max_lag_hours: number | null
+  echo_window_hours: number
+  systematic: boolean
+  computed_at: string | null
+}
+
+/** Both envelopes carry `honesty_note` verbatim from the server. The panel
+ *  RENDERS it rather than paraphrasing — the server attaches it precisely so a
+ *  client cannot present echo-lead as a causal or coordination claim. */
+export interface NarrativeListResponse {
+  narratives: Narrative[]
+  count: number
+  honesty_note?: string
+}
+
+export interface NarrativeEchoResponse {
+  edges: NarrativeEchoEdge[]
+  count: number
+  honesty_note?: string
+}
+
+export async function fetchNarratives(
+  opts: { status?: string; minCarriers?: number; limit?: number } = {},
+): Promise<NarrativeListResponse> {
+  const params = new URLSearchParams()
+  if (opts.status) params.set('status', opts.status)
+  if (opts.minCarriers != null) params.set('min_carriers', String(opts.minCarriers))
+  if (opts.limit != null) params.set('limit', String(opts.limit))
+  const qs = params.toString()
+  return apiGet<NarrativeListResponse>(`/v3/narratives${qs ? `?${qs}` : ''}`)
+}
+
+export async function fetchNarrativeEcho(
+  opts: {
+    systematicOnly?: boolean
+    leader?: string
+    follower?: string
+    limit?: number
+  } = {},
+): Promise<NarrativeEchoResponse> {
+  const params = new URLSearchParams()
+  if (opts.systematicOnly) params.set('systematic_only', 'true')
+  if (opts.leader) params.set('leader', opts.leader)
+  if (opts.follower) params.set('follower', opts.follower)
+  if (opts.limit != null) params.set('limit', String(opts.limit))
+  const qs = params.toString()
+  return apiGet<NarrativeEchoResponse>(`/v3/narratives/echo${qs ? `?${qs}` : ''}`)
+}
+
+// ---------------------------------------------------------------------------
+// GLASS-3 — the ops deck.
+//
+// Seven server surfaces that existed and were consumed by NOTHING, plus one new
+// one. Mirrors, field for field: `production_gauge_api.py`,
+// `v3_api.py::StalenessDebtOut`, `source_quality_api.py`,
+// `source_assurance_api.py`, `v3_api.py::DeskBaselineBoard`,
+// `since_api.py::BandTrajectoryResponse`, `v3_api.py::eval_analyst_runtime`,
+// and the new `judge_stats_api.py`.
+//
+// The `/system/*` family NEVER 500s on a read failure — it returns its own
+// all-defaults payload at HTTP 200 with `measured: false`. So `measured` is the
+// field that separates "the engine is quiet" from "we could not look", and a
+// panel that ignores it renders a failed read as an all-clear.
+// ---------------------------------------------------------------------------
+
+/** One gauged production loop. `ratio` is null EXACTLY when `state` is
+ *  `ungauged` — "no expectation" must never be readable as a measured 0.0. */
+export interface ProductionGaugeRow {
+  loop_class: string
+  loop_id: string
+  label: string
+  state: 'ok' | 'deficit' | 'ungauged' | string
+  severity: string
+  ratio: number | null
+  expected: string
+  actual: string
+  quiet_reason: string | null
+  last_production_at: string | null
+  /** Whether THIS row would page — the same predicate the alert plane uses. */
+  pages: boolean
+  /** Shape varies by `loop_class` on purpose; never assume keys. */
+  evidence: Record<string, unknown>
+}
+
+/** Totals are computed over the FULL read BEFORE any filter, so a filtered
+ *  request cannot lie about its denominator. Never derive one from `loops`. */
+export interface ProductionGaugeTotals {
+  loops: number
+  gauged: number
+  ok: number
+  deficit: number
+  ungauged: number
+  paging: number
+  by_severity: Record<string, number>
+  by_class: Record<string, Record<string, number>>
+}
+
+export interface ProductionGaugeResponse {
+  generated_at: string | null
+  window_days: number
+  /** The alert floor, published so a reader can see WHICH rows page without
+   *  guessing at the alert plane's private threshold. */
+  alert_min_severity: string
+  totals: ProductionGaugeTotals
+  loops: ProductionGaugeRow[]
+  measured: boolean
+}
+
+export async function fetchProductionGauge(
+  opts: {
+    loopClass?: string
+    state?: string
+    deficitsOnly?: boolean
+    pagingOnly?: boolean
+    windowDays?: number
+    limit?: number
+  } = {},
+): Promise<ProductionGaugeResponse> {
+  const params = new URLSearchParams()
+  if (opts.loopClass) params.set('loop_class', opts.loopClass)
+  if (opts.state) params.set('state', opts.state)
+  if (opts.deficitsOnly) params.set('deficits_only', 'true')
+  if (opts.pagingOnly) params.set('paging_only', 'true')
+  if (opts.windowDays != null) params.set('window_days', String(opts.windowDays))
+  if (opts.limit != null) params.set('limit', String(opts.limit))
+  const qs = params.toString()
+  return apiGet<ProductionGaugeResponse>(
+    `/v3/system/production-gauge${qs ? `?${qs}` : ''}`,
+  )
+}
+
+export interface StalenessDebtReason {
+  reason: string
+  open_flags: number
+}
+
+/** `match_verified` is hard-false on the wire today — render it as a CAVEAT,
+ *  never as a checkmark. */
+export interface StalenessDebtResponse {
+  staleness_debt: number
+  open_flags: number
+  superseded_consumer_flags: number
+  flagged_consumers: number
+  moved_foundations: number
+  closed_flags: number
+  oldest_open_at: string | null
+  newest_open_at: string | null
+  by_reason: StalenessDebtReason[]
+  last_matcher_run_at: string | null
+  match_verified: boolean
+}
+
+export async function fetchStalenessDebt(): Promise<StalenessDebtResponse> {
+  return apiGet<StalenessDebtResponse>('/v3/system/staleness-debt')
+}
+
+/** What a source ASSERTS about itself (admiralty grade, dossier, host score) —
+ *  claims, not evidence. Weigh against `earned`. */
+export interface AssertedQuality {
+  admiralty_reliability: string | null
+  admiralty_credibility: string | null
+  admiralty_grade: string | null
+  admiralty_rater: string | null
+  admiralty_method: string | null
+  admiralty_rated_at: string | null
+  public_rating_count: number
+  private_rating_count: number
+  has_dossier: boolean
+  dossier_compiled_at: string | null
+  dossier_compiled_by: string | null
+  host_matched: string | null
+  host_score: number | null
+  host_tier: string | null
+  host_state_affiliation: boolean | null
+  host_rationale: string | null
+  host_scored_by: string | null
+  host_scored_at: string | null
+}
+
+/** What a source EARNED — its contested-claim track record. `low_sample` is the
+ *  honesty flag: a 100% win rate over two contests is not a 100% win rate. */
+export interface SourceEarned {
+  wins: number
+  losses: number
+  contested_total: number
+  win_rate_raw: number | null
+  win_rate_smoothed: number
+  win_rate_lower: number
+  low_sample: boolean
+  corroborated: number
+  corroboration_total: number
+  corroboration_rate: number | null
+  lag_hours: number
+  sample_as_of: string
+  computed_at: string
+}
+
+export interface ComputedQuality {
+  freshness_grade: string
+  budget_minutes: number | null
+  cadence_raw: string | null
+  last_signal_at: string | null
+  age_seconds: number | null
+  signals_24h: number
+  signals_7d: number
+}
+
+/** `earned` is null ONLY when no track-record row exists at all — a row with
+ *  `contested_total: 0` is still returned, and means something different. */
+export interface SourceQualityRow {
+  source_id: string
+  registered: boolean
+  declared_state: string | null
+  declared_kind: string | null
+  endpoint_host: string | null
+  asserted: AssertedQuality
+  earned: SourceEarned | null
+  computed: ComputedQuality
+}
+
+/** NOTE: a BARE ARRAY on the wire, not an envelope. 503 when migration 0115's
+ *  `source_quality` view is absent. */
+export async function fetchSourceQuality(
+  opts: {
+    sourceId?: string
+    gradedOnly?: boolean
+    contestedOnly?: boolean
+    freshnessGrade?: string
+    limit?: number
+  } = {},
+): Promise<SourceQualityRow[]> {
+  const params = new URLSearchParams()
+  if (opts.sourceId) params.set('source_id', opts.sourceId)
+  if (opts.gradedOnly) params.set('graded_only', 'true')
+  if (opts.contestedOnly) params.set('contested_only', 'true')
+  if (opts.freshnessGrade) params.set('freshness_grade', opts.freshnessGrade)
+  if (opts.limit != null) params.set('limit', String(opts.limit))
+  const qs = params.toString()
+  return apiGet<SourceQualityRow[]>(`/v3/source-quality${qs ? `?${qs}` : ''}`)
+}
+
+export interface SourceRating {
+  rating_id: string
+  source_id: string
+  rater: string
+  visibility_class: string
+  method: string
+  admiralty_reliability: string | null
+  admiralty_credibility: string | null
+  grade: string | null
+  rubric: Record<string, unknown>
+  /** Wire spelling is `references`; the DB column is `refs`. */
+  references: Array<Record<string, unknown>>
+  rated_at: string
+}
+
+export interface SourceDossier {
+  dossier_id: string
+  source_id: string
+  dossier_md: string
+  references: Array<Record<string, unknown>>
+  compiled_by: string
+  compiled_at: string
+}
+
+export interface SourceQualityDetail extends SourceQualityRow {
+  includes_private: boolean
+  ratings: SourceRating[]
+  dossier: SourceDossier | null
+}
+
+/** Per-source drill-down — the C3 LIVE successor. The older
+ *  `/sources/{id}/assurance` carries `Deprecation`/`Sunset` headers and is
+ *  deliberately not wired here: consuming a sunset route in a NEW panel would
+ *  hand the ops deck a migration it does not need. */
+export async function fetchSourceQualityDetail(
+  sourceId: string,
+  opts: { includePrivate?: boolean } = {},
+): Promise<SourceQualityDetail> {
+  const qs = opts.includePrivate ? '?include_private=true' : ''
+  return apiGet<SourceQualityDetail>(
+    `/v3/sources/${encodeURIComponent(sourceId)}/quality${qs}`,
+  )
+}
+
+/** A descriptive statistical baseline over our OWN substrate — explicitly NOT a
+ *  forecast or a skill claim. The server ships that disclaimer in `note`; the
+ *  panel renders it rather than paraphrasing. */
+export interface DeskBaselineRow {
+  desk_id: string
+  metric: string
+  geo: string[]
+  baseline_days: number
+  n_sigma: number
+  expected: number
+  center_median: number
+  robust_sigma: number
+  band_low: number
+  band_high: number
+  current: number
+  deviation: 'within' | 'above' | 'below' | string
+  deviation_sigma: number | null
+  min_current_floor: number
+  sample_days: number
+  active_days: number
+  insufficient_history: boolean
+  spillover_current: number
+  features: Record<string, unknown>
+  computed_at: string | null
+}
+
+export interface DeskBaselineBoard {
+  available: boolean
+  computed_at: string | null
+  note: string
+  counts: Record<string, number>
+  rows: DeskBaselineRow[]
+}
+
+export async function fetchDeskBaselines(
+  opts: { desk?: string; deviatingOnly?: boolean } = {},
+): Promise<DeskBaselineBoard> {
+  const params = new URLSearchParams()
+  if (opts.desk) params.set('desk', opts.desk)
+  if (opts.deviatingOnly) params.set('deviating_only', 'true')
+  const qs = params.toString()
+  return apiGet<DeskBaselineBoard>(`/v3/eval/desk_baselines${qs ? `?${qs}` : ''}`)
+}
+
+export interface TrajectoryPoint {
+  ts: string
+  band: string
+  effective_confidence: number | null
+  faithfulness_flagged: boolean
+  scorecard_row_id: string
+}
+
+export interface DeskTrajectory {
+  target_id: string
+  dimensions: Record<string, TrajectoryPoint[]>
+}
+
+/** `total_rows` counts SCORECARD ROWS scanned (post-cap), not points; when
+ *  `truncated` the LAST desk group may be incomplete. */
+export interface BandTrajectoryResponse {
+  days: number
+  server_now: string
+  desks: DeskTrajectory[]
+  total_rows: number
+  truncated: boolean
+}
+
+/** `days` outside [1, 90] is a 400 from the server, not a clamp. */
+export async function fetchBandTrajectory(
+  opts: { targetId?: string; days?: number } = {},
+): Promise<BandTrajectoryResponse> {
+  const params = new URLSearchParams()
+  if (opts.targetId) params.set('target_id', opts.targetId)
+  if (opts.days != null) params.set('days', String(opts.days))
+  const qs = params.toString()
+  return apiGet<BandTrajectoryResponse>(
+    `/v3/eval/band_trajectory${qs ? `?${qs}` : ''}`,
+  )
+}
+
+/** The one board with NO response_model server-side — the handler's dict
+ *  literal IS the contract, and `window_hours` is echoed on every row. Unlike
+ *  its siblings it has no degradation wrapper: a DB failure here really is a
+ *  500, so the panel must surface the error rather than render empty. */
+export interface AnalystRuntimeRow {
+  analyst_id: string
+  runs: number
+  avg_seconds: number | null
+  max_seconds: number | null
+  last_run_at: string
+  non_success: number
+  window_hours: number
+}
+
+export async function fetchAnalystRuntime(
+  opts: { windowHours?: number } = {},
+): Promise<AnalystRuntimeRow[]> {
+  const params = new URLSearchParams()
+  if (opts.windowHours != null) params.set('window_hours', String(opts.windowHours))
+  const qs = params.toString()
+  return apiGet<AnalystRuntimeRow[]>(`/v3/eval/analyst_runtime${qs ? `?${qs}` : ''}`)
+}
+
+// --- Judge stats (the track's one NEW API) ---------------------------------
+//
+// `served_by` is the upstream provider a router actually dispatched to. It was
+// recorded on every receipt from 2026-08-16 and read by nothing, while a
+// provider change was measured to flip 13.6% of verdicts. Four sentinel labels
+// stand in where attribution is impossible; their meanings arrive on the wire in
+// `sentinels`, so nothing here hardcodes the glossary.
+
+export interface JudgeStatsCell {
+  day: string
+  served_by: string
+  judge_status: string
+  judge_pipeline_version: string
+  n: number
+  faithfulness_n: number
+  faithfulness_mean: number | null
+}
+
+/** `n` counts CRITIQUES attributed to this provider; `judge_calls` counts
+ *  RECEIPTS it served. Different grains on purpose — a run that flipped provider
+ *  mid-way contributes calls to each real provider but its verdicts to
+ *  `(mixed)`, so a provider can legitimately carry calls with `n: 0`. */
+export interface JudgeStatsProvider {
+  served_by: string
+  is_sentinel: boolean
+  n: number
+  by_status: Record<string, number>
+  adjudicated_n: number
+  adjudicated_share: number | null
+  faithfulness_n: number
+  faithfulness_mean: number | null
+  judge_calls: number
+  judge_call_errors: number
+  latency_p95_ms: number | null
+  /** Bounds of the RUNS this provider served, not of the individual calls —
+   *  see the server model's note on why the per-call timestamp is not used. */
+  first_call_at: string | null
+  last_call_at: string | null
+}
+
+export interface JudgePipelineVersionRow {
+  judge_pipeline_version: string
+  n: number
+  providers: string[]
+  faithfulness_n: number
+  faithfulness_mean: number | null
+}
+
+/** `attributed + unattributed === critiques` always. The two are reported
+ *  separately because "served by a named provider" and "we could not say" are
+ *  different statements. */
+export interface JudgeStatsTotals {
+  critiques: number
+  by_status: Record<string, number>
+  attributed: number
+  unattributed: number
+  providers: number
+  adjudicated_n: number
+  adjudicated_share: number | null
+  faithfulness_n: number
+  faithfulness_mean: number | null
+  judge_calls: number
+  judge_call_errors: number
+}
+
+export interface JudgeStatsResponse {
+  generated_at: string | null
+  window_days: number
+  measured: boolean
+  /** True when the window straddles a judge-pipeline stamp change — the pooled
+   *  mean is then an average over two different graders. */
+  pools_across_pipeline_versions: boolean
+  totals: JudgeStatsTotals
+  providers: JudgeStatsProvider[]
+  pipeline_versions: JudgePipelineVersionRow[]
+  cells: JudgeStatsCell[]
+  sentinels: Record<string, string>
+  judge_statuses: string[]
+}
+
+export async function fetchJudgeStats(
+  opts: { days?: number; analystId?: string } = {},
+): Promise<JudgeStatsResponse> {
+  const params = new URLSearchParams()
+  if (opts.days != null) params.set('days', String(opts.days))
+  if (opts.analystId) params.set('analyst_id', opts.analystId)
+  const qs = params.toString()
+  return apiGet<JudgeStatsResponse>(`/v3/system/judge-stats${qs ? `?${qs}` : ''}`)
+}

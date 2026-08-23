@@ -92,12 +92,33 @@ deploy/deploy.sh --seed                     # optional: + curated knowledge seed
 ```
 
 One script stands up the whole thing in the load-bearing order: schema →
-credential vault → the substrate stack → the 100+ source catalog (plus the shared
-and state-media feeds) → the 32 country desks → the analyst set → runtime.
+credential vault → the substrate stack → the source catalog → the 32 country
+desks → the analyst set → runtime.
 Clean-slate only (no migration path from
 pre-pivot Legba). Step-by-step manual bring-up, a throwaway validation stack,
 and troubleshooting live in [docs/SETUP.md](docs/SETUP.md) and
 [docs/RUNBOOK.md](docs/RUNBOOK.md).
+
+**What that actually registers: 53 sources, 52 of them polling.** The 46-entry
+no-auth catalog (43 `rss` + 3 `geojson`), plus 7 pinned standalone descriptors —
+three shared global wires, three state-media voices, and the UCDP conflict-event
+feed, which ships inert pending its token. That is the whole out-of-box number
+and it is deliberately smaller than this deployment's live scope: **another 64
+verified descriptors ship in-tree as opt-in breadth batches that `deploy.sh`
+does NOT run**, because every one of them registers `state: draft` — inert, no
+actor, activated per-feed by an operator who has confirmed the route is live on
+their instance:
+
+```bash
+python scripts/bringup_register_wave_a_sources.py         # 41 no-auth breadth feeds
+python scripts/bringup_register_rsshub_sources.py         # 10 starved-desk feeds (rsshub sidecar)
+python scripts/bringup_register_supply_chain_sources.py   #  7 supply-chain domain feeds
+python scripts/bringup_register_source_batch_2026_08.py   #  6 AP re-route + Niger coverage
+```
+
+53 registered + 64 available is how this deployment reaches the ~117 sources
+that have actually produced signals. Full tiering, the per-source table, and
+the activation story: [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
 
 ```bash
 # Is it alive? Signals landing, analysts producing:
@@ -126,8 +147,10 @@ thematic supply-chain desks instead — over a cited 72-hour slice plus accumula
 context from the temporal knowledge
 substrate (facts and relationships with validity windows — so it integrates
 over weeks, not just today, and stale model priors get overridden). Unit
-findings pass the **verify gate**; only verified sub-claims compose upward into
-the per-country read, the regional and world reads, and the scorecard. Every derived row
+findings pass the **verify gate**; only sub-claims that were verified AND clear
+the composition floor (`effective_confidence ≥ 0.50` by default, operator-tunable)
+compose upward into the per-country read, the regional and world reads, and the
+scorecard. Every derived row
 carries lineage (`derived_from`) plus a SHA-256 receipt chain, walkable via
 `GET /api/v1/lineage`. Deep dives: [architecture](docs/ARCHITECTURE.md) ·
 [flows](docs/FLOWS.md) · [analysis methodology](docs/ANALYSIS.md).
@@ -191,7 +214,7 @@ resolved through the stack registry. Details:
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Conceptual orientation — the four planes and why the system is shaped this way |
 | [docs/ACQUISITION.md](docs/ACQUISITION.md) | The acquisition plane — `SourceActor`, baseline enrichment, fan-out / subscription |
 | [docs/ANALYSIS.md](docs/ANALYSIS.md) | The analysis plane — units, composition, verify, coalescing triggers, action-pack agency |
-| [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md) | The source catalog — the tiered scope model (3 cold-start / 46 catalog / live), the per-source table, and the source-handler kinds reachable through them |
+| [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md) | The source catalog — the tiered scope model (46-entry catalog / 53 registered by `deploy.sh` / a moving live scope), the per-source table, and the source-handler kinds reachable through them |
 | [docs/MANUAL_INGEST_FORMAT.md](docs/MANUAL_INGEST_FORMAT.md) | The manual-ingest batch format — manifest + per-kind JSONL schemas for hand-supplied data |
 | [docs/AI_MODELS.md](docs/AI_MODELS.md) | The hosted models, providers, and how the runtime reaches them |
 | [docs/RUNBOOK.md](docs/RUNBOOK.md) | Operator runbook — bring-up, migrations, registration, troubleshooting |
@@ -213,6 +236,14 @@ declared: [docs/STATUS.md](docs/STATUS.md) is the truth-in-labeling table,
 (they fail loud, never fake output). Release history: [CHANGELOG.md](CHANGELOG.md)
 (public history is squashed per release; the changelog is the record). Retired legacy analysts and what replaced
 them: [docs/STATUS.md §Retirements](docs/STATUS.md#retirements--freezes).
+
+## Contributing
+
+[CONTRIBUTING.md](CONTRIBUTING.md) — the four gates the tree enforces
+mechanically (no undeclared stubs, tests on the real binding path, module-size
+ceilings, the ruff ratchet), what CI does and does not cover, and why an outside
+code contribution needs a CLA. Bug reports and *"your docs say X, your code does
+Y"* findings need no CLA and are the most useful thing you can send.
 
 ## Contact & license
 

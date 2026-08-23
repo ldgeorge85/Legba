@@ -199,7 +199,7 @@ def test_judge_profile_versions_bumped_for_the_prompt_change() -> None:
     test_judge_profile_resolution_pinned.py::_EXPECTED_PROFILES; this asserts the
     versions MOVED with the quote rule the module tests, not their values."""
     assert V._JUDGE_PROFILES[V.CLAIM_KIND_CITATION_SUPPORT].version == "citsupp.v5"
-    assert V._JUDGE_PROFILES[V.CLAIM_KIND_ABSENCE].version == "absence.v3"
+    assert V._JUDGE_PROFILES[V.CLAIM_KIND_ABSENCE].version == "absence.v4"
 
 
 # ---------------------------------------------------------------------------
@@ -223,3 +223,156 @@ async def test_deterministic_hard_reasons_need_no_quote(monkeypatch) -> None:
     assert "unresolved_citation" in reasons
     assert "stale_leader" in reasons
     assert "hardfail_demoted_no_quote" not in report.counters
+
+
+# ---------------------------------------------------------------------------
+# 4. RUST-1 (2026-08-20) — evidence bytes: what the judge SEES is what the
+#    corpus SCORES. The evidence map was rendered ensure_ascii=True while
+#    quote_corpus scored the UNESCAPED values, so a span copied VERBATIM from
+#    what the judge was shown — the exact behavior rule 1 demands — could
+#    never resolve when it contained non-ASCII or crossed a newline. Measured
+#    on 2026-08-15/1: 36% of contradiction attempts failed to resolve (77
+#    judge_contradicted_unquoted vs 114+21 resolved over 14 days).
+# ---------------------------------------------------------------------------
+
+_ACCENTED_TITLE = (
+    "Les réserves ont chuté pour un troisième mois consécutif, "
+    "a déclaré la banque"
+)
+
+#: The evidence VALUE the judge is scored against: OUTLET line + title — the
+#: V-H1 rendering, which is also what puts a REAL newline inside the value.
+_ACCENTED_EVIDENCE = f"OUTLET: reuters-fr\n{_ACCENTED_TITLE}"
+
+
+def _accented_citations() -> list[dict[str, Any]]:
+    return [
+        {
+            "marker": "[1]",
+            "signal_id": str(uuid4()),
+            "title": _ACCENTED_TITLE,
+            "source_id": "reuters-fr",
+        }
+    ]
+
+
+async def _run_accented(quote: str):
+    payload = {"verdicts": ["supported", "contradicted"], "quotes": ["", quote]}
+    judge = _StubJudge(payload)
+    report = await verify_finding_faithfulness(
+        body=_BODY, citations=_accented_citations(), judge_llm=judge
+    )
+    return report, judge
+
+
+async def test_evidence_map_shows_the_bytes_the_corpus_scores(monkeypatch) -> None:
+    """The render half of the fix: non-ASCII reaches the judge as itself, not
+    as six-character backslash escapes."""
+    monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
+    _, judge = await _run_accented(_ACCENTED_TITLE)
+    assert "réserves" in judge.prompts[0]
+    assert "\\u00e9" not in judge.prompts[0]
+
+
+async def test_non_ascii_quote_copied_unescaped_resolves(monkeypatch) -> None:
+    """A verbatim copy of what the judge NOW sees (real accents) earns hard."""
+    monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
+    report, _ = await _run_accented(_ACCENTED_TITLE)
+    span = _contradiction_span(report)
+    assert span.reason == "judge_contradicted"
+    assert "hardfail_demoted_no_quote" not in report.counters
+
+
+async def test_non_ascii_quote_copied_as_the_old_escaped_rendering_resolves(
+    monkeypatch,
+) -> None:
+    """A verbatim copy of what the judge USED to see. ``json.dumps(...,
+    ensure_ascii=True)`` is BYTE-FOR-BYTE the old render site, so this is the
+    exact span a compliant judge returned — and 36% of contradiction attempts
+    died on it."""
+    monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
+    as_shown_old = json.dumps(_ACCENTED_TITLE, ensure_ascii=True)[1:-1]
+    assert "\\u00e9" in as_shown_old  # the quote really is escape-ridden
+    report, _ = await _run_accented(as_shown_old)
+    assert _contradiction_span(report).reason == "judge_contradicted"
+
+
+@pytest.mark.parametrize("ensure_ascii", [True, False])
+async def test_newline_crossing_quote_resolves_in_both_renderings(
+    monkeypatch, ensure_ascii: bool
+) -> None:
+    """A span crossing the OUTLET line's newline, copied AS-SHOWN. JSON
+    escapes control characters under BOTH renderings, so the judge always sees
+    the two-char ``\\n`` — the quote-side un-escape is what makes it resolve."""
+    monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
+    as_shown = json.dumps(_ACCENTED_EVIDENCE, ensure_ascii=ensure_ascii)[1:-1]
+    assert "\\n" in as_shown  # the line break ships as two literal characters
+    report, _ = await _run_accented(as_shown)
+    assert _contradiction_span(report).reason == "judge_contradicted"
+
+
+async def test_newline_crossing_quote_with_a_real_newline_resolves(
+    monkeypatch,
+) -> None:
+    """A judge that decoded the escape itself (real newline in the returned
+    span) keeps resolving — whitespace folding covered this before RUST-1 and
+    must keep covering it."""
+    monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
+    report, _ = await _run_accented(_ACCENTED_EVIDENCE)
+    assert _contradiction_span(report).reason == "judge_contradicted"
+
+
+async def test_persisted_quote_is_the_readable_form(monkeypatch) -> None:
+    """Canonicalization: when only the un-escaped form resolves, the PERSISTED
+    audit quote is the readable bytes, not the escape sequence."""
+    monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
+    as_shown_old = json.dumps(_ACCENTED_TITLE, ensure_ascii=True)[1:-1]
+    report, _ = await _run_accented(as_shown_old)
+    span = _contradiction_span(report)
+    assert "réserves" in (span.detail or "")
+    assert "\\u00e9" not in (span.detail or "")
+
+
+async def test_unescape_never_rescues_an_invented_quote(monkeypatch) -> None:
+    """The widening is resolution-only: an INVENTED span demotes exactly as
+    before, escape-ridden or not."""
+    monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
+    report, _ = await _run_accented(
+        "La banque a d\\u00e9menti tout arrimage mon\\u00e9taire fixe"
+    )
+    span = _contradiction_span(report)
+    assert span.reason == "judge_contradicted_unquoted"
+    assert report.counters["hardfail_demoted_no_quote"] == 1
+
+
+async def test_pure_ascii_single_line_behavior_is_unchanged(monkeypatch) -> None:
+    """Regression pin for the whole pre-RUST-1 population: ASCII evidence,
+    ASCII quote — same verdict, same counters, and the rendered evidence line
+    is byte-identical (ASCII json.dumps output does not depend on
+    ensure_ascii)."""
+    monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
+    report, judge = await _run(_EVIDENCE_TITLE)
+    assert _contradiction_span(report).reason == "judge_contradicted"
+    assert "hardfail_demoted_no_quote" not in report.counters
+    # The rendered evidence line is byte-identical to the pre-RUST-1 default
+    # rendering for ASCII content — ensure_ascii only changes non-ASCII bytes.
+    cited = {1: _EVIDENCE_TITLE}
+    assert json.dumps(cited) == json.dumps(cited, ensure_ascii=False)
+    assert f"[N] -> evidence: {json.dumps(cited)}" in judge.prompts[0]
+
+
+def test_unescape_helper_semantics() -> None:
+    """The decoder itself: JSON short escapes, ``\\uXXXX``, surrogate PAIRS —
+    and strict pass-through for anything that is not a JSON escape."""
+    from legba.data.provenance.judge_quote_rules import _unescape_judge_quote
+
+    assert _unescape_judge_quote("caf\\u00e9") == "café"
+    assert _unescape_judge_quote("a\\nb\\tc") == "a\nb\tc"
+    assert _unescape_judge_quote('say \\"stop\\"') == 'say "stop"'
+    assert _unescape_judge_quote("\\ud83d\\ude00") == "\U0001f600"
+    # Not JSON escapes: untouched — un-escaping must never corrupt a quote.
+    assert _unescape_judge_quote("no backslash at all") == "no backslash at all"
+    assert _unescape_judge_quote("trailing \\") == "trailing \\"
+    assert _unescape_judge_quote("\\x41 \\q \\u12") == "\\x41 \\q \\u12"
+    # Escaped backslash decodes ONCE.
+    assert _unescape_judge_quote("a\\\\nb") == "a\\nb"

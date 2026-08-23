@@ -84,12 +84,19 @@ subscription:
   # The synth reads the OUTPUTS of country_composition, not raw signals. READ_SLICE
   # resolves this set from other_analysts[].id and — because the run is a REGION
   # frame — restricts to the region's MEMBER-country country_composition heads,
-  # verify-floored. 24h window: country_composition composes 2x/day, so a 24h
-  # look-back holds the freshest head per member country.
+  # verify-floored.
+  # FRAME-1 (2026-08-20, ratified): the window on these SOURCES is an
+  # ADMISSIBILITY HORIZON, not a freshness cliff. 24h was a wall-clock gate over
+  # an 11h-cooldown cadence that HOLDS on a quiet desk: on 2026-08-20 the BF
+  # units had last fired 42h earlier, the trailing-24h slice was mechanically
+  # empty, and the product printed "No source findings to synthesize" over seven
+  # heads carrying the window's major story. 336h (14 days) admits each unit's
+  # NEWEST head — the head-fold already yields exactly one per (unit, desk) — and
+  # the composition now prints each head's date + age and states its staleness.
   other_analysts:
     - id: country_composition
       data_types: [finding]
-      time_window: 24h
+      time_window: 336h
   substrate:
     direct_queries: false        # reads via the kind's READ_SLICE, not ad-hoc SQL
 

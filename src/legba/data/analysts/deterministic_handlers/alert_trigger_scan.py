@@ -23,6 +23,17 @@ outcome + webhook when configured). Seven trigger classes:
      (:data:`~legba.data.provenance.kinds.STRUCTURAL_VERIFY_EXEMPT_ANALYSTS` —
      those never enter the verify pass, so they can never meet the bar; the
      exclusion makes that explicit rather than incidental).
+
+     **"NEW" IS WEAKER NOW, AND DELIBERATELY UNCHANGED (FRAME-3, 2026-08-21).**
+     ``severity`` was the unit's SLICE DELTA, so ``high`` meant "something big
+     just happened"; it is now the dimension's STANDING STATE, so a war still
+     running tags ``high`` every run, writes a new head, and — the watermark
+     being per finding id — clears this gate each time (the live bar passes 14
+     findings/7d today, read-only census 2026-08-21). The guard is one line
+     (drop a candidate whose ``severity_delta`` is ``steady``; the tags are
+     already in :data:`_VERIFIED_FINDINGS_SQL`) and is NOT taken: its error
+     direction is a SUPPRESSED PAGE keyed on a model-emitted tag with no live
+     reliability measurement yet. Measure it over the soak, then decide.
   3. **contention_flip** — a ``fact_contention`` group changed state
      (status / surfaced winner) or newly appeared, AND at least one of its
      supporting facts is cited (``derived_from``) by a non-superseded finding

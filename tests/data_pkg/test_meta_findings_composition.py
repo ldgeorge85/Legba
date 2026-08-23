@@ -103,7 +103,7 @@ async def test_target_scoped_run_adds_target_and_verify_floor():
     assert "Faithfulness verify%" in query
     assert "LEAST(f.confidence, v.faithfulness_score) >= $4" in query
     assert "?| array['unstructured','coerce_failed']" in query
-    assert params[3] == synth.DEFAULT_VERIFY_FLOOR  # 0.0 default
+    assert params[3] == synth.DEFAULT_VERIFY_FLOOR  # 0.50 default (raised 2026-08-15)
 
     # The source-analyst set is the four units.
     assert params[0] == [u for u, _ in _UNITS]

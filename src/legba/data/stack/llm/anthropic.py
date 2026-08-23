@@ -9,7 +9,16 @@ to Anthropic's `{name, description, input_schema}` shape on the wire.
 
 Auth: `x-api-key` header (not Bearer).
 System prompt: top-level `system` field, not a message role.
-Max tokens: required by Anthropic; defaults from descriptor config.
+Max tokens: required by Anthropic; defaults from descriptor config, clamped
+to the model line's documented per-request output ceiling (see
+`MAX_OUTPUT_TOKENS_BY_PREFIX`).
+Streaming: EVERY generation goes over the wire with `stream: true` and the
+SSE events are accumulated back into the same JSON shape the non-streaming
+endpoint returns — transparent to `_parse_response` and every caller. The
+enabler for large output budgets: a non-streaming 4k+ generation used to
+outrun the provider HTTP window (network error → actor retry storm → 504),
+while a live stream resets the read timeout with every delta. See
+`_call_chat_streaming` for the retry + mid-stream-failure contract.
 Stop reasons: `end_turn` / `max_tokens` / `tool_use` / `stop_sequence`
 normalized to `stop` / `length` / `tool_calls`.
 Prompt caching: `cache_control` breakpoints on the stable prefix — see
@@ -28,10 +37,13 @@ task lands):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
-from typing import Any, ClassVar, Mapping
+from typing import Any, AsyncIterator, ClassVar, Mapping
+
+import httpx
 
 from .base import (
     HardLLMFailure,
@@ -40,6 +52,7 @@ from .base import (
     LLMToolCall,
     LLMUsage,
     ModelPrice,
+    TransientLLMFailure,
     estimate_cost,
 )
 
@@ -144,6 +157,27 @@ class AnthropicProviderHandler(LLMProviderHandler):
         "claude-opus-4-8",
     )
 
+    #: Anthropic's DOCUMENTED per-request output ceilings (`max_tokens` upper
+    #: bound) by model-family prefix, verified against the published model
+    #: catalog 2026-08-15: the Opus 4.7/4.8 and Sonnet 4.6 lines take up to
+    #: 128K output tokens per request (streaming required for large outputs —
+    #: which this handler now always does); Sonnet 4.5 caps at 64K and the
+    #: legacy Haiku 3.5 at 8192. A caller's `max_tokens` above the ceiling is
+    #: CLAMPED with a loud log (see `_log_clamped_max_tokens`) rather than
+    #: allowed to 400 at the provider. The deployed consult budget (32768)
+    #: sits well under the Opus ceiling, so the clamp is a guard rail, not an
+    #: expected path.
+    MAX_OUTPUT_TOKENS_BY_PREFIX: ClassVar[Mapping[str, int]] = {
+        "claude-opus-4-8": 128_000,
+        "claude-opus-4-7": 128_000,
+        "claude-sonnet-4-6": 128_000,
+        "claude-sonnet-4-5": 64_000,
+        "claude-haiku-3-5": 8_192,
+    }
+    #: Ceiling for models with no prefix match above — the current-generation
+    #: documented maximum.
+    MAX_OUTPUT_TOKENS_DEFAULT: ClassVar[int] = 128_000
+
     # ---- Prompt caching --------------------------------------------------
     #
     # A QUALITY enabler on the operator-paid plane, not a cost trim: Anthropic
@@ -188,6 +222,9 @@ class AnthropicProviderHandler(LLMProviderHandler):
         #: a 10-round consult must surface the dead knob without emitting ten
         #: identical warnings.
         self._temperature_drop_logged: set[str] = set()
+        #: Models already logged for a clamped over-ceiling `max_tokens` — see
+        #: `_log_clamped_max_tokens`. Same once-per-model discipline.
+        self._max_tokens_clamp_logged: set[str] = set()
 
     PRICE_TABLE: ClassVar[Mapping[str, ModelPrice]] = {
         # Use family-prefix keys so any minor revision rolls up under the same
@@ -306,11 +343,20 @@ class AnthropicProviderHandler(LLMProviderHandler):
         reasoning_effort: str | None,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        ceiling = self._max_output_ceiling(model)
+        if max_tokens > ceiling:
+            self._log_clamped_max_tokens(model, max_tokens, ceiling)
+            max_tokens = ceiling
         payload: dict[str, Any] = {
             "model": model,
             "messages": list(messages),
             "max_tokens": max_tokens,
-            "stream": False,
+            # ALWAYS stream on the wire (accumulated back to one response in
+            # `_call_chat_streaming`): a live stream keeps the HTTP connection
+            # alive for the whole generation, so a large output budget can no
+            # longer outrun the provider window the way non-streaming 4k+
+            # generations did (network error → actor retry storm → 504).
+            "stream": True,
         }
         if system:
             payload["system"] = system
@@ -364,6 +410,39 @@ class AnthropicProviderHandler(LLMProviderHandler):
             "and has no effect. Tune behaviour via the prompt, or point the "
             "caller at a plane that honors it. (logged once per model)",
             self._instance_id or "<unconfigured>", model, temperature,
+        )
+
+    def _max_output_ceiling(self, model: str) -> int:
+        """The documented per-request output ceiling for `model`."""
+        for prefix, ceiling in self.MAX_OUTPUT_TOKENS_BY_PREFIX.items():
+            if model.startswith(prefix):
+                return ceiling
+        return self.MAX_OUTPUT_TOKENS_DEFAULT
+
+    def _log_clamped_max_tokens(
+        self, model: str, requested: int, ceiling: int,
+    ) -> None:
+        """WARN once per handler per model that an over-ceiling `max_tokens`
+        was CLAMPED to Anthropic's documented per-request output limit.
+
+        Loud on purpose: a descriptor asking for more than the model line can
+        serve is a configuration error the operator should see and fix (lower
+        the descriptor's ``method.llm.max_tokens``), not a silent adjustment.
+        Clamping — instead of letting the provider 400 the call — keeps the
+        consult answering while the config is wrong.
+        """
+        if model in self._max_tokens_clamp_logged:
+            return
+        self._max_tokens_clamp_logged.add(model)
+        logger.warning(
+            "anthropic.max_tokens.CLAMPED component=%s model=%s requested=%d "
+            "ceiling=%d — Anthropic's documented per-request output limit for "
+            "this model line is %d tokens; sending the ceiling instead of "
+            "letting the provider 400. Lower the caller's max_tokens "
+            "(descriptor method.llm.max_tokens) to silence this. "
+            "(logged once per model)",
+            self._instance_id or "<unconfigured>", model, requested, ceiling,
+            ceiling,
         )
 
     # ---- Prompt caching --------------------------------------------------
@@ -439,16 +518,18 @@ class AnthropicProviderHandler(LLMProviderHandler):
         payload["messages"] = [*messages[:-1], {**dict(last), "content": marked}]
 
     async def _call_chat(self, payload: Mapping[str, Any]) -> dict[str, Any]:
-        """POST the payload, with a one-shot fallback if caching is rejected.
+        """Wire the payload, with a one-shot fallback if caching is rejected.
 
         Prompt caching is an optimization; a consult must never fail because a
         cache hint was unwelcome. If the endpoint 400s on a `cache_control`
         marker, we disable caching for this handler instance (logged ONCE),
         strip the markers back to the historical wire shape, and retry the same
         call. Every subsequent call on this instance is assembled uncached.
+        A cache rejection is always PRE-STREAM (the 400 arrives instead of the
+        200 that opens the stream), so the retry never duplicates generation.
         """
         try:
-            return await super()._call_chat(payload)
+            return await self._wire_call(payload)
         except HardLLMFailure as exc:
             if not self._cache_control_ok or not _has_cache_control(payload):
                 raise
@@ -463,7 +544,314 @@ class AnthropicProviderHandler(LLMProviderHandler):
                 self._instance_id or "<unconfigured>",
                 getattr(exc, "status", None),
             )
-            return await super()._call_chat(_strip_cache_control(payload))
+            return await self._wire_call(_strip_cache_control(payload))
+
+    async def _wire_call(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Route one assembled payload to the right wire shape.
+
+        `stream: true` payloads (the default — see `_build_chat_payload`) go
+        through the SSE accumulator; anything else keeps the base handler's
+        plain JSON POST, so an operator flipping streaming off in a payload
+        override degrades to the historical wire call exactly.
+        """
+        if payload.get("stream"):
+            return await self._call_chat_streaming(payload)
+        return await super()._call_chat(payload)
+
+    async def _call_chat_streaming(
+        self, payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """POST with `stream: true`; accumulate SSE back to one response dict.
+
+        The return value has the SAME shape as the non-streaming Messages API
+        body (`content` block list, `usage`, `stop_reason`), so
+        `_parse_response` and every call site are unchanged.
+
+        RETRY CONTRACT. Pre-stream failures — connect errors and HTTP status
+        codes, which arrive before any token is generated — follow the base
+        handler's retry/backoff exactly (same retryable set, same attempt
+        count, `retry-after` honored). Once the stream is OPEN, a failure is
+        handled by `_accumulate_stream` and is NEVER retried here: the
+        provider has already generated (and billed) the streamed prefix, and
+        a retry would generate a second, divergent copy of it.
+
+        TIMEOUT SEMANTICS. httpx applies the client's read timeout PER READ —
+        on a stream that means per chunk, not per body. A live generation
+        resets the clock with every delta, so wall time is unbounded by the
+        read timeout and only a genuine stall (including a long prefill gap
+        before `message_start`) can trip it. That is exactly the semantics a
+        32k output budget needs; the component's `timeout_seconds` is the
+        stall ceiling, not a generation ceiling.
+        """
+        client = await self._get_client()
+        path = self._chat_endpoint_path()
+        retryable = {429, 500, 502, 503, 529}
+        max_retries = 3
+        last_exc: Exception | None = None
+        for attempt in range(max_retries + 1):
+            stream_open = False
+            try:
+                async with client.stream(
+                    "POST", path, json=dict(payload),
+                ) as response:
+                    status = response.status_code
+                    if status in retryable and attempt < max_retries:
+                        retry_after = response.headers.get("retry-after")
+                        wait_s = (
+                            int(retry_after)
+                            if retry_after and retry_after.isdigit()
+                            else 2 ** attempt
+                        )
+                        await asyncio.sleep(wait_s)
+                        continue
+                    if status >= 400:
+                        raw = await response.aread()
+                        body = raw.decode("utf-8", errors="replace")
+                        if status in retryable:
+                            raise TransientLLMFailure(
+                                f"{self.subprovider} {status}: {body[:300]}",
+                                status=status,
+                            )
+                        raise HardLLMFailure(
+                            f"{self.subprovider} {status}: {body[:300]}",
+                            status=status, body=body[:1000],
+                        )
+                    content_type = response.headers.get("content-type", "")
+                    if "text/event-stream" not in content_type:
+                        # An Anthropic-compatible proxy that ignored
+                        # `stream: true` and returned the complete JSON body.
+                        # Accept it — streaming is a transport optimization,
+                        # never a correctness requirement.
+                        raw = await response.aread()
+                        try:
+                            return json.loads(raw.decode("utf-8", errors="replace"))
+                        except (json.JSONDecodeError, ValueError) as exc:
+                            raise HardLLMFailure(
+                                f"{self.subprovider} returned non-JSON non-SSE "
+                                f"body: {raw[:200]!r}",
+                            ) from exc
+                    stream_open = True
+                    return await self._accumulate_stream(response)
+            except (
+                httpx.ConnectError,
+                httpx.ReadTimeout,
+                httpx.RemoteProtocolError,
+            ) as exc:
+                if stream_open:
+                    # Defensive: `_accumulate_stream` catches transport errors
+                    # itself, so this arm should be unreachable — but a stream
+                    # that already produced billable output must NEVER be
+                    # retried into a duplicate generation.
+                    raise TransientLLMFailure(
+                        f"mid-stream network error: {exc}",
+                    ) from exc
+                last_exc = exc
+                if attempt < max_retries:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                raise TransientLLMFailure(f"network error: {exc}") from exc
+        raise last_exc or TransientLLMFailure("call failed after retries")
+
+    async def _accumulate_stream(
+        self, response: httpx.Response,
+    ) -> dict[str, Any]:
+        """Fold the SSE event stream into one non-streaming-shaped body.
+
+        Event handling per the Anthropic streaming contract: `message_start`
+        seeds the message envelope (id/model/role + input-side usage);
+        `content_block_start` / `content_block_delta` / `content_block_stop`
+        build the content blocks (`text_delta` text, `input_json_delta` tool
+        args, `thinking_delta` thinking); `message_delta` carries the final
+        `stop_reason` + output-side usage; `message_stop` ends the message.
+        `ping` and unknown forward-compat events are ignored.
+
+        MID-STREAM FAILURES ARE HANDLED HONESTLY, never as silent truncation:
+
+          * failure BEFORE any content accumulated → raise
+            :class:`TransientLLMFailure` (nothing was generated, so the
+            runtime's retry classification cannot duplicate a generation);
+          * failure AFTER partial content → return the partial body with
+            ``stop_reason: "error"`` (normalized to ``finish_reason="error"``
+            — an EXPLICIT error state every caller can see) plus a
+            ``legba_stream_error`` marker in the raw body, logged loudly.
+            The call is NOT retried: the streamed prefix is already billed.
+        """
+        message: dict[str, Any] = {}
+        blocks: dict[int, dict[str, Any]] = {}
+        text_parts: dict[int, list[str]] = {}
+        thinking_parts: dict[int, list[str]] = {}
+        tool_json_parts: dict[int, list[str]] = {}
+        final_usage: dict[str, Any] = {}
+        stop_reason: str | None = None
+        stop_sequence: Any = None
+        saw_message_stop = False
+        stream_error: str | None = None
+        try:
+            async for event in self._iter_sse_events(response):
+                etype = event.get("type")
+                if etype == "message_start":
+                    msg = event.get("message")
+                    if isinstance(msg, Mapping):
+                        message = dict(msg)
+                        usage = message.get("usage")
+                        if isinstance(usage, Mapping):
+                            final_usage.update(usage)
+                elif etype == "content_block_start":
+                    idx = int(event.get("index") or 0)
+                    block = event.get("content_block")
+                    blocks[idx] = dict(block) if isinstance(block, Mapping) else {}
+                    btype = blocks[idx].get("type")
+                    if btype == "text":
+                        text_parts[idx] = [str(blocks[idx].get("text") or "")]
+                    elif btype == "thinking":
+                        thinking_parts[idx] = [
+                            str(blocks[idx].get("thinking") or ""),
+                        ]
+                    elif btype == "tool_use":
+                        tool_json_parts[idx] = []
+                elif etype == "content_block_delta":
+                    idx = int(event.get("index") or 0)
+                    delta = event.get("delta")
+                    if not isinstance(delta, Mapping):
+                        continue
+                    dtype = delta.get("type")
+                    if dtype == "text_delta":
+                        blocks.setdefault(idx, {"type": "text"})
+                        text_parts.setdefault(idx, []).append(
+                            str(delta.get("text") or ""),
+                        )
+                    elif dtype == "input_json_delta":
+                        blocks.setdefault(idx, {"type": "tool_use"})
+                        tool_json_parts.setdefault(idx, []).append(
+                            str(delta.get("partial_json") or ""),
+                        )
+                    elif dtype == "thinking_delta":
+                        blocks.setdefault(idx, {"type": "thinking"})
+                        thinking_parts.setdefault(idx, []).append(
+                            str(delta.get("thinking") or ""),
+                        )
+                elif etype == "message_delta":
+                    delta = event.get("delta")
+                    if isinstance(delta, Mapping):
+                        if delta.get("stop_reason"):
+                            stop_reason = str(delta["stop_reason"])
+                        if delta.get("stop_sequence") is not None:
+                            stop_sequence = delta.get("stop_sequence")
+                    usage = event.get("usage")
+                    if isinstance(usage, Mapping):
+                        final_usage.update(usage)
+                elif etype == "message_stop":
+                    saw_message_stop = True
+                    break
+                elif etype == "error":
+                    err = event.get("error")
+                    stream_error = (
+                        "provider error event: "
+                        + json.dumps(err, default=str)[:300]
+                    )
+                    break
+                # "ping" / unknown event types: intentionally ignored.
+        except httpx.HTTPError as exc:
+            stream_error = f"{type(exc).__name__}: {exc}"
+
+        if stream_error is None and not saw_message_stop:
+            stream_error = "stream closed before message_stop"
+
+        content: list[dict[str, Any]] = []
+        for idx in sorted(blocks):
+            block = dict(blocks[idx])
+            btype = block.get("type")
+            if btype == "text":
+                block["text"] = "".join(text_parts.get(idx, []))
+            elif btype == "thinking":
+                block["thinking"] = "".join(thinking_parts.get(idx, []))
+            elif btype == "tool_use":
+                raw_json = "".join(tool_json_parts.get(idx, []))
+                if raw_json.strip():
+                    try:
+                        block["input"] = json.loads(raw_json)
+                    except (json.JSONDecodeError, ValueError):
+                        # A cut stream can truncate the args JSON mid-string.
+                        # Surface the raw text — never invent arguments.
+                        block["input"] = {"_raw": raw_json}
+                else:
+                    block.setdefault("input", {})
+            content.append(block)
+
+        data: dict[str, Any] = dict(message)
+        data["content"] = content
+        data["usage"] = final_usage
+        if stop_reason is not None:
+            data["stop_reason"] = stop_reason
+        if stop_sequence is not None:
+            data["stop_sequence"] = stop_sequence
+
+        if stream_error is not None:
+            has_content = any(
+                (b.get("type") == "text" and b.get("text"))
+                or b.get("type") == "tool_use"
+                for b in content
+            )
+            if not has_content:
+                raise TransientLLMFailure(
+                    "anthropic stream failed before any content arrived: "
+                    + stream_error,
+                )
+            logger.warning(
+                "anthropic.stream.MID_STREAM_FAILURE component=%s model=%s "
+                "err=%s — returning the PARTIAL generation with "
+                "finish_reason='error' (explicit error state, not a silent "
+                "truncation). NOT retried: the streamed prefix is already "
+                "generated and billed; a retry would produce a duplicate "
+                "generation.",
+                self._instance_id or "<unconfigured>",
+                data.get("model") or "<unknown>",
+                stream_error,
+            )
+            data["stop_reason"] = "error"
+            data["legba_stream_error"] = stream_error
+
+        return data
+
+    @staticmethod
+    async def _iter_sse_events(
+        response: httpx.Response,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Yield parsed `data:` payloads from an SSE body.
+
+        Anthropic stamps the event type INSIDE each data payload
+        (``{"type": ...}``), so ``event:`` lines are redundant and skipped.
+        Multi-line data segments are joined per the SSE spec; a payload that
+        fails to parse is skipped rather than fatal — the accumulator's
+        missing-`message_stop` check catches a stream that carried nothing
+        usable.
+        """
+        data_lines: list[str] = []
+
+        def _flush() -> dict[str, Any] | None:
+            if not data_lines:
+                return None
+            raw = "\n".join(data_lines)
+            data_lines.clear()
+            try:
+                parsed = json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                return None
+            return parsed if isinstance(parsed, dict) else None
+
+        async for line in response.aiter_lines():
+            if line == "":
+                event = _flush()
+                if event is not None:
+                    yield event
+                continue
+            if line.startswith("data:"):
+                data_lines.append(line[5:].lstrip(" "))
+        # Trailing event without a terminating blank line (seen on abrupt
+        # stream closure) — flush it too.
+        event = _flush()
+        if event is not None:
+            yield event
 
     # ---- Response parsing ------------------------------------------------
 

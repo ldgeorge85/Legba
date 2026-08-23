@@ -110,7 +110,16 @@ section "5. PASS|SECRET|TOKEN|API_KEY assigned a long literal"
 if git grep -nI -E -- \
    '(PASS(WORD)?|SECRET|TOKEN|API_?KEY)["'"'"']?\s*[:=]\s*["'"'"']?[A-Za-z0-9/+_.-]{16,}' \
    . ':(exclude)scripts/prepush_scan.sh' >/tmp/_ps_tok 2>/dev/null; then
-  while IFS= read -r line; do report token-literal "${line}"; done < <(grep -vE '\$\{|\$[A-Z_]|<[^>]+>|example|changeme|placeholder|your-|xxxx|REDACTED|\.invalid|getenv|os\.environ|environ\.get|process\.env|EXAMPLE|dummy|fake|TODO|"dev"|=dev$|:-dev|"LEGBA_[A-Z_]+"' /tmp/_ps_tok)
+  # Narrow EXACT-STRING carve-out (release-gate prepush audit, 2026-08):
+  # three self-describing FAKE test-fixture tokens, confirmed not real
+  # credentials — none of the existing placeholder markers below
+  # (example/dummy/fake/...) happen to appear in their names, so the pattern
+  # filter alone doesn't clear them. Fixed-string match, not a regex, so any
+  # OTHER token value stays caught even if it sat on the same line.
+  while IFS= read -r line; do report token-literal "${line}"; done < <(
+    grep -vE '\$\{|\$[A-Z_]|<[^>]+>|example|changeme|placeholder|your-|xxxx|REDACTED|\.invalid|getenv|os\.environ|environ\.get|process\.env|EXAMPLE|dummy|fake|TODO|"dev"|=dev$|:-dev|"LEGBA_[A-Z_]+"' /tmp/_ps_tok \
+      | grep -vF -e "super-secret-registry-token" -e "disconnect-test-token" -e "ws-subproto-token"
+  )
 fi
 
 # 6. High-entropy literals (long base64/hex runs) — heuristic, allowlist-filtered.
@@ -119,7 +128,17 @@ if git grep -nI -E -- "['\"][A-Za-z0-9+/]{40,}={0,2}['\"]|['\"][0-9a-fA-F]{48,}[
    . ':(exclude)scripts/prepush_scan.sh' ':(exclude)legba-ui-v3/package-lock.json' \
    ':(exclude)deploy/baseline/0001_baseline.sql' \
    ':(exclude)*.svg' ':(exclude)*.png' >/tmp/_ps_ent 2>/dev/null; then
-  while IFS= read -r line; do report high-entropy "${line}"; done < <(grep -vE 'sha256-|sha512-|integrity|test|fixture|mock|example|sample|hash|digest|did:key:|base64|encode|decode|ALPHABET|alphabet|charset|/[a-z]+/[a-z]+/' /tmp/_ps_ent)
+  # Narrow PATH+CONTEXT carve-out (release-gate prepush audit, 2026-08):
+  # scripts/voice4_flip/_flip_common.py's INTENDED_SHA256 / HELD_SHA256
+  # pinned-digest block (see the file's own "WHY PIN THEM HERE" docstring) is
+  # a content-integrity check, not a secret. Scoped to that exact file AND
+  # the exact dict-entry / bare-hex-literal shape those two constants use —
+  # nothing else in the file, or anywhere else, is exempted by it.
+  FLIP_DIGEST_RE='^scripts/voice4_flip/_flip_common\.py:[0-9]+: *("[a-z_]+": *)?"[0-9a-f]{64}",?$'
+  while IFS= read -r line; do report high-entropy "${line}"; done < <(
+    grep -vE 'sha256-|sha512-|integrity|test|fixture|mock|example|sample|hash|digest|did:key:|base64|encode|decode|ALPHABET|alphabet|charset|/[a-z]+/[a-z]+/' /tmp/_ps_ent \
+      | grep -vE "${FLIP_DIGEST_RE}"
+  )
 fi
 
 # 7. Non-neutral commit identity on the about-to-push range.

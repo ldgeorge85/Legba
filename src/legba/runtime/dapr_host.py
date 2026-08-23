@@ -635,6 +635,14 @@ class _RuntimeHandles:
                 await stack_informer.stop()
             except Exception as exc:                            # pragma: no cover
                 logger.warning("stack_informer.stop err=%s", exc)
+        # RUST-5: the vault-rotation informer. Same getattr posture as the
+        # stack informer above — added incrementally, not a formal field.
+        vault_informer = getattr(self, "vault_informer", None)
+        if vault_informer is not None:
+            try:
+                await vault_informer.stop()
+            except Exception as exc:                            # pragma: no cover
+                logger.warning("vault_informer.stop err=%s", exc)
         handler_cache = getattr(self, "llm_handler_cache", None)
         if handler_cache is not None:
             from .llm_handler_cache import unregister_handler_cache
@@ -743,7 +751,11 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     from ..data.nats import NatsStore
     from ..data.postgres import PostgresStore
     from .dapr_actors import AnalystActorInterface, TargetActorInterface
-    from .nats_informer import NatsReconcileInformer, NatsStackComponentInformer
+    from .nats_informer import (
+        NatsReconcileInformer,
+        NatsStackComponentInformer,
+        NatsVaultRotationInformer,
+    )
     from .reconcile import (
         AnalystReconciler,
         DesiredState,
@@ -1031,6 +1043,7 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     from .deps import StandardDeps
     from .embedding_factory import EmbeddingFactoryError
     from .llm_handler_cache import (
+        evict_all_llm_handlers,
         evict_llm_handler,
         register_handler_cache,
         registered_cache_labels,
@@ -2436,6 +2449,15 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     stack_informer = NatsStackComponentInformer(
         nats_store, evict=evict_llm_handler,
     )
+    # RUST-5 — the vault-rotation third. Bound to LEGBA_VAULT_EVENTS
+    # (``vault.secret.>``) with its own durable; on any message it drops
+    # EVERY cached LLM handler (no per-secret targeting — see
+    # nats_informer.py's module docstring) so a rotated credential is
+    # re-resolved on the next call instead of staying cached until a
+    # container recreate.
+    vault_informer = NatsVaultRotationInformer(
+        nats_store, evict_all=evict_all_llm_handlers,
+    )
 
     # ---------- singleton control-plane loops — LEADER ONLY -------------
     #
@@ -2479,6 +2501,24 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 "Check the LEGBA_STACK_EVENTS stream exists (the registry "
                 "provisions it via ensure_runtime_event_streams).", exc,
             )
+        # RUST-5: same never-take-the-control-plane-down posture as the stack
+        # informer above — its absence degrades to the pre-fix behaviour (a
+        # rotated secret needs a container recreate) and says so loudly.
+        try:
+            await vault_informer.start()
+            logger.info(
+                "dapr_host.vault_informer.started (leader) consumer=%s",
+                vault_informer.consumer_name,
+            )
+        except Exception as exc:  # pragma: no cover — bind failure is rig-level
+            logger.error(
+                "dapr_host.vault_informer.start_failed err=%s — vault secret "
+                "rotations will NOT invalidate cached LLM handlers in this "
+                "process; a rotation needs a container recreate until this "
+                "binds. Check the LEGBA_VAULT_EVENTS stream exists (the "
+                "registry provisions it via ensure_runtime_event_streams).",
+                exc,
+            )
         # Initial resync — enqueue every active descriptor so its actor gets
         # activated. Idempotent (reconcile converges), so a standby that later
         # promotes re-runs this cleanly on acquire.
@@ -2519,6 +2559,10 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             await stack_informer.stop()
         except Exception as exc:                                # pragma: no cover
             logger.warning("dapr_host.demote.stack_informer_stop err=%s", exc)
+        try:
+            await vault_informer.stop()
+        except Exception as exc:                                # pragma: no cover
+            logger.warning("dapr_host.demote.vault_informer_stop err=%s", exc)
         try:
             await reconcile_loop.stop()
         except Exception as exc:                                # pragma: no cover
@@ -2575,6 +2619,9 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     # test rig) never evicts through a torn-down runtime's dict.
     handles.stack_informer = stack_informer  # type: ignore[attr-defined]
     handles.llm_handler_cache = _llm_handler_cache  # type: ignore[attr-defined]
+    # RUST-5 vault-rotation informer. Same shutdown posture as the stack
+    # informer — stopped via the getattr lookup in ``_RuntimeHandles.stop()``.
+    handles.vault_informer = vault_informer  # type: ignore[attr-defined]
     return handles
 
 

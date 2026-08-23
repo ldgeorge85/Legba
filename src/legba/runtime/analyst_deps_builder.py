@@ -312,6 +312,7 @@ async def build_analyst_run_method(
         trio = _build_optimizer(handler, temporal_client=temporal_client)
     elif kind == "consult_on_demand":
         trio = await _build_consult_on_demand(
+            descriptor,
             handler,
             _resolve_primary_llm,
             substrate_query_port=substrate_query_port,
@@ -2055,21 +2056,34 @@ def _build_deep_consult(
     activities, not the actor (so the actor returns in <1s, never the 180s
     block).  We surface the LLM component id by ref only.
     """
+    from ..data.analysts.consult_on_demand import resolve_output_budget
     from ..data.analysts.deep_consult import DeepConsultKindDeps
 
     component_id = _primary_llm_component_id(descriptor) or ""
     budget_tokens_per_day = getattr(
         descriptor.method, "budget_tokens_per_day", None
     )
+    # The analyze stage's per-call output budget is DESCRIPTOR-governed
+    # (method.llm.max_tokens), same governance as the chat consult plane;
+    # LEGBA_CONSULT_MAX_TOKENS stays available as a loud emergency override.
+    descriptor_cap = _read_method_llm_option(
+        descriptor, "max_tokens", default=None,
+    )
+    max_analyze_tokens = resolve_output_budget(
+        int(descriptor_cap) if descriptor_cap is not None else None,
+        fallback=DeepConsultKindDeps.max_analyze_tokens,
+    )
     deps_obj = DeepConsultKindDeps(
         workflow_client=deep_consult_client,
         llm_component_id=component_id,
         budget_tokens_per_day=budget_tokens_per_day,
+        max_analyze_tokens=max_analyze_tokens,
     )
     return handler.run_method, deps_obj, handler.output_kind
 
 
 async def _build_consult_on_demand(
+    descriptor: AnalystDescriptor,
     handler: KindHandler,
     resolve_llm: Callable[[], Awaitable[LLMProviderHandler]],
     *,
@@ -2104,6 +2118,7 @@ async def _build_consult_on_demand(
     from ..data.analysts.consult_on_demand import (
         LLM_OVERRIDE_ALLOWLIST,
         ConsultOnDemandDeps,
+        resolve_output_budget,
     )
 
     llm = await resolve_llm()
@@ -2119,11 +2134,22 @@ async def _build_consult_on_demand(
         override_resolver = _bind_override_resolver(
             resolve_llm_component, LLM_OVERRIDE_ALLOWLIST,
         )
+    # Per-call output budget: DESCRIPTOR-governed (method.llm.max_tokens —
+    # 32768 on the deployed consult descriptors, streamed on the wire by the
+    # Anthropic handler). LEGBA_CONSULT_MAX_TOKENS is demoted to an emergency
+    # override inside resolve_output_budget (logged loudly when it wins).
+    descriptor_cap = _read_method_llm_option(
+        descriptor, "max_tokens", default=None,
+    )
+    max_tokens = resolve_output_budget(
+        int(descriptor_cap) if descriptor_cap is not None else None,
+    )
     return (
         handler.run_method,
         ConsultOnDemandDeps(
             llm=llm,
             substrate=substrate_query_port,
+            max_tokens=max_tokens,
             # A-3a: the production resolver ALWAYS supplies the
             # substrate_read AgencyToolBinding (and fails loud when it
             # can't). None is the hand-constructed test/embedder path —

@@ -1782,6 +1782,16 @@ folded `effective_confidence`, and every band NAMES the verified-claim id it res
    `low-faithfulness` (a distinct, legible reason). The rules never PROMOTE and never
    hand-weight a number into a fabricated overall band.
 
+   **What that severity tag means (FRAME-3, 2026-08-21).** It is the dimension's
+   STANDING STATE — where it stands on the desk today — not the severity of what
+   moved in the unit's 72-hour slice. Before the split, a standing war tagged `low`
+   on a quiet week and the dimension banded `low` off it; the movement now rides a
+   separate `severity_delta:<rose|fell|steady|new>` tag, is carried on the verdict
+   beside the band, and NO rule reads it (letting movement move a band would decay a
+   "steady" war a rung a cycle). Damping is untouched. Each verdict stamps
+   `banding_semantics` (`"standing"`) so cards written under the two contracts are
+   comparable; a head with no delta reads `null`, never `steady`.
+
 3. **Insufficient-evidence is a first-class outcome (honesty).** A dimension with no
    qualifying verified claim reads `band = "insufficient-evidence"` with an
    EMPTY-but-explicit basis and a machine `reason` (`below-floor` / `verify-failed` /

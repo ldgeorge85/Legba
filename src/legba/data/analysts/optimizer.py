@@ -531,6 +531,42 @@ async def resolve_promoted_system_prompt(
 
 
 # ---------------------------------------------------------------------------
+# RUST-4 MOTHBALL (decision 2026-08-21)
+# ---------------------------------------------------------------------------
+#
+# The GEPA optimizer plane is MOTHBALLED: code kept, deploy/schedule surface
+# dropped. Evidence: `planning/RUST4_EVIDENCE_2026-08-21.md` — one real GEPA
+# compile ever completed (2026-08-10) and it did not clear the promotion bar
+# (faithfulness delta -0.5354 against a +0.03 floor); the workflow long-
+# activity round-trip bug (#86) reproduced again the following week
+# (2026-08-17, `workflow_timeout`); and the manual VOICE-4 prompt wave
+# shipped in its place. Declared as SEAMS #53 (`docs/SEAMS.md`).
+#
+# Both live optimizer descriptors' `identity.id` are refused here, loud,
+# by construction — never a silent `naive_best_of_n` fallback that could
+# be mistaken for a working (if degraded) compile. This is the single
+# choke point every trigger path funnels through (cadence reminder,
+# reactive fire, or a manual force-run): the runtime always stamps the
+# optimizer's OWN identity into ``options["analyst_id"]`` before calling
+# ``run_method`` (see the docstring below).
+MOTHBALLED_OPTIMIZER_IDS: frozenset[str] = frozenset(
+    {"country_optimizer", "unit_optimizer"}
+)
+
+
+class OptimizerMothballedError(RuntimeError):
+    """Raised when a mothballed optimizer descriptor's run path fires.
+
+    RUST-4 (decision 2026-08-21): the GEPA optimizer plane is mothballed.
+    A trigger reaching here means something re-armed a path that should
+    stay inert (a restored cadence, a manual force-run, a stray reminder)
+    — the loud failure is the signal to fix THAT, not to silence this
+    guard. See ``docs/SEAMS.md`` #53 and
+    ``planning/RUST4_EVIDENCE_2026-08-21.md``.
+    """
+
+
+# ---------------------------------------------------------------------------
 # Public entry — run_method
 # ---------------------------------------------------------------------------
 
@@ -570,6 +606,15 @@ async def run_method(
     The actor's ``_select_output_payload`` reads the kind's OUTPUT_KIND
     and the candidate payload from this slot.
     """
+    own_id = str(options.get("analyst_id") or "")
+    if own_id in MOTHBALLED_OPTIMIZER_IDS:
+        raise OptimizerMothballedError(
+            f"optimizer {own_id!r} is MOTHBALLED (RUST-4, decision "
+            "2026-08-21) — refusing to run. See docs/SEAMS.md #53 and "
+            "planning/RUST4_EVIDENCE_2026-08-21.md. The GEPA compile plane "
+            "is not to run; this is a refusal, not a fallback."
+        )
+
     deps = deps or OptimizerDeps()
 
     analyzed_analyst_id, analyzed_analyst_version = _resolve_analyzed_identity(
@@ -917,17 +962,17 @@ def _shape_training_set(
     serialization).  We keep the load-bearing fields and drop the rest.
 
     R-tail (2026-08-04) — LOUD on the empty-input degradation. ``input`` comes
-    from ``analyst_traces.prompt_rendered``, which is NULL **by design**
-    (``run_accounting``: persisting the rendered prompt would put up to the
-    full 32k-token input budget on every trace; the bounded
-    ``llm_calls[].prompt_sha256`` + ``prompt_chars`` digest carries the
-    evidence instead, and does so on 100% of LLM-bearing traces). Live: 0 of
-    187,550 rows carry it. So every training row's ``input`` is ``""`` and has
-    been all along — GEPA optimizes against empty inputs and says nothing.
-    That is a real defect, but it is a SCOPED one (the fix is to source the
-    training input from somewhere other than a deliberately-NULL column), so
-    the honest interim behaviour is to make it audible instead of silent: a
-    wholly-empty training set is now a warning, not a shrug.
+    from ``analyst_traces.prompt_rendered``, which was NULL on every row,
+    all-time, until RUST-5 (2026-08-20) wired it: every LLM-bearing trace now
+    carries the rendered synthesis prompt (capped, with a truncation marker
+    past the cap — see ``run_accounting.current_prompt_rendered``) plus a
+    ``prompt_sha256`` sidecar column covering the FULL untruncated text. A
+    trace written BEFORE that migration still carries a NULL
+    ``prompt_rendered`` — this fallback chain and the warning below stay in
+    place so an ``analyzed_analyst_version`` whose recent window predates the
+    fix still degrades audibly instead of silently training on empty inputs,
+    and so a deterministic (no-LLM) analyst's traces — which have nothing to
+    render — don't spuriously trip it when they're the whole window.
     """
     out: list[dict[str, Any]] = []
     empty_inputs = 0
@@ -956,12 +1001,12 @@ def _shape_training_set(
     if out and empty_inputs == len(out):
         logger.warning(
             "optimizer.training_set.all_inputs_empty rows=%s — every training "
-            "row's `input` is empty because it is read from "
-            "analyst_traces.prompt_rendered, which is NULL BY DESIGN (the "
-            "bounded llm_calls[].prompt_sha256 digest carries the prompt "
-            "evidence instead). GEPA is optimizing against empty inputs; the "
-            "training input needs a different source before any promotion off "
-            "this run should be trusted.",
+            "row's `input` is empty. `analyst_traces.prompt_rendered` was "
+            "wired in RUST-5 (2026-08-20); this now means either every row in "
+            "the read window predates that migration, or the analyzed analyst "
+            "made no LLM call on any of them (a deterministic analyst has "
+            "nothing to render). GEPA is optimizing against empty inputs; "
+            "confirm which before trusting any promotion off this run.",
             len(out),
         )
     return out
@@ -1187,8 +1232,10 @@ __all__ = [
     "HANDLER_VERSION",
     "KIND_NAME",
     "MAX_TRAINING_ROWS",
+    "MOTHBALLED_OPTIMIZER_IDS",
     "OUTPUT_KIND",
     "OptimizerDeps",
+    "OptimizerMothballedError",
     "PROMPT_MODULE_CONVENTION",
     "PROMPT_MODULE_PATH",
     "READ_SLICE",

@@ -8,14 +8,28 @@
 # empty volumes through to a boot-verified instance. Replaces the ~16 hand-typed
 # commands previously spread across README / docs/SETUP.md / docs/RUNBOOK.md.
 #
-# This wraps the SAME proven, load-bearing ordering those docs describe:
-#   substrate+registry up → apply baseline schema → vault → stack → packs →
-#   sources+catalog → targets → analysts → budget → [seeds] → runtime up → verify.
+# This wraps the SAME proven, load-bearing ordering those docs describe, and the
+# PHASE banners below print exactly these steps in exactly this order:
+#   [3] substrate + dapr control plane → [4] baseline schema + future migrations
+#   → [5] registry up, then vault → stack → packs → sources + catalog → G20 →
+#   watch tier → region frames → region/applicability tags → analyst set →
+#   deterministic set → budget → [6] optional seeds → [7] runtime + ui [+ caddy]
+#   → [8] boot-verify.
 #
 # It applies the single proven baseline (deploy/baseline/0001_baseline.sql), NOT
 # the full migration history, then runs `python -m legba.data.migrate` for any
-# FUTURE (0054+) migrations. The baseline pre-seeds the ledger through 0053, so
-# migrate applies 0054..0060 to bring a fresh instance to the live head (0060).
+# FUTURE (0054+) migrations. The baseline pre-seeds the ledger with the 23-file
+# canonical history 0001..0053, so migrate applies everything after it, up to
+# whatever head src/legba/data/migrations/ carries in THIS checkout.
+#
+# NO STEP LABEL BELOW PINS A COUNT. Five of them had drifted by 2026-08 — "3
+# shared sources" was 7, "x6 watch tier" was 13, "25 desks" was 32, "~36
+# analysts" was 43, "head 0060" was 0185 — because a hand-typed number in a
+# label has nothing that notices when the list it describes grows. Each
+# registrar already prints one line per descriptor it touched, and the SUMMARY
+# reports registry counts read back out of the DB. Those are generated; a label
+# is not, so labels name the step and leave the counting to the things that
+# can't be wrong about it.
 #
 # ----------------------------------------------------------------------------
 # USAGE
@@ -65,6 +79,7 @@ DO_TEARDOWN=0
 COMPOSE_BASE="docker-compose.yml"
 ISOLATION_OVERRIDE="deploy/compose.isolation.yml"
 BASELINE_SQL="deploy/baseline/0001_baseline.sql"
+MIGRATIONS_DIR="src/legba/data/migrations"
 
 # Registry health endpoint (served by legba-registry, proxied by caddy).
 REGISTRY_HEALTH_PATH="/api/v1/registry/healthz"
@@ -134,6 +149,27 @@ run_registrar() {
     -e "LEGBA_DATA_PG_DB=${APP_DB}" \
     -e "LEGBA_REGISTRY_URL=http://legba-registry:8090/api/v1/registry" \
     --entrypoint python legba-registry "${script}" "$@"
+}
+
+# The migration head THIS checkout carries: the numeric prefix of the
+# highest-numbered file in MIGRATIONS_DIR. Derived, never typed — the previous
+# hard-coded "head 0060" was 125 migrations stale. Prints "?" when the
+# directory is unreadable rather than inventing a confident number.
+migration_head() {
+  local last
+  last="$(find "${MIGRATIONS_DIR}" -maxdepth 1 -name '[0-9][0-9][0-9][0-9]_*.sql' \
+            -printf '%f\n' 2>/dev/null | sort | tail -1)"
+  [ -n "${last}" ] && printf '%s' "${last%%_*}" || printf '?'
+}
+
+# A single scalar out of the app DB, or "?" when the query can't be answered.
+# Used by the SUMMARY so the counts it reports are READ BACK, not asserted.
+db_count() {
+  # usage: db_count <sql>
+  local out
+  out="$(dc exec -T postgres psql -U "${LEGBA_DATA_PG_USER:-legba}" -d "${APP_DB}" \
+           -tAc "$1" 2>/dev/null | tr -d '[:space:]')" || true
+  case "${out}" in ''|*[!0-9]*) printf '?' ;; *) printf '%s' "${out}" ;; esac
 }
 
 # Wait until a one-off psql/health probe succeeds, or time out.
@@ -317,9 +353,10 @@ else
   ok "baseline applied"
 fi
 
-info "running future migrations (legba.data.migrate) — applies 0054..0060 over the 0053 baseline ledger..."
+MIG_HEAD="$(migration_head)"
+info "running future migrations (legba.data.migrate) — applies everything after the 0053 baseline ledger, up to this checkout's head ${MIG_HEAD}..."
 run_registrar -m legba.data.migrate || die "migrate failed"
-ok "schema at head 0060 (no pending future migrations)"
+ok "schema at head ${MIG_HEAD} (no pending future migrations)"
 
 # =============================================================================
 # PHASE 5 — REGISTRARS (audit's ordered sequence)
@@ -337,18 +374,20 @@ wait_for "registry-healthz" 120 \
 # predicate matches ZERO targets and the S2 region floor silently vanishes):
 #   1 vault → 2 stack → 3 packs(HTTP) → 4 sources → 4b catalog → 5 G20 targets →
 #   5b watch tier → 5c region frames → 5d region/applicability tags →
-#   6 analyst set → 7 deterministic-6 → 8 budget.
-info "[1] vault secrets (HTTP)";            run_registrar scripts/bringup_vault_load.py
+#   6 analyst set → 7 deterministic set → 8 budget.
+info "[1] vault secrets (HTTP)";             run_registrar scripts/bringup_vault_load.py
 info "[2] stack components (HTTP)";          run_registrar scripts/bringup_register_stack.py
-info "[3] action packs (HTTP, 8 packs)";     run_registrar scripts/bringup_register_action_packs.py
-info "[4] shared RSS sources (3, direct)";   run_registrar scripts/bringup_register_sources.py
-info "[4b] full no-auth catalog (~46)";      run_registrar scripts/bringup_register_source_catalog.py
-info "[5] G20 country targets (x19)";        run_registrar scripts/bringup_register_g20_country_targets.py
-info "[5b] watch tier (x6 il/ir/ua/tw/kp/pk)"; run_registrar scripts/bringup_register_watch_country_targets.py
-info "[5c] region frames (x5, HTTP)";        run_registrar scripts/bringup_register_region_targets.py
-info "[5d] region/applicability tags (25 desks, HTTP)"; run_registrar scripts/bringup_tag_targets.py
-info "[6] analyst working set (~36)";        run_registrar scripts/bringup_register_analysts.py
-info "[7] deterministic analysts (x6, HTTP)"
+info "[3] action packs (HTTP)";              run_registrar scripts/bringup_register_action_packs.py
+info "[4] pinned standalone sources (direct: shared wires + state media + UCDP)"
+run_registrar scripts/bringup_register_sources.py
+info "[4b] full no-auth source catalog (direct)"
+run_registrar scripts/bringup_register_source_catalog.py
+info "[5] G20 country targets";              run_registrar scripts/bringup_register_g20_country_targets.py
+info "[5b] watch-tier country targets";      run_registrar scripts/bringup_register_watch_country_targets.py
+info "[5c] region frames (HTTP)";            run_registrar scripts/bringup_register_region_targets.py
+info "[5d] region/applicability desk tags (HTTP)"; run_registrar scripts/bringup_tag_targets.py
+info "[6] analyst working set";              run_registrar scripts/bringup_register_analysts.py
+info "[7] deterministic analysts (HTTP)"
 for det in cross_source_dedup cross_source_coalesce entity_resolution \
            finding_supersession integrity_sweep situation_clustering; do
   run_registrar "scripts/bringup_register_${det}.py"
@@ -444,8 +483,9 @@ fi
 #     2026-08-01 outage fell through: the descriptor-parse bug only bites on the
 #     COLD path, so warm actors kept serving and every check above stayed green
 #     while the fleet could not activate. The full test suite missed it too —
-#     8,500 tests build descriptors in process, none traverse
-#     registry-fetch → parse → activate → run against a live sidecar.
+#     every one of its ten-thousand-odd tests builds descriptors in process,
+#     none traverse registry-fetch → parse → activate → run against a live
+#     sidecar.
 #
 #     The smoke forces ONE unit on ONE desk through the sidecar and asserts a
 #     fresh analyst_traces row, distinguishing "no trace" (cold-activation
@@ -463,7 +503,17 @@ printf '   app DB        : %s\n' "${APP_DB}"
 printf '   isolation     : %s\n' "$([ "${IS_REAL}" -eq 1 ] && echo 'real legba volumes' || echo "ISOLATED (${PROJECT}_*)")"
 printf '   caddy edge    : %s\n' "$([ "${NO_CADDY}" -eq 1 ] && echo 'skipped (--no-caddy)' || echo 'up')"
 printf '   seeds         : %s\n' "$([ "${DO_SEED}" -eq 1 ] && echo "${SEED_SOURCES}" || echo 'skipped')"
-printf '   sources       : %s registered\n' "${src_count}"
+printf '   schema head   : %s\n' "${MIG_HEAD:-?}"
+# The registry counts, READ BACK from the DB rather than asserted by a label.
+# `is_head` keeps a re-run from counting superseded descriptor versions.
+printf '   sources       : %s registered (%s active heads)\n' \
+  "${src_count}" \
+  "$(db_count "SELECT count(*) FROM source_descriptors WHERE is_head AND state='active'")"
+# Targets = country desks + region frames + any situation/thematic targets.
+printf '   targets       : %s active heads (country desks + region frames)\n' \
+  "$(db_count "SELECT count(*) FROM target_descriptors WHERE is_head AND state='active'")"
+printf '   analysts      : %s active analyst heads\n' \
+  "$(db_count "SELECT count(*) FROM analyst_descriptors WHERE is_head AND state='active'")"
 if [ "${VERIFY_FAIL}" -eq 0 ]; then
   printf '\n%s[PASS] deploy verified — %s is up.%s\n' "${BOLD}${GRN}" "${PROJECT}" "${RST}"
   exit 0

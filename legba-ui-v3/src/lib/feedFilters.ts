@@ -8,10 +8,14 @@
  *   severity:high verified:true country:iran kind:finding analyst:escalation last:7d coup
  *   └──────────── chips (AND-combined facets) ────────────────────────────┘ └ free text
  *
- * Verification/faithfulness is a FIRST-CLASS facet: `verified:true|false` and
+ * Verification/faithfulness is a FIRST-CLASS facet: `verified:true|false`,
+ * `judge:llm|deterministic|unsampled` (how the verify pass ran — the unsampled
+ * stratum is one chip, not a client-side sieve) and
  * `confidence:high|moderate|low|unverified` filter on the SAME two-axis
  * `verdictModel` vocabulary the VerdictBadge renders (ICD-203), so "high-severity
- * VERIFIED findings for Iran, last 7d" is one line of chips.
+ * VERIFIED findings for Iran, last 7d" is one line of chips. `verified:` and
+ * `judge:` push server-side (GLASS-1 — `/findings?verified=&judge_status=`), so
+ * they filter the whole corpus, not just the fetched page.
  *
  * The whole filter round-trips to a single string (`serializeFilter`) so it
  * serializes to a saved view AND to the `#view=` URL hash (addressability with
@@ -29,6 +33,7 @@ import { buildVerdict, type VerdictInput, type Verdict, type VerificationBlock }
 export const FACET_KEYS = [
   'severity',
   'verified',
+  'judge',
   'confidence',
   'likelihood',
   'target',
@@ -45,6 +50,10 @@ const FACET_ALIASES: Record<string, FacetKey> = {
   sev: 'severity',
   verified: 'verified',
   verify: 'verified',
+  // How the verify pass ran (`judge:llm|deterministic|unsampled`) — the
+  // verdict model's judgeStatus axis, incl. the honest J2 unsampled state.
+  judge: 'judge',
+  judge_status: 'judge',
   confidence: 'confidence',
   conf: 'confidence',
   likelihood: 'likelihood',
@@ -95,6 +104,7 @@ export function resolveFacetKey(raw: string): FacetKey | null {
 const SINGLE_VALUED: ReadonlySet<FacetKey> = new Set<FacetKey>([
   'severity',
   'verified',
+  'judge',
   'confidence',
   'likelihood',
   'since',
@@ -241,6 +251,11 @@ function matchChip(row: UnifiedRow, verdict: Verdict, chip: FeedChip, now: numbe
       return (row.severity ?? '').toLowerCase() === v
     case 'verified':
       return (v === 'true' || v === 'yes') ? isVerified(verdict) : !isVerified(verdict)
+    case 'judge':
+      // Exact match on how the verify pass ran (llm / deterministic /
+      // unsampled). A row with no judge_status (unverified, structural, a
+      // legacy block) matches NO value — same rule the server facet enforces.
+      return (verdict.judgeStatus ?? '').toLowerCase() === v
     case 'confidence': {
       // `unverified` is an alias for the honest `unassessed` level.
       const want = v === 'unverified' ? 'unassessed' : v
@@ -326,25 +341,41 @@ export function matchesFilter(
 
 /**
  * The query params `GET /findings` accepts that map onto a feed facet
- * (`substrate_reads_api.list_findings`). `q` is deliberately ABSENT: the route's
- * `plainto_tsquery('simple', …)` matches whole TOKENS, so pushing the free-text
- * box server-side would blank the list on every partial word the operator types
- * ("cou" → 0 rows). Free text therefore stays a client-side substring match over
- * the loaded page, exactly as before.
+ * (`substrate_reads_api.list_findings`). `verified`/`judge_status` are the
+ * GLASS-1 verification facet — the server filters over the SAME surfaced
+ * verification block the verdict reads, so the facet reaches the whole corpus
+ * and the page fill / next_cursor count the FILTERED population. `q` is
+ * deliberately ABSENT: the route's `plainto_tsquery('simple', …)` matches whole
+ * TOKENS, so pushing the free-text box server-side would blank the list on
+ * every partial word the operator types ("cou" → 0 rows). Free text therefore
+ * stays a client-side substring match over the loaded page, exactly as before.
  */
 export const FINDINGS_SERVER_FACETS: readonly string[] = [
   'target_id',
   'analyst_id',
   'severity',
+  'verified',
+  'judge_status',
   'since',
 ]
 
-/** The subset `GET /signals` accepts (no analyst/severity columns on a signal). */
+/** The subset `GET /signals` accepts (no analyst/severity/verify columns on a
+ *  signal — raw intake is never verify-assessed). */
 export const SIGNALS_SERVER_FACETS: readonly string[] = ['target_id', 'since']
 
 /** The four real severities the route's `Severity` enum accepts. `severity:none`
  *  ("has no severity") has no server equivalent and stays client-side. */
 const SERVER_SEVERITIES: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'critical'])
+
+/** The route's `JudgeStatus` enum — the three ways a verify pass runs, with the
+ *  J2 `unsampled` state first-class. A hand-typed other value stays client-side
+ *  (where it matches nothing, exactly as the server would return nothing — but
+ *  pushing it would 422 the whole page instead). */
+const SERVER_JUDGE_STATUSES: ReadonlySet<string> = new Set([
+  'llm',
+  'deterministic',
+  'unsampled',
+])
 
 export interface ServerFilterOptions {
   /** Which params the target route accepts — {@link FINDINGS_SERVER_FACETS} or
@@ -394,6 +425,18 @@ export function serverFilterParams(
   const severity = chipValue(filter.chips, 'severity')
   if (supports.has('severity') && SERVER_SEVERITIES.has(severity)) {
     out.severity = severity
+  }
+
+  const verified = chipValue(filter.chips, 'verified')
+  if (supports.has('verified') && verified) {
+    // Mirror `matchChip` exactly: 'true'/'yes' means verified; ANY other value
+    // means "not verified" — so it pushes as false, and the two passes agree.
+    out.verified = verified === 'true' || verified === 'yes' ? 'true' : 'false'
+  }
+
+  const judge = chipValue(filter.chips, 'judge')
+  if (supports.has('judge_status') && SERVER_JUDGE_STATUSES.has(judge)) {
+    out.judge_status = judge
   }
 
   const since = chipValue(filter.chips, 'since')

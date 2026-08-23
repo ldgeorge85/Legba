@@ -36,7 +36,8 @@ maturity) → [DIRECTION.md](DIRECTION.md) (designed-not-built futures: RBAC,
 tenancy, STIX/TAXII, MCP, scale-out).
 
 **"I'm going into the code." (contributor)**
-[CODE_MAP.md](CODE_MAP.md) (where everything lives) → [DESIGN.md](DESIGN.md)
+[CONTRIBUTING.md](../CONTRIBUTING.md) (the gates your branch must clear, and the
+CLA position) → [CODE_MAP.md](CODE_MAP.md) (where everything lives) → [DESIGN.md](DESIGN.md)
 (implementation decisions) → [DATA_MODEL.md](DATA_MODEL.md) (tables, tiers,
 mutation rules) → [ACQUISITION.md](ACQUISITION.md) (the ingest plane) →
 [AGENCY_GATING_MODEL.md](AGENCY_GATING_MODEL.md) (when an LLM analyst may act).

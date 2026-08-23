@@ -710,6 +710,68 @@ async def test_cache_tokens_land_in_the_run_receipt():
 
 
 @pytest.mark.asyncio
+async def test_router_served_by_lands_in_the_run_receipt():
+    """A ROUTED response names who actually served it — record that.
+
+    `model` is what we asked for and `subprovider` is which handler class
+    asked; neither identifies the upstream that answered. Measured 2026-08-16:
+    the same model id, prompt and 94 critiques flipped 13.6% of pass/fail
+    verdicts between two providers of the same weights, including a
+    pass-stratum claim. Without this field that drift cannot be seen at all.
+    """
+    from legba.data.run_accounting import (
+        bind_run_accounting,
+        current_llm_calls,
+        reset_run_accounting,
+    )
+
+    h = OpenAIProviderHandler()
+    ctx = _make_ctx(handler_kind="openai")
+    await h.on_configure(ctx)
+    routed = {**_OPENAI_OK_BODY, "provider": "DeepInfra"}
+    await _install_mock_transport(
+        h, lambda request: httpx.Response(200, json=routed),
+    )
+
+    token = bind_run_accounting()
+    try:
+        await h.chat_complete(messages=[{"role": "user", "content": "hi"}])
+        calls = current_llm_calls()
+    finally:
+        reset_run_accounting(token)
+
+    assert calls[0]["served_by"] == "DeepInfra"
+
+
+@pytest.mark.asyncio
+async def test_unrouted_receipt_omits_served_by():
+    """A direct endpoint names no provider, so the receipt must stay
+    byte-identical — the field's PRESENCE is the evidence that a router chose
+    on our behalf."""
+    from legba.data.run_accounting import (
+        bind_run_accounting,
+        current_llm_calls,
+        reset_run_accounting,
+    )
+
+    h = OpenAIProviderHandler()
+    ctx = _make_ctx(handler_kind="openai")
+    await h.on_configure(ctx)
+    await _install_mock_transport(
+        h, lambda request: httpx.Response(200, json=_OPENAI_OK_BODY),
+    )
+
+    token = bind_run_accounting()
+    try:
+        await h.chat_complete(messages=[{"role": "user", "content": "hi"}])
+        calls = current_llm_calls()
+    finally:
+        reset_run_accounting(token)
+
+    assert "served_by" not in calls[0]
+
+
+@pytest.mark.asyncio
 async def test_uncached_receipt_omits_the_cache_fields():
     from legba.data.run_accounting import (
         bind_run_accounting,
@@ -980,6 +1042,309 @@ async def test_anthropic_chat_complete_with_tools_translates():
     assert tc.name == "search_signals"
     assert tc.id == "toolu_01ABC"
     assert tc.arguments == {"query": "BR energy", "limit": 5}
+
+
+# ---------------------------------------------------------------------------
+# Anthropic streaming — SSE accumulation, mid-stream honesty, output clamp
+# ---------------------------------------------------------------------------
+
+
+def _sse_body(events: list[dict[str, Any]]) -> bytes:
+    """Render events the way Anthropic's SSE wire serves them."""
+    lines: list[str] = []
+    for event in events:
+        lines.append(f"event: {event.get('type', 'message')}")
+        lines.append("data: " + json.dumps(event))
+        lines.append("")
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def _sse_response(events: list[dict[str, Any]]) -> httpx.Response:
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content=_sse_body(events),
+    )
+
+
+_ANTHROPIC_SSE_OK: list[dict[str, Any]] = [
+    {
+        "type": "message_start",
+        "message": {
+            "id": "msg_01S", "type": "message", "role": "assistant",
+            "model": "claude-opus-4-8", "content": [],
+            "usage": {
+                "input_tokens": 100,
+                "cache_read_input_tokens": 20,
+                "cache_creation_input_tokens": 5,
+                "output_tokens": 2,
+            },
+        },
+    },
+    {"type": "content_block_start", "index": 0,
+     "content_block": {"type": "text", "text": ""}},
+    {"type": "ping"},
+    {"type": "content_block_delta", "index": 0,
+     "delta": {"type": "text_delta", "text": "Hello "}},
+    {"type": "content_block_delta", "index": 0,
+     "delta": {"type": "text_delta", "text": "streamed."}},
+    {"type": "content_block_stop", "index": 0},
+    {"type": "message_delta",
+     "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+     "usage": {"output_tokens": 50}},
+    {"type": "message_stop"},
+]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_streams_and_accumulates_text():
+    """`stream: true` on the wire; deltas accumulate to the SAME LLMResponse
+    contract callers already consume — content, usage, stop reason."""
+    h = AnthropicProviderHandler()
+    ctx = _make_ctx(handler_kind="anthropic", model="claude-opus-4-8")
+    await h.on_configure(ctx)
+
+    captured: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return _sse_response(_ANTHROPIC_SSE_OK)
+
+    await _install_mock_transport(h, handler)
+    response = await h.chat_complete(
+        messages=[{"role": "user", "content": "Hello"}], max_tokens=512,
+    )
+    assert captured[0]["stream"] is True
+    assert response.content == "Hello streamed."
+    assert response.finish_reason == "stop"
+    assert response.usage.prompt_tokens == 100
+    assert response.usage.completion_tokens == 50      # message_delta wins
+    assert response.usage.cache_read_tokens == 20
+    assert response.usage.cache_write_tokens == 5
+    assert response.usage.cost_estimate_usd > 0.0
+
+
+@pytest.mark.asyncio
+async def test_anthropic_streams_tool_use_via_input_json_deltas():
+    """tool_use args arrive as input_json_delta fragments — the accumulator
+    reassembles + parses them into the normalized tool_calls shape."""
+    h = AnthropicProviderHandler()
+    ctx = _make_ctx(handler_kind="anthropic", model="claude-opus-4-8")
+    await h.on_configure(ctx)
+
+    events: list[dict[str, Any]] = [
+        _ANTHROPIC_SSE_OK[0],
+        {"type": "content_block_start", "index": 0,
+         "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "text_delta", "text": "Let me search."}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 1,
+         "content_block": {"type": "tool_use", "id": "toolu_01S",
+                           "name": "search_signals", "input": {}}},
+        {"type": "content_block_delta", "index": 1,
+         "delta": {"type": "input_json_delta", "partial_json": '{"que'}},
+        {"type": "content_block_delta", "index": 1,
+         "delta": {"type": "input_json_delta",
+                   "partial_json": 'ry": "BR energy", "limit": 5}'}},
+        {"type": "content_block_stop", "index": 1},
+        {"type": "message_delta",
+         "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+         "usage": {"output_tokens": 30}},
+        {"type": "message_stop"},
+    ]
+    await _install_mock_transport(h, lambda request: _sse_response(events))
+    response = await h.chat_complete(
+        messages=[{"role": "user", "content": "Search."}],
+    )
+    assert response.content == "Let me search."
+    assert response.finish_reason == "tool_calls"
+    assert len(response.tool_calls) == 1
+    tc = response.tool_calls[0]
+    assert tc.id == "toolu_01S"
+    assert tc.name == "search_signals"
+    assert tc.arguments == {"query": "BR energy", "limit": 5}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_mid_stream_failure_returns_partial_with_error_state(caplog):
+    """A stream that dies after partial content is handled HONESTLY: the
+    partial text comes back under an explicit finish_reason='error' (plus a
+    raw-body marker), the failure is logged loudly, and the call is NOT
+    retried into a duplicate generation."""
+    import logging as _logging
+
+    h = AnthropicProviderHandler()
+    ctx = _make_ctx(handler_kind="anthropic", model="claude-opus-4-8")
+    await h.on_configure(ctx)
+
+    events: list[dict[str, Any]] = [
+        _ANTHROPIC_SSE_OK[0],
+        {"type": "content_block_start", "index": 0,
+         "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "text_delta", "text": "Partial ans"}},
+        {"type": "error",
+         "error": {"type": "overloaded_error", "message": "mid-stream cut"}},
+    ]
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return _sse_response(events)
+
+    await _install_mock_transport(h, handler)
+    with caplog.at_level(
+        _logging.WARNING, logger="legba.data.stack.llm.anthropic",
+    ):
+        response = await h.chat_complete(
+            messages=[{"role": "user", "content": "q"}],
+        )
+    assert len(calls) == 1                              # NOT retried
+    assert response.content == "Partial ans"           # partial preserved
+    assert response.finish_reason == "error"           # explicit error state
+    assert "overloaded_error" in (
+        response.raw_response or {}
+    ).get("legba_stream_error", "")
+    assert any("MID_STREAM_FAILURE" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_mid_stream_failure_before_content_raises_transient():
+    """A stream that dies before ANY content is a transient failure — there
+    is no partial to preserve and no duplicate-generation risk on retry."""
+    h = AnthropicProviderHandler()
+    ctx = _make_ctx(handler_kind="anthropic", model="claude-opus-4-8")
+    await h.on_configure(ctx)
+
+    events: list[dict[str, Any]] = [
+        _ANTHROPIC_SSE_OK[0],
+        {"type": "error",
+         "error": {"type": "overloaded_error", "message": "early cut"}},
+    ]
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return _sse_response(events)
+
+    await _install_mock_transport(h, handler)
+    with pytest.raises(TransientLLMFailure, match="before any content"):
+        await h.chat_complete(messages=[{"role": "user", "content": "q"}])
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_anthropic_truncated_stream_without_message_stop_is_error_state():
+    """An abrupt close (no error event, no message_stop) must never read as a
+    complete answer — it comes back as the explicit error state."""
+    h = AnthropicProviderHandler()
+    ctx = _make_ctx(handler_kind="anthropic", model="claude-opus-4-8")
+    await h.on_configure(ctx)
+
+    events = _ANTHROPIC_SSE_OK[:5]  # cut before message_delta/message_stop
+    await _install_mock_transport(h, lambda request: _sse_response(events))
+    response = await h.chat_complete(messages=[{"role": "user", "content": "q"}])
+    assert response.content == "Hello streamed."
+    assert response.finish_reason == "error"
+    assert "message_stop" in (
+        response.raw_response or {}
+    ).get("legba_stream_error", "")
+
+
+@pytest.mark.asyncio
+async def test_anthropic_pre_stream_retryable_status_still_retries():
+    """Pre-stream failures keep the base handler's retry semantics — a 529
+    before the stream opens is retried and the second attempt succeeds."""
+    h = AnthropicProviderHandler()
+    ctx = _make_ctx(handler_kind="anthropic", model="claude-opus-4-8")
+    await h.on_configure(ctx)
+
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(
+                529, headers={"retry-after": "0"},
+                json={"error": {"type": "overloaded_error"}},
+            )
+        return _sse_response(_ANTHROPIC_SSE_OK)
+
+    await _install_mock_transport(h, handler)
+    response = await h.chat_complete(messages=[{"role": "user", "content": "q"}])
+    assert len(calls) == 2
+    assert response.content == "Hello streamed."
+    assert response.finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_non_sse_json_body_still_parses():
+    """An Anthropic-compatible proxy that ignores `stream: true` and returns
+    the complete JSON body degrades gracefully — streaming is a transport
+    optimization, never a correctness requirement."""
+    h = AnthropicProviderHandler()
+    ctx = _make_ctx(handler_kind="anthropic", model="claude-opus-4-7")
+    await h.on_configure(ctx)
+    await _install_mock_transport(
+        h, lambda request: httpx.Response(200, json=_ANTHROPIC_OK_BODY),
+    )
+    response = await h.chat_complete(messages=[{"role": "user", "content": "q"}])
+    assert response.content == "Hello there."
+    assert response.finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_clamps_max_tokens_over_documented_ceiling(caplog):
+    """A max_tokens above Anthropic's documented per-request output ceiling
+    is clamped on the wire and logged loudly — once per model, not per call."""
+    import logging as _logging
+
+    h = AnthropicProviderHandler()
+    ctx = _make_ctx(handler_kind="anthropic", model="claude-opus-4-8")
+    await h.on_configure(ctx)
+
+    captured: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return _sse_response(_ANTHROPIC_SSE_OK)
+
+    await _install_mock_transport(h, handler)
+    with caplog.at_level(
+        _logging.WARNING, logger="legba.data.stack.llm.anthropic",
+    ):
+        await h.chat_complete(
+            messages=[{"role": "user", "content": "q"}], max_tokens=200_000,
+        )
+        await h.chat_complete(
+            messages=[{"role": "user", "content": "q"}], max_tokens=200_000,
+        )
+    assert captured[0]["max_tokens"] == 128_000
+    assert captured[1]["max_tokens"] == 128_000
+    clamp_logs = [r for r in caplog.records if "CLAMPED" in r.message]
+    assert len(clamp_logs) == 1                        # once per model
+
+
+@pytest.mark.asyncio
+async def test_anthropic_in_budget_max_tokens_not_clamped():
+    """The deployed 32768 consult budget passes through untouched — it sits
+    well under the Opus line's 128k documented ceiling."""
+    h = AnthropicProviderHandler()
+    ctx = _make_ctx(handler_kind="anthropic", model="claude-opus-4-8")
+    await h.on_configure(ctx)
+
+    captured: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return _sse_response(_ANTHROPIC_SSE_OK)
+
+    await _install_mock_transport(h, handler)
+    await h.chat_complete(
+        messages=[{"role": "user", "content": "q"}], max_tokens=32_768,
+    )
+    assert captured[0]["max_tokens"] == 32_768
 
 
 # ---------------------------------------------------------------------------

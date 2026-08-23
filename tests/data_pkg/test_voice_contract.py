@@ -40,8 +40,11 @@ from legba.data.analysts._tradecraft import (
     COMPOSITION_BODY_SHAPE,
     CONSEQUENCE_RULE,
     NO_INSTRUMENT_READINGS,
+    TITLE_NOT_THE_AS_OF_LINE,
     UNIT_BODY_SHAPE,
+    UNIT_BODY_SHAPE_D6,
     UNIT_READ_CONTRACT,
+    UNIT_READ_CONTRACT_D6,
     UNIT_VERDICT_RULE,
     with_preamble_if_absent,
 )
@@ -75,6 +78,32 @@ UNITS: tuple[str, ...] = (
     "disruption_status",
 )
 
+#: D6 (2026-08-19 drafts, flipped 2026-08-20) — the units whose descriptors
+#: carry the amended house contract, i.e. everything in :data:`UNITS` except the
+#: one desk the VOICE-3 replay HELD.
+#:
+#: MA4 splices :data:`TITLE_NOT_THE_AS_OF_LINE` INTO the contract, so a flipped
+#: descriptor no longer contains the pre-D6 contract as a substring and a held
+#: one no longer contains the amended one. The contract's own first line claims
+#: it is "identical on every desk" — while this split exists that claim is
+#: TRUE OF EIGHT DESKS, and the split is pinned here rather than papered over so
+#: the divergence cannot outlive the HOLD silently.
+D6_FLIPPED: frozenset[str] = frozenset(UNITS) - {"narrative_coordination"}
+
+#: The desk VOICE-3 held back: its replay could not catch the coordination
+#: signal on the two positive windows. Its descriptor keeps the pre-D6 prompt
+#: (and therefore the pre-D6 contract) until that condition is met.
+D6_HELD: frozenset[str] = frozenset(UNITS) - D6_FLIPPED
+
+
+def _expected_contract(unit: str) -> str:
+    return UNIT_READ_CONTRACT_D6 if unit in D6_FLIPPED else UNIT_READ_CONTRACT
+
+
+def _expected_body_shape(unit: str) -> str:
+    return UNIT_BODY_SHAPE_D6 if unit in D6_FLIPPED else UNIT_BODY_SHAPE
+
+
 #: Every composition prompt that must carry the new shape.
 COMPOSITION_PROMPTS: tuple[tuple[str, str], ...] = (
     ("country", synth._COMPOSITION_SYSTEM),
@@ -83,10 +112,16 @@ COMPOSITION_PROMPTS: tuple[tuple[str, str], ...] = (
     ("thematic", synth._THEMATIC_COMPOSITION_SYSTEM),
 )
 
-#: The three that RANK. ``_COMPOSITION_SYSTEM`` carries the consequence rubric
-#: in reduced form inside its own shape rule (a country desk ranks seven units,
-#: not the world), so it is excluded from the full-rule assertion.
-RANKING_PROMPTS: tuple[tuple[str, str], ...] = COMPOSITION_PROMPTS[1:]
+#: Every composition prompt RANKS, and since VOICE-4 every one of them carries
+#: the full shared ``CONSEQUENCE_RULE``. ``_COMPOSITION_SYSTEM`` used to be
+#: excluded here: it held the rubric only in reduced form inside its own shape
+#: rule, on the theory that a country desk ranks seven units rather than the
+#: world. The D6 drafts ported the intact rule down — the tower inherits its
+#: ordering from the layer below, so a floor that ranks by a different key is
+#: exactly how the defect propagates — and the reduced rubric stays alongside it
+#: (pinned separately by
+#: ``test_country_composition_carries_the_reduced_consequence_rubric``).
+RANKING_PROMPTS: tuple[tuple[str, str], ...] = COMPOSITION_PROMPTS
 
 
 def _norm(text: str) -> str:
@@ -133,8 +168,49 @@ def test_unit_descriptor_carries_the_house_contract_verbatim(unit: str) -> None:
     it (``_effective_system_prompt``) is shared with three non-unit
     inline_target analysts whose body shapes are legitimately different. So it
     is pasted, and this test is what makes the paste safe.
+
+    D6: which contract a desk owes depends on whether it has flipped — see
+    :data:`D6_FLIPPED`. The assertion is unchanged in kind (a descriptor
+    carries its contract VERBATIM); only the expected constant is now a
+    function of the desk's flip state.
     """
-    assert _norm(UNIT_READ_CONTRACT) in _norm(_system_prompt(unit))
+    assert _norm(_expected_contract(unit)) in _norm(_system_prompt(unit))
+
+
+def test_the_only_d6_contract_change_is_the_title_amendment() -> None:
+    """MA4 is ONE sentence, and this is what keeps it one sentence.
+
+    The amended contract is derived from the pre-D6 one by a single splice, so
+    undoing that splice here and comparing reproduces the whole delta. A second
+    change smuggled into the D6 contract — a reworded body shape, a dropped
+    rule — shows up as an inequality rather than as prose nobody diffed.
+    """
+    assert TITLE_NOT_THE_AS_OF_LINE in UNIT_READ_CONTRACT_D6
+    assert TITLE_NOT_THE_AS_OF_LINE not in UNIT_READ_CONTRACT
+    assert (
+        _norm(UNIT_READ_CONTRACT_D6).replace(
+            _norm(TITLE_NOT_THE_AS_OF_LINE) + " ", "", 1
+        )
+        == _norm(UNIT_READ_CONTRACT)
+    )
+
+
+def test_the_held_desk_is_the_only_one_still_on_the_pre_d6_contract() -> None:
+    """The HOLD, as a property of the tree rather than a note in a plan.
+
+    When narrative_coordination's replay condition is met and its descriptor
+    flips, this test goes red and names the constant to edit — which is the
+    point. Until then it pins that the split is exactly one desk wide, and that
+    nobody flipped the held desk without lifting the hold here.
+    """
+    assert D6_HELD == {"narrative_coordination"}
+    for unit in UNITS:
+        prompt = _norm(_system_prompt(unit))
+        carries = _norm(TITLE_NOT_THE_AS_OF_LINE) in prompt
+        assert carries == (unit in D6_FLIPPED), (
+            f"{unit}: carries the MA4 TITLE amendment={carries} but "
+            f"D6_FLIPPED membership={unit in D6_FLIPPED}"
+        )
 
 
 @pytest.mark.parametrize("unit", UNITS)
@@ -161,9 +237,12 @@ def test_assembled_unit_prompt_states_the_as_of_rule(unit: str) -> None:
 def test_assembled_unit_prompt_carries_the_one_body_shape(unit: str) -> None:
     """D4 — one skeleton, every desk. Before this the eight units used five
     different house styles and one emitted its whole body as a single
-    paragraph."""
+    paragraph.
+
+    D6 amends the TITLE rule inside this shape (MA4), so the expected spec is
+    the flipped or the pre-D6 one per :data:`D6_FLIPPED`."""
     assembled = _norm(_assembled(unit))
-    assert _norm(UNIT_BODY_SHAPE) in assembled
+    assert _norm(_expected_body_shape(unit)) in assembled
     for section in (
         "## What changed",
         "## Why it matters",
@@ -173,25 +252,87 @@ def test_assembled_unit_prompt_carries_the_one_body_shape(unit: str) -> None:
         assert section in assembled, section
 
 
+#: The paragraphs allowed to NAME a banned phrase, keyed by their opening
+#: words, because naming one is the whole job of each:
+#:
+#:   * ``UNIT_VERDICT_RULE`` — the ban itself, which quotes what it forbids;
+#:   * the D6 ``WHAT EACH MISTAKE COSTS`` paragraph (P2), whose mush-move slot
+#:     is instantiated with a phrase from THIS desk's vocabulary — escalation
+#:     fills it with 'call a real move "steady tension"', the literal example
+#:     the shared preamble note gives, which is also a banned marker.
+#:
+#: Both are prohibitions. Anywhere ELSE in the prompt, a marker is an order.
+_PROHIBITION_OPENERS: tuple[str, ...] = (
+    "STATE THE VERDICT IN YOUR OWN WORDS.",
+    "WHAT EACH MISTAKE COSTS.",
+)
+
+
+def _prohibition_paragraphs(unit: str) -> list[str]:
+    """The assembled prompt's paragraphs that are allowed to name a marker."""
+    return [
+        p
+        for p in _assembled(unit).split("\n\n")
+        if _norm(p).startswith(_PROHIBITION_OPENERS)
+    ]
+
+
 @pytest.mark.parametrize("unit", UNITS)
-def test_banned_phrases_appear_only_inside_the_ban(unit: str) -> None:
+def test_banned_phrases_appear_only_inside_a_prohibition(unit: str) -> None:
     """D2 — the ban ships WITH the replacement shape, and nothing still orders
     the banned sentence.
 
     The failure this guards against is subtle and was the diagnostic's explicit
     warning: banning a phrase while a descriptor elsewhere still instructs it
     produces synonym-swapping ("the principal vector"), not judgment. So the
-    assertion is not "the phrase is absent" — it is "the phrase occurs exactly
-    as often as the prohibition itself mentions it, and no more".
+    assertion is not "the phrase is absent" — it is "every occurrence sits
+    inside a paragraph whose job is to FORBID it".
+
+    D6 widened the allowance from one paragraph to two. P2 prices the refusal
+    to judge by naming a concrete mush-move in the desk's own vocabulary, and
+    on escalation that phrase is a banned marker. Counting against the ban
+    alone would have made a correctly-written prohibition look like an order.
+    The guard did not weaken: the allowance is still a fixed, named set of
+    prohibition paragraphs, and a marker in the bounded question, the vectors
+    or the rubric still fails.
     """
     assembled = _norm(_assembled(unit))
-    ban = _norm(UNIT_VERDICT_RULE)
+    zones = _prohibition_paragraphs(unit)
     for marker in BANNED_PHRASE_MARKERS:
-        assert assembled.count(marker) == ban.count(marker), (
+        allowed = sum(_norm(z).count(marker) for z in zones)
+        assert assembled.count(marker) == allowed, (
             f"{unit}: {marker!r} appears {assembled.count(marker)}x in the "
-            f"assembled prompt but only {ban.count(marker)}x in the ban — some "
-            "descriptor line is still asking for it"
+            f"assembled prompt but only {allowed}x inside a prohibition "
+            "paragraph — some descriptor line is still asking for it"
         )
+
+
+@pytest.mark.parametrize("unit", UNITS)
+def test_the_prohibition_paragraphs_are_actually_prohibitions(unit: str) -> None:
+    """The fence under the widened allowance above.
+
+    ``_PROHIBITION_OPENERS`` grants two paragraphs the right to name a banned
+    phrase. That right is only safe while those paragraphs still FORBID —
+    reword P2 into something that orders the mush-move and the allowance would
+    launder it. So each zone is pinned to the text that makes it a prohibition:
+    the ban to its own constant, and P2 to the price it puts on refusing to
+    judge.
+    """
+    zones = {
+        _norm(p).split(".")[0]: _norm(p) for p in _prohibition_paragraphs(unit)
+    }
+    ban = zones.get("STATE THE VERDICT IN YOUR OWN WORDS")
+    assert ban is not None, f"{unit}: the verdict rule paragraph is missing"
+    assert _norm(UNIT_VERDICT_RULE) in ban
+
+    cost = zones.get("WHAT EACH MISTAKE COSTS")
+    if unit in D6_FLIPPED:
+        assert cost is not None, f"{unit}: D6-flipped but P2 is missing"
+        # P2 states BOTH prices; the shared note forbids shipping it with one.
+        assert "fails the finding" in cost
+        assert "is WORSE" in cost
+    else:
+        assert cost is None, f"{unit}: held desk carries P2"
 
 
 @pytest.mark.parametrize("unit", UNITS)

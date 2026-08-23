@@ -7,7 +7,7 @@ publishes lifecycle events to NATS subjects (e.g. ``descriptor.updated.target.<i
 but until matching JetStream streams exist those publishes silently fail
 — ``js.publish`` requires a stream covering the subject.
 
-This module owns the four streams the runtime consumes:
+This module owns the five streams the runtime consumes:
 
   * ``LEGBA_DESCRIPTOR_EVENTS`` covering ``descriptor.>`` (all action ×
     family × id combos),
@@ -15,7 +15,11 @@ This module owns the four streams the runtime consumes:
     stack-component lifecycle events),
   * ``LEGBA_VOCABULARY_EVENTS`` covering ``vocabulary.updated.>``,
   * ``LEGBA_DLQ_EVENTS`` covering ``legba.dlq.>`` (per-row dead-letter
-    events for the UI live-tail panel — L-221).
+    events for the UI live-tail panel — L-221),
+  * ``LEGBA_VAULT_EVENTS`` covering ``vault.secret.>`` (credential-vault
+    rotation events — drives LLM handler-cache eviction so a rotated secret
+    doesn't keep serving from a process-lifetime cache; see
+    :mod:`legba.data.registry.vault_events`).
 
 Retention is interest-based (auto-cleanup once every consumer ACKs); a
 1-hour ``max_age`` is a safety net for events with no live consumer.
@@ -40,6 +44,7 @@ DESCRIPTOR_EVENTS_STREAM = "LEGBA_DESCRIPTOR_EVENTS"
 STACK_EVENTS_STREAM = "LEGBA_STACK_EVENTS"
 VOCABULARY_EVENTS_STREAM = "LEGBA_VOCABULARY_EVENTS"
 DLQ_EVENTS_STREAM = "LEGBA_DLQ_EVENTS"
+VAULT_EVENTS_STREAM = "LEGBA_VAULT_EVENTS"
 
 # Subject filters — match every descriptor/stack/vocabulary event published
 # by the registry. `>` is JetStream's recursive wildcard so this covers any
@@ -52,6 +57,12 @@ VOCABULARY_EVENTS_SUBJECTS = ["vocabulary.updated.>"]
 # ``legba.dlq.output.<row_id>`` (route_to_output_dead_letter), plus any
 # future ``legba.dlq.<namespace>.<id>`` subjects the DLQ helpers grow.
 DLQ_EVENTS_SUBJECTS = ["legba.dlq.>"]
+# Credential-vault rotation events (``vault.secret.rotated.<secret_id>`` —
+# see vault_events.py). A separate stream from LEGBA_STACK_EVENTS on purpose:
+# a vault secret is not a stack component (no ``kind`` token, no per-id
+# eviction target), so mixing it into the stack stream would misname what
+# that stream covers for anyone inspecting it via ``nats stream ls``.
+VAULT_EVENTS_SUBJECTS = ["vault.secret.>"]
 
 # 1 hour safety-net so a long-disconnected consumer can't accumulate
 # unbounded backlog. Interest retention removes acked messages immediately.
@@ -79,7 +90,7 @@ async def ensure_runtime_event_streams(
     *,
     max_age_seconds: int = _DEFAULT_MAX_AGE_SECONDS,
 ) -> list[StreamProvisionResult]:
-    """Idempotently create the four runtime event streams.
+    """Idempotently create the five runtime event streams.
 
     The caller (registry server lifespan, or a bring-up CLI) must have
     already called :meth:`NatsStore.connect` so ``nats_store.js`` is
@@ -93,6 +104,7 @@ async def ensure_runtime_event_streams(
         (STACK_EVENTS_STREAM, STACK_EVENTS_SUBJECTS),
         (VOCABULARY_EVENTS_STREAM, VOCABULARY_EVENTS_SUBJECTS),
         (DLQ_EVENTS_STREAM, DLQ_EVENTS_SUBJECTS),
+        (VAULT_EVENTS_STREAM, VAULT_EVENTS_SUBJECTS),
     )
     out: list[StreamProvisionResult] = []
     for name, subjects in specs:
@@ -126,6 +138,8 @@ __all__ = [
     "STACK_EVENTS_STREAM",
     "STACK_EVENTS_SUBJECTS",
     "StreamProvisionResult",
+    "VAULT_EVENTS_STREAM",
+    "VAULT_EVENTS_SUBJECTS",
     "VOCABULARY_EVENTS_STREAM",
     "VOCABULARY_EVENTS_SUBJECTS",
     "ensure_runtime_event_streams",

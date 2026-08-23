@@ -480,6 +480,31 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
             "counting as one severity step. The default puts a TOTAL judge "
             "outage at critical, exactly.",
         ),
+        # -- METERING loops (#21/#22, 2026-08-15) -------------------------
+        _pos_int(
+            "gauge_llm_latency_window_minutes",
+            "production gauge: trailing window over the llm_calls receipts "
+            "for the primary-plane latency read. Short by design — "
+            "saturation is acute, and a day-wide denominator averages a bad "
+            "hour into invisibility.",
+        ),
+        _pos_float(
+            "gauge_llm_latency_p95_ceiling_ms",
+            "production gauge: p95 call duration (ms) that counts as a "
+            "latency deficit on the primary LLM component. Default is HALF "
+            "the component's client timeout — the leading edge of the "
+            "timeout cliff, and the number that must be green before a "
+            "budget raise.",
+            maximum=3_600_000.0,
+        ),
+        _pos_int(
+            "gauge_llm_latency_min_calls",
+            "production gauge: calls needed in-window before the p95 "
+            "statistic is trusted (below it the loop reads "
+            "insufficient_history). The truncation leg ignores this floor — "
+            "one finish_reason='length' receipt is a defect at any sample "
+            "size.",
+        ),
         _pos_float(
             "gauge_drift_severity_divisor",
             "production gauge: diverged descriptors per severity step in the "
@@ -487,6 +512,24 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
             "divergence page, because a live prompt that is not the tree's IS "
             "the analytic method actually running.",
             maximum=1000.0,
+        ),
+        # -- desk_head_staleness (FRAME-1 §6, 2026-08-20) ------------------
+        _pos_float(
+            "gauge_staleness_max_head_age_hours",
+            "production gauge: age (hours) of the OLDEST head a composition "
+            "consumed, above which the desk counts as silent past its expected "
+            "fire interval. Default 34h = 2x the units' 11h cooldown + fallback "
+            "slack. NOT a freshness SLA — the composition may read old heads "
+            "under its admissibility horizon; this is the line past which the "
+            "operator should know the desk went quiet.",
+            maximum=_MAX_WINDOW_DAYS * 24.0,
+        ),
+        _pos_float(
+            "gauge_staleness_window_hours",
+            "production gauge: how far back to look for the composition head "
+            "carrying the head-age stamp. Short by design — a composition that "
+            "stopped running belongs to the cadence loop, not this one.",
+            maximum=_MAX_WINDOW_DAYS * 24.0,
         ),
         _pos_float(
             "gauge_state_drift_severity_divisor",
@@ -1092,6 +1135,15 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
             "Posture for a web-origin object whose license is unreviewed.",
             choices=("fail_closed", "inherit"),
         ),
+        OptionSpec(
+            "unknown_license_gate",
+            "str",
+            "Posture for ANY object (curated included) whose license is "
+            "unset or 'unknown'. 'archive' = the shipped fail-OPEN default; "
+            "'fail_closed' = withhold the bytes, keep the metadata. "
+            "Recommended fail_closed once your own catalog is classified.",
+            choices=("archive", "fail_closed"),
+        ),
     ),
     "signals_retention": (
         _nonneg_int(
@@ -1141,6 +1193,46 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
 #: Bounded length so a knob cannot smuggle a paragraph into the ranking scan.
 _FOCUS_TOKEN_PATTERN = re.compile(r"^[\w .,'\-/&()]{1,64}(:\d{1,3}(\.\d{1,3})?)?$")
 
+#: One ``judge_sample_always`` member: a finding kind or analyst id — the same
+#: lowercase snake_case identifier alphabet both use.
+_ANALYST_TOKEN_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+# J2 (2026-08-15) — the verify-path JUDGE SAMPLING gate, settable on every
+# verify-bearing kind. UNLIKE every other kind knob these are NOT read by the
+# kind's own ``run_method``: the actor plane's verify seam reads them off the
+# merged run options (``dapr_actors`` → ``actor_critic`` →
+# ``provenance.judge_assessability.JudgeSamplingPolicy``), because the judge
+# runs AFTER the finding lands, outside run_method. Declared here because this
+# catalog is the one operator-facing channel (registration gate + live PUT +
+# loud degrade) for descriptor-borne knobs.
+_JUDGE_SAMPLING_OPTION_SPECS: tuple[OptionSpec, ...] = (
+    OptionSpec(
+        "judge_sample_rate",
+        "float",
+        "Fraction of this analyst's findings the LLM faithfulness judge "
+        "grades (the J2 sampling gate). DETERMINISTIC per finding — SHA-256 "
+        "of the finding id vs the rate, replayable, no RNG. An unsampled "
+        "finding keeps the deterministic floor under the PROVISIONAL "
+        "ceiling and publishes judge_status='unsampled' (an honest state, "
+        "never an error), with overall_score still a real float. Absent ⇒ "
+        "no gate: every finding is judged, exactly as before J2.",
+        minimum=0.0,
+        maximum=1.0,
+    ),
+    OptionSpec(
+        "judge_sample_always",
+        "str_list",
+        "Finding kinds and/or analyst ids the judge ALWAYS grades regardless "
+        "of judge_sample_rate. Absent ⇒ the code default "
+        "(judge_assessability.JUDGE_SAMPLE_ALWAYS_DEFAULT: compositions + "
+        "world + journal — meta_findings_synthesizer, "
+        "cross_analyst_correlator, situation_tracker, journal_assessor). An "
+        "explicit empty list CLEARS the default so a rate can gate "
+        "everything.",
+        pattern=_ANALYST_TOKEN_PATTERN,
+    ),
+)
+
 ANALYST_KIND_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
     "inline_target": (
         OptionSpec(
@@ -1164,7 +1256,19 @@ ANALYST_KIND_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
             "slice_focus; same re-order-never-filter contract.",
             pattern=_FOCUS_TOKEN_PATTERN,
         ),
+        # J2 — the unit findings are the SAMPLED verify population (the tree
+        # default rides the unit descriptors at 0.10).
+        *_JUDGE_SAMPLING_OPTION_SPECS,
     ),
+    # J2 — every OTHER verify-bearing kind may set the same gate. Their kinds
+    # sit in JUDGE_SAMPLE_ALWAYS_DEFAULT, so a bare judge_sample_rate on one of
+    # these is protected (always judged) until an explicit judge_sample_always
+    # clears the membership — the deliberate two-step for sampling a
+    # composition. The verify seam reads these, not run_method (banner above).
+    "meta_findings_synthesizer": _JUDGE_SAMPLING_OPTION_SPECS,
+    "cross_analyst_correlator": _JUDGE_SAMPLING_OPTION_SPECS,
+    "situation_tracker": _JUDGE_SAMPLING_OPTION_SPECS,
+    "journal_assessor": _JUDGE_SAMPLING_OPTION_SPECS,
     # K-G2. The reifier's throughput and quality dials. THROUGHPUT is
     # max_candidates × batch_size; QUALITY is qualification_bar ×
     # min_independent_sources. They are separate levers on purpose — the bar

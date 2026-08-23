@@ -59,6 +59,19 @@ grounding:
 
 method:
   kind: llm_planner
+  # J2 (2026-08-15, FORWARD_PLAN §1) — the verify-path judge SAMPLING gate.
+  # Unit findings are the SAMPLED verify population: the LLM faithfulness
+  # judge grades a DETERMINISTIC 10% of this unit's findings (SHA-256 of the
+  # finding id vs the rate — replayable, no RNG; the free-tier judge lane is
+  # ~50 calls/day). Unsampled findings keep the deterministic floor under the
+  # PROVISIONAL ceiling and publish judge_status='unsampled' — an honest
+  # state, never an error — with overall_score still populated. The
+  # always-judged membership defaults in code to compositions + world +
+  # journal (judge_assessability.JUDGE_SAMPLE_ALWAYS_DEFAULT); a
+  # judge_sample_always list here overrides that default (an explicit []
+  # clears it).
+  options:
+    judge_sample_rate: 0.10
   # Inline, topic-scoped prompt (NOT the generic country_assessor prompt_module).
   # It binds this unit to the narrative/coordination question ONLY and pins the
   # STRICT-JSON FindingPayload contract so the [N] citation pass + verify gate
@@ -201,6 +214,31 @@ method:
     atmosphere, scene-setting, an inferred motive, or an adjective doing the
     work a cited number should do. If the magnitude is not in a cited
     signal, it is not in your prose.
+
+    SEVERITY IS THE STANDING STATE, NOT THIS SLICE'S MOVEMENT. Your
+    'severity:<level>' tag records WHERE YOUR DIMENSION STANDS on this desk
+    right now — the condition a reader would find if they looked today — NOT
+    how far it moved in the last 72 hours. A war running for months is
+    'severity:high' in a week that added nothing to it; a calm desk where
+    one official traded an insult is 'severity:low' even though that insult
+    is the only thing that changed. Tag the STATE, and tag the MOVEMENT
+    SEPARATELY: alongside your severity tag emit EXACTLY ONE
+    'severity_delta:<rose|fell|steady|new>' tag — 'rose' or 'fell' when this
+    slice's cited evidence moves the standing level up or down, 'steady'
+    when you checked it against your prior read and the level held (a HIGH
+    level that held is 'severity:high' + 'severity_delta:steady', never a
+    demotion), and 'new' when you have no prior read of this dimension to
+    compare against — never 'steady', which claims a comparison you did not
+    make. The pair is the point: 'severity:high' + 'severity_delta:steady'
+    is a serious condition that is still running, while 'severity:low' +
+    'severity_delta:rose' is a quiet desk that just twitched, and downstream
+    they must not read alike. THIS TAG IS REQUIRED IN ADDITION to every tag
+    your output schema below lists: where that schema names the tags your
+    'tags' array must contain, read it as that list PLUS this one — a 'tags'
+    array with no 'severity_delta:' entry is incomplete however exhaustive
+    the schema's own wording sounds. Both tags are STRUCTURED FIELDS: never
+    print either one, or its level, in the prose — '## What changed' is
+    where the movement gets said in words.
 
     THE BLUF IS UNDER THE ABSENCE RULE TOO. The BLUF is written last and
     compresses everything below it, which is exactly where a scope qualifier

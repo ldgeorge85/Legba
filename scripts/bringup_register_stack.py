@@ -47,7 +47,7 @@ def _t(s: str) -> dict:
     return {"factory_kind": "text", "raw": s}
 
 
-def _n(n: int) -> dict:
+def _n(n: float | int) -> dict:
     return {"factory_kind": "number", "raw": n}
 
 
@@ -82,6 +82,97 @@ COMPONENTS: list[tuple[str, dict]] = [
                 "model_name": _t(LLM_MODEL_NAME),
                 "max_tokens": _n(16384),
                 "tier": _dd("primary", ["primary", "fallback", "cheap"]),
+                # Client-side concurrency cap (#21 headroom): at most 12
+                # in-flight completions from one process against the primary
+                # plane. Self-hosted, so NO price_* fields — receipts cost
+                # $0.00, the correct posture for our own GPUs.
+                "max_concurrent": _n(12),
+            },
+        },
+    ),
+    (
+        # Cross-family verify judge, Cerebras PAYG lane (registered live
+        # 2026-07-30; tree payload added with #22 so the config — and now its
+        # PRICING — has a reviewable home). Values mirror the live head row
+        # as of 2026-08-15.
+        "llm.judge.cerebras_gemma4_31b.openai_compat",
+        {
+            "id": "llm.judge.cerebras_gemma4_31b.openai_compat",
+            "name": "Cerebras gemma-4-31b (cross-family verify judge, PAYG)",
+            "schema_uri": "legba/stack/llm_provider/1.0.0",
+            "state": "active",
+            "owner": "lewis@local",
+            "config": {
+                "api_endpoint": _t("https://api.cerebras.ai"),
+                "api_key": _s("llm.judge.cerebras.api_key"),
+                "model_name": _t("gemma-4-31b"),
+                "max_tokens": _n(16384),
+                "timeout_seconds": _n(90),
+                "tier": _dd("fallback", ["primary", "fallback", "cheap"]),
+                # #22 spend metering — Cerebras list price for gemma-4-31b,
+                # USD per 1M tokens, verified 2026-08-15 against two
+                # independent trackers (artificialanalysis.ai, llmgateway.io).
+                # Re-verify at cerebras.ai/pricing before trusting a burn
+                # number across a provider price change.
+                "price_input_per_m": _n(0.99),
+                "price_output_per_m": _n(1.49),
+                # Daily page ceiling for the llm_daily_burn gauge. Measured
+                # judge volume 2026-08-15: ~9.4M in + 0.11M out tokens over
+                # 7 days ≈ $1.4/day average, ~$4/day at full ~1,100-call
+                # tilt — $10 pages on runaway, never on normal.
+                "daily_burn_alert_usd": _n(10.0),
+            },
+        },
+    ),
+    (
+        # Cross-family judge, OpenRouter FREE lane (Nemotron-3-super). The
+        # `:free` model id is $0 by contract, so prices are pinned to 0 —
+        # explicit zeros, not absent, so the day a PAID Nemotron lane
+        # replaces this one the reviewer finds the two fields already
+        # sitting here waiting for OpenRouter's listed per-1M numbers (and a
+        # daily_burn_alert_usd alongside them). Mirrors the live head row.
+        "llm.judge.nemotron3_super.openai_compat",
+        {
+            "id": "llm.judge.nemotron3_super.openai_compat",
+            "name": "OpenRouter Nemotron-3-super-120b (cross-family judge, free lane)",
+            "schema_uri": "legba/stack/llm_provider/1.0.0",
+            "state": "active",
+            "owner": "lewis@local",
+            "config": {
+                "api_endpoint": _t("https://openrouter.ai/api"),
+                "api_key": _s("llm.judge.openrouter.api_key"),
+                "model_name": _t("nvidia/nemotron-3-super-120b-a12b:free"),
+                "max_tokens": _n(16384),
+                "timeout_seconds": _n(120),
+                "tier": _dd("fallback", ["primary", "fallback", "cheap"]),
+                "price_input_per_m": _n(0),
+                "price_output_per_m": _n(0),
+                # No daily_burn_alert_usd: a $0 lane cannot burn, and absent
+                # = never pages. Set it WITH the prices if a paid lane lands.
+            },
+        },
+    ),
+    (
+        # OpenRouter Nemotron-3-ultra free lane (the 550B; endpoint 404s as
+        # of 2026-08-15 but the component is live-registered for the 2x3
+        # judge matrix). Same $0 pinning and the same where-the-numbers-go
+        # note as the super lane above.
+        "llm.judge.nemotron3_ultra.openai_compat",
+        {
+            "id": "llm.judge.nemotron3_ultra.openai_compat",
+            "name": "OpenRouter Nemotron-3-ultra-550b (judge matrix, free lane)",
+            "schema_uri": "legba/stack/llm_provider/1.0.0",
+            "state": "active",
+            "owner": "lewis@local",
+            "config": {
+                "api_endpoint": _t("https://openrouter.ai/api"),
+                "api_key": _s("llm.judge.openrouter.api_key"),
+                "model_name": _t("nvidia/nemotron-3-ultra-550b-a55b:free"),
+                "max_tokens": _n(16384),
+                "timeout_seconds": _n(120),
+                "tier": _dd("fallback", ["primary", "fallback", "cheap"]),
+                "price_input_per_m": _n(0),
+                "price_output_per_m": _n(0),
             },
         },
     ),
@@ -99,7 +190,58 @@ COMPONENTS: list[tuple[str, dict]] = [
                 "api_key": _s("llm.anthropic.api_key"),
                 "model_name": _t(CONSULT_MODEL_NAME),
                 "max_tokens": _n(8192),
+                # 2026-08-15: raised from the 60s schema default for the 32k
+                # streamed consult budget. The handler streams every
+                # generation, so httpx applies this per CHUNK (a live stream
+                # resets it with every delta) — this is the stall ceiling,
+                # sized for the worst prefill gap before message_start on a
+                # long cached transcript, NOT a generation wall-time cap.
+                "timeout_seconds": _n(300),
                 "tier": _dd("fallback", ["primary", "fallback", "cheap"]),
+            },
+        },
+    ),
+    (
+        # J1 (2026-08-15, FORWARD_PLAN §1) — the CROSS-FAMILY verify judge:
+        # NVIDIA Nemotron 3 Super 120B A12B via OpenRouter's free tier. An
+        # NVIDIA judge over the OpenAI-derived gpt-oss-120b producer plane
+        # preserves the independence property the judge plane exists for.
+        # Selected via the judge-route ladder rung 1
+        # (LEGBA_JUDGE_STACK_REF=llm.judge.openrouter_nemotron120b.openai_compat);
+        # registering it changes NOTHING until that env line lands.
+        #
+        # NAMING IS LOAD-BEARING: the id ENDS with `.openai_compat` so
+        # infer_llm_subprovider routes it to the vLLM handler (OpenAI
+        # Chat-Completions + Bearer — the wire shape OpenRouter speaks). Do
+        # NOT rename it to contain `.openai.` — that routes to the OpenAI
+        # handler, which rewrites max_tokens and injects reasoning_effort.
+        #
+        # The handler's _chat_endpoint_path() prepends `/v1/...` and the base
+        # client strips a trailing `/v1` defensively, so this endpoint
+        # normalizes to https://openrouter.ai/api on the wire. max_tokens
+        # feeds the BudgetEnforcer estimate only — the vLLM handler does not
+        # put it on the wire unless the caller opts in (send_max_tokens; the
+        # opt-in exists if the free lane needs a cap). FREE-TIER LIMITS:
+        # 20 RPM, ~50 requests/day (~1000/day after a $10 lifetime credit) —
+        # the reason the verify path samples (J2). The key is the vault ref
+        # loaded by bringup_vault_load.py from .env OPENROUTER_API_KEY.
+        "llm.judge.openrouter_nemotron120b.openai_compat",
+        {
+            "id": "llm.judge.openrouter_nemotron120b.openai_compat",
+            "name": (
+                "NVIDIA Nemotron 3 Super 120B A12B "
+                "(OpenRouter free — cross-family verify judge)"
+            ),
+            "schema_uri": "legba/stack/llm_provider/1.0.0",
+            "state": "active",
+            "owner": "lewis@local",
+            "config": {
+                "api_endpoint": _t("https://openrouter.ai/api/v1"),
+                "api_key": _s("llm.judge.openrouter.api_key"),
+                "model_name": _t("nvidia/nemotron-3-super-120b-a12b:free"),
+                "max_tokens": _n(16384),
+                "timeout_seconds": _n(120),
+                "tier": _dd("cheap", ["primary", "fallback", "cheap"]),
             },
         },
     ),

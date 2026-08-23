@@ -168,6 +168,18 @@ UNIT_BODY_SHAPE: str = _body_shape(
 #: unit roll-call goes: rule (h)'s integrity guarantee (never silently drop a
 #: shown unit) is preserved, but as a FOOTER rather than as an equal-airtime
 #: obligation that ate the whole body in 94/117 compositions.
+#:
+#: L3-12 (VOICE-4): section 5 said "the ones with no read at all this cycle",
+#: which MANDATED a false self-report — a dimension whose read exists but sat
+#: below the verification floor is not a dimension with "no read at all", and
+#: the C4 audit's atom 10 is exactly that sentence published as a world fact.
+#: "no verified read CARRIED" is true of BOTH withheld classes at once, so the
+#: one-line section spec stops forcing a choice the spec cannot see; the
+#: per-class vocabulary (below-verification-floor vs unassessed gap) is set
+#: downstream by ``_coverage_rule`` against FRAME-1's deterministic COVERAGE
+#: LEDGER, which is the only surface that actually knows which class a
+#: dimension is in. ``UNIT_BODY_SHAPE`` is deliberately NOT changed: a unit
+#: really does have a slice, and its coverage semantics differ.
 COMPOSITION_BODY_SHAPE: str = _body_shape(
     "(1) the as-of line, in italics, alone on the first line; "
     "(2) '**BLUF:**' — ONE sentence naming the single most consequential thing "
@@ -179,7 +191,8 @@ COMPOSITION_BODY_SHAPE: str = _body_shape(
     "(4) '## Tension' — name any two blocks pointing different ways, or state "
     "plainly that they agree; "
     "(5) '## Coverage' — a SINGLE closing line naming the shown blocks whose "
-    "read was unremarkable and the ones with no read at all this cycle."
+    "read was unremarkable and the ones with no verified read carried this "
+    "cycle."
 )
 
 #: D2 — ask for the JUDGMENT, not the sentence. Ships the replacement SHAPE
@@ -259,21 +272,138 @@ NO_INSTRUMENT_READINGS: str = (
     "\"2026-08-03T09:15:53.997707+00:00\")."
 )
 
+#: FRAME-3 — SEVERITY AS STATE (``planning/FRAME_PROGRAM_2026-08-20.md`` §0.6,
+#: §7 train 3). The C-B driver, and the only one of R1's findings that lives
+#: entirely in a single tag's MEANING: a desk tagged the severity of its SLICE
+#: DELTA, so a war in its fourth month tagged ``severity:low`` on a week that
+#: added nothing to it, the scorecard banded the dimension ``low`` off that tag,
+#: and 37/37 non-exact bands sat BELOW the reference. Splitting the tag is the
+#: repair — the standing level in ``severity``, the movement in
+#: ``severity_delta`` — and it must land on every desk in ONE train, because a
+#: scorecard whose seven dimensions mix two meanings of the same word is worse
+#: than one that is uniformly wrong.
+#:
+#: It lives INSIDE the house contract rather than in nine per-unit tag
+#: paragraphs for the reason the contract exists: the per-unit ``"tags"``
+#: schema lines are already worded nine different ways, and a rule about what a
+#: shared field MEANS cannot be one of the things that varies by desk.
+#:
+#: THE LAST SENTENCE IS NOT DECORATION. Every unit descriptor already carries a
+#: paragraph of the form "the tags array MUST contain the topic tag X PLUS
+#: EXACTLY ONE severity tag", which reads as an EXHAUSTIVE list, and the JSON
+#: schema example above it shows exactly those two. A model handed that plus a
+#: new required tag has a genuine conflict to resolve, and the cheapest
+#: resolution is to drop the new one — which would make this whole train a
+#: no-op the tests could not see. So the rule states its own precedence, once,
+#: instead of nine bespoke edits to nine differently-worded schema paragraphs.
+SEVERITY_AS_STATE_RULE: str = (
+    "SEVERITY IS THE STANDING STATE, NOT THIS SLICE'S MOVEMENT. Your "
+    "'severity:<level>' tag records WHERE YOUR DIMENSION STANDS on this desk "
+    "right now — the condition a reader would find if they looked today — NOT "
+    "how far it moved in the last 72 hours. A war running for months is "
+    "'severity:high' in a week that added nothing to it; a calm desk where one "
+    "official traded an insult is 'severity:low' even though that insult is "
+    "the only thing that changed. Tag the STATE, and tag the MOVEMENT "
+    "SEPARATELY: alongside your severity tag emit EXACTLY ONE "
+    "'severity_delta:<rose|fell|steady|new>' tag — 'rose' or 'fell' when this "
+    "slice's cited evidence moves the standing level up or down, 'steady' when "
+    "you checked it against your prior read and the level held (a HIGH level "
+    "that held is 'severity:high' + 'severity_delta:steady', never a demotion), "
+    "and 'new' when you have no prior read of this dimension to compare "
+    "against — never 'steady', which claims a comparison you did not make. The "
+    "pair is the point: 'severity:high' + 'severity_delta:steady' is a serious "
+    "condition that is still running, while 'severity:low' + "
+    "'severity_delta:rose' is a quiet desk that just twitched, and downstream "
+    "they must not read alike. THIS TAG IS REQUIRED IN ADDITION to every tag "
+    "your output schema below lists: where that schema names the tags your "
+    "'tags' array must contain, read it as that list PLUS this one — a 'tags' "
+    "array with no 'severity_delta:' entry is incomplete however exhaustive the "
+    "schema's own wording sounds. Both tags are STRUCTURED FIELDS: never print "
+    "either one, or its level, in the prose — '## What changed' is where the "
+    "movement gets said in words."
+)
+
 #: The block pasted VERBATIM into all nine bounded-unit descriptors. Order is
-#: the order a writer needs it: shape, then verdict, then the two rules that
-#: most often break at the BLUF. The AS-OF rule is NOT here — it is
-#: code-appended to every unit via ``unit_grounding.UNIT_GROUNDING_CLAUSE``, so
-#: it needs no descriptor copy at all.
+#: the order a writer needs it: shape, then verdict, then the tag split the
+#: verdict feeds, then the two rules that most often break at the BLUF. The
+#: AS-OF rule is NOT here — it is code-appended to every unit via
+#: ``unit_grounding.UNIT_GROUNDING_CLAUSE``, so it needs no descriptor copy at
+#: all.
 UNIT_READ_CONTRACT: str = "\n\n".join(
     (
         "HOUSE READ CONTRACT — identical on every desk. Follow it; do not "
         "restate it in your output.",
         UNIT_BODY_SHAPE,
         UNIT_VERDICT_RULE,
+        SEVERITY_AS_STATE_RULE,
         UNIT_BLUF_ABSENCE_RULE,
         NO_INSTRUMENT_READINGS,
     )
 )
+
+
+# ---------------------------------------------------------------------------
+# MA4 — the D6 wave's TITLE amendment, unit layer ONLY
+# ---------------------------------------------------------------------------
+#
+# L2-11: units were opening 'title' with the as-of line, so the headline said
+# the run date instead of the verdict. The repair is one sentence spliced into
+# the TITLE rule.
+#
+# WHY IT IS SPLICED HERE AND NOT WRITTEN INTO ``_body_shape``. The TITLE
+# mechanics are SHARED — ``_body_shape`` renders them for the unit layer AND
+# the composition layer — but the two layers bind differently (see the module
+# header): compositions take the text by IMPORT, so editing ``_body_shape``
+# would rewrite four live composition prompts in the image and make this a code
+# deploy. The D6 wave is descriptor-only. So the amendment is applied to the
+# UNIT-layer copies alone, and ``COMPOSITION_BODY_SHAPE`` keeps the unamended
+# mechanics it ships with today.
+#
+# NOTHING AT RUNTIME READS THESE. Like :data:`UNIT_READ_CONTRACT` itself, they
+# are the canonical paste-source and the anti-drift anchor that
+# ``tests/data_pkg/test_voice_contract.py`` pins descriptors against.
+
+#: The MA4 sentence, verbatim as the nine D6 drafts carry it.
+TITLE_NOT_THE_AS_OF_LINE: str = (
+    "It is NEVER the as-of line and never begins with 'As of'."
+)
+
+#: The seam MA4 splices at — the end of the TITLE rule's verdict clause, and
+#: the start of the sentence that sends the body back to its own field.
+_TITLE_AMENDMENT_ANCHOR: str = "verdict in a few words. "
+
+
+def _with_title_amendment(text: str) -> str:
+    """Splice :data:`TITLE_NOT_THE_AS_OF_LINE` into a unit-layer shape spec.
+
+    Raises rather than returning the text unchanged when the anchor is gone:
+    a silent no-op here would let ``_body_shape``'s TITLE wording be reworded
+    while the amended constants quietly stopped carrying the amendment, and
+    the descriptor pins below would still pass against a contract that no
+    longer says the thing L2-11 needs it to say.
+    """
+    if text.count(_TITLE_AMENDMENT_ANCHOR) != 1:
+        raise ValueError(
+            f"MA4 anchor {_TITLE_AMENDMENT_ANCHOR!r} occurs "
+            f"{text.count(_TITLE_AMENDMENT_ANCHOR)}x, expected exactly 1 — "
+            "the TITLE rule in _body_shape() was reworded; re-derive the "
+            "splice point before trusting the amended constants"
+        )
+    return text.replace(
+        _TITLE_AMENDMENT_ANCHOR,
+        _TITLE_AMENDMENT_ANCHOR + TITLE_NOT_THE_AS_OF_LINE + " ",
+        1,
+    )
+
+
+#: :data:`UNIT_BODY_SHAPE` as the D6-flipped descriptors carry it.
+UNIT_BODY_SHAPE_D6: str = _with_title_amendment(UNIT_BODY_SHAPE)
+
+#: :data:`UNIT_READ_CONTRACT` as the D6-flipped descriptors carry it. The ONLY
+#: difference from the pre-D6 contract is :data:`TITLE_NOT_THE_AS_OF_LINE`;
+#: every other byte is identical, which is what makes MA4 auditable as a
+#: one-sentence change rather than a contract rewrite.
+UNIT_READ_CONTRACT_D6: str = _with_title_amendment(UNIT_READ_CONTRACT)
 
 
 #: The shared spine of D1 — the dated-claim obligation, identical at both
@@ -402,10 +532,14 @@ CONSEQUENCE_RULE: str = (
     "effective_confidence and salience tell you HOW FIRMLY YOU MAY STATE a "
     "thing, NEVER HOW MUCH IT MATTERS — a 0.62 confirmed strike outranks a "
     "0.89 procurement contract. Carry the SEVERITY the underlying desk "
-    "assigned: a block whose own unit called it \"no material change\", "
-    "\"routine\", or \"holding steady\", or tagged it severity:low, may NOT be "
-    "your lead however well-sourced it is. Confidence may be DISPLAYED in "
-    "words where it changes how a reader should act on a claim, but it is "
+    "assigned: a block whose own unit called it \"no material change\" or "
+    "\"routine\", or tagged it severity:low, may NOT be your lead however "
+    "well-sourced it is. \"Holding steady\" is the one exception, and it is a "
+    "different claim: it describes the DELTA, never the stakes — a block whose "
+    "standing severity is high and whose severity_delta is steady is a "
+    "continuing high-stakes condition and stays fully eligible to lead. "
+    "Confidence may be DISPLAYED in words where it changes how a reader "
+    "should act on a claim, but it is "
     "NEVER the ordering key and never a sorted list. If your lead is not the "
     "highest-stakes item shown, say why in ONE clause. "
     "STANDING PICTURE BEFORE DELTA. Open with what is TRUE AND CONTINUING — "
@@ -418,6 +552,35 @@ CONSEQUENCE_RULE: str = (
 )
 
 
+#: FRAME-3, composition half. The unit rule above changes what ``severity=``
+#: MEANS on a rendered block, and the block now prints ``severity_delta=``
+#: beside it — so the layer that reads them has to be told, or FRAME-3 lands the
+#: fix at the unit layer and loses it one floor up. This is the D7 lesson
+#: applied to a second field: a number rendered without a rule is a number the
+#: model will order by, and a ``steady`` delta silently read as "nothing here"
+#: would re-manufacture the exact class §0.6 exists to kill.
+#:
+#: Appended to ALL FOUR composition prompts rather than folded into
+#: :data:`CONSEQUENCE_RULE` (which the country prompt takes only in reduced
+#: form) because the country composition is the layer that consumes UNIT heads
+#: and therefore the layer that must not get this wrong.
+SEVERITY_STATE_READ_RULE: str = (
+    "READING severity AND severity_delta. A block may print two of its "
+    "source's structured calls. 'severity=' is the STANDING STATE of that "
+    "dimension — where it stands today, not how far it moved — and "
+    "'severity_delta=' is what the source's own slice did to it: rose, fell, "
+    "steady, or new. Read them as a PAIR. 'severity=high severity_delta=steady' "
+    "is a serious condition that is still running, and it outranks "
+    "'severity=low severity_delta=rose' however loudly the second one moved: "
+    "the delta tells you what belongs in '## What changed', the severity tells "
+    "you what matters. A steady delta is NEVER a reason to demote, drop, "
+    "soften, or bury a high-severity block. A block showing no "
+    "'severity_delta=' carries no movement call at all — infer none, and do "
+    "not read its absence as steady. Never print either field or its level; "
+    "say the same thing in words."
+)
+
+
 __all__ = [
     "ANALYTIC_PREAMBLE",
     "BANNED_PHRASE_MARKERS",
@@ -426,9 +589,14 @@ __all__ = [
     "CONSEQUENCE_RULE",
     "NO_INSTRUMENT_READINGS",
     "RETRIEVED_CONTEXT_RULE",
+    "SEVERITY_AS_STATE_RULE",
+    "SEVERITY_STATE_READ_RULE",
+    "TITLE_NOT_THE_AS_OF_LINE",
     "UNIT_BLUF_ABSENCE_RULE",
     "UNIT_BODY_SHAPE",
+    "UNIT_BODY_SHAPE_D6",
     "UNIT_READ_CONTRACT",
+    "UNIT_READ_CONTRACT_D6",
     "UNIT_VERDICT_RULE",
     "as_of_rule",
     "with_preamble",

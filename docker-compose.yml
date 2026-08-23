@@ -618,6 +618,19 @@ services:
   # It needs its own daprd sidecar (app-id legba-dapr-workflow) to reach
   # the workflow engine's gRPC channel — added under the `dapr-workflow`
   # profile so the canonical `up -d` doesn't pull it until P-CUT cuts over.
+  #
+  # RUST-4 MOTHBALL (2026-08-21): hosts deep_consult_workflow; optimizer
+  # plane mothballed 2026-08-21. This service STAYS — it is not dropped from
+  # the deploy path — because it also registers deep_consult_workflow (the
+  # "deep" consult mode's durable leg; see legba_dapr_workflow_worker/README
+  # and `build_workflow_runtime()`, which registers both workflows
+  # unconditionally on the same runtime). Only the optimizer half of what
+  # this worker serves is mothballed: `descriptors/analyst_country_optimizer
+  # .yaml` and `descriptors/analyst_unit_optimizer.yaml` are annotated
+  # `state: paused` (tree-only as of this commit), and
+  # `src/legba/data/analysts/optimizer.py::run_method` refuses loud
+  # (`OptimizerMothballedError`) for both descriptor ids regardless. See
+  # `docs/SEAMS.md` #53 and `planning/RUST4_EVIDENCE_2026-08-21.md`.
   legba-dapr-workflow-worker:
     logging: *default-logging
     # Dedicated image = runtime image + dspy 3.0 (docker/Dockerfile.worker).

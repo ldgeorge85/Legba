@@ -5,6 +5,409 @@ on `main` — so this file is the release record. Entries are dated (newest firs
 written against the docs as they shipped; [docs/STATUS.md](docs/STATUS.md) remains the
 always-current truth-in-labeling table.
 
+## 2026-08-21
+
+**The ops deck, and the number nobody could see.** Seven server
+endpoints had been live, tested and consumed by *nothing*: the production gauge
+and its integrity bricks, staleness debt, source quality, and the three eval
+boards. They were built, they answered, and no surface in the workstation asked
+them anything. This train gives them readers — four Dockview panel kinds
+(Production Gauge, Judge Stats, Source Health, Eval Boards), registered like the
+existing sixty and landing in Engine Room, whose rows fold behind one collapsed
+header and so cost nothing against the sidebar's spent row budget.
+
+- **`served_by` becomes a fact you can act on.** The one new API. The upstream
+  provider a router actually dispatched a judge call to has been recorded on
+  every LLM receipt since 2026-08-16 and read by nothing at all — while a
+  provider change was measured to flip 13.6% of verdicts. That is an
+  unannounced, upstream input to the faithfulness numbers the whole product is
+  graded on, and it was observable only by hand-decoding a JSONB array.
+  `GET /v3/system/judge-stats` aggregates the verdict mix by
+  `judge_status` × `served_by` × day × judge-pipeline stamp, off receipts and
+  critique rows that already existed. No migration, no new writer.
+- **The attribution refuses to inflate, and refuses to guess.** The
+  critique-to-receipt join is many-to-many — one run yields several critiques,
+  one finding partitions into several judge calls — so the naive join multiplies
+  every verdict by its receipt count and reports a cube that is pure fiction. The
+  provider is resolved per *run* before being attached to that run's critiques.
+  Where it cannot be resolved it is bucketed, never assigned: a run that flipped
+  provider mid-way is `(mixed)`, a direct provider that never reports who served
+  is `(unrouted)`, and a verdict with no judge call at all — every
+  `deterministic` and `unsampled` one, which by definition never asked an LLM —
+  is `(no receipt)`. Each bucket ships its own meaning on the wire so no client
+  hardcodes the glossary.
+- **Every metric carries its n and its provider.** Enforced structurally rather
+  than by convention: no field on the response carries a rate or a mean without
+  the count it was computed over beside it, and a mean over zero rows is absent
+  rather than `0.0`. The panel's drift readout reports a delta between two
+  providers only when *both* clear a minimum sample, and otherwise says how far
+  short it is — because "not enough data yet" and "no drift" are opposite
+  findings, and an instrument built to detect a real 13.6% effect must not be
+  able to invent one. The cube is keyed by judge-pipeline stamp too, so a window
+  straddling a judge swap shows two rows and a warning instead of one pooled
+  average that could flatten a regression into a straight line.
+- **Two deliberate disagreements with the health gauge**, stated in the route
+  because the two surfaces will differ: a legacy NULL `judge_status` is reported
+  as `(unknown)` rather than folded into `deterministic`, and `unsampled` is a
+  first-class bucket rather than excluded. The gauge's folds are right for a
+  health check and wrong for the measuring instrument.
+- **The accept-reason gap, closed.** `decision_reason` has been on the journal
+  proposals row since migration 0048, and only *reject* ever wrote it — the
+  accept path set the status and hardcoded a null reason, with no body to carry
+  one. The decision trail was asymmetric by construction: every refusal explained
+  itself, and every applied change, the half that actually mutates the substrate,
+  could not. Accept now takes the same reason, optional where reject's is
+  required, recorded on the same atomic claim as the status flip; and if the
+  apply then fails, the operator's note is carried into the archived row rather
+  than overwritten by the machine's. A decided row with no reason now says so
+  instead of rendering nothing.
+- Read failures across the ops deck degrade the way the `/system/*` family
+  already does — an honest empty payload at HTTP 200 with `measured: false`,
+  never a 500 at a polling panel — and every new panel renders that as a loud
+  failed read rather than an all-clear.
+**Severity as state.** The correctness round's other finding was smaller
+to state and harder to see: one tag was answering two questions and therefore
+neither. A desk tagged the severity of *what moved in its 72-hour slice*, so a war
+in its fourth month was tagged "low" in a week that added nothing to it, the
+scorecard banded the dimension `low` off that tag, and every one of the round's
+thirty-seven inexact bands sat *below* the reference. Nothing was miscalculated;
+the number simply meant something other than what the page said it meant.
+
+- **The tag splits.** `severity` is now the **standing state** of a dimension —
+  where it stands today, not how far it moved — and the movement gets its own
+  `severity_delta` of *rose*, *fell*, *steady* or *new*. The pair is the point: a
+  serious condition that is still running and a quiet desk that just twitched are
+  no longer the same reading. `new` is the honest answer when a desk has no prior
+  read to compare against; `steady` is a claim that the comparison was made.
+- **One contract, every desk, one train.** The rule is a single paragraph in the
+  house read contract that all nine bounded units carry verbatim — including the
+  desk held back from the earlier voice rewrite, whose hold is about prose and
+  cannot apply here: it is one of the seven scorecard dimensions, and a scorecard
+  whose dimensions mixed two meanings of the same word would be worse than one
+  uniformly on the old meaning.
+- **The band is the condition; the movement never touches it.** The banding engine
+  reads the standing level exactly where it always read the tag, and carries the
+  movement call beside the band rather than inside it — otherwise a war reported
+  "steady" for a fortnight would decay a rung a fortnight, which is the same defect
+  arriving from the other side. Damping is untouched. Every card now records which
+  severity contract produced it, so a `low` from before the change and a `low` from
+  after are distinguishable rather than three identical characters.
+- **The composition reads both halves.** Each consumed block prints its source's
+  standing severity *and* its movement, and all four composition prompts are told
+  how to read the pair — a steady delta is never a reason to demote, drop or bury a
+  high-severity block, and a block showing no movement call carries none rather than
+  an implied "steady". The ranking rule that used to bar anything its unit called
+  "holding steady" from leading was corrected in the same breath: that phrase
+  describes the delta, never the stakes.
+- Absence stays first-class throughout. Until a desk's next run lands under the new
+  prompt its heads carry no movement call at all, every render omits the field, and
+  nothing anywhere substitutes a default — so the two halves of the change may land
+  in either order and an unflipped desk reads exactly as it did before.
+
+**A second, replay-measured revision to the composition prompts' doctrine.**
+The four composition prompts were rewritten with sharper, more explicit
+language for naming a below-floor unit rather than glossing over the gap.
+Replayed against the same reads under both wordings, the revision named 28
+of 28 below-floor units, against 17 of 28 under the prior phrasing — with
+zero contract violations in either arm, and citations roughly doubling at
+zero fabrication.
+
+**The absence-route verify path gets its own system prompt and a fourth
+verdict.** Absence claims — "no new sanctions," "not_observed" — were
+graded through the same judge prompt as every other claim shape; they now
+run under a dedicated system prompt built from their own failure history. A
+fourth verdict, "this span is not a proposition," is earn-gated: it can
+only fire on shapes the judge has positively learned to recognize, never as
+a catch-all demotion. Measured against the same census, false-fail
+suppression is +9.5 percentage points with catch rate held, and the
+absence screen itself now reads a signal's full rendered body rather than
+its title alone. Judge stamp `2026-08-21/1`.
+
+**A model quirk that silently corrupted confidence scores is repaired
+before parsing.** One model's output occasionally rendered a confidence as
+prose-with-a-decimal — "0. nine" for 0.9 — which the parser read as 0.30
+and, in the process, dropped the finding's indicators entirely. The
+malformed shape is now detected and repaired before parsing runs, rather
+than silently misread.
+
+**The UI's docking library jumps four majors with zero source changes.**
+The upgrade is proven, not assumed: runtime tests restore a layout
+serialized under the old major version and confirm it still renders
+correctly under the new one. Around 200 dead packages came out of the
+dependency tree in the same pass. Separately, consult conversations now
+survive a layout change or a page reload — the answer is persisted
+server-side, proven against a client disconnecting mid-stream, rather than
+living only in browser state.
+
+**The optimizer's compile plane is retired to mothball.** Across its full
+run history, exactly one real compile ever produced a candidate that
+cleared the promotion bar — the plane never earned production trust. The
+nightly suite's mask that had been quietly forcing its tests green
+regardless is replaced with honest skips, and its watchdog hooks are
+removed. The code stays in the tree, not deleted.
+
+## 2026-08-20
+
+**Correctness, measured from the outside for the first time.** Everything
+this project has published about verification so far answers one question:
+does a claim trace to the evidence we collected? That machinery is silent on
+whether the read is *right*. This round asked the other question: does a
+country read match reality as a knowledgeable third party would judge it?
+
+Ten country reads (stratified: four high-coverage, three active-conflict,
+three sparse-watch desks) were graded by a fresh-context, web-enabled model
+that first committed its own reference read — top developments plus a risk
+band per dimension — before seeing our product, with the blindness enforced
+by staged delivery rather than an instruction not to peek. Every decisive
+verdict carries a verbatim source span mechanically checked against an
+archived copy of the page: 176 of 176 resolved, zero fabricated. Two
+countries were graded twice for inter-rater reliability and a second model
+family re-graded them as a check on grader bias.
+
+- **Factual accuracy: 0.893**, weighted over 61 scored assertions (48
+  accurate, 13 partially, zero inaccurate; 7 unverifiable disclosed and
+  excluded). No invented event, number, name, or place turned up in any
+  read.
+- **Risk-band accuracy, 44 comparisons:** 7 exact, 15 within one rung, 22
+  two-or-more rungs off — and every one of those 37 non-exact calls had our
+  product BELOW the reference band; none above. A further 24 of 70
+  dimension-slots published "insufficient evidence" where the reference
+  found enough to band. The one-directional pattern (never over-banded)
+  held under the cross-family check too.
+- **Coverage of major developments: 9 of 32 fully present (28%)**; 8 more
+  were in the pipeline but dropped before the reader saw them; sparse-watch
+  desks covered 0 of 7.
+- **Hedging: 12 flat assertions were under-hedged; zero were over-hedged.**
+- The dominant failure was architectural, not factual: reads are composed
+  from short trailing slices, and developments from earlier in the window
+  age out with nothing carrying them forward, so the prose stays true while
+  the window's defining story goes missing. The two fixes directly below
+  this section — the admissibility horizon and the fortnight ledger — are
+  the response to exactly that mechanism, traced per miss before either was
+  written.
+- Honest limits, stated as plainly as the results: one round, one stamped
+  day, ten reads. Grading a read's correctness has an irreducible
+  salience-judgment component; nothing here changes production behavior by
+  itself. A second, wider round is the next step.
+
+**The unit prompt contract's second revision lands on eight of the nine
+bounded desks.** The as-of-line, banned-template-phrase, and
+collection-scoped-absence contract from the prior voice pass is joined by a
+shared preamble and two fleet-wide repairs: a machine-parseable date now
+rides beside every human-readable one in structured output fields (a prompt
+that let a model write a prose date was silently dropping the entry
+downstream — caught on 2 of 40 sampled cells before it shipped), and the
+house read contract gains an explicit line that a trajectory claim's date is
+never the read's own as-of line. The ninth desk (a narrative-coordination
+unit) is held back because measurement showed it would silence genuine
+coordination signal; it stays held after seven measured revision rounds,
+with the residual false-positive class traced to wire-syndication pairs
+reaching the desk as distinct signals — eight of nine is the intended
+stopping point, not a partial job. Landed through direct, byte-verified PUTs
+against the live registry rather than a redeploy.
+
+**A rotated credential now evicts its cache immediately**, closing the same
+failure shape an earlier fix closed for stack-component changes: rotating a
+secret previously kept serving the old cached model handler until the next
+container recreate. And `analyst_traces` now records the exact prompt each
+run sent the model (capped, with a SHA-256 of the untruncated text) —
+previously wired to always store nothing, which meant the self-optimizer's
+training-set reader had been silently reading empty input from every one of
+187,550 rows. Migration 0186.
+
+**Two more read surfaces get a UI.** The human-review queue for the
+journal's self-proposed edits — previously API-only, exercised only by hand
+— becomes a clickable panel: two-click accept, a mandatory non-empty reason
+to reject, and no optimistic success anywhere (a rejected or conflicting
+apply renders exactly what the server recorded, never a green checkmark over
+nothing having happened). Alongside it, two panels that had routes and no
+consumer: a situation's append-only trajectory, each entry dated by the
+finding that established it rather than by when the tracker last ran, and a
+contested-claim carriage view (who published a claim first, who followed, at
+what lag) that states throughout that it shows publication order, never
+influence.
+
+**The judge now sees exactly the bytes the corpus scores.** Evidence shown
+to the faithfulness judge was rendered with non-ASCII characters and line
+breaks escaped; the check that verifies a contradicting quote was matching
+against the *unescaped* original. A quote copied verbatim from what the
+judge was shown — the literal rule the system asks for — could never
+resolve if it crossed a line break or contained non-Latin script. Measured
+over the prior two weeks: 36% of contradiction attempts failed to resolve
+their quote this way, concentrated on Cyrillic, Arabic, and CJK sources,
+where every character had been escaped. Fixed on both sides of the
+comparison; the published faithfulness score is unaffected by construction
+(this only affects whether a genuine contradiction registers as one).
+
+**The Live Feed's verification filter now filters where the data lives.**
+The verified/judge-status facet fetched a page of results and then discarded
+what didn't match, client-side — which silently misrepresented the filtered
+population at any real corpus size. It now filters server-side, and the
+newly-introduced "unsampled" judge status (below) is a first-class filter
+value alongside verified and deterministic.
+
+**The carry.** The window change below stopped the composition forgetting the fortnight;
+this stops the *reads* forgetting it. The round's largest attributed failure class —
+roughly twelve of twenty-three missed major developments — was an event that happened
+in the window's first ten days, *was* in some desk's slice at the time, and had aged
+out of every 72-hour slice by the time the reader saw it, with nothing carrying it
+forward. The desks were meanwhile printing "mass protest: not_observed" (Argentina),
+"State of emergency – not_observed" (Britain) and "no new or tightened sanctions"
+(Ukraine) about a fortnight that contained exactly those things. The memory each read
+had was one previous 900-character head and an instruction to diff against it.
+
+- **A window ledger carries the fortnight.** Each read now receives a bounded, dated,
+  citable block of the verified, severity-tagged heads *it or its desk already
+  produced* over the trailing 14 days — one line per unit per day, severest first,
+  built at prompt-build time from rows that already existed. No new table, no new
+  writer, no new analyst kind. A unit gets its own dimension's record; the country
+  composition gets the whole desk's. The block is cited like any other evidence and
+  graded against its own rendered bytes.
+- **Superseded rows are carried on purpose.** Supersession is a freshness relation,
+  not a retraction, and under a head-fold a fortnight's record is almost entirely
+  superseded rows — including the Argentine protest head the round's reads should have
+  remembered.
+- **A read can no longer contradict its own record.** Every ledger line prints its own
+  calendar date in the form the prose is required to use, and one clause — stated
+  identically at both layers, from one definition — makes a carried event *already
+  established, dated, and never news*, licenses standing-state and duration claims
+  only where the ledger supports them, and flatly forbids writing that something was
+  absent or not observed *in this window* when a ledger line records it. If the current
+  slice simply does not show it, the read must say that instead, which is a different
+  and honest statement.
+- **The situations register stops arguing that nothing is happening.** Two bounded
+  repairs to an instrument that was right in shape and wrong in selection. Its
+  trajectory now renders the newest *significant* movements — escalations,
+  de-escalations, broadenings — with at most one trailing "last checkpoint" line,
+  instead of the three same-day "unchanged" checkpoints the hourly tracker happened to
+  write last; and a frame is named for its highest-severity member that actually
+  asserts something, rather than for whichever absence read landed most recently. Three
+  desks were literally titled "No observable shift…" at the time of the round. Names
+  re-derive on the next cadence tick; no migration.
+- Under the module-size gate, the ledger and the composition's continuity section share
+  `data/analysts/window_ledger.py` — the seam the window train's own ceiling note named — and
+  the synthesizer's ceiling ratchets down again even though the train added a whole
+  carry mechanism.
+
+**Compose over the window.** The 2026-08-20 correctness round found one
+architecture defect carrying most of its mass: *a 72-hour pipeline forgets its own
+window*. The country composition subscribed to its unit heads under a trailing
+**24-hour wall-clock gate**, while the units beneath it fire on an 11-hour cooldown
+that deliberately HOLDS on a quiet desk. On 20 August the Burkina Faso units had last
+fired 42 hours earlier, the trailing-24h slice was mechanically empty, and the product
+printed "No source findings to synthesize" over seven two-day-old heads that carried
+the window's major story. Nothing was broken; every instrument was green.
+
+- **The window becomes an admissibility horizon, not a freshness cliff.** The three
+  composition descriptors subscribe over 336h (14 days) instead of 24h. Mechanically
+  small — the fold to exactly one newest non-superseded head per (unit, desk) already
+  existed — and the code half is the honesty a wider window obliges: every consumed
+  head now prints its own calendar date and its **age** in the prompt, each run stamps
+  `data.head_ages` on its envelope, and the composition is told to state the oldest
+  read's age in the prose rather than writing as if everything were composed today.
+- **The floor's action becomes visible — its level does not move.** 0.50 stands. What
+  changes is that a dimension the floor withheld stops being narrated as an unassessed
+  gap: a deterministic **coverage ledger** in the prompt states, per declared unit,
+  in-basis / below-verification-floor (with its date and score) / no read at all inside
+  the horizon, and the coverage rule forks to match. "Below verification floor," never
+  "no read this cycle" — the audit precedent, now a prompt-enforced contract. The
+  empty-slice sentence gets the same fork: an all-below-floor desk reads as a
+  verification withholding, not an absence of reads.
+- **The newest read that cleared the floor reaches the page.** When a unit's freshest
+  head fails verification, the newest in-horizon head that PASSED is admitted to the
+  basis — dated and labelled as not-the-latest — while the newer failing head stays in
+  the weakly-supported section with its own date and score. Showing both is strictly
+  more honest than showing neither, which is what happened before (the newer head hid
+  the older one behind supersession, and the dimension vanished from both tiers).
+- **A cadence-staleness gauge closes the loop.** A new S-1 production-gauge class reads
+  the `head_ages` stamp the composition itself published and alarms when a desk's
+  newest consumed head passes 34 hours — twice the units' cooldown plus fallback slack,
+  so the 42-hour stall pages and an ordinary overnight quiet does not. **The trigger
+  policy is untouched**: a stalled desk is surfaced, never silently re-fired. Forcing
+  runs on empty slices would spend budget manufacturing "no change" heads; the honest
+  fix is that 42 hours of silence stops being invisible.
+- Under the module-size gate, the two-tier evidence subsystem and the new window
+  machinery live in `data/analysts/composition_window.py`; the synthesizer's ceiling
+  ratchets down even though the train added behavior.
+
+## 2026-08-19
+
+- A prior finding's own citation markers, embedded into the next run's
+  prompt as-is, could land in a numbering space that pointed at entirely
+  different sources in the new prompt. A claim that copied one of those
+  stale markers was correctly failed by the judge — the defect was in what
+  the prompt showed, not in the model's reasoning. Old markers are now
+  neutralized at render time and labeled as the prior run's numbering,
+  never a citable handle in the current one.
+
+## 2026-08-16
+
+- **Receipts now record who actually served a routed call, not just which
+  model was requested.** When a request is routed to one of several
+  providers hosting nominally the same open-weights model, that choice was
+  invisible — no field could name it, so nothing could page on it if it
+  mattered. It mattered: replaying the same model, prompt, and 94 critiques
+  against two different providers of the identical weights flipped 13.6% of
+  pass/fail verdicts, including one case in the pass stratum, on a
+  verification plane whose stated invariant is zero false passes.
+- **The public repository gets its first CI workflow and its first
+  CONTRIBUTING guide**, prompted by an outside read of the repo that found
+  real gaps: no CI, no contributor guide, and several places where the docs
+  had drifted from what the code does. CI runs lint plus four structural
+  gates (module-size ceilings, a scan for stub code masquerading as
+  finished work, a ban on two libraries in the production path, and the
+  strict-test-mode gate) — and says explicitly, in its own output, that it
+  does *not* run the ~10,000 tests needing a live database and model
+  endpoints; that suite still runs nightly on operated infrastructure.
+  CONTRIBUTING.md covers the CLA position, the project's descriptor-first
+  design (most new sources or desks are a registration, not code), the four
+  gates in detail, and commit conventions.
+- The same read caught the README overstating the source catalog ("100+")
+  against what actually registers on a fresh deploy (53, with ~64 more
+  available behind a manual activation step) — corrected to the real
+  numbers everywhere it was stated. And the shipped verification floor's
+  code-level default is now 0.50, matching the documented default; it had
+  been 0.0 in code with the real value supplied only by the reference
+  deployment's own configuration; note the README's language was already
+  accurate.
+- The evidence archiver's license posture for sources whose license was
+  never classified — previously always fail-open (bytes archived anyway) —
+  is now a per-source operator option, default unchanged, so a self-hosted
+  instance that adds its own uncatalogued feeds can choose to withhold
+  archiving until it classifies them.
+- Two more shared-state test-ordering leaks rooted in the nightly suite,
+  continuing the cleanup from the past two releases; a source whose feed
+  serves its publish date as free-form prose (rather than a standard date
+  format) had been silently nulling every entry's timestamp, which
+  defeated that source's own "gone quiet" detection.
+
+## 2026-08-15
+
+- **The faithfulness judge moves off a single vendor and learns to sample
+  its own budget.** A second, independent judge model — reached through a
+  router rather than a direct endpoint, preserving the cross-family
+  property (a different model family judging the analysis) — joins the
+  judge rotation on a rate-limited lane. Because that lane can't carry
+  every verification call, a deterministic sampling gate now decides, per
+  finding, whether the judge is called at all: the decision is a hash of
+  the finding's own id, so it is 100% reproducible on replay with no
+  randomness anywhere, and it always includes the higher-stakes analysis
+  kinds (country/region/world compositions and the journal) regardless of
+  the sample rate. A finding the gate skips publishes a new, honest status
+  — "unsampled" — rather than a fabricated pass: it still clears the
+  deterministic citation-presence floor and a capped provisional score, and
+  spends zero judge calls. The judge-health alarm excludes this population
+  from its math, so sampling can never look like an outage.
+- Ahead of a planned increase to how much each run can read, a new watch
+  gauge tracks GPU-side saturation on the model host (queue depth,
+  memory-pressure, and request preemptions) and pages before the queue
+  actually backs up. Paired with new per-component latency and spend
+  gauges across every model endpoint — hosted judge lanes had been
+  receipting $0 toward nothing, uncounted, since they were added.
+- The consult plane's per-answer output budget rises from 2,048 to 32,768
+  tokens (streamed, so the change doesn't trip provider timeout limits) —
+  the old cap had been silently truncating real answers mid-sentence.
+
 ## 2026-08-10
 
 **The clearing train — the whole tracked queue, knocked out in one wave.** Four
@@ -34,6 +437,21 @@ decision shipped together.
   pinned clock crossed a decay floor at 10:48Z; eight tests would have paged that
   night). Both remaining condemned-class suite wipes retired behind hermetic
   fixtures. Three historical failing seeds replay clean.
+- **Correction (2026-08-20)**, to the line above: "both remaining" overstated the
+  scope. It named exactly two wipes — the band-calibration scorecard fixture and
+  the fact-contention facts fixture — and both were genuinely retired that day
+  behind hermetic, own-row fixtures; it did not mean "every wipe of this class in
+  the suite." Two more of the SAME class were live then and still are:
+  `tests/data_pkg/test_narrative_mapper_db.py` and `test_source_track_record_db.py`
+  each carry a `clean` fixture that unconditionally `DELETE FROM`s shared tables
+  (`signals`, `facts`, `fact_contention`, plus `narratives`/`narrative_echo_edges`
+  or `source_track_records` respectively) against the session-scoped test
+  database, with no per-test or per-run scoping. Not a regression introduced
+  since — simply never counted. Left as-is deliberately: narrowing them to their
+  own rows needs the same own-row-proof redesign the two retired fixtures got, and
+  removing the wipes without it would manufacture inter-test ordering dependencies
+  rather than remove one. Tracked debt, stated plainly rather than left to read as
+  done.
 - **Findings stop titling themselves with their own date stamp** (the As-of header
   is skipped by the title fallback), and the journal's tool-call leak guard learned
   the JSON-lines transcript shape that slipped past it.

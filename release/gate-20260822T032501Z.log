@@ -1,0 +1,368 @@
+Legba release gate — 20260822T032501Z — HEAD 393d7db1
+==== STAGE 1/7 strict test suite ====
+........................................................................ [  0%]
+........................................................................ [  1%]
+............................................................s......s.... [  1%]
+........................................................................ [  2%]
+.......................................................s.ss..sss........ [  3%]
+.......................................s................................ [  3%]
+........................................................................ [  4%]
+........................................................ss........s....s [  5%]
+........................................................................ [  5%]
+........................................................................ [  6%]
+........................................................................ [  6%]
+..............................s......................................... [  7%]
+....................................................s......s............ [  8%]
+........................................................................ [  8%]
+........................................................................ [  9%]
+........................................................................ [ 10%]
+........................................................................ [ 10%]
+........................................................................ [ 11%]
+..............................................s......................... [ 11%]
+........................................................................ [ 12%]
+........................................................................ [ 13%]
+..........................................s............................. [ 13%]
+............................s...s............................F.......... [ 14%]
+............................................s........................... [ 15%]
+.............................................................EEE...s.... [ 15%]
+........................................................................ [ 16%]
+..............s..................s...................................... [ 17%]
+........................................................................ [ 17%]
+.........................................x.............................. [ 18%]
+........................................................................ [ 18%]
+........................................................................ [ 19%]
+.......s................................................................ [ 20%]
+........................................................................ [ 20%]
+........................................................................ [ 21%]
+.................................s..........s...................s....... [ 22%]
+........................................................................ [ 22%]
+........................................................................ [ 23%]
+........................................................................ [ 23%]
+.............................................s.......................... [ 24%]
+........s.ss.....s.s.............ss.s....s............s................. [ 25%]
+.........s...s.......................................................... [ 25%]
+........................................................................ [ 26%]
+........................................................................ [ 27%]
+........................................................................ [ 27%]
+.........................s.............................................. [ 28%]
+........................................................................ [ 29%]
+........................................................................ [ 29%]
+........................................................................ [ 30%]
+.......s................................................................ [ 30%]
+........................................................................ [ 31%]
+........................................................................ [ 32%]
+........................................................................ [ 32%]
+..................................................s..................... [ 33%]
+........................................s............................... [ 34%]
+........................................................................ [ 34%]
+........................................................................ [ 35%]
+...................................................................E.... [ 35%]
+........................................................................ [ 36%]
+........................................................................ [ 37%]
+................................................s..sss.ss............... [ 37%]
+........................................................................ [ 38%]
+........................................................................ [ 39%]
+........................................................................ [ 39%]
+........................................................................ [ 40%]
+...........................................s............................ [ 41%]
+........................................................................ [ 41%]
+........................................................................ [ 42%]
+........................................................................ [ 42%]
+........................................................................ [ 43%]
+................ss....s................................................. [ 44%]
+........................................................................ [ 44%]
+........................................................................ [ 45%]
+........................................................................ [ 46%]
+........................................................................ [ 46%]
+........................................................................ [ 47%]
+........................................................................ [ 47%]
+........................................................................ [ 48%]
+........................................................................ [ 49%]
+........................................................................ [ 49%]
+........................................................................ [ 50%]
+........................................................................ [ 51%]
+........................................................................ [ 51%]
+........................................................................ [ 52%]
+........................................................................ [ 52%]
+........................................................................ [ 53%]
+........................................................................ [ 54%]
+........................................................................ [ 54%]
+........................................................................ [ 55%]
+........................................................................ [ 56%]
+...........................................x.......x.................... [ 56%]
+........................................................................ [ 57%]
+........................................................................ [ 58%]
+.............s...s...s.................................................. [ 58%]
+s............................s.......................................... [ 59%]
+.s...................................................................... [ 59%]
+s...............................s..............................s........ [ 60%]
+........................................................................ [ 61%]
+........................................................................ [ 61%]
+............................................................sssss....... [ 62%]
+........................................................................ [ 63%]
+........................................................................ [ 63%]
+........................................................................ [ 64%]
+........................................................................ [ 64%]
+........................................................................ [ 65%]
+........................................................................ [ 66%]
+........................................................................ [ 66%]
+........................................................................ [ 67%]
+........................................................................ [ 68%]
+........................................................................ [ 68%]
+........................................................................ [ 69%]
+...............................................................s........ [ 70%]
+........................................................................ [ 70%]
+........................................................................ [ 71%]
+.s...................................................................... [ 71%]
+..................................sx.................................... [ 72%]
+....................................................................s... [ 73%]
+........................................................................ [ 73%]
+........................................................................ [ 74%]
+........................................................................ [ 75%]
+........................................................................ [ 75%]
+........................................................................ [ 76%]
+........................................................................ [ 76%]
+........................................................................ [ 77%]
+........................................................................ [ 78%]
+............E....E...................................................... [ 78%]
+........................................................................ [ 79%]
+........................................................sss............. [ 80%]
+........................................................................ [ 80%]
+..........................s............................................. [ 81%]
+.....................................................................E.. [ 82%]
+.................E...................................................... [ 82%]
+........................................................................ [ 83%]
+......................s................................................. [ 83%]
+........................................................................ [ 84%]
+........................................................................ [ 85%]
+........................................................................ [ 85%]
+..................................................................s..... [ 86%]
+.................................................s...s.................. [ 87%]
+........................................................................ [ 87%]
+........................................................................ [ 88%]
+........................................................................ [ 88%]
+F....................................................................... [ 89%]
+........................................................................ [ 90%]
+......................................................................s. [ 90%]
+.....................s.................................................. [ 91%]
+........................................................................ [ 92%]
+........................................................................ [ 92%]
+................................s....................................... [ 93%]
+........................................................................ [ 94%]
+........................................................................ [ 94%]
+....................................................s................... [ 95%]
+........................................................................ [ 95%]
+........................................................................ [ 96%]
+.............................................................s.s....s... [ 97%]
+........................................................................ [ 97%]
+........................................................................ [ 98%]
+................................................s....................... [ 99%]
+........................................................................ [ 99%]
+....................................                                     [100%]
+==================================== ERRORS ====================================
+_ ERROR at setup of test_critic_actor_activates_and_writes_critique_through_daprd _
+[LEGBA_TEST_STRICT] infra-gated skip escalated to FAILURE (tests/runtime/test_critic_descriptor_e2e.py::test_critic_actor_activates_and_writes_critique_through_daprd): Skipped: port 6090 is bound by another process (likely the production legba-runtime-dapr container) — the spike test's in-process uvicorn cannot claim it; this flow is exercised by manual validation against the running production runtime
+Strict mode means the canonical rig must provide this dependency — fix the rig (or the gate) instead of skipping.
+__ ERROR at setup of test_critic_heterogeneity_guard_rejects_self_correlated ___
+[LEGBA_TEST_STRICT] infra-gated skip escalated to FAILURE (tests/runtime/test_critic_descriptor_e2e.py::test_critic_heterogeneity_guard_rejects_self_correlated): Skipped: port 6090 is bound by another process (likely the production legba-runtime-dapr container) — the spike test's in-process uvicorn cannot claim it; this flow is exercised by manual validation against the running production runtime
+Strict mode means the canonical rig must provide this dependency — fix the rig (or the gate) instead of skipping.
+____________ ERROR at setup of test_critic_missing_rubric_rejection ____________
+[LEGBA_TEST_STRICT] infra-gated skip escalated to FAILURE (tests/runtime/test_critic_descriptor_e2e.py::test_critic_missing_rubric_rejection): Skipped: port 6090 is bound by another process (likely the production legba-runtime-dapr container) — the spike test's in-process uvicorn cannot claim it; this flow is exercised by manual validation against the running production runtime
+Strict mode means the canonical rig must provide this dependency — fix the rig (or the gate) instead of skipping.
+_________ ERROR at setup of test_process_media_pack_enqueues_real_job __________
+[LEGBA_TEST_STRICT] infra-gated skip escalated to FAILURE (tests/data_pkg/agency/test_agency_hard_gate.py::test_process_media_pack_enqueues_real_job): Skipped: needs an isolated NATS; per-test job queue's jobs.> subjects overlap the live runtime's LEGBA_JOBS stream on --network host
+Strict mode means the canonical rig must provide this dependency — fix the rig (or the gate) instead of skipping.
+_____________ ERROR at setup of test_webhook_5xx_retries_then_dlqs _____________
+[LEGBA_TEST_STRICT] infra-gated skip escalated to FAILURE (tests/runtime/test_webhook_alert_e2e.py::test_webhook_5xx_retries_then_dlqs): Skipped: needs an isolated NATS; DLQ subject overlaps the live runtime's legba.dlq.> stream on --network host
+Strict mode means the canonical rig must provide this dependency — fix the rig (or the gate) instead of skipping.
+______________ ERROR at setup of test_webhook_4xx_no_retry_no_dlq ______________
+[LEGBA_TEST_STRICT] infra-gated skip escalated to FAILURE (tests/runtime/test_webhook_alert_e2e.py::test_webhook_4xx_no_retry_no_dlq): Skipped: needs an isolated NATS; DLQ subject overlaps the live runtime's legba.dlq.> stream on --network host
+Strict mode means the canonical rig must provide this dependency — fix the rig (or the gate) instead of skipping.
+__________ ERROR at setup of test_emit_retry_exhausted_routes_to_dlq ___________
+[LEGBA_TEST_STRICT] infra-gated skip escalated to FAILURE (tests/data_pkg/test_output_webhook.py::test_emit_retry_exhausted_routes_to_dlq): Skipped: needs an isolated NATS; DLQ subject overlaps the live runtime's legba.dlq.> stream on --network host
+Strict mode means the canonical rig must provide this dependency — fix the rig (or the gate) instead of skipping.
+_________________ ERROR at setup of test_emit_4xx_does_not_dlq _________________
+[LEGBA_TEST_STRICT] infra-gated skip escalated to FAILURE (tests/data_pkg/test_output_webhook.py::test_emit_4xx_does_not_dlq): Skipped: needs an isolated NATS; DLQ subject overlaps the live runtime's legba.dlq.> stream on --network host
+Strict mode means the canonical rig must provide this dependency — fix the rig (or the gate) instead of skipping.
+=================================== FAILURES ===================================
+____________ test_register_webhook_persists_row_and_returns_active _____________
+
+webhook_registry = <legba.data.registry.conversion.ConversionWebhookRegistry object at 0x7fdff57a2890>
+
+    @pytest.mark.integration
+    @pytest.mark.asyncio
+    async def test_register_webhook_persists_row_and_returns_active(
+        webhook_registry: ConversionWebhookRegistry,
+    ):
+        w = ConversionWebhook(
+            from_uri="legba/target/1.0.0",
+            to_uri="legba/target/2.0.0",
+            impl="legba.data.conversions.target_v1_to_v2:convert",
+        )
+>       row = await webhook_registry.register_webhook(w, actor="lewis@local")
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/data_pkg/test_conversion_webhooks.py:343: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <legba.data.registry.conversion.ConversionWebhookRegistry object at 0x7fdff57a2890>
+webhook = ConversionWebhook(from_uri='legba/target/1.0.0', to_uri='legba/target/2.0.0', impl='legba.data.conversions.target_v1_to_v2:convert', direction='forward')
+actor = 'lewis@local'
+
+    async def register_webhook(
+        self,
+        webhook: ConversionWebhook,
+        actor: str,
+        *,
+        actor_role: str = "operator",
+        notes: str | None = None,
+    ) -> WebhookRow:
+        """Persist a webhook + emit registration event.
+    
+        Validates:
+          * Same-family constraint (pydantic enforces; we re-check for
+            defence in depth so an operator hand-crafting SQL via the
+            registry layer can't bypass).
+          * Forward-only version order: `from_uri` semver must be strictly
+            less than `to_uri` semver.
+          * `impl` resolves to an importable callable (eager-fails the
+            registration; otherwise the operator only discovers a typo
+            when a real descriptor needs converting).
+        """
+        from_fam = family_of_uri(webhook.from_uri)
+        to_fam = family_of_uri(webhook.to_uri)
+        if from_fam != to_fam:
+            raise WebhookValidationError(
+                f"cross-family webhook rejected: {from_fam} → {to_fam}"
+            )
+    
+        from_v = version_of_uri(webhook.from_uri)
+        to_v = version_of_uri(webhook.to_uri)
+        if from_v >= to_v:
+            raise WebhookValidationError(
+                f"forward-only conversion: from_uri ({webhook.from_uri}) "
+                f"must precede to_uri ({webhook.to_uri}); per L-101 §7"
+            )
+    
+        # Eager-resolve the impl so an unimportable path fails registration
+        # instead of every conversion attempt downstream.
+        resolve_impl(webhook.impl)
+    
+        webhook_id = uuid4()
+        async with self._pg.transaction() as conn:
+            # Reject duplicates against active (non-retired) webhooks for
+            # the same (from_uri, to_uri). The UNIQUE constraint from
+            # migration 0008 covers ALL rows; we route to a clearer error.
+            existing = await conn.fetchrow(
+                """
+                SELECT id, retired_at FROM conversion_webhooks
+                 WHERE from_uri = $1 AND to_uri = $2
+                """,
+                webhook.from_uri, webhook.to_uri,
+            )
+            if existing is not None and existing["retired_at"] is None:
+>               raise WebhookValidationError(
+                    f"active conversion webhook already exists for "
+                    f"{webhook.from_uri} → {webhook.to_uri} "
+                    f"(id={existing['id']}); retire it first"
+                )
+E               legba.data.registry.conversion.WebhookValidationError: active conversion webhook already exists for legba/target/1.0.0 → legba/target/2.0.0 (id=ae566d1f-5ee2-4762-85dd-aad2ba123598); retire it first
+
+src/legba/data/registry/conversion.py:375: WebhookValidationError
+_____________ test_actor_state_table_reachable_from_every_acquire ______________
+
+migrated_pg = PostgresConfig(host='127.0.0.1', port=5432, user='legba', password='legba', database='legba_test_af49e40e6d', pool_min=1, pool_max=10)
+
+    @pytest.mark.asyncio
+    async def test_actor_state_table_reachable_from_every_acquire(
+        migrated_pg: PostgresConfig,
+    ):
+        """Create actor_state on one acquire, read it from many others.
+    
+        Reproduces the runtime's failure mode: the table is created during
+        bring-up on one checkout, then later (after the pool recycles the
+        connection through other callers) reads happen on a different
+        checkout. With the bug, reads fail with ``UndefinedTableError``.
+        """
+        store = PostgresStore(migrated_pg)
+        await store.connect()
+        try:
+            # Bring up the schema on a fresh checkout.
+            from legba.runtime.state import ActorStateStore
+    
+            actor_state = ActorStateStore(store.pool)
+            await actor_state.ensure_schema()
+    
+            # Burn through several checkouts. With the bug the search_path
+            # drifts and the unqualified `SELECT * FROM actor_state` lookup
+            # raises UndefinedTableError on the second+ checkout.
+            for _ in range(6):
+                async with store.acquire() as conn:
+                    # Sanity: unqualified table reference must resolve.
+                    row = await conn.fetchrow(
+                        "SELECT count(*) AS n FROM actor_state"
+                    )
+>                   assert row["n"] == 0
+E                   assert 3 == 0
+
+tests/data_pkg/test_postgres_pool_search_path.py:91: AssertionError
+=============================== warnings summary ===============================
+tests/data_pkg/test_consult_api_chat.py:25
+  /usr/local/deployments/active/legba/tests/data_pkg/test_consult_api_chat.py:25: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient
+
+tests/data_pkg/test_predicate_dsl.py::test_wall_clock_budget_main_thread_via_sigalrm
+  /install/lib/python3.11/site-packages/qdrant_client/async_qdrant_remote.py:231: UserWarning: Failed to obtain server version. Unable to check client-server compatibility. Set check_compatibility=False to skip version check.
+    show_warning(
+
+tests/data_pkg/test_retention_policies_api.py::test_patch_rejects_empty_keep_class_entry
+  /usr/local/deployments/active/legba/src/legba/data/registry/retention_policies_api.py:183: StarletteDeprecationWarning: 'HTTP_422_UNPROCESSABLE_ENTITY' is deprecated. Use 'HTTP_422_UNPROCESSABLE_CONTENT' instead.
+    body.validate_keep_classes()
+
+tests/data_pkg/test_source_rss.py: 12 warnings
+  /install/lib/python3.11/site-packages/feedparser/util.py:95: DeprecationWarning: To avoid breaking existing software while fixing issue 310, a temporary mapping has been created from `updated_parsed` to `published_parsed` if `updated_parsed` doesn't exist. This fallback will be removed in a future version of feedparser.
+    warnings.warn(
+
+tests/data_pkg/test_source_rss.py::test_pull_records_newest_entry_ts_for_prose_dated_feed
+tests/data_pkg/test_source_rss.py::test_pull_records_newest_entry_ts_for_prose_dated_feed
+tests/data_pkg/test_source_rss.py::test_extract_published_prose_localized_month_stays_none
+  /install/lib/python3.11/site-packages/feedparser/util.py:80: DeprecationWarning: To avoid breaking existing software while fixing issue 310, a temporary mapping has been created from `updated` to `published` if `updated` doesn't exist. This fallback will be removed in a future version of feedparser.
+    warnings.warn(
+
+tests/data_pkg/test_watchlist.py::test_watchlist_crud_roundtrip
+tests/data_pkg/test_collection_requirements_api.py::test_list_filters_by_status_and_desk
+  /install/lib/python3.11/site-packages/fastapi/routing.py:350: StarletteDeprecationWarning: 'HTTP_422_UNPROCESSABLE_ENTITY' is deprecated. Use 'HTTP_422_UNPROCESSABLE_CONTENT' instead.
+    return await dependant.call(**values)
+
+tests/data_pkg/test_stack_vector_store.py: 14 warnings
+tests/runtime/test_substrate_query_port.py: 40 warnings
+tests/data_pkg/test_narrative_mapper.py: 1 warning
+tests/data_pkg/test_filter_dedupe_tiers.py: 2 warnings
+tests/data_pkg/test_stores.py: 2 warnings
+tests/data_pkg/test_filter_dedupe.py: 1 warning
+tests/data_pkg/test_stack_registry.py: 1 warning
+  /install/lib/python3.11/site-packages/qdrant_client/async_qdrant_remote.py:225: UserWarning: Qdrant client version 1.18.0 is incompatible with server version 1.16.3. Major versions should match and minor version difference must not exceed 1. Set check_compatibility=False to skip version check.
+    show_warning(
+
+tests/data_pkg/test_stores.py::test_redis_ping_and_embed_cache_ttl
+  /usr/local/deployments/active/legba/src/legba/data/redis.py:81: DeprecationWarning: Call to deprecated setex. (Use 'set' instead.) -- Deprecated since version 2.6.12.
+    await self.client.setex(key, self._cfg.embed_cache_ttl_seconds, value)
+
+tests/data_pkg/test_export_api.py::test_export_cap_413_and_empty_400
+  /install/lib/python3.11/site-packages/fastapi/routing.py:350: StarletteDeprecationWarning: 'HTTP_413_REQUEST_ENTITY_TOO_LARGE' is deprecated. Use 'HTTP_413_CONTENT_TOO_LARGE' instead.
+    return await dependant.call(**values)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/data_pkg/test_conversion_webhooks.py::test_register_webhook_persists_row_and_returns_active
+FAILED tests/data_pkg/test_postgres_pool_search_path.py::test_actor_state_table_reachable_from_every_acquire
+ERROR tests/runtime/test_critic_descriptor_e2e.py::test_critic_actor_activates_and_writes_critique_through_daprd
+ERROR tests/runtime/test_critic_descriptor_e2e.py::test_critic_heterogeneity_guard_rejects_self_correlated
+ERROR tests/runtime/test_critic_descriptor_e2e.py::test_critic_missing_rubric_rejection
+ERROR tests/data_pkg/agency/test_agency_hard_gate.py::test_process_media_pack_enqueues_real_job
+ERROR tests/runtime/test_webhook_alert_e2e.py::test_webhook_5xx_retries_then_dlqs
+ERROR tests/runtime/test_webhook_alert_e2e.py::test_webhook_4xx_no_retry_no_dlq
+ERROR tests/data_pkg/test_output_webhook.py::test_emit_retry_exhausted_routes_to_dlq
+ERROR tests/data_pkg/test_output_webhook.py::test_emit_4xx_does_not_dlq
+2 failed, 11309 passed, 89 skipped, 4 xfailed, 83 warnings, 8 errors in 1155.86s (0:19:15)
+>> GATE FAILED at: strict test suite

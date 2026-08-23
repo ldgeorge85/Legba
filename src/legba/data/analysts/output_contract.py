@@ -67,6 +67,7 @@ __all__ = [
     "OutputContractError",
     "extract_json_object",
     "is_unusable_output",
+    "repair_confidence_word_token",
     "strip_tool_plan_preamble",
 ]
 
@@ -164,6 +165,58 @@ def strip_tool_plan_preamble(text: str) -> tuple[str, str]:
     if not consumed:
         return text, ""
     return remaining.lstrip(), " ".join(consumed)
+
+
+# ---------------------------------------------------------------------------
+# The confidence digit-then-number-word token
+# ---------------------------------------------------------------------------
+#
+# The core plane occasionally emits ``"confidence": 0. nine`` instead of
+# ``"confidence": 0.9`` — a digit, a literal period, whitespace, then the
+# fractional digit spelled out as an English word. ``0.`` alone is not a
+# valid JSON number (the grammar requires a digit immediately after the
+# decimal point), so ``json.loads`` fails on the token, and — before this
+# fix — took the WHOLE finding down with it: the primary parse AND
+# ``parse_finding_envelope``'s "find it anywhere" recovery both run
+# ``json.loads`` over the same malformed number and fail the same way,
+# landing the finding in the unstructured salvage path at a flat 0.30
+# confidence with an EMPTY ``indicators`` array. That is exactly backwards —
+# measured in ``planning/VOICE_REPLAY_2026-08-20/runs/
+# REVISION_RESULT_2026-08-21.md`` §5, the token only shows up where the
+# model is writing a confident positive: five cells across the 2026-08-21
+# narrative replay and the frozen 2026-08-20 corpus, every one a
+# coordination-positive call, every one spelling out ``nine``.
+#
+# Repaired TEXTUALLY, before either parse attempt, so a normal
+# ``json.loads`` recovers the whole contract — confidence, evidence, tags
+# and (the field this defect actually costs) ``indicators`` — rather than
+# degrading through the salvage path at all.
+_CONFIDENCE_DIGIT_WORDS = {
+    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+    "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+}
+
+#: Anchored on the ``"confidence":`` key so a body sentence that happens to
+#: spell out a number is never touched — only the confidence VALUE itself.
+_CONFIDENCE_WORD_TOKEN_RE = re.compile(
+    r'("confidence"\s*:\s*-?\d+)\.\s+(' + "|".join(_CONFIDENCE_DIGIT_WORDS) + r')\b',
+    re.IGNORECASE,
+)
+
+
+def repair_confidence_word_token(text: str) -> str:
+    """Rewrite a ``"confidence": 0. nine``-shaped token to ``"confidence": 0.9``.
+
+    Bounded to the ten single-digit words a 0.0-1.0 confidence can spell out
+    for its fractional digit — not a general English-number parser. A no-op
+    on well-formed input: ``0.9`` has no whitespace after the dot, so the
+    pattern never matches it, and the substitution is idempotent.
+    """
+    def _sub(match: "re.Match[str]") -> str:
+        word = match.group(2).lower()
+        return f"{match.group(1)}.{_CONFIDENCE_DIGIT_WORDS[word]}"
+
+    return _CONFIDENCE_WORD_TOKEN_RE.sub(_sub, text)
 
 
 # ---------------------------------------------------------------------------

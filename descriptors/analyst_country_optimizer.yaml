@@ -6,6 +6,21 @@
 # human_gated.  Runs as a Temporal workflow (the one actor kind that does).
 #
 # An optimizer analyst MUST declare an eval block (schema constraint).
+#
+# ── RUST-4 MOTHBALL (decision 2026-08-21) ──────────────────────────────
+# state flipped active -> paused: the GEPA optimizer plane is mothballed
+# (docs/SEAMS.md #53, evidence planning/RUST4_EVIDENCE_2026-08-21.md). This
+# monolith was already frozen by the earlier SEQUENCED FREEZE (SEAMS #30,
+# cadence.fallback_schedule: null below) and has zero lifetime runs; `paused`
+# makes the mothball explicit rather than relying only on the null cadence.
+# `paused` is the schema's built-in, RESUMABLE halt (LifecycleState, ACTIVE
+# <-> PAUSED both ways) — not `retired` (terminal). TREE ONLY: this edit has
+# NOT been PUT to the live registry (BUILD-ONLY per the RUST-4 spec); the
+# live head stays `active` until an operator deploys + PUTs this. The code
+# path also refuses loud regardless (src/legba/data/analysts/optimizer.py
+# ::run_method, OptimizerMothballedError) so a stray trigger before this
+# descriptor is live still fails LOUD, never silently. To restore: flip
+# back to `active` (registry PUT) and see docs/SEAMS.md #53 "To restore".
 
 identity:
   id: country_optimizer
@@ -16,7 +31,7 @@ identity:
   type_signature:
     input_type: legba.runtime.TraceCritiqueJoin
     output_type: legba.runtime.PromptModuleCandidate
-  state: active
+  state: paused
   owner: p17_reregister
 
 subscription:

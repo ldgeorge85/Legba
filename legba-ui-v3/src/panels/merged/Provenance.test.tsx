@@ -1,7 +1,9 @@
 /**
- * Component test for the U-3 merged Provenance (`system.provenance`) — proves
- * the tab strip actually swaps between the three ORIGINAL, unmodified
- * implementations (Why / Lineage / Flow) rather than silently dropping one.
+ * Component test for the merged Provenance (`system.provenance`) — proves the
+ * tab strip actually swaps between the FIVE original, unmodified
+ * implementations rather than silently dropping one: the U-3 trio (Why /
+ * Lineage / Flow) plus the two GLASS-2 surfaces that landed here as tabs
+ * instead of spending a sidebar row (Trajectory / Narratives).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
@@ -61,5 +63,23 @@ describe('ProvenanceMerged', () => {
       await screen.findByText(/no descriptors registered|projecting the registry graph/i),
     ).toBeInTheDocument()
     expect(screen.queryByTestId('why-findings-search')).not.toBeInTheDocument()
+  })
+
+  it('switching to Trajectory mounts the situation-register surface (GLASS-2)', async () => {
+    render(wrap(<ProvenanceMerged registration={reg()} scope={{}} mode="personal" />))
+    await screen.findByTestId('why-findings-search')
+    fireEvent.click(screen.getByTestId('provenance-tab-trajectory'))
+    expect(await screen.findByTestId('trajectory-frames')).toBeInTheDocument()
+    expect(screen.queryByTestId('why-findings-search')).not.toBeInTheDocument()
+  })
+
+  it('switching to Narratives mounts the contested-claim surface with its honesty note (GLASS-2)', async () => {
+    render(wrap(<ProvenanceMerged registration={reg()} scope={{}} mode="personal" />))
+    await screen.findByTestId('why-findings-search')
+    fireEvent.click(screen.getByTestId('provenance-tab-narratives'))
+    expect(await screen.findByTestId('narratives-honesty-note')).toHaveTextContent(
+      /NOT a causal or coordination claim/,
+    )
+    expect(screen.queryByTestId('trajectory-frames')).not.toBeInTheDocument()
   })
 })

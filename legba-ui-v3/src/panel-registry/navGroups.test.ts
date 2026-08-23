@@ -65,6 +65,11 @@ describe('groupForKind', () => {
     expect(groupForKind('system.audit')).toBe('operations')
   })
 
+  it('pins the Journal Gate to Engine Room beside Weekly Grading (both are operator duties over a queue)', () => {
+    expect(groupForKind('system.journal_gate')).toBe('operations')
+    expect(groupForKind('system.goldset')).toBe('operations')
+  })
+
   it('auto-slots an unknown kind via prefix fallback', () => {
     expect(groupForKind('registry.brand_new' as PanelKind)).toBe('operations')
     expect(groupForKind('system.brand_new' as PanelKind)).toBe('operations')

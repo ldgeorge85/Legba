@@ -38,6 +38,7 @@ from math import exp, log
 from typing import Any, Mapping
 from uuid import UUID, uuid4
 
+from ...provenance.models import _SEVERITY_RANK
 from ...provenance.models import FindingPayload
 from ....runtime.analyst_method import AnalystMethodResult
 from ....runtime.grounding import is_non_event_situation_name
@@ -118,16 +119,126 @@ def _is_report_snapshot_name(title: Any) -> bool:
     return isinstance(title, str) and _SNAPSHOT_NAME_RE.search(title) is not None
 
 
-def _situation_name(rows: list[dict[str, Any]], sig: str) -> str:
-    """Human label — the latest member finding's title (the freshest framing).
+# FRAME-2 §2.3.2 — THE FRAME-NAMING REPAIR.
+#
+# THE DEFECT (DB diagnosis, read-only 2026-08-20): naming a frame after its
+# LATEST member means whichever read happened to land last owns the label — and
+# because a desk's units emit an absence read whenever they look and see nothing,
+# the label that landed last was frequently a NEGATIVE claim. At the round's T0:
+# AR = "Argentina – No Coercive Economic Measures Observed…", BF = "Burkina Faso
+# – No observable shift in standing military posture", CD = "DRC – No discernible
+# shift in standing military posture". The register's principal rendered content
+# per desk was therefore a statement that nothing was happening, shown to every
+# unit and every composition on that desk, under a clause that forbids describing
+# a frame beyond "its own name and status" — so the model could not look past the
+# name even when the frame's own members contradicted it.
+#
+# THE FIX ranks candidates on what a LABEL is for, in this order:
+#   1. USABLE AT ALL — a dated-snapshot / leaked-JSON title (the DQ P6 #125
+#      class) can never name a frame, whatever its severity.
+#   2. POSITIVE OVER ABSENCE — a title that asserts something outranks one that
+#      asserts nothing, using the SHARED ``is_non_event_situation_name``
+#      predicate (the same one the grounding read filters on and the same one
+#      ``_situation_fields`` stamps ``steady_state`` from, so a frame that gains
+#      a positive name also stops being marked steady-state — one predicate,
+#      three consumers, no drift).
+#   3. SEVERITY — among titles that assert something, the desk's own worst
+#      assessment names the frame.
+#   4. RECENCY — the previous rule, kept as the tiebreak, so nothing about a
+#      frame with one severity level changes.
+#
+# NOT A STORED-STATE MIGRATION. ``situations.name`` is re-derived and re-UPSERTed
+# by this handler every run (``name=EXCLUDED.name``), so the fleet's existing
+# frames re-label themselves on the next cadence tick with no backfill.
 
-    DQ P6: a dated-snapshot or leaked-JSON title (the #125 parse-fallback class)
-    is REJECTED — fall back to the signature's topic label so a report receipt
-    never mints a situation named after a raw JSON fragment or a churning date.
+def _name_rank(row: dict[str, Any]) -> tuple[int, int, int, str]:
+    """Sort key for :func:`_situation_name`; the MAX of these names the frame.
+
+    ``(usable, asserts_something, severity, produced_at+id)``:
+
+    * **usable** — 0 for a dated-snapshot / leaked-JSON title (DQ P6), which may
+      never name a frame whatever else it has going for it; 1 otherwise. The
+      caller checks this leg to decide whether to fall back to the topic slug.
+    * **asserts_something** — a title the shared ``is_non_event_situation_name``
+      predicate calls a non-event ("… – No observable shift in standing military
+      posture", the live BF and CD frame names at T0) ranks BELOW every title
+      that asserts something, across the frame's WHOLE member set. A frame that
+      has ever asserted something is better labelled by that, however quiet it
+      has since gone: the register prints ``status`` and ``last_event_at`` right
+      beside the name, so a dormant frame named for its real event is honest AND
+      informative, while one named for whichever absence read landed last
+      actively reinforces "nothing happening" at compose time.
+    * **severity** — the repair's second leg, and why it sits above recency. An
+      absence read is tagged ``severity:low`` BY ITS OWN DESK while a real event
+      is moderate or above, so severity is the discriminator that catches the
+      absence titles the name-shape predicate misses. The live AR frame name is
+      exactly that case: "Argentina – No Coercive Economic Measures Observed"
+      does NOT match the non-event regex (its trailing-noun anchor has no
+      "measures"), and is beaten here on severity by the elevated protest head
+      instead. Unscored / unknown levels rank 0, below ``low``: a title the desk
+      never graded never displaces one it did.
+
+      FRAME-3 (2026-08-21) WEAKENS THIS LEG, deliberately and without changing
+      it. The severity tag used to be the SLICE DELTA — "no change observed"
+      banded low almost by construction — and is now the dimension's STANDING
+      STATE, so an absence read on a desk whose standing condition is serious
+      can be tagged ``high``. What survives is ``asserts_something``, which
+      ranks strictly above severity and is the leg that actually reads the
+      TITLE: a "No observable shift…" head loses on it whatever its severity
+      (``test_window_ledger.test_frame_naming_refuses_a_non_event_title_even_at_high_severity``
+      is that property, and it was written before this train). Severity remains
+      the right tiebreak among titles that all assert something. Re-keying the
+      rank on ``severity_delta`` was considered and rejected: a frame should be
+      named for the biggest thing in it, not the most recently moving one.
+    * **produced_at + id** — the previous rule (latest member wins), kept as the
+      final tiebreak, so nothing changes for a frame whose members all rank
+      alike. The id tail makes it deterministic: a name flickering between two
+      equal candidates every cadence tick would churn ``/situations`` for no
+      reason.
+
+    NO RECENCY WINDOW. An earlier draft narrowed candidates to the frame's last
+    seven days before ranking; it is left out deliberately, because
+    ``produced_at`` already breaks ties by recency and a hard window would
+    re-introduce the defect on exactly the frames that suffer it worst — a
+    dormant frame whose only recent members are absence reads.
     """
-    title = str(_latest(rows).get("title") or "").strip()
-    if title and not _is_report_snapshot_name(title):
-        return title[:512]
+    title = str(row.get("title") or "").strip()
+    if not title or _is_report_snapshot_name(title):
+        return (0, 0, 0, "")
+    return (
+        1,
+        0 if is_non_event_situation_name(title) else 1,
+        _SEVERITY_RANK.get(str(row.get("severity") or "").strip().lower(), 0),
+        f"{_produced_key(row)}|{row.get('id')}",
+    )
+
+
+def _produced_key(row: dict[str, Any]) -> str:
+    """``produced_at`` as a sortable string ("" for missing — sorts oldest, so a
+    timestampless row is never chosen as the freshest). Same coercion
+    :func:`_latest` makes, for the same heterogeneous-key reason."""
+    v = row.get("produced_at")
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v
+    iso = getattr(v, "isoformat", None)
+    return iso() if callable(iso) else str(v)
+
+
+def _situation_name(rows: list[dict[str, Any]], sig: str) -> str:
+    """Human label — the member title that best NAMES the frame (see the
+    FRAME-2 note above and :func:`_name_rank` for the ordering).
+
+    Falls back to the signature's topic label when NO member carries a usable
+    title, so a report receipt never mints a situation named after a raw JSON
+    fragment or a churning date (DQ P6).
+    """
+    if not rows:
+        return f"Situation {sig}"[:512]
+    best = max(rows, key=_name_rank)
+    if _name_rank(best)[0]:
+        return str(best.get("title") or "").strip()[:512]
     topic = _topic_from_signature(sig)
     return (f"Situation: {topic}" if topic else f"Situation {sig}")[:512]
 
@@ -334,7 +445,13 @@ async def _resolve_pool(
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             f"""
-            SELECT id, title, produced_at, situation_signature, analyst_id
+            -- FRAME-2: ``severity`` joins the projection so the frame NAME can
+            -- prefer the desk's own worst recent assessment over whichever read
+            -- happened to land last. It is a first-class read column (lifted
+            -- from the ``severity:<level>`` tag at write, S3-T4), so this costs
+            -- one more projected column and no join.
+            SELECT id, title, produced_at, situation_signature, analyst_id,
+                   severity
             FROM analyst_outputs
             WHERE kind = 'finding' AND situation_signature IS NOT NULL
               AND produced_at > NOW() - INTERVAL '{int(lookback_days)} days'

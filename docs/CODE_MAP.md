@@ -1117,7 +1117,8 @@ is the main source-registration path** — a 46-entry `CatalogEntry` tuple
 WHO/CDC/HRW, ~43 RSS feeds, etc. So the live source set is the
 **`source_descriptors` DB rows**, NOT just the operator-pinned
 `descriptors/source_*.yaml` — `ls descriptors/` undercounts. The full
-catalog table (with the three-tier 3 / 46 / 49 scope model) lives in
+catalog table (with the tiered 46-catalog / 53-registered-by-`deploy.sh` /
+moving-live-scope model) lives in
 `docs/DATA_SOURCES.md`. (A `CatalogEntry`'s
 `enrich_text` flag selects the geojson enrichment chain: `[language_detect,
 ner_multilingual, geocode]` when true vs geocode-only when false.)

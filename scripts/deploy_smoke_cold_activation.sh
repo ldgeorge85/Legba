@@ -30,9 +30,9 @@
 # descriptor PARSING, which only bites on the COLD path — resolving deps for an
 # actor that is not already resident. Actors that were already warm kept
 # running from cached deps, so the fleet looked fine until the next recreate
-# evicted them. The full test suite missed it too: 8,500 tests construct
-# descriptors IN PROCESS, and none of them traverse registry-fetch → parse →
-# activate → run against a live sidecar.
+# evicted them. The full test suite missed it too: every one of its
+# ten-thousand-odd tests constructs descriptors IN PROCESS, and none of them
+# traverse registry-fetch → parse → activate → run against a live sidecar.
 #
 # So the gap is specifically: "can a COLD actor activate and complete a run
 # against the CURRENTLY DEPLOYED image?" That question is only answerable

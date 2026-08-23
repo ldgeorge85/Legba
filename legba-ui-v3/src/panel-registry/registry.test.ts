@@ -200,3 +200,53 @@ describe('U-4 — system.wall_movers is registered, hidden, and still fully reac
     expect(wall.requiresBinding).toBe(false)
   })
 })
+
+/**
+ * GLASS-2 — the three API surfaces that shipped with no consumer now have one.
+ *
+ * Two of the three land as TABS of the merged Provenance panel rather than as
+ * sidebar rows (the ≤23-visible-row budget in navGroups.test.ts is spent to the
+ * last row, and that test's own terms are "earn it, fold into a tab, or hide").
+ * They use the same registered-but-hidden alias mechanism as the U-3 merges, so
+ * ⌘K and any saved layout still resolve them standalone.
+ */
+describe('GLASS-2 — the unconsumed-API consumers', () => {
+  const TAB_MOUNTED: PanelKind[] = ['system.situations', 'system.narratives']
+
+  it('the journal gate is a real, VISIBLE, non-binding singleton', () => {
+    const entry = PANEL_REGISTRY['system.journal_gate']
+    expect(entry).toBeDefined()
+    expect(entry.Component).toBeDefined()
+    expect(entry.definition.requiresBinding).toBe(false)
+    expect(entry.definition.scopeKey).toBe(null)
+    expect(entry.definition.hidden).not.toBe(true)
+    expect(SINGLETON_PANELS).toContain('system.journal_gate')
+  })
+
+  it('the journal gate is personal-only — it applies registry writes', () => {
+    expect(PANEL_REGISTRY['system.journal_gate'].definition.modes).toEqual(['personal'])
+  })
+
+  it('the two tab-mounted surfaces are registered, hidden, and keep a real Component', () => {
+    for (const kind of TAB_MOUNTED) {
+      const entry = PANEL_REGISTRY[kind]
+      expect(entry, `${kind} must exist in PANEL_REGISTRY`).toBeDefined()
+      expect(entry.Component, `${kind} must have a real Component`).toBeDefined()
+      expect(entry.definition.hidden, `${kind} is mounted as a Provenance tab`).toBe(true)
+      expect(SINGLETON_PANELS).not.toContain(kind)
+    }
+  })
+
+  it('every GLASS-2 panel_id round-trips (⌘K + saved layouts resolve them)', () => {
+    for (const kind of [...TAB_MOUNTED, 'system.journal_gate' as PanelKind]) {
+      const panelId = PANEL_REGISTRY[kind].definition.panelId
+      expect(PANEL_ID_TO_KIND[panelId], `panel_id "${panelId}" → ${kind}`).toBe(kind)
+    }
+  })
+
+  it('folding the two tabs in did not hide their host (system.provenance)', () => {
+    const host = PANEL_REGISTRY['system.provenance'].definition
+    expect(host.hidden).not.toBe(true)
+    expect(host.requiresBinding).toBe(false)
+  })
+})

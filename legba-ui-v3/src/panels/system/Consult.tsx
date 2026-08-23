@@ -7,8 +7,8 @@
  *
  * This panel is a multi-turn CHAT surface:
  *   - `mode:'chat'` (default) → the actor answers without writing a finding;
- *     the answer comes back in the envelope (no DB row). History is held
- *     client-side here and re-sent as `messages[]` on each turn.
+ *     the answer comes back in the envelope (no DB row). History threads
+ *     under a server-side session and is re-sent as `messages[]` on each turn.
  *   - Live thinking → before POSTing, the panel mints a `request_id`, opens an
  *     `EventSource` on `/api/v1/consult/stream/<id>?token=...`, and renders each
  *     ReAct step as it streams; the stream closes on the terminal `final` frame.
@@ -16,9 +16,43 @@
  * Deep, durable analysis (a long-running task that writes a finding) lives in
  * its OWN `Deep Consult` panel (`system.deep_consult`) — this panel is the
  * lightweight chat surface only.
+ *
+ * The conversation is NOT component state (GLASS-4)
+ * =================================================
+ *
+ * Transcript, session id, pins, the in-flight turn and its live step ticker all
+ * live in `state/consultSession.ts`, keyed by `registration.id`. This panel is
+ * a view over that slice.
+ *
+ * That is a correctness requirement, not tidiness. Dockview destroys a panel's
+ * React tree on `api.clear()` — which every layout preset and both Investigate
+ * grids call — so with the state held locally, picking a preset silently
+ * discarded an in-flight turn along with the whole conversation above it. With
+ * the state in the store the unmount costs only the DOM: the `fetch` in `send`
+ * is never aborted and its continuation writes through the store, so the answer
+ * still lands and is waiting when the panel reopens.
+ *
+ * Three things follow from that split, and each is load-bearing:
+ *
+ *   1. **The EventSource is closed on unmount.** It is the one resource that
+ *      genuinely cannot outlive the component, so `send` registers it on a ref
+ *      and an unmount cleanup closes it. The turn keeps running; only the live
+ *      ticker stops, and the steps collected so far stay on the pending turn.
+ *   2. **On mount the panel reconciles against the server** via the existing
+ *      `loadConsultSession`. Server truth wins for completed turns; the local
+ *      pending turn survives only while the server has not recorded its answer
+ *      (see `reconcileWithServer`).
+ *   3. **A pending turn orphaned by a RELOAD is polled back.** Its `fetch` died
+ *      with the old page, so nothing will ever resolve it locally — the panel
+ *      re-reads the session until the answer appears, then stops waiting and
+ *      says so rather than showing "Consulting…" forever.
+ *
+ * Step 2 and 3 rest on the registry finishing a turn whose client has gone
+ * away. That is proven, not assumed — see
+ * `tests/data_pkg/test_consult_disconnect_persistence.py`.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { PanelChrome } from '@/components/PanelChrome'
@@ -35,20 +69,18 @@ import {
 } from '@/lib/api'
 import { RecordLink } from '@/components/inspector/RecordLink'
 import { Pin, X } from 'lucide-react'
-import { selectionKindOf, useSelection, type Selection } from '@/state/selection'
+import { selectionKindOf, useSelection } from '@/state/selection'
+import {
+  consultActions,
+  isDetached,
+  useConsultPanel,
+  CONSULT_PAGE_LOAD_ID,
+  type ChatTurn,
+  type ConsultCitedRef,
+  type ConsultToolCall,
+  type StepFrame,
+} from '@/state/consultSession'
 import type { PanelProps } from '@/types'
-
-interface ConsultToolCall {
-  tool: string
-  args: Record<string, unknown>
-  result: unknown
-}
-
-interface ConsultCitedRef {
-  kind: string
-  id: string
-  description?: string | null
-}
 
 interface ConsultResponse {
   answer: string
@@ -64,33 +96,19 @@ interface ConsultResponse {
   model?: string | null
 }
 
-/** One streamed ReAct step frame off the SSE relay. */
-interface StepFrame {
-  type: string
-  phase?: string
-  kind?: string
-  tool?: string
-  round?: number
-  [k: string]: unknown
-}
-
-/** One turn of the client-held transcript. */
-interface ChatTurn {
-  role: 'user' | 'assistant'
-  content: string
-  steps?: StepFrame[]
-  toolCalls?: ConsultToolCall[]
-  citedRefs?: ConsultCitedRef[]
-  uncertainty?: number | null
-  unansweredAspects?: string[]
-  findingId?: string | null
-  deep?: boolean
-  model?: string | null
-}
-
 const CONSULT_PATH = '/consult'
-const DEFAULT_ROUNDS = 10
 const MAX_ROUNDS = 30
+
+/**
+ * How often a turn orphaned by a reload re-reads its session looking for the
+ * answer, and how long it keeps looking.
+ *
+ * The deadline mirrors `DAPR_INVOKE_TIMEOUT_SECONDS` in `consult_api.py`: past
+ * it the registry has itself given up on the actor, so an answer is no longer
+ * coming and continuing to poll would only misrepresent the turn as live.
+ */
+const REATTACH_POLL_MS = 3000
+const REATTACH_DEADLINE_MS = 300_000
 
 function formatApiError(err: unknown): string {
   if (err instanceof ApiError) {
@@ -118,90 +136,146 @@ function stepLabel(s: StepFrame): string {
 }
 
 export default function ConsultPanel({ registration }: PanelProps) {
-  const [question, setQuestion] = useState('')
-  const [scope, setScope] = useState('')
-  const [maxRounds, setMaxRounds] = useState(DEFAULT_ROUNDS)
-  // F1 model picker — the LLM plane this chat runs on; persisted across opens.
+  // The store key. `singleton:system.consult` for the ordinary panel — stable
+  // across an `api.clear()`, so a re-opened panel rejoins its own conversation.
+  const panelId = registration.id
+  const panel = useConsultPanel(panelId)
+  const { sessionId, transcript, pins, pendingTurn, draft, scope, maxRounds, error } = panel
+
+  // F1 model picker — the LLM plane this chat runs on; persisted across opens
+  // under its own key (it is an operator preference, not conversation state).
   const [model, setModel] = useState<ConsultModel>(() => loadConsultModel())
-  const [transcript, setTranscript] = useState<ChatTurn[]>([])
-  const [liveSteps, setLiveSteps] = useState<StepFrame[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  // The persisted audit-trail session (0038). Set on the first server reply;
-  // re-sent on each subsequent turn so the whole conversation threads under one
-  // session, and set directly when a prior session is loaded from history.
-  const [sessionId, setSessionId] = useState<string | null>(null)
-  // History sidebar: prior chat sessions, most-recently-active first.
+  // History sidebar: prior chat sessions. Deliberately component-local — view
+  // chrome SHOULD reset with the panel; only the conversation is durable.
   const [sessions, setSessions] = useState<ConsultSessionSummary[]>([])
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyError, setHistoryError] = useState<string | null>(null)
+
   const esRef = useRef<EventSource | null>(null)
-  // Mirror of liveSteps readable synchronously inside the async submit closure
-  // (state reads there are stale). Kept in lockstep via pushLiveStep / reset.
-  const liveStepsRef = useRef<StepFrame[]>([])
   // Auto-scroll the conversation to the newest turn / live step.
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
+  // A turn whose POST this page load no longer owns (the reload case) — it can
+  // only be recovered from the server, so it is polled rather than awaited.
+  const detached = isDetached(pendingTurn)
+  // A stalled turn must not lock the composer: the operator gets the panel back.
+  const busy = !!pendingTurn && !pendingTurn.stalled
+
   // Pin-to-context (#90): the operator pins records from the shared selection
   // into a sticky set; every pin is injected into each turn's context (see
-  // `send`). Pins persist as the operator navigates and accumulate.
+  // `send`). Pins live in the store, so they now survive a preset pick too.
   const selection = useSelection((s) => s.selection)
-  const [pins, setPins] = useState<Selection[]>([])
   const pinSelection = () => {
     if (!selection) return
-    setPins((prev) =>
-      prev.some((p) => p.kind === selection.kind && p.id === selection.id)
-        ? prev
-        : [...prev, selection],
-    )
+    consultActions().addPin(panelId, selection)
   }
-  const removePin = (kind: string, id: string) =>
-    setPins((prev) => prev.filter((p) => !(p.kind === kind && p.id === id)))
   const selectionPinned =
     !!selection && pins.some((p) => p.kind === selection.kind && p.id === selection.id)
 
-  const pushLiveStep = (frame: StepFrame) => {
-    liveStepsRef.current = [...liveStepsRef.current, frame]
-    setLiveSteps(liveStepsRef.current)
-  }
-
-  const resetLiveSteps = () => {
-    liveStepsRef.current = []
-    setLiveSteps([])
-  }
-
-  const closeStream = () => {
+  const closeStream = useCallback(() => {
     if (esRef.current) {
       esRef.current.close()
       esRef.current = null
     }
-  }
+  }, [])
+
+  // The EventSource is the one piece of this panel that CANNOT outlive the
+  // component — an unmounted panel has nothing to render steps into, and a
+  // leaked SSE connection would hold a registry worker and keep relaying into
+  // the void. Closing it does not touch the turn: the POST is still running and
+  // the steps gathered so far stay on the pending turn in the store.
+  useEffect(() => closeStream, [closeStream])
 
   // Keep the conversation pinned to the bottom as turns / steps arrive.
   useEffect(() => {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [transcript, liveSteps, loading])
+  }, [transcript, pendingTurn])
+
+  // ---------------------------------------------------------------------
+  // Reconcile on mount — server truth for completed turns, local pending turn
+  // only while the server has no answer for it.
+  // ---------------------------------------------------------------------
+  useEffect(() => {
+    const store = consultActions()
+    const slice = store.panel(panelId)
+    if (!slice.sessionId) return
+    const rev = slice.rev
+    let cancelled = false
+    void loadConsultSession(slice.sessionId)
+      .then((detail) => {
+        if (!cancelled) consultActions().reconcile(panelId, detail, rev)
+      })
+      .catch(() => {
+        // Best-effort: an unreachable registry leaves the local slice exactly
+        // as it was. Nothing is dropped on a failed reconcile.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [panelId])
+
+  // ---------------------------------------------------------------------
+  // Reattach poll — a turn orphaned by a reload has no promise to resolve it.
+  // ---------------------------------------------------------------------
+  useEffect(() => {
+    if (!pendingTurn || pendingTurn.stalled || !detached) return
+    const { requestId, startedAt } = pendingTurn
+
+    // No session id means the reload beat the FIRST response back: the server
+    // minted the session, we never learned its id, and `consult_sessions`
+    // carries no `request_id` to find it by. The turn is genuinely
+    // unrecoverable automatically — say so instead of spinning. The run itself
+    // is not lost: it is in the History sidebar under its own question.
+    if (!sessionId || Date.now() - startedAt > REATTACH_DEADLINE_MS) {
+      consultActions().markStalled(panelId, requestId)
+      return
+    }
+
+    let cancelled = false
+    const timer = window.setInterval(() => {
+      if (Date.now() - startedAt > REATTACH_DEADLINE_MS) {
+        consultActions().markStalled(panelId, requestId)
+        return
+      }
+      const rev = consultActions().panel(panelId).rev
+      void loadConsultSession(sessionId)
+        .then((detail) => {
+          if (!cancelled) consultActions().reconcile(panelId, detail, rev)
+        })
+        .catch(() => {
+          // A poll that can't reach the registry just tries again next tick.
+        })
+    }, REATTACH_POLL_MS)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [panelId, pendingTurn, detached, sessionId])
 
   const send = async (mode: 'chat' | 'deep') => {
-    const trimmed = question.trim()
-    if (!trimmed || loading) return
+    const trimmed = draft.trim()
+    if (!trimmed || busy) return
 
-    setError(null)
-    setLoading(true)
-    resetLiveSteps()
+    const store = consultActions()
+    // Snapshot the transcript-so-far for the server (prior turns) BEFORE the
+    // store optimistically appends the new user turn.
+    const priorMessages = transcript.map((t) => ({ role: t.role, content: t.content }))
+    const requestId = crypto.randomUUID()
 
-    // Snapshot the transcript-so-far for the server (prior turns) BEFORE we
-    // optimistically append the new user turn locally.
-    const priorMessages = transcript.map((t) => ({
-      role: t.role,
-      content: t.content,
-    }))
-    setTranscript((prev) => [...prev, { role: 'user', content: trimmed }])
-    setQuestion('')
+    // Stamp the turn with THIS page load: while the stamp matches, the reattach
+    // poll leaves the turn alone, because the promise below will answer it.
+    store.startTurn(panelId, {
+      requestId,
+      question: trimmed,
+      mode,
+      startedAt: Date.now(),
+      pageLoadId: CONSULT_PAGE_LOAD_ID,
+      steps: [],
+    })
 
     // Subscribe to the step stream BEFORE POSTing (subscribe-before-publish).
-    const requestId = crypto.randomUUID()
     closeStream()
     try {
       const token = localStorage.getItem('legba_token') ?? ''
@@ -222,7 +296,9 @@ export default function ConsultPanel({ registration }: PanelProps) {
           return
         }
         if (frame.type === 'step') {
-          pushLiveStep(frame)
+          // Addressed by request id, so a frame arriving after the turn settled
+          // (or belonging to a superseded turn) is dropped, not misfiled.
+          consultActions().pushStep(panelId, requestId, frame)
         }
       }
       es.onerror = () => {
@@ -258,40 +334,33 @@ export default function ConsultPanel({ registration }: PanelProps) {
       // Thread the audit-trail session — the server opens one on the first turn
       // and echoes its id; pass it back on the next turn so the conversation
       // stays under one session.
-      if (resp.session_id) setSessionId(resp.session_id)
-      setTranscript((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: resp.answer,
-          steps: liveStepsRef.current,
-          toolCalls: resp.tool_calls,
-          citedRefs: resp.cited_refs,
-          uncertainty: resp.uncertainty,
-          unansweredAspects: resp.unanswered_aspects,
-          findingId: resp.finding_id,
-          deep: mode === 'deep',
-          model: resp.model ?? model,
-        },
-      ])
+      if (resp.session_id) consultActions().setSessionId(panelId, resp.session_id)
+      // Read the live steps back off the store rather than a local ref: this
+      // continuation may be running long after the component that started it
+      // was unmounted, and the store is the only thing that still has them.
+      const steps = consultActions().panel(panelId).pendingTurn?.steps ?? []
+      consultActions().completeTurn(panelId, requestId, {
+        role: 'assistant',
+        content: resp.answer,
+        steps,
+        toolCalls: resp.tool_calls,
+        citedRefs: resp.cited_refs,
+        uncertainty: resp.uncertainty,
+        unansweredAspects: resp.unanswered_aspects,
+        findingId: resp.finding_id,
+        deep: mode === 'deep',
+        model: resp.model ?? model,
+      })
     } catch (err) {
-      setError(formatApiError(err))
+      consultActions().failTurn(panelId, requestId, formatApiError(err))
     } finally {
       closeStream()
-      resetLiveSteps()
-      setLoading(false)
     }
   }
 
   const resetChat = () => {
     closeStream()
-    setTranscript([])
-    resetLiveSteps()
-    setError(null)
-    setLoading(false)
-    setPins([])
-    // Start a fresh conversation — the next turn opens a new session.
-    setSessionId(null)
+    consultActions().reset(panelId)
   }
 
   // Load the prior-session list for the history sidebar.
@@ -308,26 +377,14 @@ export default function ConsultPanel({ registration }: PanelProps) {
   // Open a prior session: re-seed the transcript from its persisted turns and
   // adopt its id so the next turn CONTINUES the conversation server-side.
   const openSession = async (id: string) => {
-    if (loading) return
-    setError(null)
+    if (busy) return
     closeStream()
-    resetLiveSteps()
     try {
       const detail = await loadConsultSession(id)
-      const turns: ChatTurn[] = detail.turns.map((t) => ({
-        role: t.role,
-        content: t.content,
-        steps: (t.steps as StepFrame[]) ?? [],
-        toolCalls: (t.tool_calls as ConsultToolCall[]) ?? [],
-        citedRefs: (t.cited_refs as ConsultCitedRef[]) ?? [],
-        findingId: t.finding_id ?? null,
-        deep: Boolean(t.finding_id),
-      }))
-      setTranscript(turns)
-      setSessionId(detail.id)
+      consultActions().adoptSession(panelId, detail)
       setHistoryOpen(false)
     } catch (err) {
-      setError(formatApiError(err))
+      consultActions().setError(panelId, formatApiError(err))
     }
   }
 
@@ -335,6 +392,18 @@ export default function ConsultPanel({ registration }: PanelProps) {
   useEffect(() => {
     if (historyOpen) void loadHistory()
   }, [historyOpen, loadHistory])
+
+  /** What the in-flight block says about itself — the three states differ. */
+  const pendingLabel = useMemo(() => {
+    if (!pendingTurn) return ''
+    if (pendingTurn.stalled) {
+      return sessionId
+        ? 'Stopped waiting — the server never recorded an answer for this turn.'
+        : 'Stopped waiting — this turn was interrupted before it was threaded to a session. Check History.'
+    }
+    if (detached) return 'Reattached after a reload — waiting for the server…'
+    return `Thinking… (${pendingTurn.steps.length} steps)`
+  }, [pendingTurn, detached, sessionId])
 
   return (
     <PanelChrome
@@ -373,7 +442,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
                 <li key={s.id}>
                   <button
                     onClick={() => void openSession(s.id)}
-                    disabled={loading}
+                    disabled={busy}
                     className={
                       'w-full text-left rounded px-2 py-1 text-xs hover:bg-surface-200 disabled:opacity-50 ' +
                       (s.id === sessionId ? 'bg-surface-200 text-slate-100' : 'text-slate-300')
@@ -404,7 +473,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
           </button>
           <button
             onClick={resetChat}
-            disabled={loading}
+            disabled={busy}
             className="text-[11px] text-slate-400 hover:text-slate-200 rounded px-2 py-0.5 border border-slate-700 disabled:opacity-50"
             data-testid="consult-new-chat"
           >
@@ -433,7 +502,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
           className="flex-1 overflow-y-auto min-h-0 space-y-3 pr-1"
           data-testid="consult-scroll"
         >
-          {transcript.length === 0 && !loading && (
+          {transcript.length === 0 && !pendingTurn && (
             <div className="text-label text-ink-3 py-6 text-center">
               Ask the substrate anything — answers cite the records they used.
             </div>
@@ -441,7 +510,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
 
           {transcript.length > 0 && (
             <div className="space-y-3" data-testid="consult-transcript">
-              {transcript.map((turn, i) =>
+              {transcript.map((turn: ChatTurn, i: number) =>
                 turn.role === 'user' ? (
                   <div key={i} className="flex justify-end" data-testid="consult-turn-user">
                     <div className="bg-accent-info/20 rounded px-3 py-2 text-sm max-w-[85%] whitespace-pre-wrap">
@@ -552,20 +621,40 @@ export default function ConsultPanel({ registration }: PanelProps) {
             </div>
           )}
 
-          {/* Live thinking (in-flight turn) */}
-          {loading && (
+          {/* The in-flight turn — survives an unmount, so this block is drawn
+              from the store and can outlive the component that started it. */}
+          {pendingTurn && (
             <div
               className="bg-surface-200 rounded p-2 border border-slate-700"
               data-testid="consult-live-steps"
             >
-              <div className="text-[11px] text-slate-400 mb-1">
-                Thinking… ({liveSteps.length} steps)
+              <div className="flex items-center gap-2 mb-1">
+                <div
+                  className={
+                    'text-[11px] ' +
+                    (pendingTurn.stalled ? 'text-amber-300' : 'text-slate-400')
+                  }
+                  data-testid="consult-pending-label"
+                >
+                  {pendingLabel}
+                </div>
+                {pendingTurn.stalled && (
+                  <button
+                    onClick={() => consultActions().dismissPending(panelId)}
+                    className="ml-auto text-[10px] text-slate-400 hover:text-slate-200 underline underline-offset-2"
+                    data-testid="consult-pending-dismiss"
+                  >
+                    Dismiss
+                  </button>
+                )}
               </div>
-              <ul className="text-[10px] font-mono space-y-0.5 text-slate-400 max-h-40 overflow-y-auto">
-                {liveSteps.map((s, i) => (
-                  <li key={i}>{stepLabel(s)}</li>
-                ))}
-              </ul>
+              {pendingTurn.steps.length > 0 && (
+                <ul className="text-[10px] font-mono space-y-0.5 text-slate-400 max-h-40 overflow-y-auto">
+                  {pendingTurn.steps.map((s, i) => (
+                    <li key={i}>{stepLabel(s)}</li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
         </div>
@@ -588,7 +677,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
                   <span className="text-slate-400">{p.kind}:</span>
                   <span className="truncate max-w-[140px]">{p.label ?? p.id}</span>
                   <button
-                    onClick={() => removePin(p.kind, p.id)}
+                    onClick={() => consultActions().removePin(panelId, p.kind, p.id)}
                     className="text-slate-400 hover:text-slate-100"
                     title="unpin"
                     aria-label="unpin"
@@ -598,7 +687,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
                 </span>
               ))}
               <button
-                onClick={() => setPins([])}
+                onClick={() => consultActions().clearPins(panelId)}
                 className="text-[10px] text-slate-400 hover:text-slate-200 underline underline-offset-2 ml-1"
                 data-testid="consult-pins-clear"
               >
@@ -641,8 +730,8 @@ export default function ConsultPanel({ registration }: PanelProps) {
             <textarea
               className="flex-1 bg-surface-200 border border-slate-700 rounded p-2 text-sm resize-none"
               rows={2}
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
+              value={draft}
+              onChange={(e) => consultActions().setDraft(panelId, e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault()
@@ -654,11 +743,11 @@ export default function ConsultPanel({ registration }: PanelProps) {
             />
             <button
               onClick={() => send('chat')}
-              disabled={loading || !question.trim()}
+              disabled={busy || !draft.trim()}
               className="px-4 py-2 text-sm bg-accent-info/30 hover:bg-accent-info/50 disabled:opacity-50 rounded shrink-0"
               data-testid="consult-submit"
             >
-              {loading ? 'Consulting…' : 'Send'}
+              {busy ? 'Consulting…' : 'Send'}
             </button>
           </div>
           <details className="text-xs text-slate-400">
@@ -667,7 +756,7 @@ export default function ConsultPanel({ registration }: PanelProps) {
               <input
                 className="w-full bg-surface-200 border border-slate-700 rounded p-2 text-xs font-mono"
                 value={scope}
-                onChange={(e) => setScope(e.target.value)}
+                onChange={(e) => consultActions().setScope(panelId, e.target.value)}
                 placeholder='scope predicate (optional) — target.id == "brazil"'
                 data-testid="consult-scope"
               />
@@ -679,7 +768,10 @@ export default function ConsultPanel({ registration }: PanelProps) {
                   max={MAX_ROUNDS}
                   value={maxRounds}
                   onChange={(e) =>
-                    setMaxRounds(Math.max(1, Math.min(MAX_ROUNDS, Number(e.target.value) || 1)))
+                    consultActions().setMaxRounds(
+                      panelId,
+                      Math.max(1, Math.min(MAX_ROUNDS, Number(e.target.value) || 1)),
+                    )
                   }
                   className="w-16 bg-surface-200 border border-slate-700 rounded px-1 py-0.5 text-xs font-mono"
                   data-testid="consult-max-rounds"

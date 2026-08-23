@@ -58,11 +58,11 @@ class _FakeConn:
     async def execute(self, query: str, *args):
         # The ONLY execute the chain issues is the analyst_traces INSERT.
         assert "INSERT INTO analyst_traces" in query
-        # Column order matches receipts.py: ... output_row_refs($13),
-        # output_payload($14::jsonb) ...
+        # Column order matches receipts.py: ... output_row_refs($14),
+        # output_payload($15::jsonb) ...
         self._store["insert_args"] = args
-        self._store["output_row_refs"] = args[12]
-        self._store["output_payload"] = json.loads(args[13])
+        self._store["output_row_refs"] = args[13]
+        self._store["output_payload"] = json.loads(args[14])
 
 
 class _FakeAcquire:

@@ -37,15 +37,23 @@ method:
   llm:
     # 2026-06-22: consult runs on the Anthropic plane (operator: consult +
     # deep_consult are the ONLY Anthropic users; everything else, incl. the
-    # critic, is on the core plane). max_tokens IS sent + enforced here
-    # (Anthropic requires it) — unlike the core plane, which serves its own
-    # output budget. TO REVERT to the core plane: set raw back to
-    # llm.primary.openai_compat.
+    # critic, is on the core plane). TO REVERT to the core plane: set raw back
+    # to llm.primary.openai_compat.
+    #
+    # 2026-08-15: max_tokens is the OPERATIVE per-call output budget — the
+    # deps builder threads it into the ReAct loop (resolve_output_budget),
+    # replacing the old env-defaulted 2048. LEGBA_CONSULT_MAX_TOKENS is now an
+    # emergency override only (logged loudly when it wins). 32768 is enabled
+    # by the Anthropic handler STREAMING every generation (the old 2048 sweet
+    # spot existed only because a non-streaming 4k+ generation outran the
+    # provider HTTP window → 504); it sits well under the Opus line's
+    # documented 128k per-request output ceiling (the handler clamps + logs
+    # if a descriptor ever exceeds that).
     primary:
       factory_kind: stack_ref
       raw: llm.anthropic.opus_4_7
       expected_family: llm_provider
-    max_tokens: 16384
+    max_tokens: 32768
   # Opus 4.7 plane (above). 1M/day throttled the daily driver after ~5 broad
   # consults (~150-250k tokens each across 10 rounds); raised to 5M for headroom
   # (the wall-clock loop budget also trims per-consult usage). Tune to taste —

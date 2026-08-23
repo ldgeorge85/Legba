@@ -572,9 +572,12 @@ async def _read_substrate_slice(
 
     # QW1-B — DESK GROUNDING leg. The composition floor got a memory in Phase 1
     # (``meta_findings_synthesizer``, grep CONTINUITY); this is the SAME idiom one
-    # floor down, widened from two blocks to four: the unit's own PRIOR READ of
-    # this target, the desk's OPEN SITUATION REGISTER, its DESK BASELINE (what is
-    # normal here), and its STANDING OPEN QUESTIONS. Each arrives as a MARKED row
+    # floor down, widened from two blocks to five: the unit's own PRIOR READ of
+    # this target, its WINDOW LEDGER (FRAME-2 — this unit's own dated, verified,
+    # severity-tagged reads of the trailing fortnight, the carry that stops a
+    # 72-hour read forgetting its own window), the desk's OPEN SITUATION
+    # REGISTER, its DESK BASELINE (what is normal here), and its STANDING OPEN
+    # QUESTIONS. Each arrives as a MARKED row
     # (``UNIT_GROUNDING_ROW_KEY``) that ``inline_target.run_method`` lifts out of
     # the evidence slice before ORIENT and renders as its own citable ``[N]``
     # block — never as a signal, never in ``derived_from``.

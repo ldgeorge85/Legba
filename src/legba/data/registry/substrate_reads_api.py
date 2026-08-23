@@ -77,6 +77,12 @@ SituationState = Literal["active", "resolved", "escalating"]
 # `collapsed` once it drops below 2 non-junk clusters. The UI surfaces the LIVE
 # disputes (contested / surfaced); a `collapsed` group is no longer contested.
 ContentionStatus = Literal["contested", "surfaced", "collapsed"]
+# GLASS-1 — how the faithfulness verify pass ran, as stamped in the critique's
+# ``verification.judge_status``: ``llm`` (the judge graded), ``deterministic``
+# (only the floor ran), ``unsampled`` (J2 — the sampling gate deliberately did
+# not select this row; an honest state, never an error, and a FIRST-CLASS
+# filter value here so the unsampled stratum is one query, not a client sieve).
+JudgeStatus = Literal["llm", "deterministic", "unsampled"]
 
 
 # ---------------------------------------------------------------------------
@@ -580,6 +586,8 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         analyst_id: str | None = Query(default=None),
         analyst_id_in: str | None = Query(default=None),
         severity: Severity | None = Query(default=None),
+        verified: bool | None = Query(default=None),
+        judge_status: JudgeStatus | None = Query(default=None),
         q: str | None = Query(default=None),
         limit: int = Query(default=DEFAULT_LIMIT),
         cursor: str | None = Query(default=None),
@@ -622,6 +630,35 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         if severity is not None:
             args.append(severity)
             where.append(f"f.severity = ${len(args)}")
+        # GLASS-1 — the server-side verification facet. Both predicates run
+        # over the SAME surfaced verification block ``_hydrate_finding``
+        # projects (the faithfulness lateral's block, else the structural
+        # fallback), so the filter and the badge a row renders can never
+        # disagree — and, being in the WHERE, the page fill + next_cursor are
+        # computed over the FILTERED population (the client-side sieve this
+        # replaces filtered pages it had already fetched, so at any real
+        # corpus size the facet lied about the filtered population).
+        surfaced_verification = "coalesce(c.verification, s.structural_verification)"
+        if verified is not None:
+            # ``verified=true`` means what the feed's isVerified() means: the
+            # surfaced block carries a MEASURED faithfulness_score (an
+            # ``unsampled`` row still qualifies — the deterministic floor
+            # ran). ``verified=false`` is everything else: no verify pass,
+            # structural-only, or a block without the number. jsonb_typeof is
+            # NULL-safe — a missing block/key is never 'number' (and always
+            # DISTINCT FROM it), so no fabricated verdict either way.
+            op = "=" if verified else "IS DISTINCT FROM"
+            where.append(
+                f"jsonb_typeof({surfaced_verification} -> 'faithfulness_score') "
+                f"{op} 'number'"
+            )
+        if judge_status is not None:
+            # Exact text match on the block's ``judge_status``, mirroring the
+            # client verdict model: a legacy block without the key matches NO
+            # value (never coalesced to 'deterministic' here — that fold is
+            # the production gauge's health heuristic, not a filter truth).
+            args.append(judge_status)
+            where.append(f"{surfaced_verification} ->> 'judge_status' = ${len(args)}")
         # P1-T1 reachability — keyword reach. Full-text match over the
         # concatenated title+body. `to_tsvector(...) @@ plainto_tsquery(...)` is
         # correct without a dedicated index (seq scan, scoped by the other

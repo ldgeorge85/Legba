@@ -13,10 +13,21 @@
 # 2-minute restart fixes. This script is the actuator: a root cron (every 5
 # min) that checks the freshest signal's age straight from Postgres and, when
 # the pipeline is provably dead, executes the operator-approved recovery
-# recipe — restart the sidecar, then the dapr-workflow worker, then the runtime
+# recipe — restart the sidecar, then the runtime
 # (RESTART, never recreate: recreate churn is itself implicated in degrading
-# the actor plane; the worker joined the recipe after the 2026-07-18..21 soak
-# proved it the recovery differentiator, 8/8).
+# the actor plane).
+#
+# RUST-4 MOTHBALL (2026-08-21): the dapr-workflow worker used to be the third
+# leg of this recipe (the 2026-07-18..21 soak had credited it as the recovery
+# differentiator, 8/8) — dropped here now that the GEPA optimizer plane is
+# mothballed (docs/SEAMS.md #53, planning/RUST4_EVIDENCE_2026-08-21.md): the
+# worker container stays deployed (it also hosts deep_consult_workflow — see
+# docker-compose.yml), but "deep" consult mode had 2 sessions in the 6 weeks
+# the evidence was gathered, and the worker's earlier restart-differentiator
+# role is attributed to the optimizer's actor-plane load, not deep_consult's.
+# If that attribution turns out wrong, re-add `docker restart
+# "$WORKER_CONTAINER"` alongside the sidecar/runtime restarts below, citing
+# the same evidence file.
 #
 # SAFETY LADDER (every rung must pass before a restart):
 #   1. /etc/legba-watchdog.disabled exists           -> skip (maintenance flag)
@@ -59,7 +70,8 @@ DISABLE_FLAG="/etc/legba-watchdog.disabled"
 PG_CONTAINER="legba-postgres-1"
 SIDECAR_CONTAINER="legba-dapr-sidecar-1"
 RUNTIME_CONTAINER="legba-legba-runtime-dapr-1"
-WORKER_CONTAINER="legba-legba-dapr-workflow-worker-1"
+# WORKER_CONTAINER dropped from the recovery recipe — RUST-4 mothball
+# (2026-08-21), see the header comment.
 PG_USER="legba"
 PG_DB="legba"
 
@@ -137,13 +149,14 @@ fi
 # identical second restart (app image hot in page cache, <1s boot) always won.
 # It was never the delay and never the worker. Fix-2a: restart the RUNTIME
 # first, WAIT for its healthcheck, then the sidecar (which now reports a host
-# that already answers with the full actor set), then the worker.
+# that already answers with the full actor set). (The worker was the third
+# leg here; dropped RUST-4 2026-08-21 — see the header comment.)
 if [ "$DRY_RUN" = "1" ]; then
-    log "DRY_RUN WOULD-RESTART pipeline stalled (freshest signal ${age}s > ${MAX_AGE_SECS}s): $RUNTIME_CONTAINER first (wait healthy), then $SIDECAR_CONTAINER, then $WORKER_CONTAINER"
+    log "DRY_RUN WOULD-RESTART pipeline stalled (freshest signal ${age}s > ${MAX_AGE_SECS}s): $RUNTIME_CONTAINER first (wait healthy), then $SIDECAR_CONTAINER"
     exit 0
 fi
 
-log "FIRE pipeline stalled (freshest signal ${age}s > ${MAX_AGE_SECS}s) — P2 order: $RUNTIME_CONTAINER first (wait healthy), then $SIDECAR_CONTAINER, then $WORKER_CONTAINER"
+log "FIRE pipeline stalled (freshest signal ${age}s > ${MAX_AGE_SECS}s) — P2 order: $RUNTIME_CONTAINER first (wait healthy), then $SIDECAR_CONTAINER"
 docker restart "$RUNTIME_CONTAINER" >/dev/null 2>&1
 # Bounded wait for the app to answer before the sidecar re-reports its host to
 # placement. Timeout proceeds anyway — the verify-recovery rung backstops.
@@ -155,15 +168,12 @@ for _i in $(seq 1 30); do
 done
 log "FIRE runtime health after wait: ${hs:-unknown}"
 docker restart "$SIDECAR_CONTAINER" >/dev/null 2>&1
-sleep 5
-docker restart "$WORKER_CONTAINER" >/dev/null 2>&1
 touch "$COOLDOWN_STAMP"
 
 # VERIFY-RECOVERY: wait for warmup + the first source polls, re-read the age,
-# and if flow has NOT resumed repeat the trio ONCE, cooldown-exempt. The worker
-# is already in the first fire (8/8 evidence above); this rung is the backstop
-# for the day that stops being sufficient. One retry only — a loop of restarts
-# IS the churn.
+# and if flow has NOT resumed repeat the pair ONCE, cooldown-exempt. This rung
+# is the backstop for the day the first fire stops being sufficient. One
+# retry only — a loop of restarts IS the churn.
 VERIFY_WAIT="${VERIFY_WAIT:-720}"   # 12 min: warmup grace (~5) + poll headroom
 sleep "$VERIFY_WAIT"
 age2="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -tAc \
@@ -176,10 +186,9 @@ case "$age2" in
         if [ "$age2" -lt "$VERIFY_WAIT" ]; then
             log "VERIFIED recovery took (freshest signal ${age2}s old)"
         else
-            log "RETRY first restart did NOT recover (age still ${age2}s) — repeating the trio: sidecar + worker + runtime"
+            log "RETRY first restart did NOT recover (age still ${age2}s) — repeating: sidecar + runtime"
             docker restart "$SIDECAR_CONTAINER" >/dev/null 2>&1
             sleep 5
-            docker restart "$WORKER_CONTAINER" >/dev/null 2>&1
             docker restart "$RUNTIME_CONTAINER" >/dev/null 2>&1
             touch "$COOLDOWN_STAMP"
         fi
@@ -188,7 +197,7 @@ esac
 
 # Durable, operator-visible recovery row (fail-safe: a failed insert never
 # undoes the recovery — log and move on).
-payload="{\"kind\":\"pipeline_stall_auto_recovery\",\"age_seconds\":${age},\"threshold_seconds\":${MAX_AGE_SECS},\"recovered_at\":\"$(now_iso)\",\"recipe\":\"restart sidecar + worker + runtime (host_stall_watchdog)\"}"
+payload="{\"kind\":\"pipeline_stall_auto_recovery\",\"age_seconds\":${age},\"threshold_seconds\":${MAX_AGE_SECS},\"recovered_at\":\"$(now_iso)\",\"recipe\":\"restart sidecar + runtime (host_stall_watchdog)\"}"
 if ! docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -qc \
     "INSERT INTO alert_sink_deliveries (sink_kind, sink_target, status, channel_name, severity, payload_summary)
      VALUES ('host_watchdog', 'operator', 'auto_recovered', 'liveness_stall', 'high', '${payload}'::jsonb);" >/dev/null 2>&1; then

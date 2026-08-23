@@ -114,38 +114,31 @@ SEED="${LEGBA_NIGHTLY_SEED:-$(( (RANDOM << 15) | RANDOM ))}"
 # If a worktree dry-run shows those twelve, that is the worktree talking.
 KNOWN_FAILURES=(
   # --- 1. dspy is a WORKER-ONLY dependency ---------------------------------
-  # The litellm/dspy production ban keeps dspy out of the runtime image, and
-  # the test image is built FROM the runtime image — so every test that
-  # resolves an optimizer's parent prompt module (the `legba.prompts.*`
-  # packages import dspy at module level) dies with ModuleNotFoundError, or a
-  # PromptModuleImportError / DescriptorValidationError wrapping one. These
-  # are real tests with real coverage; they belong to the GEPA worker image,
-  # which is the only image that carries dspy.
+  # RETIRED 2026-08-21 (RUST-4 mothball). This section used to carry eleven
+  # entries: every test that resolves an optimizer's parent prompt module
+  # (the `legba.prompts.*` packages import dspy at module level) dies with
+  # ModuleNotFoundError in the dspy-free test image, or a
+  # PromptModuleImportError / DescriptorValidationError wrapping one, and
+  # they were masked red here instead of paging every night.
   #
-  # THIS IS THE BIGGEST BLOCK AND IT IS THE ONE TO RETIRE. Installing dspy
-  # into legba/legba-test (a TEST image, not a production one) would delete
-  # all eighteen entries at a stroke AND make
-  # test_v3_optimizer_diff::test_diff_route_does_not_import_dspy meaningful
-  # instead of vacuous — it can only catch a real violation where dspy is
-  # importable. That is an operator call, because it puts litellm inside an
-  # image derived from the runtime one.
-  # RETIRED 2026-08-09 (the stale-entry sweep): every entry marked (base-only)
-  # in this section matched nothing on 2026-08-07, -08 AND -09 — the main
-  # checkout's later commits fixed them, exactly as the note above predicted —
-  # so all eight went, along with the whole "live registry is fail-closed"
-  # section below (its single entry was also base-only and also clean three
-  # nights running).
-  'tests/data_pkg/test_analyst_optimizer\.py::test_in_process_client_runs_loop_when_enough_traces'
-  'tests/data_pkg/test_analyst_optimizer\.py::test_naive_fallback_respects_max_generations_bound'
-  'tests/data_pkg/test_descriptor_reference_resolution_k3\.py::test_optimizer_still_loads_a_real_parent_prompt'
-  'tests/data_pkg/test_optimizer_prompt_module_convention\.py::test_convention_is_the_kind_not_the_analyst_id'
-  'tests/data_pkg/test_optimizer_prompt_module_convention\.py::test_every_optimizer_resolves_a_prompt_module_that_imports'
-  'tests/runtime/test_dapr_workflow_optimizer\.py::test_compile_activity_returns_candidate_dict'
-  'tests/runtime/test_optimizer_gepa_loop\.py::test_activity_failure_propagates_through_loop'
-  'tests/runtime/test_optimizer_gepa_loop\.py::test_in_process_is_deterministic_for_same_input'
-  'tests/runtime/test_optimizer_gepa_loop\.py::test_in_process_result_carries_usage_dict'
-  'tests/runtime/test_optimizer_gepa_loop\.py::test_in_process_returns_bounded_result'
-  'tests/runtime/test_optimizer_payload_by_reference\.py::test_empty_training_set_still_noops'
+  # The GEPA optimizer plane is now MOTHBALLED (docs/SEAMS.md #53,
+  # planning/RUST4_EVIDENCE_2026-08-21.md) — installing dspy into
+  # legba/legba-test to make these green for real is no longer the operator
+  # call this note used to frame it as; the plane isn't shipping. Instead
+  # the eleven tests now carry an explicit
+  # `@pytest.mark.skip(reason="optimizer plane mothballed 2026-08-21
+  # (RUST-4)")` in their own files (NOT deleted — they still exist, still
+  # collect, and un-skip trivially if the plane un-mothballs) and so no
+  # longer need to be named here: a real pytest skip is honest in a way a
+  # standing allowlist entry silently masking a fail never was. Removing them
+  # from this array is what makes the nightly stop lying — the mask shrinks
+  # from eleven to zero for this class instead of accumulating a stale
+  # env-conditional exception nobody re-checks.
+  #
+  # (The dspy_gepa worker image + `test_v3_optimizer_diff.py`'s subprocess
+  # guard that dspy never leaks into the registry process are both still
+  # real and still exercised — mothball keeps the code and its tests, it
+  # only drops the deploy/schedule surface. See SEAMS #53 "Guard rail".)
 
   # --- 2. LEGBA_TEST_STRICT infra escalations ------------------------------
   # Strict mode escalates INFRA-GATED skips to FAILURES on purpose, so a
@@ -198,12 +191,68 @@ KNOWN_FAILURES=(
 # Both were fixed alongside the four UNEXPECTED failures in the same files, and
 # leaving an entry listed after its cause is gone is how a list stops shrinking.
 KNOWN_SHARED_STATE=(
-  # RETIRED 2026-08-09 (the stale-entry sweep): nine entries — the
-  # test_claim_watch global-damping one, all five test_collection_requirements
-  # ones, the test_discovery_p13 auto-wire one, and both jobs-plane ones —
-  # matched nothing three nights running (2026-08-07/-08/-09, three different
-  # shuffle seeds). The list only shrinks: a clean streak is the evidence, and
-  # a recurrence is a NEW page with a NEW fix, not a re-listing.
+  # RULE AMENDED 2026-08-15, and it stands: an entry retires on a ROOTED CAUSE
+  # (the polluter found and fixed, band-calibration-style), never on a quiet
+  # streak. The 2026-08-09 stale-entry sweep retired nine entries on three
+  # quiet nights — and seven of them refired within a week (jobs pair
+  # 08-11/14/15, all five collection_requirements 08-14/15): a LONG-PERIOD
+  # order-dep is silent most nights by definition, so quiet is not evidence.
+  # Those seven were RESTORED pending-root and are retired below by that rule,
+  # each with its polluter named and a command that reproduces the failure.
+  #
+  # RETIRED 2026-08-16 (task #23 — rooted, then fixed). Both classes turned out
+  # to be the same shape the section header describes: a test asserting a
+  # GLOBAL statement over a substrate the whole single-process suite shares,
+  # broken by a sibling that wrote to that substrate and never retired what it
+  # wrote. Both fixes scope the POLLUTER's cleanup; neither weakens a victim.
+  #
+  #   * the five tests/data_pkg/test_collection_requirements.py entries.
+  #     POLLUTER: test_source_catalog_bringup.py::test_catalog_registers_
+  #     head_rows_and_credibility_rows registered the whole embedded catalog —
+  #     35-50 ACTIVE is_head rows across all four scope.source_class values,
+  #     each with the entry's scope.geo — into the SESSION-shared
+  #     source_descriptors and never removed them.
+  #     collection_gap._match_candidate_sources reads that table globally, and
+  #     the victim's clean_slate only deletes its own owner's rows, so all five
+  #     were asserting over 35-50 candidate sources they never seeded. It is
+  #     exactly those five and no others because the catalog rows are `active`:
+  #     the ORDER BY puts them last and an active candidate never yields a
+  #     suggested_fetch_url, which spares the file's two other candidate tests.
+  #     REPRO (pre-fix):
+  #       bash scripts/run_tests_in_container.sh \
+  #         tests/data_pkg/test_source_catalog_bringup.py \
+  #         tests/data_pkg/test_collection_requirements.py -p no:randomly
+  #       -> exactly those five FAILED; the victim file alone, 21 passed.
+  #     FIX: the registration test retires exactly the (descriptor_id, version)
+  #     pairs it added and asserts the table is back to its pre-run snapshot.
+  #
+  #   * the jobs pair. POLLUTER: five tests in tests/runtime/jobs end on a live
+  #     'claimed' ledger row on purpose (test_reaper_leaves_fresh_claims_alone
+  #     most plainly — that row IS its subject) and the job_pg fixture never
+  #     retired them. JobStore.reap_stale_claims sweeps public.legba_jobs
+  #     table-wide, so a leaked claim is reapable once it is older than one
+  #     lease (ack_wait x max_deliver = 40 s), and both victims state their
+  #     result as a global `worker.reaped == 1`.
+  #     WHY IT WAS SILENT MOST NIGHTS — the useful half of this one: every test
+  #     in that package runs in ~20 ms, so in file order a leak is never 40 s
+  #     old when a victim sweeps and the ORDERED phase can never show it.
+  #     pytest-randomly sorts MODULES by crc32("<seed>::<module>") with no
+  #     regard for package or directory, so a shuffled seed scatters those five
+  #     modules through the 16-minute session and minutes separate a leaking
+  #     module from a victim. Long-period by construction, and the reason three
+  #     quiet nights proved nothing.
+  #     REPRO (pre-fix), with a 45 s spacer module standing in for that gap:
+  #       bash scripts/run_tests_in_container.sh \
+  #         tests/runtime/jobs/test_worker_reaper_backoff.py::test_reaper_leaves_fresh_claims_alone \
+  #         tests/runtime/jobs/spacer.py \
+  #         tests/runtime/jobs/test_jobs_plane_hardening.py::test_failed_reap_is_not_reenqueued \
+  #         -p no:randomly
+  #       -> assert 2 == 1 (the captured log names both reaped keys). The same
+  #          shape with test_nak_uses_delay_when_sibling_holds_claim as the
+  #          polluter fails test_worker_loop_reaps_due_stale_claim.
+  #     FIX: job_pg now runs inside job_store_scope, which retires exactly the
+  #     ledger rows written inside it; tests/runtime/jobs/
+  #     test_ledger_scope_isolation.py pins both halves of that contract.
   #
   # RETIRED 2026-08-10 (fixed, not aged out — the #16/#17 hygiene pass):
   #   * test_claim_watch::test_stream_hub_entities_are_floored_… — the same
@@ -235,7 +284,8 @@ say() { echo "$(now_iso) [nightly] $*" | tee -a "$SUMMARY"; }
 
 # page <priority> <title> <tags> <body> — the alert idiom shared with
 # host_llm_heartbeat.sh / host_stall_watchdog.sh. ntfy is consumed through the
-# WEB UI (alerts.legba.civislux.us), never a phone app.
+# WEB UI (${LEGBA_ALERT_WEB_URL:?configure your ntfy web UI URL}), never a
+# phone app.
 page() {
   curl -s -m 10 -H "X-Title: $2" -H "X-Priority: $1" -H "X-Tags: $3" \
     -d "$4" "$NTFY_URL" >/dev/null 2>&1 \

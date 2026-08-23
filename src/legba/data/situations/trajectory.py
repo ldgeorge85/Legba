@@ -383,40 +383,114 @@ async def read_trajectory(
     return [_row_to_dict(r) for r in rows]
 
 
+#: FRAME-2 §2.3.1 — how far back a SIGNIFICANT delta may be and still be shown
+#: in the register. The fortnight, the same window the window ledger carries and
+#: the same one the composition admits heads over: a register whose movement
+#: record reached further back than the read's own window would date-anchor the
+#: prose outside anything else it was shown.
+SIGNIFICANT_WINDOW_HOURS: int = 336
+
+#: How many trailing ``unchanged_checkpoint`` rows accompany the significant
+#: deltas. ONE, and it is not decoration: without it a frame with real August
+#: escalations and nothing since would read as though it were still moving, and
+#: "the last time we looked, nothing had changed, and that was <date>" is a fact
+#: the reader needs. It renders LAST, after the movement.
+CHECKPOINT_LINES: int = 1
+
+# FRAME-2 §2.3.1 — THE RENDER SELECTION REPAIR.
+#
+# THE DEFECT, from the DB diagnosis (all rows read-only, 2026-08-20). Fleet-wide
+# ``situation_events`` holds 461 escalates / 117 broadens / 50 de_escalates and
+# 742 ``unchanged_checkpoint`` rows, and the hourly tracker writes MULTIPLE
+# checkpoints a day (AR: five at 13:31:42Z on 08-20 alone). The register showed
+# the newest three rows of ANY kind — so at the round's T0 the three rendered AR
+# lines were three same-day "unchanged_checkpoint: no coercive economic measures
+# observed", while that same frame's THREE real dated August escalations (the
+# 08-06 maritime-pilot strike halting grain exports, the 08-07/08-09 Ecuador-gang
+# sanctions) sat below the render cut. The record of movement existed; the render
+# selected the noise, and the composition then read the register as evidence of
+# calm.
+#
+# THE FIX is a predicate, not new machinery: rank the SIGNIFICANT deltas
+# (anything that is not a checkpoint) in their own window, keep at most one
+# trailing checkpoint, and hand the caller the movement FIRST. Two ranks in one
+# query — still ONE round trip for up to eight frames, which is why the windowed
+# rank was chosen over a per-situation fan-out in the first place.
 _TRAJECTORIES_SQL = """
     SELECT id, situation_id, occurred_at, delta, state_from, state_to, why,
-           derived_from, source_output_id, created_at
+           derived_from, source_output_id, created_at, row_class
       FROM (
         SELECT e.*,
+               0 AS row_class,
                row_number() OVER (
                    PARTITION BY e.situation_id
                    ORDER BY e.occurred_at DESC, e.created_at DESC, e.id DESC
-               ) AS rn
+               ) AS rn,
+               $2::int AS keep
           FROM situation_events e
          WHERE e.situation_id = ANY($1::uuid[])
+           AND e.delta <> 'unchanged_checkpoint'
+           AND e.occurred_at > NOW() - make_interval(hours => $3)
+        UNION ALL
+        SELECT e.*,
+               1 AS row_class,
+               row_number() OVER (
+                   PARTITION BY e.situation_id
+                   ORDER BY e.occurred_at DESC, e.created_at DESC, e.id DESC
+               ) AS rn,
+               $4::int AS keep
+          FROM situation_events e
+         WHERE e.situation_id = ANY($1::uuid[])
+           AND e.delta = 'unchanged_checkpoint'
       ) ranked
-     WHERE rn <= $2
-     ORDER BY situation_id, occurred_at DESC, created_at DESC, id DESC
+     WHERE rn <= keep
+     ORDER BY situation_id, row_class, occurred_at DESC, created_at DESC, id DESC
 """
 
 
 async def read_trajectories(
-    conn: Any, situation_ids: Iterable[Any], *, per_situation: int = 3,
+    conn: Any,
+    situation_ids: Iterable[Any],
+    *,
+    per_situation: int = 3,
+    significant_window_hours: int = SIGNIFICANT_WINDOW_HOURS,
+    checkpoint_lines: int = CHECKPOINT_LINES,
 ) -> dict[str, list[dict[str, Any]]]:
-    """``{situation_id -> the newest ``per_situation`` ledger rows}``.
+    """``{situation_id -> its MOVEMENT record, newest first, then one checkpoint}``.
 
-    ONE query with a windowed rank rather than a fan-out of per-situation reads:
-    the composition register (D5) asks for the last few deltas of up to eight
-    frames on every compose, and eight round-trips inside a prompt build is how
-    a "best-effort enrichment" turns into a latency regression.
+    ``per_situation`` bounds the SIGNIFICANT deltas (escalates / de_escalates /
+    broadens) within ``significant_window_hours``; ``checkpoint_lines`` bounds
+    the trailing ``unchanged_checkpoint`` rows, which are unwindowed on purpose —
+    "we last looked on <date> and nothing had changed" is worth saying however
+    long ago that was, and a checkpoint asserts nothing about the world (it is
+    the one delta the ledger writes without evidence), so showing an old one
+    cannot mislead the way an old escalation could.
+
+    ORDER IS THE PRODUCT HERE. Movement first, quiet last — a caller renders the
+    list as it arrives, and the whole defect this repairs was a render that put
+    the day's checkpoint chatter where the movement should have been.
+
+    ONE query with two windowed ranks rather than a fan-out of per-situation
+    reads: the composition register asks for the deltas of up to eight frames on
+    every compose, and eight round-trips inside a prompt build is how a
+    "best-effort enrichment" turns into a latency regression.
 
     Situations with no ledger rows are simply absent (same honesty contract as
-    :func:`read_current_states`).
+    :func:`read_current_states`). ``per_situation <= 0`` with no checkpoints
+    asked for returns ``{}`` and issues NO query.
     """
     ids = _coerce_uuids(situation_ids)
-    if not ids or per_situation <= 0:
+    keep_significant = max(int(per_situation), 0)
+    keep_checkpoints = max(int(checkpoint_lines), 0)
+    if not ids or (keep_significant <= 0 and keep_checkpoints <= 0):
         return {}
-    rows = await conn.fetch(_TRAJECTORIES_SQL, ids, int(per_situation))
+    rows = await conn.fetch(
+        _TRAJECTORIES_SQL,
+        ids,
+        keep_significant,
+        int(significant_window_hours),
+        keep_checkpoints,
+    )
     out: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
         out.setdefault(str(r["situation_id"]), []).append(_row_to_dict(r))
@@ -466,12 +540,14 @@ def _row_to_dict(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 __all__ = [
+    "CHECKPOINT_LINES",
     "DELTA_BROADENS",
     "DELTA_DE_ESCALATES",
     "DELTA_ESCALATES",
     "DELTA_KINDS",
     "DELTA_UNCHANGED_CHECKPOINT",
     "DORMANCY_DAYS",
+    "SIGNIFICANT_WINDOW_HOURS",
     "INITIAL_STATE",
     "LEDGER_FAITHFULNESS_FLOOR",
     "STATE_CLOSED",

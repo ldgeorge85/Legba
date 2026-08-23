@@ -2649,3 +2649,79 @@ def test_bounded_tool_json_unserializable_degrades_honestly():
     parsed = json.loads(out)
     assert parsed["truncated"] is True
     assert parsed["error"] == "unserializable tool result"
+
+
+# ---------------------------------------------------------------------------
+# Output budget resolution — descriptor-governed, env as emergency override
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_output_budget_descriptor_cap_wins_when_env_absent(monkeypatch):
+    """The descriptor's method.llm.max_tokens IS the operative per-call cap
+    when the emergency env override is not set."""
+    from legba.data.analysts.consult_on_demand import resolve_output_budget
+
+    monkeypatch.delenv("LEGBA_CONSULT_MAX_TOKENS", raising=False)
+    assert resolve_output_budget(32768) == 32768
+
+
+def test_resolve_output_budget_env_override_wins_and_logs_loudly(
+    monkeypatch, caplog,
+):
+    """LEGBA_CONSULT_MAX_TOKENS is demoted to an emergency valve: it still
+    wins, but NEVER silently — the override is WARNING-logged so a forgotten
+    pin can't quietly defeat the descriptor-governed budget."""
+    import logging
+
+    from legba.data.analysts.consult_on_demand import resolve_output_budget
+
+    monkeypatch.setenv("LEGBA_CONSULT_MAX_TOKENS", "4096")
+    with caplog.at_level(
+        logging.WARNING, logger="legba.data.analysts.consult_on_demand",
+    ):
+        assert resolve_output_budget(32768) == 4096
+    assert any("ENV_OVERRIDE" in r.message for r in caplog.records)
+    assert any("32768" in r.message and "4096" in r.message for r in caplog.records)
+
+
+def test_resolve_output_budget_env_equal_to_cap_is_quiet(monkeypatch, caplog):
+    """An env pin that AGREES with the descriptor is not an override — no
+    warning noise for a no-op."""
+    import logging
+
+    from legba.data.analysts.consult_on_demand import resolve_output_budget
+
+    monkeypatch.setenv("LEGBA_CONSULT_MAX_TOKENS", "32768")
+    with caplog.at_level(
+        logging.WARNING, logger="legba.data.analysts.consult_on_demand",
+    ):
+        assert resolve_output_budget(32768) == 32768
+    assert not [r for r in caplog.records if "ENV_OVERRIDE" in r.message]
+
+
+def test_resolve_output_budget_fallback_without_descriptor(monkeypatch):
+    """Hand-built deps (no descriptor, no env) keep the legacy 2048 default;
+    a custom fallback (deep_consult's 8192) is honored."""
+    from legba.data.analysts.consult_on_demand import (
+        _default_max_tokens,
+        resolve_output_budget,
+    )
+
+    monkeypatch.delenv("LEGBA_CONSULT_MAX_TOKENS", raising=False)
+    assert resolve_output_budget(None) == 2048
+    assert resolve_output_budget(None, fallback=8192) == 8192
+    assert _default_max_tokens() == 2048
+
+
+def test_resolve_output_budget_malformed_env_and_cap_degrade(monkeypatch):
+    """A malformed env pin can never zero the budget; a malformed / non-
+    positive descriptor cap degrades to the fallback."""
+    from legba.data.analysts.consult_on_demand import resolve_output_budget
+
+    monkeypatch.setenv("LEGBA_CONSULT_MAX_TOKENS", "not-a-number")
+    assert resolve_output_budget(32768) == 32768
+    monkeypatch.setenv("LEGBA_CONSULT_MAX_TOKENS", "-5")
+    assert resolve_output_budget(32768) == 32768
+    monkeypatch.delenv("LEGBA_CONSULT_MAX_TOKENS", raising=False)
+    assert resolve_output_budget(0) == 2048
+    assert resolve_output_budget(-1) == 2048

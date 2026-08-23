@@ -27,7 +27,7 @@ because they are properties of the platform, not of the layer:
      and the clause anchors every temporal statement on those printed dates —
      never on run/fetch time.
 
-FOUR BLOCKS, all bounded, all absent-by-default:
+FIVE BLOCKS, all bounded, all absent-by-default:
 
   * PRIOR READ (:data:`GROUNDING_PRIOR_READ`) — THIS unit's own previous
     non-superseded, VERIFIED head for THIS target. Reuses the composition's
@@ -35,6 +35,22 @@ FOUR BLOCKS, all bounded, all absent-by-default:
     verbatim (the reader is analyst-agnostic: "the same analyst_id's last verified
     head for the same target_id"), so the verify GATE, the lookback bound and the
     coerce-fallback drop are ONE implementation, not two that can drift.
+  * WINDOW LEDGER (:data:`GROUNDING_WINDOW_LEDGER`) — FRAME-2, the CARRY. The
+    prior read is ONE step back and the clause below obliges a SINGLE-STEP diff;
+    the ledger is that memory made CUMULATIVE — every verified, severity-tagged
+    head THIS unit wrote over the trailing fortnight, one dated line each. It
+    exists because the round's largest attributed failure class (ATTRIBUTION
+    H-FRAME Class 3, ~12 of 23 missed majors) was an event that happened in the
+    window's first ten days, WAS in this desk's slice then, and had aged out of
+    every 72h slice by T0 with nothing carrying it forward — while the unit
+    printed "mass protest: not_observed" for a fortnight that contained exactly
+    that. Scope is this unit's OWN heads, not the desk's: a unit answers ONE
+    bounded question, and handing it its siblings' dimensions invites the scope
+    creep its descriptor forbids (§2.2 — desk-wide at the unit layer is an R2
+    decision, not a round-1 one). The selection, render, marker defuse and
+    clause live in :mod:`legba.data.analysts.window_ledger` — ONE definition
+    shared with the composition floor, which renders the DESK-scoped form of the
+    same block.
   * OPEN-SITUATION REGISTER (:data:`GROUNDING_SITUATIONS`) — the desk's currently
     OPEN ``situations`` frames, worst-first, one block. Reuses the composition's
     :func:`~legba.data.analysts.meta_findings_synthesizer.read_open_situations`
@@ -84,10 +100,19 @@ fails, and never loses its evidence slice, because its memory was unavailable.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Mapping, Sequence
 from uuid import UUID
 
 from ._tradecraft import RETRIEVED_CONTEXT_RULE, as_of_rule
+from .window_ledger import (
+    LEDGER_UNIT_TOTAL_CAP,
+    ledger_block_lines,
+    ledger_finding_ids,
+    read_window_ledger,
+    select_ledger_entries,
+    window_ledger_rule,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +124,7 @@ __all__ = [
     "GROUNDING_QUESTIONS",
     "GROUNDING_RECEIPT_KEYS",
     "GROUNDING_SITUATIONS",
+    "GROUNDING_WINDOW_LEDGER",
     "UNIT_GROUNDING_CLAUSE",
     "UNIT_GROUNDING_ROW_KEY",
     "citation_for_block",
@@ -125,6 +151,15 @@ caller, every non-unit kind — is byte-for-byte the pre-grounding path."""
 GROUNDING_PRIOR_READ: str = "prior_read"
 """Marker value: the row IS this unit+target's previous verified head."""
 
+GROUNDING_WINDOW_LEDGER: str = "window_ledger"
+"""Marker value: the synthetic WINDOW LEDGER block (FRAME-2 — the carry).
+
+Deliberately the SAME token as
+:data:`legba.data.analysts.window_ledger.WINDOW_LEDGER_REF_KIND`, which is what
+the composition floor stamps: one block, one name, one entry in
+``provenance.kinds.GROUNDING_REF_KINDS``, so the verify path cannot end up
+grading the two layers' copies of the same block by two different rules."""
+
 GROUNDING_SITUATIONS: str = "situation_register"
 """Marker value: the synthetic OPEN-SITUATION REGISTER block."""
 
@@ -136,14 +171,21 @@ GROUNDING_QUESTIONS: str = "open_questions"
 
 GROUNDING_BLOCK_KINDS: tuple[str, ...] = (
     GROUNDING_PRIOR_READ,
+    GROUNDING_WINDOW_LEDGER,
     GROUNDING_SITUATIONS,
     GROUNDING_BASELINE,
     GROUNDING_QUESTIONS,
 )
-"""The block kinds IN RENDER ORDER — memory, then the open picture, then the
-statistical prior, then the standing debt. The ordinal a block receives is its
-position in THIS sequence among the blocks actually present, so the ordinal space
-stays contiguous and gap-free whichever subset resolved."""
+"""The block kinds IN RENDER ORDER — one step back, then the fortnight, then the
+open picture, then the statistical prior, then the standing debt. The ordinal a
+block receives is its position in THIS sequence among the blocks actually
+present, so the ordinal space stays contiguous and gap-free whichever subset
+resolved.
+
+The WINDOW LEDGER sits SECOND, beside the prior read, because both are MEMORY
+and a reader (human or model) meeting "what I said last cycle" immediately
+followed by "what I established this fortnight" reads one continuous account of
+before. The composition floor orders its own three blocks the same way."""
 
 GROUNDING_PAYLOAD_KEY: str = "_grounding_payload"
 """Key on a SYNTHETIC grounding row carrying its rendered payload (the situation
@@ -152,6 +194,7 @@ and carries no payload key — it renders off its own columns."""
 
 GROUNDING_RECEIPT_KEYS: dict[str, str] = {
     GROUNDING_PRIOR_READ: "grounding_prior_ref",
+    GROUNDING_WINDOW_LEDGER: "grounding_window_ledger_ref",
     GROUNDING_SITUATIONS: "grounding_situations_ref",
     GROUNDING_BASELINE: "grounding_baseline_ref",
     GROUNDING_QUESTIONS: "grounding_questions_ref",
@@ -160,7 +203,9 @@ GROUNDING_RECEIPT_KEYS: dict[str, str] = {
 ``grounding_blocks`` step) so "did this unit get its memory this cycle" is
 answerable from a trace without re-running the gather. 0/1 each — these are single
 blocks by construction, and counting them is how a silently-absent memory becomes
-visible instead of reading as a first run forever."""
+visible instead of reading as a first run forever. FRAME-2's receipt
+(``grounding_window_ledger_ref``) is the §2.2 requirement that a silently absent
+CARRY is visible in traces rather than indistinguishable from a quiet desk."""
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +386,7 @@ async def gather_unit_grounding_rows(
     target_filter: str | None,
     prior_lookback_hours: int = PRIOR_LOOKBACK_HOURS,
 ) -> list[dict[str, Any]]:
-    """Gather the (at most four) marked GROUNDING rows for one unit run.
+    """Gather the (at most five) marked GROUNDING rows for one unit run.
 
     BEST-EFFORT by contract: this is ADDITIVE enrichment on top of an already
     complete slice, so ANY failure (a missing relation, a degraded read replica, a
@@ -352,9 +397,9 @@ async def gather_unit_grounding_rows(
     A unit with no ``target_filter`` gets NOTHING: every block is desk-scoped by
     construction, and an unscoped read would hand a desk another desk's frames —
     the contamination class the D4 fix exists to prevent. A missing ``analyst_id``
-    suppresses only the PRIOR READ (an unattributable "previous read" is exactly
-    the uncited prior this design refuses); the three desk-scoped blocks still
-    resolve.
+    suppresses the PRIOR READ **and the WINDOW LEDGER** — both are scoped to THIS
+    unit's own heads, and an unattributable "what I said before" is exactly the
+    uncited prior this design refuses; the three desk-scoped blocks still resolve.
     """
     if not target_filter:
         return []
@@ -396,6 +441,32 @@ async def gather_unit_grounding_rows(
             row = dict(prior)
             row[UNIT_GROUNDING_ROW_KEY] = GROUNDING_PRIOR_READ
             out.append(row)
+
+        # FRAME-2 — the CARRY, at OWN-UNIT scope. ``per_unit_cap=None`` because
+        # the plan's 3-lines-per-unit bound is a FAIRNESS rule for the desk-wide
+        # form (stop one loud dimension crowding out six others) and there is
+        # nobody here to crowd out; the one-line-per-(unit, calendar day) dedupe
+        # already bounds a single unit's fortnight, and 3 lines is not a
+        # fortnight. Same total cap either way.
+        try:
+            ledger = select_ledger_entries(
+                await read_window_ledger(
+                    conn,
+                    target_id=str(target_filter),
+                    analyst_ids=[str(analyst_id)],
+                ),
+                per_unit_cap=None,
+                total_cap=LEDGER_UNIT_TOTAL_CAP,
+            )
+        except Exception as exc:  # pragma: no cover — best-effort enrichment
+            logger.warning(
+                "unit_grounding.window_ledger.failed analyst_id=%s target_id=%s "
+                "err=%s — this run reads WITHOUT its fortnight",
+                analyst_id, target_filter, exc,
+            )
+            ledger = []
+        if ledger:
+            out.append(_synthetic_row(GROUNDING_WINDOW_LEDGER, ledger))
 
     try:
         situations = await read_open_situations(
@@ -514,18 +585,51 @@ def _render_prior_read(row: Mapping[str, Any], ordinal: int) -> list[str]:
     No confidence number is printed (see the module note): a unit's signal blocks
     carry none, so a number shown only on last cycle's own read is an anchor the
     unit cannot weigh and would be tempted to inherit.
+
+    The body's own ``[N]`` markers arrive already defused to ``[prior:N]``
+    (see :func:`_defuse_prior_read_markers`) — the prior run's citations must
+    never be inheritable as THIS run's — and when any survive the excerpt cap,
+    ONE header line names what they are, so the model reads them as the prior
+    run's numbering instead of a citation format to imitate.
     """
     title = str(row.get("title") or "(untitled)")[:MAX_TITLE_CHARS]
     produced_at = _iso_text(row.get("produced_at")) or "(unknown)"
     age = _as_float(row.get("age_hours"))
     age_part = f" age={age:.1f}h" if age is not None else ""
     analyst_id = str(row.get("analyst_id") or "(unknown)")
-    return [
+    body = _body_excerpt(row, PRIOR_BODY_CHARS)
+    lines = [
         f"[{ordinal}] PRIOR READ — this unit's previous verified read of this "
         f"target: {title}",
         f"    analyst_id={analyst_id} produced_at={produced_at}{age_part}",
-        f"    body: {_body_excerpt(row, PRIOR_BODY_CHARS)}",
     ]
+    # The note renders ONLY when the body actually carries a defused marker, so
+    # a marker-free prior read (the common case) stays byte-identical to the
+    # pre-defuse render.
+    if "[prior:" in body:
+        lines.append(
+            "    note: [prior:N] references inside the body are the PRIOR "
+            "run's own signal numbering — they resolve to NOTHING in this "
+            f"run and are NOT citable; cite this block as [{ordinal}]."
+        )
+    lines.append(f"    body: {body}")
+    return lines
+
+
+def _render_window_ledger(
+    entries: Sequence[Mapping[str, Any]], ordinal: int
+) -> list[str]:
+    """The WINDOW LEDGER block — ONE ordinal for the whole fortnight.
+
+    A thin adapter, on purpose: the render itself lives in
+    :func:`legba.data.analysts.window_ledger.ledger_block_lines` so the unit and
+    the composition show the SAME block under their two marker languages. All
+    this supplies is the unit's ``[N]`` handle and the OWN-UNIT scope label —
+    the label matters, because an own-unit ledger's silence means "this
+    dimension recorded nothing", while a desk ledger's silence means "no
+    dimension did", and a model told the wrong one mis-reads the absence.
+    """
+    return ledger_block_lines(entries, f"[{ordinal}]", scope="unit")
 
 
 def _render_situations(situations: Sequence[Mapping[str, Any]], ordinal: int) -> list[str]:
@@ -595,6 +699,7 @@ def _render_questions(questions: Sequence[Mapping[str, Any]], ordinal: int) -> l
 
 _RENDERERS = {
     GROUNDING_PRIOR_READ: _render_prior_read,
+    GROUNDING_WINDOW_LEDGER: _render_window_ledger,
     GROUNDING_SITUATIONS: _render_situations,
     GROUNDING_BASELINE: _render_baselines,
     GROUNDING_QUESTIONS: _render_questions,
@@ -664,6 +769,7 @@ def block_evidence_text(row: Mapping[str, Any], ordinal: int) -> str:
 
 _BLOCK_TITLES = {
     GROUNDING_PRIOR_READ: "Prior read (this unit's previous verified read)",
+    GROUNDING_WINDOW_LEDGER: "Window ledger (this unit's trailing 14-day record)",
     GROUNDING_SITUATIONS: "Open-situation register",
     GROUNDING_BASELINE: "Desk baseline",
     GROUNDING_QUESTIONS: "Standing open questions",
@@ -681,10 +787,14 @@ def citation_for_block(row: Mapping[str, Any], ordinal: int) -> dict[str, Any] |
       (``verify._uses_subclaim_convention``) and would route the whole unit
       finding to the sub-claim floor. It carries NO ``effective_confidence`` and
       NO ``derived_from`` — the prior read is MEMORY, not corroboration.
-    * REGISTER / BASELINE / QUESTIONS — synthetic blocks with no single substrate
-      id, so they carry the REAL underlying ids (``situation_ids`` /
-      ``baseline_keys`` / ``question_ids``) and NO ``ref_id``. Minting one so a
-      drill link resolves would be a fabricated anchor.
+    * WINDOW LEDGER / REGISTER / BASELINE / QUESTIONS — synthetic blocks with no
+      single substrate id, so they carry the REAL underlying ids
+      (``ledger_finding_ids`` / ``situation_ids`` / ``baseline_keys`` /
+      ``question_ids``) and NO ``ref_id``. Minting one so a drill link resolves
+      would be a fabricated anchor. The ledger's members ARE real
+      ``analyst_outputs`` rows, which makes the temptation sharper and the rule
+      no different: the block is N of them, so pointing at any ONE would be a
+      lie about what the clause rests on.
 
     Every shape carries ``evidence_text`` (the rendered block) so the verify pass
     grades a block-backed clause against exactly what the model was shown, and
@@ -715,7 +825,9 @@ def citation_for_block(row: Mapping[str, Any], ordinal: int) -> dict[str, Any] |
         return citation
     entries = row.get(GROUNDING_PAYLOAD_KEY)
     entries = [e for e in entries if isinstance(e, Mapping)] if isinstance(entries, (list, tuple)) else []
-    if kind == GROUNDING_SITUATIONS:
+    if kind == GROUNDING_WINDOW_LEDGER:
+        citation["ledger_finding_ids"] = ledger_finding_ids(entries)
+    elif kind == GROUNDING_SITUATIONS:
         citation["situation_ids"] = [
             str(e["situation_id"]) for e in entries if e.get("situation_id")
         ]
@@ -806,10 +918,12 @@ UNIT_GROUNDING_CLAUSE: str = (
     + _RETRIEVED_CLAUSE
     + "\n\n"
     + "DESK GROUNDING (what this desk already knew). AFTER the numbered signals you "
-    "may be shown a DESK GROUNDING section carrying up to four blocks, each with "
+    "may be shown a DESK GROUNDING section carrying up to five blocks, each with "
     "its own [N] handle in the SAME numbering as the signals: a PRIOR READ (this "
     "unit's own previous verified read of this target, with its produced_at and "
-    "age), an OPEN SITUATION REGISTER (the desk's open frames with their status, "
+    "age), a WINDOW LEDGER (this unit's own dated, verified reads of the trailing "
+    "14 days — see the WINDOW LEDGER rules below), an OPEN SITUATION REGISTER "
+    "(the desk's open frames with their status, "
     "intensity, event count and last_event_at), a DESK BASELINE (the trailing "
     "normal band for this desk with the current observed value), and STANDING "
     "OPEN QUESTIONS (questions this desk raised that nobody has answered). When a "
@@ -841,6 +955,15 @@ UNIT_GROUNDING_CLAUSE: str = (
     "cited DESK GROUNDING block. If NO DESK GROUNDING section is shown this is a "
     "FIRST read of this target: make NO claim about what came before and use no "
     "'ongoing' / 'continuing' / 'still' framing."
+    # FRAME-2 — the ledger's own three rules, generated by the SAME function the
+    # composition clause calls (``window_ledger_rule``) so both layers state the
+    # contract identically and neither can drift on an edit. Appended AFTER the
+    # six numbered obligations rather than folded into them: those govern a
+    # SINGLE-STEP diff against last cycle, these govern the FORTNIGHT, and the
+    # rule the round actually needs — "never write 'not observed' about a window
+    # your own ledger contradicts" — deserves to be readable on its own.
+    + "\n\n"
+    + window_ledger_rule("[N]")
 )
 
 _CLAUSE_FINGERPRINT = "DESK GROUNDING (what this desk already knew)."
@@ -931,12 +1054,48 @@ def _fmt_days(value: Any) -> str:
     )
 
 
+# PRIOR-MARKER DEFUSE (V-2 renderer defect, live capture 2026-08-05) — the
+# prior read's body is the PREVIOUS cycle's completed prose, written to cite
+# ITS OWN ``[N]`` ordinals over ITS OWN evidence slice. Rendered verbatim
+# inside THIS run's prompt, those markers land in a prompt whose live
+# ``[1]``…``[N]`` space points at DIFFERENT signals (the capture: a ``[15]``
+# PRIOR READ block carrying "…is reported in the current 72-hour slice
+# [15][1][2][3][4]…[14]" — fourteen stale ordinals plus a recursive
+# self-cite). The section header then orders the model to cite the block
+# "exactly like a numbered signal", which makes INHERITING a stale marker the
+# cheapest compliant move — and a claim that inherits one is genuinely
+# mis-cited, so the judge fails it CORRECTLY: the renderer, not the judge, is
+# the defect. Mirrors the composition's ``_defuse_child_ref_markers`` (the
+# same pollution class, one marker syntax down): the rewrite happens at RENDER
+# time only — the stored finding is never touched — and ``[prior:N]`` resolves
+# NOWHERE (not the unit ``[N]`` parse, not the composition ``[[ref:N]]``
+# parse, not the write-time variant normalizers), while still preserving the
+# information that the prior read cited something there.
+_PRIOR_MARKER_RE = re.compile(r"\[(\d+)\]")
+
+
+def _defuse_prior_read_markers(text: str) -> str:
+    """Rewrite an embedded prior-read body's ``[N]`` markers to the visually
+    close but non-resolvable ``[prior:N]`` form.
+
+    Pure / idempotent (``[prior:N]`` does not match the ``[N]`` pattern);
+    marker-free text — the common case — is returned unchanged with no
+    allocation beyond the input.
+    """
+    if not text or "[" not in text:
+        return text
+    return _PRIOR_MARKER_RE.sub(lambda m: f"[prior:{m.group(1)}]", text)
+
+
 def _body_excerpt(row: Mapping[str, Any], cap: int) -> str:
     """The row's body excerpt — column first, then ``data.body`` (the same
-    fallback chain the composition's ``_row_body_excerpt`` walks)."""
+    fallback chain the composition's ``_row_body_excerpt`` walks), with the
+    SAME defuse-before-cap order: capping first could cut a live marker in
+    half at the boundary, and the truncation must never re-arm what the
+    defuse exists to kill."""
     body = row.get("body")
     if not isinstance(body, str):
         data = row.get("data")
         inner = data.get("body") if isinstance(data, Mapping) else None
         body = inner if isinstance(inner, str) else ""
-    return body[:cap]
+    return _defuse_prior_read_markers(body)[:cap]

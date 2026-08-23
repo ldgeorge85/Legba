@@ -119,8 +119,9 @@ JUDGE_STACK_REF_ENV = "LEGBA_JUDGE_STACK_REF"
 _ENV_FLAGS: tuple[tuple[str, str], ...] = (
     (
         "LEGBA_COMPOSITION_VERIFY_FLOOR",
-        "composition-layer verify floor (default 0.0 = accept any faithfulness "
-        "score; see meta_findings_synthesizer.DEFAULT_VERIFY_FLOOR)",
+        "composition-layer verify floor (shipped default 0.50 = a sub-claim "
+        "must clear effective_confidence >= 0.50 to compose; see "
+        "meta_findings_synthesizer.DEFAULT_VERIFY_FLOOR)",
     ),
     (
         "LEGBA_WORLD_CONTEXT_DISABLED_UNITS",

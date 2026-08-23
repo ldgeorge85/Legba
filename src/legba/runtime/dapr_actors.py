@@ -107,6 +107,7 @@ from ..data.provenance.writes import write_analyst_output
 from ..data.run_accounting import (
     bind_run_accounting as _bind_run_accounting,
     current_llm_calls as _current_llm_calls,
+    current_prompt_rendered as _current_prompt_rendered,
     current_tool_calls as _current_tool_calls,
     llm_call_watermark as _llm_call_watermark,
     llm_calls_since as _llm_calls_since,
@@ -3369,6 +3370,11 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                         *(getattr(method_result, "tool_calls", None) or []),
                         *_current_tool_calls(),
                     ]
+                    # RUST-5: last LLM call at this watermark — usually the
+                    # synthesis call (GATHER precedes it, judge leg follows).
+                    _acct_prompt_rendered, _acct_prompt_sha256 = (
+                        _current_prompt_rendered()
+                    )
                     receipt_hash, prev_receipt_hash = (
                         await deps_bundle.receipt_chain.record(
                             run_id=run_id,
@@ -3385,9 +3391,8 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                             prompt_module_hash=getattr(
                                 method_result, "prompt_module_hash", None
                             ),
-                            prompt_rendered=getattr(
-                                method_result, "prompt_rendered", None
-                            ),
+                            prompt_rendered=_acct_prompt_rendered,
+                            prompt_sha256=_acct_prompt_sha256,
                             output_row_refs=(
                                 [output_row.id] if output_row is not None else []
                             ),
@@ -3514,6 +3519,10 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                             # countries is flagged). None for a meta/global run →
                             # guard no-ops.
                             target_id=options.get("target_id"),
+                            # J2: the descriptor-driven judge sampling gate
+                            # (method.options via the X-1 merge; None ⇒ ungated).
+                            judge_sample_rate=options.get("judge_sample_rate"),
+                            judge_sample_always=options.get("judge_sample_always"),
                         )
                     except Exception as exc:  # pragma: no cover — never break a run
                         logger.warning(

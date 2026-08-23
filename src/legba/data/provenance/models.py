@@ -54,6 +54,58 @@ _SEVERITY_RANK: dict[str, int] = {
 }
 _SEVERITY_TAG_PREFIX = "severity:"
 
+# FRAME-3 — SEVERITY AS STATE (``planning/FRAME_PROGRAM_2026-08-20.md`` §0.6).
+#
+# The tag above used to answer two questions at once and therefore neither: a
+# desk tagged the severity of its SLICE DELTA, so a war in its fourth month
+# banded ``low`` on a week that added nothing, and 37/37 non-exact bands in
+# CORRECTNESS-R1 sat BELOW the reference. The split is the repair. ``severity``
+# is now the STANDING level of the dimension — where it stands today — and the
+# movement gets its own tag.
+#
+# A TAG, not a column and not a payload field: ``severity`` itself travels as a
+# tag (the read column is derived FROM it at write, S3-T4), every consumer that
+# needs the pair already has ``data -> 'tags'`` in hand, and a payload field on
+# an ``extra="forbid"`` model would cost a schema bump plus a migration for a
+# datum that is read in exactly the same three places the severity tag is.
+
+#: The four movement calls, in the vocabulary the unit prompts hand the model.
+#: ``new`` is the honest answer when the desk has no prior read to compare a
+#: standing level against — never ``steady``, which is a CLAIM that the level
+#: was checked and held.
+SEVERITY_DELTA_LEVELS: tuple[str, ...] = ("rose", "fell", "steady", "new")
+
+_SEVERITY_DELTA_TAG_PREFIX = "severity_delta:"
+
+
+def severity_delta_from_tags(tags: Any) -> str | None:
+    """The ``severity_delta:<rose|fell|steady|new>`` value in a finding's tags.
+
+    ``None`` when absent or unrecognised — the ONLY honest answer for a head
+    written before the FRAME-3 flip reached its desk, or by a model that skipped
+    the tag. Every consumer is required to tolerate that ``None`` rather than
+    substitute ``steady``: "nobody said" and "the desk checked and it held" are
+    different facts, and papering the first over as the second is precisely the
+    invention this platform refuses.
+
+    The LAST valid tag wins (the prompt asks for exactly one), mirroring the
+    unit-side readers rather than :func:`severity_from_tags`' highest-rank rule
+    — the delta levels are a flat vocabulary with no ladder to rank on.
+    """
+    if not tags:
+        return None
+    level: str | None = None
+    for t in tags:
+        if not isinstance(t, str):
+            continue
+        s = t.strip()
+        if not s.lower().startswith(_SEVERITY_DELTA_TAG_PREFIX):
+            continue
+        candidate = s[len(_SEVERITY_DELTA_TAG_PREFIX):].strip().lower()
+        if candidate in SEVERITY_DELTA_LEVELS:
+            level = candidate
+    return level
+
 
 def severity_from_tags(tags: Any) -> str | None:
     """The ``severity:<level>`` value carried in a finding's tags, or ``None``.

@@ -488,10 +488,12 @@ guard that collapses shared-lineage evidence so two desks resting on one wire
 signal are not double-counted.
 
 **Two-tier composition evidence (2026-07, flag-gated).** Under
-`LEGBA_COMPOSITION_TIERED_EVIDENCE` (**default OFF in code** — flipping it ON
-also moves the basis bar from the historical `0.0` floor to `0.50`, so even an
-empty periphery is not byte-identical; enabled on the reference deployment)
-the composition read splits into two explicitly-labeled tiers:
+`LEGBA_COMPOSITION_TIERED_EVIDENCE` (**default OFF in code**; enabled on the
+reference deployment) the composition read splits into two explicitly-labeled
+tiers. The flag used to move the basis bar as well — from the historical `0.0`
+default to `0.50` — but since the 2026-08-15 raise of
+`meta_findings_synthesizer.DEFAULT_VERIFY_FLOOR` the bar is `0.50` either way,
+so flipping it now only adds the periphery section:
 
 - **The basis** — verify-passed findings whose
   `effective_confidence = min(confidence, faithfulness)` clears the **0.50

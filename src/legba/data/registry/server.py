@@ -91,13 +91,16 @@ def create_app(
     signing_identity = load_default_identity()
     audit_logger = AuditLogger(identity=signing_identity)
     vocab_cache = VocabularyCache(pg_store)
-    vault = CredentialVault(pg_store)
 
-    # L-221: thread the registry's existing NATS emitter into the DLQ
-    # writer so every descriptor-side dead-letter insert fires a per-row
-    # ``legba.dlq.descriptor.{id}`` event for the UI live-tail panel.
-    # The emitter is constructed before the DLQ so it can be passed in.
+    # L-221: the registry's shared NATS emitter, threaded into every registry
+    # component that publishes lifecycle events — the DLQ writer (per-row
+    # ``legba.dlq.descriptor.{id}``), the stack registry (``stack.component.>``),
+    # and the credential vault (``vault.secret.rotated.<id>`` — the rotation
+    # eviction hook: a rotated secret must not keep serving from a runtime
+    # process's cached LLM handler until a container recreate). Constructed
+    # before all three so it can be passed into each.
     emitter = NATSEventEmitter(nats_store)
+    vault = CredentialVault(pg_store, emitter=emitter)
     dlq = DescriptorDeadLetter(pg_store, emitter=emitter)
     descriptor_registry = DescriptorRegistry(
         pg_store,
@@ -146,11 +149,11 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await pg_store.connect()
         await nats_store.connect()
-        # Provision the three runtime event streams so descriptor / stack /
-        # vocabulary publishes actually land (without a matching JetStream
-        # stream `js.publish` returns "no stream matches" and the emitter
-        # logs+drops the event). Idempotent — re-runs on warm restart are
-        # cheap no-ops.
+        # Provision the runtime event streams (descriptor / stack / vocabulary
+        # / dlq / vault) so publishes actually land (without a matching
+        # JetStream stream `js.publish` returns "no stream matches" and the
+        # emitter logs+drops the event). Idempotent — re-runs on warm restart
+        # are cheap no-ops.
         try:
             await ensure_runtime_event_streams(nats_store)
         except Exception as exc:  # pragma: no cover — fail loud, do not block startup
@@ -260,6 +263,16 @@ def create_app(
     # module rather than another block inside the 2.2k-line v3_api.
     from .production_gauge_api import build_production_gauge_router
     app.include_router(build_production_gauge_router(deps), prefix="/api/v1/v3")
+
+    # GLASS-3 — the judge's verdict mix by SERVING PROVIDER. `served_by` has been
+    # on every LLM receipt since 2026-08-16 and read by nothing, while a provider
+    # change was measured to flip 13.6% of verdicts: an unannounced upstream input
+    # to the faithfulness numbers the product is graded on. Read-only aggregate
+    # over `analyst_traces.llm_calls` + critique rows — no migration, no new
+    # writer. Its own module rather than another block inside the 2.4k-line
+    # v3_api (which is 11 lines under its size ceiling).
+    from .judge_stats_api import build_judge_stats_router
+    app.include_router(build_judge_stats_router(deps), prefix="/api/v1/v3")
 
     # Continuity P2 — the situation TRAJECTORY ledger read. Additive route, no
     # panel (the UI is Phase 3); it is what the situation_escalation alert links

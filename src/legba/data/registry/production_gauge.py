@@ -165,6 +165,21 @@ LOOP_JUDGE_AVAILABILITY = "judge_availability"
 LOOP_DESCRIPTOR_PROMPT_DRIFT = "descriptor_prompt_drift"
 LOOP_DESCRIPTOR_STATE_DRIFT = "descriptor_state_drift"
 
+#: Headroom/spend metering (#21/#22, 2026-08-15). Same contract again, a third
+#: question: not "does it produce", not "is it what we think", but "can the
+#: plane it runs on AFFORD it" — latency against the client timeout, and
+#: dollars against a per-component daily ceiling. Defined in
+#: ``production_gauge_metering``; named here so ``LOOP_CLASSES`` stays the one
+#: enumeration.
+LOOP_LLM_LATENCY = "llm_latency"
+LOOP_LLM_DAILY_BURN = "llm_daily_burn"
+
+#: Cadence staleness (FRAME-1 §6, 2026-08-20). A fourth question: not "does it
+#: produce", not "is it what we think", not "can we afford it" — but "was what
+#: it READ still current". Defined in ``production_gauge_staleness``; named here
+#: so ``LOOP_CLASSES`` stays the one enumeration.
+LOOP_DESK_HEAD_STALENESS = "desk_head_staleness"
+
 LOOP_CLASSES: tuple[str, ...] = (
     LOOP_ANALYST_CADENCE,
     LOOP_ANALYST_PRODUCTION,
@@ -173,6 +188,9 @@ LOOP_CLASSES: tuple[str, ...] = (
     LOOP_JUDGE_AVAILABILITY,
     LOOP_DESCRIPTOR_PROMPT_DRIFT,
     LOOP_DESCRIPTOR_STATE_DRIFT,
+    LOOP_LLM_LATENCY,
+    LOOP_LLM_DAILY_BURN,
+    LOOP_DESK_HEAD_STALENESS,
 )
 
 GaugeState = Literal["ok", "deficit", "ungauged"]
@@ -296,6 +314,23 @@ class GaugeConfig:
     #: TOTAL outage (share 0.0) at ratio 4.0 = critical, exactly.
     judge_share_tolerance: float = 0.20
 
+    # -- llm_latency (#21 headroom, 2026-08-15) -----------------------------
+    #: Trailing window over the ``analyst_traces.llm_calls`` receipts. SHORT
+    #: like the judge window and for the same reason: saturation is acute, and
+    #: a day-wide denominator would average a bad hour into invisibility.
+    llm_latency_window_minutes: int = 60
+    #: p95 call duration that counts as a deficit, in ms. Default = HALF the
+    #: primary component's 240s client timeout: when the typical-worst call
+    #: burns half its timeout budget, the next load increment starts timing
+    #: out — this is the leading edge of the failure, not the failure.
+    llm_latency_p95_ceiling_ms: float = 120_000.0
+    #: Calls needed in-window before the p95 statistic is trusted. Below it
+    #: the loop is ``ungauged``/``insufficient_history`` — a single slow call
+    #: in a quiet hour is an anecdote, not a percentile. The truncation leg
+    #: (finish_reason='length') deliberately IGNORES this floor: one
+    #: truncated finding is a defect at any sample size.
+    llm_latency_min_calls: int = 5
+
     # -- descriptor_prompt_drift (R-train 2026-08-05) ----------------------
     #: Diverged descriptors per severity step. 1.0 means the first divergence is
     #: already ``medium`` (it pages) and four are ``critical`` — a fleet-wide
@@ -308,6 +343,21 @@ class GaugeConfig:
     #: stays silent until the condition worsens, which is exactly the S-1 shape
     #: for a large standing debt.
     state_drift_severity_divisor: float = 4.0
+
+    # -- desk_head_staleness (FRAME-1 §6, 2026-08-20) ----------------------
+    #: Age (hours) of the OLDEST head a composition consumed, above which the
+    #: desk has been silent past its expected fire interval. 34h = 2x the units'
+    #: declared 11h cooldown + 12h of fallback-cron slack: the 2026-08-20 BF
+    #: stall (42h) trips it, a normal overnight quiet does not. NOT a freshness
+    #: SLA — the composition is entitled to read old heads under the 336h
+    #: admissibility horizon; this is the line past which the operator should
+    #: know the desk went quiet.
+    staleness_max_head_age_hours: float = 34.0
+    #: How far back to look for the composition head carrying the stamp. Short
+    #: like the judge/latency windows: "is the read on the shelf now stale" is an
+    #: acute question, and a composition that stopped running belongs to the
+    #: ``analyst_cadence`` loop, not this one.
+    staleness_window_hours: float = 26.0
 
     @classmethod
     def from_options(cls, options: Mapping[str, Any] | None) -> "GaugeConfig":
@@ -353,8 +403,13 @@ _CONFIG_FIELDS: dict[str, Any] = {
     "judge_window_days": 2,
     "judge_min_adjudicated_share": 0.80,
     "judge_share_tolerance": 0.20,
+    "llm_latency_window_minutes": 60,
+    "llm_latency_p95_ceiling_ms": 120_000.0,
+    "llm_latency_min_calls": 5,
     "drift_severity_divisor": 1.0,
     "state_drift_severity_divisor": 4.0,
+    "staleness_max_head_age_hours": 34.0,
+    "staleness_window_hours": 26.0,
 }
 
 
@@ -1295,6 +1350,17 @@ async def read_gauge(
     from .production_gauge_integrity import read_integrity_loops
 
     loops.extend(await read_integrity_loops(conn, now=now, cfg=cfg))
+    # The METERING loops (#21/#22 — LLM latency, per-component daily burn).
+    # Same call-time import, same reason: they import the gauge vocabulary
+    # from here.
+    from .production_gauge_metering import read_metering_loops
+
+    loops.extend(await read_metering_loops(conn, now=now, cfg=cfg))
+    # The CADENCE-STALENESS loop (FRAME-1 §6 — was what the composition READ
+    # still current). Same call-time import, same reason.
+    from .production_gauge_staleness import read_staleness_loops
+
+    loops.extend(await read_staleness_loops(conn, now=now, cfg=cfg))
     _STATE_ORDER = {"deficit": 0, "ok": 1, "ungauged": 2}
     loops.sort(
         key=lambda g: (
@@ -1319,8 +1385,11 @@ __all__ = [
     "LOOP_ANALYST_PRODUCTION",
     "LOOP_BACKLOG_DRAIN",
     "LOOP_DESCRIPTOR_PROMPT_DRIFT",
+    "LOOP_DESK_HEAD_STALENESS",
     "LOOP_DESCRIPTOR_STATE_DRIFT",
     "LOOP_JUDGE_AVAILABILITY",
+    "LOOP_LLM_DAILY_BURN",
+    "LOOP_LLM_LATENCY",
     "LOOP_CLASSES",
     "LOOP_SOURCE_PRODUCTION",
     "LoopGauge",

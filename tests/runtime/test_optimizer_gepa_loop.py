@@ -97,6 +97,7 @@ async def test_in_process_short_circuits_below_min_traces() -> None:
     assert "<<skipped:" in result.candidate_prompt_module_text
 
 
+@pytest.mark.skip(reason="optimizer plane mothballed 2026-08-21 (RUST-4)")
 @pytest.mark.asyncio
 async def test_in_process_returns_bounded_result() -> None:
     wf_in = _build_workflow_input(n_rows=10, min_traces_required=1, max_generations=2)
@@ -108,6 +109,7 @@ async def test_in_process_returns_bounded_result() -> None:
     assert result.training_set_size == 10
 
 
+@pytest.mark.skip(reason="optimizer plane mothballed 2026-08-21 (RUST-4)")
 @pytest.mark.asyncio
 async def test_in_process_is_deterministic_for_same_input() -> None:
     """Replay determinism precondition: same input → same output.
@@ -199,6 +201,7 @@ def test_naive_search_stamps_zero_usage_into_diagnostics() -> None:
     assert usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
 
+@pytest.mark.skip(reason="optimizer plane mothballed 2026-08-21 (RUST-4)")
 @pytest.mark.asyncio
 async def test_in_process_result_carries_usage_dict() -> None:
     """Every in-process result (which goes through naive fallback when no
@@ -296,6 +299,7 @@ def test_gepa_rollout_headroom_default_and_clamps(monkeypatch) -> None:
     assert _gepa_rollout_headroom() == 60
 
 
+@pytest.mark.skip(reason="optimizer plane mothballed 2026-08-21 (RUST-4)")
 @pytest.mark.asyncio
 async def test_activity_failure_propagates_through_loop() -> None:
     """If the inner loop raises, run_optimizer_in_process surfaces it.

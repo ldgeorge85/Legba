@@ -842,6 +842,163 @@ def test_extract_published_preserves_true_midnight():
 
 
 # ---------------------------------------------------------------------------
+# M-c — Drupal prose pubDate ("Thursday, July 30, 2026 - 15:47")
+#
+# Every string below was copied verbatim off the live
+# https://www.crisisgroup.org/rss document on 2026-08-16. feedparser sets
+# published_parsed=None for all of them, and parsedate_to_datetime /
+# fromisoformat both raise — so before this fix every entry of the feed landed
+# with published_at NULL and every poll recorded newest_entry_ts=NULL. With no
+# observation the production gauge's upstream-quiet discriminator cannot fire,
+# and the source (genuinely quiet upstream since 2026-07-30) paged as a
+# 394-hour conversion DROUGHT at severity high.
+#
+# Drupal renders the weekday and month in each item's OWN language, so the one
+# feed mixes English with French and Turkish. English is decoded; anything
+# else must return None — an unreadable month is "no date", never a guess.
+# ---------------------------------------------------------------------------
+
+
+def test_parse_tolerant_recovers_crisisgroup_prose_date():
+    """The exact live shape: weekday name, English month, ' - ' HH:MM, no tz."""
+    dt = _parse_tolerant_datetime("Thursday, July 30, 2026 - 15:47")
+    assert dt == datetime(2026, 7, 30, 15, 47, tzinfo=timezone.utc)
+
+
+def test_parse_tolerant_prose_date_all_live_english_entries():
+    """Every English-dated entry of the live document, verbatim."""
+    observed = {
+        "Thursday, July 30, 2026 - 15:47": datetime(2026, 7, 30, 15, 47),
+        "Tuesday, July 28, 2026 - 15:57": datetime(2026, 7, 28, 15, 57),
+        "Monday, July 27, 2026 - 16:08": datetime(2026, 7, 27, 16, 8),
+        "Friday, July 24, 2026 - 00:00": datetime(2026, 7, 24, 0, 0),
+        "Thursday, July 23, 2026 - 15:18": datetime(2026, 7, 23, 15, 18),
+        "Wednesday, July 22, 2026 - 11:06": datetime(2026, 7, 22, 11, 6),
+    }
+    for raw, want in observed.items():
+        assert _parse_tolerant_datetime(raw) == want.replace(
+            tzinfo=timezone.utc
+        ), raw
+
+
+def test_parse_tolerant_prose_date_accepts_seconds_and_bare_month():
+    """Structural variants of the same shape: optional :SS, optional weekday."""
+    assert _parse_tolerant_datetime(
+        "Thursday, July 30, 2026 - 15:47:09"
+    ) == datetime(2026, 7, 30, 15, 47, 9, tzinfo=timezone.utc)
+    assert _parse_tolerant_datetime("July 30, 2026 - 15:47") == datetime(
+        2026, 7, 30, 15, 47, tzinfo=timezone.utc
+    )
+    assert _parse_tolerant_datetime("Jul 30, 2026 - 15:47") == datetime(
+        2026, 7, 30, 15, 47, tzinfo=timezone.utc
+    )
+
+
+def test_parse_tolerant_prose_date_rejects_localized_months():
+    """The live French / Turkish entries: NOT decoded, and NOT guessed at.
+
+    These are the same structural shape with a non-English month word. The
+    parser must return None (no date) rather than invent one — understating
+    the feed's newest entry is safe for the gauge, a wrong date is not.
+    """
+    assert _parse_tolerant_datetime("Vendredi, juillet 24, 2026 - 13:43") is None
+    assert _parse_tolerant_datetime("Perşembe, Temmuz 23, 2026 - 15:54") is None
+
+
+def test_parse_tolerant_prose_date_rejects_garbage():
+    """The shape is fully anchored — near-misses and nonsense stay None."""
+    for raw in (
+        "Notamonth 30, 2026 - 15:47",      # unknown month word
+        "February 30, 2026 - 15:47",       # impossible calendar date
+        "July 30, 2026 - 25:47",           # hour out of range
+        "July 30, 2026 - 15:61",           # minute out of range
+        "July 30, 26 - 15:47",             # 2-digit year in the prose shape
+        "July 30, 2026",                   # no time at all
+        "read more July 30, 2026 - 15:47 today",  # unanchored prose
+    ):
+        assert _parse_tolerant_datetime(raw) is None, raw
+
+
+def test_extract_published_recovers_crisisgroup_prose_date():
+    """End-to-end through feedparser: the bug, then the recovery."""
+    entry = _entry_from_pubdate("Thursday, July 30, 2026 - 15:47")
+    # Sanity: confirm feedparser cannot read it at all (the bug).
+    assert entry.get("published_parsed") is None
+    dt = _extract_published(entry)
+    assert dt == datetime(2026, 7, 30, 15, 47, tzinfo=timezone.utc)
+
+
+def test_extract_published_prose_localized_month_stays_none():
+    entry = _entry_from_pubdate("Vendredi, juillet 24, 2026 - 13:43")
+    assert entry.get("published_parsed") is None
+    assert _extract_published(entry) is None
+
+
+# The live document verbatim (dates only), including the two localized entries
+# that must be skipped. Newest readable entry = 2026-07-30 15:47Z.
+CRISISGROUP_PROSE_FEED = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+  <title>RSS</title>
+  <link>https://www.crisisgroup.org/</link>
+  <description>prose-pubDate fixture</description>
+  <item>
+    <title>War, Politics and Chauvinism in Russia and Europe</title>
+    <link>https://www.crisisgroup.org/pod/a</link>
+    <pubDate>Thursday, July 30, 2026 - 15:47</pubDate>
+    <guid>28336</guid>
+  </item>
+  <item>
+    <title>Ebola en RDC, une epidemie hors de controle ?</title>
+    <link>https://www.crisisgroup.org/fr/pod/b</link>
+    <pubDate>Vendredi, juillet 24, 2026 - 13:43</pubDate>
+    <guid>28337</guid>
+  </item>
+  <item>
+    <title>Bir baska yazi</title>
+    <link>https://www.crisisgroup.org/tr/pod/c</link>
+    <pubDate>Per&#351;embe, Temmuz 23, 2026 - 15:54</pubDate>
+    <guid>28338</guid>
+  </item>
+  <item>
+    <title>An older English entry</title>
+    <link>https://www.crisisgroup.org/pod/d</link>
+    <pubDate>Wednesday, July 22, 2026 - 11:06</pubDate>
+    <guid>28339</guid>
+  </item>
+</channel>
+</rss>
+"""
+
+
+@pytest.mark.asyncio
+async def test_pull_records_newest_entry_ts_for_prose_dated_feed():
+    """THE gauge-facing assertion.
+
+    This observation is what reaches source_poll_outcomes.newest_entry_ts and
+    feeds the production gauge's upstream-quiet discriminator. Before the fix
+    it was None for this feed on every one of 82 polls, which is what cost the
+    standing page.
+    """
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=CRISISGROUP_PROSE_FEED, request=req)
+
+    state = InMemoryStateStore()
+    ctx = _make_ctx(state)
+    rss = _make_handler(handler)
+    signals = await _collect(rss.pull(ctx))
+    await rss.aclose()
+
+    # The localized-month entries are still EMITTED (an unreadable date is not
+    # a reason to drop an item) — they just carry no published_at.
+    assert len(signals) == 4
+    assert sum(1 for s in signals if s.payload["published_at"] is None) == 2
+
+    health = state.snapshot()[_RSS_HEALTH_KEY]
+    assert health["detail"]["newest_entry_ts"] == "2026-07-30T15:47:00+00:00"
+
+
+# ---------------------------------------------------------------------------
 # Fix C — stale-edge 304 pin guard
 #
 # A stale CDN edge (crisisgroup.latest behind Cloudflare) can pin a constant

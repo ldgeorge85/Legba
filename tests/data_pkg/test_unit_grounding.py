@@ -76,12 +76,18 @@ class _RoutingConn:
         situation_rows: list[dict[str, Any]] | None = None,
         baseline_rows: list[dict[str, Any]] | list[Exception] | None = None,
         question_rows: list[dict[str, Any]] | None = None,
+        ledger_rows: list[dict[str, Any]] | None = None,
         raise_on: tuple[str, ...] = (),
     ) -> None:
         self._prior = prior_rows or []
         self._situations = situation_rows or []
         self._baselines = baseline_rows or []
         self._questions = question_rows or []
+        # FRAME-2 — the WINDOW LEDGER is a fifth query family. It defaults to
+        # EMPTY so every pre-FRAME-2 test in this file asserts exactly what it
+        # did; without the explicit route it would fall through to the prior-read
+        # branch and quietly mint a ledger block out of a prior-read row.
+        self._ledger = ledger_rows or []
         self._raise_on = raise_on
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
 
@@ -96,6 +102,8 @@ class _RoutingConn:
             return [dict(r) for r in self._questions]
         if "FROM situations" in query:
             return [dict(r) for r in self._situations]
+        if _LEDGER_SQL_MARKER in query:
+            return [dict(r) for r in self._ledger]
         return [dict(r) for r in self._prior]
 
     def query_of(self, needle: str) -> tuple[str, tuple[Any, ...]]:
@@ -111,6 +119,31 @@ class _RoutingConn:
 _PRIOR_ID = uuid4()
 _SITUATION_ID = uuid4()
 _QUESTION_ID = uuid4()
+_LEDGER_ID = uuid4()
+
+#: FRAME-2 — the WINDOW LEDGER gather's severity CASE, generated from the shared
+#: rank ladder and present in no other query this module fires.
+_LEDGER_SQL_MARKER = "CASE f.severity"
+
+
+def _ledger_row(n: int = 2) -> dict[str, Any]:
+    """A marked WINDOW LEDGER grounding row carrying ``n`` dated entries."""
+    return {
+        ug.UNIT_GROUNDING_ROW_KEY: ug.GROUNDING_WINDOW_LEDGER,
+        ug.GROUNDING_PAYLOAD_KEY: [
+            {
+                "finding_id": str(_LEDGER_ID if i == 0 else uuid4()),
+                "analyst_id": "escalation",
+                "severity": "elevated",
+                "severity_rank": 3,
+                "title": f"Iran - dated fortnight record {i}",
+                "read_date": f"{7 + i} August 2026",
+                "day": f"2026-08-{7 + i:02d}",
+                "produced_at": f"2026-08-{7 + i:02d}T07:00:00+00:00",
+            }
+            for i in range(n)
+        ],
+    }
 
 
 def _prior_row(**over: Any) -> dict[str, Any]:
@@ -244,6 +277,7 @@ def test_partition_lifts_marked_rows_in_canonical_order():
         _signal(1),
         _baseline_row(),
         _signal(2),
+        _ledger_row(),
         _prior_row(),
         _situations_row(),
     ]
@@ -310,6 +344,76 @@ def test_prior_read_body_is_bounded():
     text, _stamped = ug.render_grounding_section(grounding, start_ordinal=1)
     assert "x" * ug.PRIOR_BODY_CHARS in text
     assert "x" * (ug.PRIOR_BODY_CHARS + 1) not in text
+
+
+# ---------------------------------------------------------------------------
+# V-2 — the embedded prior body's OWN [N] markers must never be inheritable
+# ---------------------------------------------------------------------------
+
+
+def test_prior_read_body_markers_are_defused_never_inheritable():
+    """V-2 (live capture 2026-08-05): the prior body's [N] markers point at the
+    PRIOR run's slice — rendered bare, the new prompt hands the model fourteen
+    stale citations plus a recursive self-cite and then orders it to cite
+    'exactly like a numbered signal'. The render must rewrite them to the dead
+    [prior:N] form; the block's OWN live handle is untouched."""
+    row = _prior_row(
+        body="No new deployment is reported in the current slice [15][2][3]."
+    )
+    _signals, grounding = ug.partition_grounding_rows([row])
+    text, _stamped = ug.render_grounding_section(grounding, start_ordinal=1)
+    assert "[prior:15][prior:2][prior:3]" in text
+    for stale in ("[15]", "[2]", "[3]"):
+        assert stale not in text
+    assert "[1] PRIOR READ" in text, "the block's own live handle must survive"
+
+
+def test_prior_read_marker_note_renders_only_when_markers_survive():
+    """The one-line header note names what [prior:N] is — and a marker-free
+    prior read (the common case) stays byte-identical to the pre-defuse
+    render, so absence costs nothing."""
+    marked = _prior_row(body="Tension flat versus the prior sweep [7].")
+    _s, grounding = ug.partition_grounding_rows([marked])
+    text, _st = ug.render_grounding_section(grounding, start_ordinal=4)
+    assert "NOT citable" in text
+    assert "cite this block as [4]." in text
+    clean = _prior_row()
+    _s, grounding = ug.partition_grounding_rows([clean])
+    text, _st = ug.render_grounding_section(grounding, start_ordinal=4)
+    assert "NOT citable" not in text
+    assert "note:" not in text
+
+
+def test_a_marker_straddling_the_excerpt_cap_never_survives_bare():
+    """Defuse-before-cap: capping first could slice a live marker in half at
+    the boundary, and the truncation must never re-arm what the defuse kills."""
+    row = _prior_row(body="x" * (ug.PRIOR_BODY_CHARS - 2) + "[7] tail")
+    _signals, grounding = ug.partition_grounding_rows([row])
+    text, _stamped = ug.render_grounding_section(grounding, start_ordinal=1)
+    assert "[7" not in text
+
+
+def test_defuse_is_idempotent_through_the_renderer():
+    """A body already carrying the dead form (a prior read OF a prior read that
+    quoted one) is left alone — never [prior:prior:N]."""
+    row = _prior_row(body="Held steady per [prior:3] and the new strike [9].")
+    _signals, grounding = ug.partition_grounding_rows([row])
+    text, _stamped = ug.render_grounding_section(grounding, start_ordinal=1)
+    assert "[prior:3]" in text
+    assert "[prior:prior:" not in text
+    assert "[prior:9]" in text
+    assert "[9]" not in text
+
+
+def test_judge_evidence_for_the_prior_block_is_the_defused_bytes():
+    """evidence_text IS what the judge grades against — it must carry the same
+    defused form the model was shown, or a quote spanning a marker could never
+    resolve."""
+    row = _prior_row(body="Strike tempo unchanged [12].")
+    citation = ug.citation_for_block(row, 5)
+    assert citation is not None
+    assert "[prior:12]" in citation["evidence_text"]
+    assert "[12]" not in citation["evidence_text"]
 
 
 def test_baseline_block_names_itself_as_not_a_forecast():
@@ -738,16 +842,61 @@ _INLINE_TARGET_SRC = (
 ).read_text()
 
 
+#: J2 — kind knobs read by the ACTOR VERIFY SEAM (dapr_actors → actor_critic →
+#: provenance), not by run_method: the judge runs after the finding lands. The
+#: reachability proof for these is the seam source, below.
+_VERIFY_SEAM_KIND_KNOBS = frozenset({"judge_sample_rate", "judge_sample_always"})
+
+_DAPR_ACTORS_SRC = (
+    Path(__file__).resolve().parents[2]
+    / "src" / "legba" / "runtime" / "dapr_actors.py"
+).read_text()
+
+_ACTOR_CRITIC_SRC = (
+    Path(__file__).resolve().parents[2]
+    / "src" / "legba" / "runtime" / "actor_critic.py"
+).read_text()
+
+
 def test_every_declared_kind_knob_is_actually_read_by_its_kind():
     """A declared-but-unread knob is dead config with extra steps. Proven
     BEHAVIOURALLY (the resolver must change what run_method sees), not by grep —
     the reads go through module constants, and a grep would pass on a constant
-    nothing consumes."""
+    nothing consumes. The J2 judge-sampling knobs are the one declared
+    exception: they are read by the actor verify seam (the judge runs AFTER
+    run_method), so their reachability is proven against that seam instead."""
     for name in known_kind_option_names("inline_target"):
+        if name in _VERIFY_SEAM_KIND_KNOBS:
+            assert f'options.get("{name}")' in _DAPR_ACTORS_SRC, (
+                f"ANALYST_KIND_OPTIONS declares inline_target.{name} as a "
+                "verify-seam knob but dapr_actors never reads it off the "
+                "merged run options"
+            )
+            assert name in _ACTOR_CRITIC_SRC, (
+                f"{name} never reaches the verify call in actor_critic"
+            )
+            continue
         assert f'"{name}"' in _INLINE_TARGET_SRC or f"'{name}'" in _INLINE_TARGET_SRC
         assert _resolve_slice_focus({name: ["hormuz"]}) is not None, (
             f"ANALYST_KIND_OPTIONS declares inline_target.{name} but "
             "run_method's option resolution ignores it"
+        )
+
+
+def test_every_verify_bearing_kind_declares_the_sampling_knobs():
+    """J2 — the sampling gate must be settable on EVERY kind the actor-plane
+    verify gate admits (a kind missing from the catalog cannot carry
+    method.options at all, so its descriptors could never opt in)."""
+    for kind in (
+        "inline_target",
+        "meta_findings_synthesizer",
+        "cross_analyst_correlator",
+        "situation_tracker",
+        "journal_assessor",
+    ):
+        names = set(known_kind_option_names(kind))
+        assert _VERIFY_SEAM_KIND_KNOBS <= names, (
+            f"{kind} does not declare the judge sampling options: {names}"
         )
 
 
@@ -795,9 +944,20 @@ def test_kind_resolution_still_refuses_runtime_owned_keys():
 
 
 def test_kind_resolution_of_an_undeclared_kind_degrades_loudly():
-    res = resolve_kind_options("meta_findings_synthesizer", {"slice_focus": ["x"]})
+    # (Was meta_findings_synthesizer — that kind gained the J2 sampling
+    # catalog, so an undeclared KEY there is now 'unknown_key'; the
+    # no-catalog-at-all lane needs a kind that still has none.)
+    res = resolve_kind_options("cross_target_raw", {"slice_focus": ["x"]})
     assert res.accepted == {}
     assert res.rejected[0].cause == "unknown_kind"
+
+
+def test_kind_resolution_of_a_catalog_kind_rejects_foreign_keys_loudly():
+    """A composition kind now HAS a catalog (the J2 sampling knobs) — a knob it
+    does not declare, like the unit-only slice_focus, degrades per-key."""
+    res = resolve_kind_options("meta_findings_synthesizer", {"slice_focus": ["x"]})
+    assert res.accepted == {}
+    assert res.rejected[0].cause == "unknown_key"
 
 
 def test_kind_resolution_of_an_unknown_key_degrades_loudly():
@@ -851,12 +1011,16 @@ def test_an_inline_target_descriptor_may_declare_slice_focus():
 
 def test_a_kind_with_no_catalog_still_cannot_carry_options():
     """The X-1 rule survives: a block no code path reads is refused, because a
-    silent inert block is exactly the dead config X-1 exists to remove."""
+    silent inert block is exactly the dead config X-1 exists to remove.
+
+    (Was ``meta_findings_synthesizer`` — J2 gave every verify-bearing kind a
+    catalog for the judge sampling knobs, so the no-catalog example moves to a
+    kind that still has none.)"""
     from legba.data.schemas.analyst import AnalystDescriptor
 
     with pytest.raises(ValueError, match="silently inert"):
         AnalystDescriptor.model_validate(
-            _descriptor_body("meta_findings_synthesizer", "llm_planner",
+            _descriptor_body("cross_target_raw", "llm_planner",
                              {"slice_focus": ["hormuz"]}),
             strict=False,
         )
@@ -999,6 +1163,37 @@ async def test_run_method_renders_the_section_after_the_signals_and_cites_it():
     assert by_marker["[2]"]["signal_id"]
     # The whole prose grades clean on the deterministic floor — the blocks are
     # real evidence, not decoration.
+    assert _deterministic_floor(body, citations).faithfulness_score == 1.0
+
+
+@pytest.mark.asyncio
+async def test_run_method_never_shows_the_model_a_bare_foreign_marker():
+    """V-2 through the REAL binding path: a prior read whose body carries its
+    own run's [N] markers reaches the assembled prompt defused, the header
+    note names them, and the judge-facing evidence_text carries the same
+    bytes. The live [N] handle the block itself gets stays fully citable."""
+    inputs = _focus_slice() + [
+        _prior_row(
+            body="No new deployment is reported in the current 72-hour "
+            "slice [15][1][2][3]."
+        ),
+    ]
+    body = "No material change since the prior read of 2026-07-30 [5]."
+    result, llm = await _run(inputs, body)
+
+    prompt = llm.user_prompt
+    assert "[prior:15][prior:1][prior:2][prior:3]" in prompt
+    assert "[15]" not in prompt, "a stale foreign marker reached the prompt"
+    assert "NOT citable" in prompt
+    assert "cite this block as [5]." in prompt
+
+    citations = result.finding.data["citations"]
+    prior = next(
+        c for c in citations if c["ref_kind"] == ug.GROUNDING_PRIOR_READ
+    )
+    assert prior["marker"] == "[5]"
+    assert "[prior:15]" in prior["evidence_text"]
+    assert "[15]" not in prior["evidence_text"]
     assert _deterministic_floor(body, citations).faithfulness_score == 1.0
 
 

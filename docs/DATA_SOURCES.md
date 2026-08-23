@@ -1,7 +1,7 @@
 # Legba — Data Sources
 
 This doc catalogs Legba's data sources: how many there are and at what scope
-(the three-tier model, the 46-source repo catalog, and the breadth batches
+(the tiered model, the 46-source repo catalog, and the breadth batches
 layered on top of it — the live active count is generated in
 [RELEASE_STATE.md](RELEASE_STATE.md), not repeated here), the fifteen source-handler
 kinds a descriptor can use, the editorial `source_class` taxonomy a descriptor
@@ -13,7 +13,7 @@ commands see `SETUP.md` and `RUNBOOK.md`.
 
 **Contents**
 
-- [1. The three-tier scope model](#1-the-three-tier-scope-model)
+- [1. The scope model](#1-the-scope-model)
 - [2. The full catalog (46 sources)](#2-the-full-catalog-46-sources)
 - [3. Credentialed sources: live status](#3-credentialed-sources-live-status)
 - [4. Registering sources (reaching full scope)](#4-registering-sources-reaching-full-scope)
@@ -28,15 +28,16 @@ commands see `SETUP.md` and `RUNBOOK.md`.
 
 ---
 
-## 1. The three-tier scope model
+## 1. The scope model
 
-"How many sources?" has three honest answers, because three different things
-are being counted. Anchor every scope claim to these:
+"How many sources?" has several honest answers, because several different
+things are being counted. Anchor every scope claim to these:
 
 | Tier | Count | What it is | Where it comes from |
 |---|---|---|---|
-| **1 — Minimal cold-start** | **3** shared RSS | The smallest loop that proves the path from empty volumes: BBC World, Al Jazeera World, Deutsche Welle. This is *all a fresh deploy gets* if it stops at the documented working-set. | `scripts/bringup_register_sources.py` (standalone 3-source registrar) and the working-set script `scripts/bringup_register_p17_workingset.py` (RUNBOOK §7) |
-| **2 — Full repo catalog** | **46** sources | The full catalog of independently-verified, no-auth feeds: **43 `rss` + 3 `geojson`** hazard feeds. **NOT auto-run on deploy and NOT part of the working-set bring-up** — a separate manual step a fresh operator currently misses. Running it is how you reach current/full scope. | `scripts/bringup_register_source_catalog.py` (the `CATALOG` tuple — 46 `CatalogEntry`, owner `s1_catalog`) |
+| **1 — Minimal cold-start** | **3** shared RSS | The smallest loop that proves the path from empty volumes: BBC World, Al Jazeera World, Deutsche Welle. This is *all you get* from the legacy working-set path alone (`deploy.sh` goes further — tier 1b). | `scripts/bringup_register_sources.py` (which now registers 7 — see tier 1b) and the working-set script `scripts/bringup_register_p17_workingset.py` (RUNBOOK §7) |
+| **1b — What `deploy.sh` registers** | **53** sources (52 active) | The honest out-of-box number: the 46-entry catalog **plus** the 7 pinned standalone descriptors (3 shared wires + 3 state-media voices + UCDP, which registers `draft`/inert pending its token). `deploy/deploy.sh` phase 5 runs both registrars, in this order, on every bring-up. | `deploy/deploy.sh` steps `[4]` + `[4b]` |
+| **2 — Full repo catalog** | **46** sources | The full catalog of independently-verified, no-auth feeds: **43 `rss` + 3 `geojson`** hazard feeds. Auto-run by `deploy.sh` (step `[4b]`) since the one-command bring-up landed; still runnable standalone against an existing stack, and idempotent either way. | `scripts/bringup_register_source_catalog.py` (the `CATALOG` tuple — 46 `CatalogEntry`, owner `s1_catalog`) |
 | **3 — Live-productive** | **~117** sources (moving) | The real "productive scope" of a representative running deployment: distinct `source_id` values that have actually emitted signals — the catalog sources **plus** the operator-pinned standalone descriptors (state-media, Telegram, …; §2.3) **plus** the activated breadth batches (§2.5–§2.7) **plus** seed / world-baseline curated adapters. Exceeds the active-registered count because retired and paused feeds keep the signals they already produced. | Live reconcile against the production `signals` table |
 
 Two adjacent counts round out the picture (neither is a different set of
@@ -58,21 +59,20 @@ Two adjacent counts round out the picture (neither is a different set of
   re-fetching anything; see `ACQUISITION.md` §6). Do **not** count them as ingest
   sources.
 
-> **Why three numbers.** (The live ACTIVE count is a fourth, moving number —
+> **Why several numbers.** (The live ACTIVE count is another moving number —
 > generated, not documented here: see [RELEASE_STATE.md](RELEASE_STATE.md).)
-> A fresh deploy that stops at the documented
-> working-set gets **only 3 RSS feeds** — the minimal cold-start verification
-> set, not the catalog and not the live scope. The full 46-source catalog
-> lives in a separate, manually-run registration script that the working-set
-> bring-up does **not** invoke (§4). A review that sees "only 3 RSS feeds" is
-> reading the cold-start set.
+> A review that sees "only 3 RSS feeds" is reading the tier-1 cold-start set,
+> which is what the *legacy working-set path* leaves you with. `deploy.sh`
+> registers tier 1b — 53 sources, 52 of them polling — on every run. Neither
+> path registers the breadth batches (§2.5–§2.7): those ship `state: draft` by
+> design, so the operator activates them per-feed after confirming each route.
 
-**The one-line answer.** *3 minimal · 46 catalog · a moving live scope* — the
-active-registered head-descriptor count is generated, never hand-typed here
-(105 at the last [RELEASE_STATE.md](RELEASE_STATE.md) regeneration; no
-autowired fan-out templates materialized in this deployment). The fix for the "only 3 feeds" state is to
-register the 46-source catalog (§4), then the breadth batches (§2.5–§2.7) an
-operator activates deliberately.
+**The one-line answer.** *46 catalog · 53 registered by `deploy.sh` · a moving
+live scope* — the active-registered head-descriptor count is generated, never
+hand-typed here (105 at the last [RELEASE_STATE.md](RELEASE_STATE.md)
+regeneration; no autowired fan-out templates materialized in this deployment).
+The path from 53 to the live scope is the breadth batches (§2.5–§2.7), which an
+operator registers and activates deliberately.
 
 ---
 
@@ -419,12 +419,17 @@ rest ship as ready descriptors awaiting creds/infra.
 Registration is a deploy-time step, not a code change — the live source set is
 the `source_descriptors` **DB rows**, not the `descriptors/*.yaml` files.
 
-- **Minimal (Tier 1).** The working-set bring-up
+- **Minimal (Tier 1).** The legacy working-set bring-up
   (`scripts/bringup_register_p17_workingset.py`) registers the 3 shared RSS
-  sources alongside the G20 targets, analysts, and action packs. A fresh deploy
-  that stops here has exactly 3 feeds.
-- **Full catalog (Tier 2) — the step a fresh operator misses.** Run the catalog
-  bring-up:
+  sources alongside the G20 targets, analysts, and action packs. A bring-up that
+  stops here has exactly 3 feeds.
+- **The one-command deploy (Tier 1b).** `deploy/deploy.sh` runs
+  `bringup_register_sources.py` (7 pinned standalone descriptors) at step `[4]`
+  and the full catalog at step `[4b]`, so a fresh `deploy.sh` lands on **53
+  registered / 52 active** without a second command. Nothing below is needed to
+  reach that number; the sections below are how you go *past* it.
+- **Full catalog (Tier 2) — standalone, against an existing stack.** Run the
+  catalog bring-up directly:
 
   ```
   python scripts/bringup_register_source_catalog.py           # register all 46

@@ -263,13 +263,14 @@ def structural_badge(analyst_id: str | None, structural_verified: bool | None) -
 #
 # A bounded unit's ``data['citations']`` used to hold exactly one entry shape:
 # a ``[N]`` marker bound to a ``signals`` row id. QW1-B adds four MORE citable
-# block kinds (see :mod:`legba.data.analysts.unit_grounding`), none of which is a
-# signal: this unit's own PRIOR READ (a real ``analyst_outputs`` uuid, carried as
-# ``ref_id``), and three SYNTHETIC blocks — the open-situation REGISTER, the DESK
-# BASELINE and the STANDING OPEN QUESTIONS — which have no single substrate id and
-# therefore carry the REAL underlying ids (``situation_ids`` / ``baseline_keys`` /
-# ``question_ids``) and NO ``ref_id`` at all. Minting a ``ref_id`` so a drill link
-# resolves would be a fabricated anchor.
+# block kinds (see :mod:`legba.data.analysts.unit_grounding`), and FRAME-2 a
+# fifth, none of which is a signal: this unit's own PRIOR READ (a real
+# ``analyst_outputs`` uuid, carried as ``ref_id``), and four SYNTHETIC blocks —
+# the WINDOW LEDGER, the open-situation REGISTER, the DESK BASELINE and the
+# STANDING OPEN QUESTIONS — which have no single substrate id and therefore
+# carry the REAL underlying ids (``ledger_finding_ids`` / ``situation_ids`` /
+# ``baseline_keys`` / ``question_ids``) and NO ``ref_id`` at all. Minting a
+# ``ref_id`` so a drill link resolves would be a fabricated anchor.
 #
 # THE SET LIVES HERE, not in the producing module, for ONE reason: the CONSUMER is
 # ``provenance.verify``, and ``verify`` importing ``data.analysts.inline_target``
@@ -286,6 +287,14 @@ GROUNDING_REF_KINDS: frozenset[str] = frozenset({
     "situation_register",
     "desk_baseline",
     "open_questions",
+    # FRAME-2 (2026-08-20) — the WINDOW LEDGER, the fifth block: a bounded,
+    # dated record of the verified severity-tagged heads this scope itself
+    # produced over the trailing fortnight. Same synthetic shape as the register
+    # (no ``ref_id``; the REAL member uuids ride ``ledger_finding_ids``), and it
+    # is registered HERE for the same reason the other four are — without it the
+    # verify path would score a ledger-backed clause as an unresolved citation
+    # and false-demote the exact carry the train exists to license.
+    "window_ledger",
 })
 
 

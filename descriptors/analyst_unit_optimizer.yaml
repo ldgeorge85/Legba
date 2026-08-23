@@ -22,6 +22,26 @@
 # per-activity reminders) cannot regress here because (a) one weekly reminder,
 # and (b) the training set is passed BY REFERENCE (TrainingSetRef, SEAMS #23) so
 # the serialized workflow input is always << 4 MB regardless of trainset size.
+#
+# ── RUST-4 MOTHBALL (decision 2026-08-21) ──────────────────────────────
+# state flipped active -> paused: the GEPA optimizer plane is mothballed
+# (docs/SEAMS.md #53, evidence planning/RUST4_EVIDENCE_2026-08-21.md). This IS
+# the descriptor that actually ran (6 lifetime runs): 4/6 fell back to
+# naive_best_of_n, 1/6 hit the #86 long-activity round-trip timeout
+# (2026-08-17), and the 1 completed real dspy_gepa compile (2026-08-10) missed
+# the promotion bar by a wide margin (faithfulness delta -0.5354 vs +0.03).
+# `paused` is the schema's built-in, RESUMABLE halt (LifecycleState, ACTIVE <->
+# PAUSED both ways) — not `retired` (terminal); unlike country_optimizer this
+# descriptor is CADENCE-ONLY (no subscription.targets) so, once live, `paused`
+# mechanically stops the `run_cadence` reminder the same way SEAMS #30's null
+# cadence does for the frozen monolith. TREE ONLY: this edit has NOT been PUT
+# to the live registry (BUILD-ONLY per the RUST-4 spec); the live head stays
+# `active` and still ticks weekly until an operator deploys + PUTs this. The
+# code path also refuses loud regardless (src/legba/data/analysts/optimizer.py
+# ::run_method, OptimizerMothballedError) so every tick between now and that
+# PUT fails LOUD instead of quietly emitting another naive_best_of_n result.
+# To restore: flip back to `active` (registry PUT) and see docs/SEAMS.md #53
+# "To restore".
 
 identity:
   id: unit_optimizer
@@ -32,7 +52,7 @@ identity:
   type_signature:
     input_type: legba.runtime.TraceCritiqueJoin
     output_type: legba.runtime.PromptModuleCandidate
-  state: active
+  state: paused
   owner: p4_t6
 
 subscription:

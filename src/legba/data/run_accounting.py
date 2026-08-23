@@ -43,12 +43,37 @@ a successful LLM call into an error. The recorders are also bounded (see
 ``_MAX_CALLS``) — ``analyst_traces`` has retention, but a ReAct loop with a
 runaway tool budget should not be able to write an unbounded JSONB blob.
 
-What this module deliberately does NOT collect: ``prompt_rendered``. See the
-per-call ``prompt_sha256`` / ``prompt_chars`` fields instead — they evidence
-WHICH prompt was sent without persisting it (a full prompt is up to the
-32k-token input budget; at the live trace rate that is multi-GB/week of row
-bloat, and it would additionally change the canonical receipt-hash payload,
-which is a provenance-semantics decision rather than instrumentation).
+RUST-5 (2026-08-20) — ``prompt_rendered`` is now wired
+-------------------------------------------------------
+
+This module used to argue the opposite of what follows: a full prompt is up
+to the 32k+-token input budget, and persisting one on EVERY call would be
+multi-GB/week of row bloat. That argument was against persisting the
+``llm_calls`` list's per-call prompts — it never had to be an argument
+against persisting ONE prompt per trace. The decision on record is WIRE IT
+(observability won), and the design below is the version of it that is
+actually affordable:
+
+  * :func:`record_prompt_rendered` OVERWRITES a single slot on the account
+    (``last_prompt_rendered`` / ``last_prompt_sha256``) on every call —
+    it never accumulates, so memory cost is bounded to ONE prompt's worth
+    at a time regardless of how many calls (GATHER rounds, judge legs) a run
+    makes, and NOTHING is written to ``llm_calls`` — that JSONB array stays
+    exactly as bounded as it always was.
+  * :func:`current_prompt_rendered` is read ONCE, at the same instant the
+    actor flushes ``current_llm_calls()`` into the trace write (before the
+    post-receipt verify/judge leg runs — see the S-4 section below), so in
+    the ordinary run shape (GATHER rounds, then ONE synthesis call, then
+    trace write) the captured prompt IS the synthesis call's: the last LLM
+    call a run makes before its trace is written.
+  * The returned text is capped at ``_MAX_PROMPT_RENDERED_CHARS`` with an
+    explicit truncation marker; the returned sha256 is ALWAYS computed over
+    the FULL, untruncated text, so a capped ``analyst_traces.prompt_rendered``
+    is still byte-verifiable against a re-rendered prompt — the claim
+    ``scripts/render_prompt_pack.py`` depends on.
+  * ``prompt_sha256`` is stored in its own column, NOT folded into
+    ``compute_receipt_hash``'s payload — supplementary provenance, not chain
+    material, same posture as ``llm_calls``/``tool_calls``.
 """
 
 from __future__ import annotations
@@ -74,6 +99,15 @@ _MAX_CALLS = 200
 #: block cause). Nothing large is meant to reach these — the cap is a backstop.
 _MAX_FIELD_CHARS = 500
 
+#: Cap on the persisted ``analyst_traces.prompt_rendered`` text. Chosen to
+#: echo the figure this module's own docstring used to cite against wiring
+#: this at all (a full prompt runs up to the 32k-TOKEN input budget) while
+#: actually being a small fraction of it in CHARS — enough to read what
+#: shape of prompt a run sent without reintroducing the row-bloat argument
+#: that blocked this. A truncated value ALWAYS carries an explicit marker
+#: (see :func:`current_prompt_rendered`) — never a silent cut.
+_MAX_PROMPT_RENDERED_CHARS = 32_000
+
 
 @dataclass
 class _RunAccount:
@@ -83,6 +117,11 @@ class _RunAccount:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     llm_dropped: int = 0
     tool_dropped: int = 0
+    #: The MOST RECENT call's full rendered prompt + its sha256 — overwritten
+    #: (never appended) on every :func:`record_prompt_rendered` call, so this
+    #: never grows past one prompt's worth regardless of run length.
+    last_prompt_rendered: str | None = None
+    last_prompt_sha256: str | None = None
 
 
 _account: ContextVar[_RunAccount | None] = ContextVar(
@@ -140,6 +179,88 @@ def current_tool_calls() -> list[dict[str, Any]]:
     if acct is None:
         return []
     return _flush(acct.tool_calls, acct.tool_dropped)
+
+
+# ---------------------------------------------------------------------------
+# RUST-5 — ``prompt_rendered`` (the LAST call's full rendered prompt + hash)
+# ---------------------------------------------------------------------------
+
+
+def _render_prompt_text(system: str | None, messages: Any) -> str:
+    """Render ``(system, messages)`` — the ORIGINAL, pre-translation
+    ``chat_complete`` args — into one readable text block.
+
+    Provider-agnostic on purpose: this runs on the args the CALLER passed
+    (before ``_translate_messages`` folds ``system`` into the wire messages
+    for OpenAI-style providers, or leaves it separate for Anthropic-style
+    ones), so the text is identical regardless of which provider handled the
+    call. Handles multi-turn conversations (a GATHER round's accumulated
+    tool-call history, the journal's narrate turn) the same as a single-shot
+    call — every message in order, not just the last one.
+    """
+    parts: list[str] = []
+    if system:
+        parts.append(f"[SYSTEM]\n{system}")
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        role = str(m.get("role") or "?").upper()
+        content = m.get("content")
+        if not isinstance(content, str):
+            try:
+                content = json.dumps(content, default=str, ensure_ascii=False)
+            except Exception:  # pragma: no cover — defensive
+                content = str(content)
+        parts.append(f"[{role}]\n{content}")
+    return "\n\n".join(parts)
+
+
+def record_prompt_rendered(system: str | None, messages: Any) -> None:
+    """Capture one call's full rendered prompt into the bound account.
+
+    OVERWRITES the account's single slot — this is not a log, it is "the
+    most recent call's prompt," by construction. No-op when unbound (mirrors
+    every other recorder in this module). Never raises.
+    """
+    try:
+        acct = _account.get()
+        if acct is None:
+            return
+        rendered = _render_prompt_text(system, messages)
+        acct.last_prompt_rendered = rendered or None
+        acct.last_prompt_sha256 = (
+            hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+            if rendered else None
+        )
+    except Exception:  # pragma: no cover — instrumentation must never fail a run
+        logger.debug("run_accounting.record_prompt_rendered failed", exc_info=True)
+
+
+def current_prompt_rendered() -> tuple[str | None, str | None]:
+    """``(prompt_rendered, prompt_sha256)`` for the run's most recent LLM call.
+
+    ``(None, None)`` when nothing is bound or no call has been recorded yet —
+    matching the historical ``NULL`` for a deterministic (no-LLM) run.
+
+    ``prompt_rendered`` is capped at ``_MAX_PROMPT_RENDERED_CHARS`` with an
+    explicit truncation marker naming the full length and the sha256 to
+    verify against; ``prompt_sha256`` is ALWAYS computed over the FULL,
+    untruncated text (see :func:`record_prompt_rendered`), so a capped row is
+    still byte-verifiable against a re-rendered prompt.
+    """
+    acct = _account.get()
+    if acct is None or acct.last_prompt_rendered is None:
+        return None, None
+    text = acct.last_prompt_rendered
+    sha = acct.last_prompt_sha256
+    if len(text) > _MAX_PROMPT_RENDERED_CHARS:
+        omitted = len(text) - _MAX_PROMPT_RENDERED_CHARS
+        text = (
+            text[:_MAX_PROMPT_RENDERED_CHARS]
+            + f"\n...[TRUNCATED: {omitted} of {len(text)} chars omitted; "
+              f"full sha256={sha}]"
+        )
+    return text, sha
 
 
 # ---------------------------------------------------------------------------
@@ -434,10 +555,12 @@ __all__ = [
     "bind_run_accounting",
     "reset_run_accounting",
     "current_llm_calls",
+    "current_prompt_rendered",
     "current_tool_calls",
     "llm_call_watermark",
     "llm_calls_since",
     "record_llm_call",
+    "record_prompt_rendered",
     "record_tool_call",
     "redact_tool_args",
     "prompt_digest",

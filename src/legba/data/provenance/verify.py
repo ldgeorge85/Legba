@@ -157,6 +157,7 @@ from .judge_quote_rules import (  # noqa: F401 — re-exported verify surface
     _VERDICT_PRIOR_READ_CONFLICT,
     _VERDICT_QUOTE_CONFIRMS,
     _VERDICT_ROUTE_EXCLUDED,
+    _canonical_judge_quote,
     _judge_claim_block,
     _normalize_quote_text,
     _numeral_fingerprint,
@@ -167,6 +168,20 @@ from .judge_quote_rules import (  # noqa: F401 — re-exported verify surface
     _quote_restates_claim,
     claim_is_routed_out,
     quote_confirms_the_claim,
+)
+# RUST-2/RUST-3 (2026-08-21) — the ABSENCE RUBRIC + the FOURTH VERDICT, the
+# judge subsystem's sixth brick (see that module's header for the measurement
+# and the earn test). Imported ONE WAY and RE-EXPORTED, so
+# ``verify._ABSENCE_JUDGE_SYSTEM`` resolves exactly as before; the severity
+# DECISION stays here, beside the fail-class table it must agree with.
+from .judge_absence_rubric import (  # noqa: F401 — re-exported verify surface
+    ABSENCE_PROFILE_VERSION,
+    JUDGE_VERDICT_TOKENS,
+    VERDICT_NOT_A_PROPOSITION,
+    _ABSENCE_JUDGE_SYSTEM,
+    _JUDGE_NONPROP_UNEARNED,
+    _VERDICT_NONPROP_UNEARNED,
+    nonproposition_is_earned,
 )
 # V-G7 (2026-08-03) — the STRUCTURAL-CLAIMS verify profile is the SECOND,
 # deterministic critique path (see the sibling module's header for why it is a
@@ -769,6 +784,9 @@ _SYNTHESIS_PREFIXES = (
 from .judge_assessability import (  # noqa: F401 — re-exported verify surface
     DENOMINATOR_COVERAGE_STATEMENT,
     DENOMINATOR_TRIGGERED_INDICATOR,
+    JUDGE_SAMPLE_ALWAYS_DEFAULT,
+    JUDGE_STATUS_UNSAMPLED,
+    JudgeSamplingPolicy,
     PROVISIONAL_SCORE_CEILING,
     SCORE_STATE_SCORED,
     SCORE_STATE_UNASSESSABLE,
@@ -781,6 +799,7 @@ from .judge_assessability import (  # noqa: F401 — re-exported verify surface
     is_json_syntax_claim,
     is_labeled_scaffold,
     is_provisional,
+    judge_sample_unit,
     resolve_score_state,
 )
 
@@ -1116,6 +1135,14 @@ _FAIL_CLASS_BY_REASON: dict[str, str] = {
     # Soft by the same rule (no fabricated fact) and the most consequential soft
     # class in the table: it is how a chokepoint was simultaneously shut and open.
     "unsurfaced_input_contradiction": FAIL_CLASS_SOFT,
+    # RUST-3 (2026-08-21) — the judge answered ``not_a_proposition`` on a span
+    # that DOES assert a checkable particular, so "this asserts nothing" is false
+    # and the claim stays graded. Soft, and its own class: it is the only entry
+    # here recording the judge DECLINING to grade rather than grading wrongly,
+    # and a judge laundering real claims through the fourth verdict would show up
+    # here and nowhere else. An EARNED one reaches no table at all — it is
+    # ungraded, never a span and never a ledger row.
+    _JUDGE_NONPROP_UNEARNED: FAIL_CLASS_SOFT,
 }
 
 
@@ -1163,183 +1190,15 @@ def _llm_judge_enabled() -> bool:
 # measured, operator-gated step — nothing here changes a live prompt.
 # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# THE JUDGE PIPELINE VERSION (2026-07-31) — the population SPLIT key.
-#
-# The verify gate is the product's keystone, so every structural change to it
-# ships behind ONE version stamp on the critique, the MATCHER_VERSION idiom.
-# Band calibration, the gold-set loop, the correctness scorer and the scorecard
-# all read faithfulness history; without a split key they would POOL critiques
-# graded under different pipelines and read the change as a quality movement.
-#
-# The 2026-07-31 train (V-F claim-splitter hygiene, V-C metadata lookup, V-D
-# earned hard-fail severity, V-B slice-scoped absence, A3's counter) is expected
-# to shift mean faithfulness UPWARD. That shift is a MEASUREMENT CORRECTION —
-# the readout established that both judges over-fail, so the prior mean
-# UNDERSTATED true faithfulness — and must never be reported as findings getting
-# better. Splitting on this stamp is what makes that statement checkable rather
-# than asserted.
-#
-# ONE bump per train. Format ``<train date>/<n>``; a later structural change to
-# the verify path bumps it again, in the same commit as the change.
-#
-# 2026-08-02/1 — the F-A PRECISION train, off the 08-02 acceptance readout (all
-# three pre-declared gates failed at 2026-07-31/1: 70% agreement vs 85%, 60%
-# failure precision vs 75%, one pass-side miss vs zero). W1 makes the
-# contradicted branch earn its hard fail (target-scope, composition-body,
-# machine-row and carve-out filters, a tighter route, slice-size honesty); W2
-# makes a hard fail auditable, correctly labelled in the ledger, and actually
-# refuting; W3 splits the citationless shapes; W4 lands the four small checkers.
-#
-# DIRECTION OF THE EXPECTED SHIFT IS NOT ONE-WAY, and pooling would hide that.
-# Hard-fail COUNT should fall sharply (20 of the 27 live contradicted verdicts
-# are removed by W1's deterministic filters alone). Mean faithfulness may fall
-# SLIGHTLY: W1(e) withdraws ~11% of V-B's supported overrides — claims where a
-# subordinate negative was certifying a forecast or a two-read comparison it did
-# not cover — and those claims go back to carrying the grader's own verdict.
-# Fewer false hard fails AND fewer unearned passes is the intended shape; only
-# the split key makes it legible as that rather than as a quality movement.
-#
-# 2026-08-03/1 — the V-G train, off the 08-03 acceptance RE-RUN (all three gates
-# failed again, and agreement REGRESSED 70% -> 63%). F-A's filters worked — zero
-# cross-target and zero CAMEO failures in the sample, contradicted 27 -> 15 — and
-# in clearing them it exposed what they had been hiding: the judge was refuting
-# findings with FINDINGS. 14 of 24 hard fails rested on a quote from an analyst
-# output, 13 of them the desk's OWN superseded prior read.
-#
-#   V-G1  a hard fail's quote must resolve to SOURCE reporting, or to evidence
-#         the claim itself cites; anything else demotes to the new soft class
-#         judge_prior_read_conflict. Retires the whole anti-update class.
-#   V-G2  continuity claims ("no material change since the prior read") leave the
-#         V-B slice route — a diff between two assessments is not decidable from
-#         a row describing the current state.
-#   V-G3  the claim's carve-outs and its SCALE word reach the judge prompt, and
-#         a quote landing on an exemption no longer earns the hard class.
-#   V-G5  a markerless claim resting on an uncited world BASELINE stops passing
-#         by default (the pass-side miss, twice running, on the same shape).
-#   F-D   composition citations carry the unit judge's whole-evidence window, and
-#         the synthesizer packs against the shared input-token budget.
-#
-# DIRECTION OF THE EXPECTED SHIFT, again not one-way. Hard-fail COUNT should fall
-# again and further: V-G1 alone reaches 14 of 24, V-G2 removes 6 of the 15
-# surviving absence hard fails (measured read-only on the stamped day). Mean
-# faithfulness should move only slightly, and can move DOWN — V-G5 converts 19 of
-# 5,338 silent passes into soft fails, and V-G2 hands 81 verified absences back
-# to the judge to grade on citation support. Soft-fail count should FALL where
-# F-D's wider evidence window lets a composed clause resolve against the body of
-# what it cited instead of its first quarter. Three effects, opposite signs, one
-# population: pooling this with 2026-08-02/1 would make every one of them
-# invisible.
-#
-# 2026-08-04/1 — the V-H train, the RESIDUALS the 08-03 adjudication itemized and
-# V-G did not reach. Smaller than its predecessors by design: V-G took the classes
-# that moved volume, and what is left is four narrow defects and one honest
-# refusal.
-#
-#   V-H1  the judge's citation view carries the OUTLET (`signals.source_id`). An
-#         attribution claim — "near-identical framing across CBC, NPR and the
-#         BBC" — was unverifiable BY CONSTRUCTION; the panel checked all six
-#         outlets by hand and the judge still graded it unsupported.
-#   V-H2  the UNDECORATED "Indicators to watch:" label is a heading. The producer
-#         has always read it as one and mines its bullets as forward-looking;
-#         verify required markdown, so it graded them on citation support a watch
-#         item can never carry.
-#   V-H3  _metadata_dominant opens a SECOND, evidence-bearing arm: the residual
-#         passes when the CITED text covers it and agrees on polarity. The
-#         anti-laundering arm is untouched.
-#   V-H4  a hard fail whose quote names none of an ENUMERATED denial's listed
-#         things demotes to the new soft class judge_contradicted_off_scope.
-#   V-H5  a scoped negative is not violated by a slice row whose own leading
-#         assertion is a negative about the same subject.
-#
-# DIRECTION OF THE EXPECTED SHIFT — mostly UP, and small, which is itself the
-# reason to split. Every one of these five removes a FALSE failure and none adds
-# a new failure class, so mean faithfulness should rise slightly and hard-fail
-# count should fall slightly. Measured read-only on the 08-02/1 stamp: V-H4 fires
-# on 1 of 24 quoted judge hard fails, V-H5 on 1 of 44 absence hard fails, V-H2
-# withdraws roughly 4 graded claims from each of 27 findings a day, and V-H1 and
-# V-H3 change what the judge can SEE rather than what it decides — so their
-# effect is the one that cannot be predicted from here and is exactly what panel
-# 3 is for. Two of the five (V-H1, V-H2) alter the population's claim SET, not
-# just its verdicts, which is on its own sufficient reason never to pool this
-# stamp with 2026-08-03/1.
-#
-# 2026-08-05/1 — the R train, the PRECISION batch. Unlike V-G and V-H, which
-# corrected how claims were GRADED, this one corrects which claims EXIST and what
-# a tally is entitled to be called. Two of its four parts change the population's
-# claim SET and one changes the published NUMBER, so pooling it with any earlier
-# stamp would make all three invisible at once.
-#
-#   Q-1a  the labeled-scaffold exemption reads PAST the label. It keyed on the
-#         bold run and never looked at what followed, so every
-#         `- **Heat-wave alerts:** <cited fact>` bullet was floor-exempt and
-#         whole bodies segmented to ZERO claims. Measured: 11 critiques in 7 days
-#         with no verdicts at all, 10 of them over 1,026-2,091 characters of
-#         substantive cited analysis, every one scored 1.0. The LABELED spelling
-#         of a derived read joins the synthesis exemption in the same change, so
-#         the fix does not trade a false 1.0 for a false no_citation.
-#   Q-1b  zero (or near-zero on a substantive body) checkable claims publishes
-#         `unassessable` — a NON-score with its own title, tag, body line and
-#         counter — instead of borrowing the top of the scale.
-#   Q-1c  a judge_status != 'llm' verdict publishes PROVISIONAL under a ceiling.
-#   Q-1d  literal JSON syntax is dropped from the claim stream, counted.
-#   R2    a detected P/not-P pair in the composition's INPUT set that the body
-#         never surfaced is a counted soft failure.
-#   R3    a lead buried under a higher-consequence input (the salience check,
-#         advisory since it was written) is a counted soft failure.
-#
-# DIRECTION OF THE EXPECTED SHIFT — mixed, large, and in both directions at once,
-# which is the whole reason for the split key.
-#
-#   * CLAIM COUNT rises sharply on the affected population. Bodies that produced
-#     zero claims now produce several; the Italy energy read replayed at 0 -> 3.
-#     Every ratio computed over claim counts moves for that reason alone.
-#   * MEAN FAITHFULNESS falls. Roughly a third of critiques scored >= 0.999, and
-#     some of that was earned on nothing; those become real scores over real
-#     denominators, and the two new soft classes add failures that did not exist.
-#   * PUBLISHED overall_score falls further and separately, because ~23% of
-#     critiques are floor-only and now cap at the provisional ceiling. That is a
-#     LABELLING change, not a grading one: the raw tally is unchanged on the row.
-#
-# The honest summary is that this stamp measures the same fleet more accurately
-# and will therefore look worse than its predecessor. Any comparison across the
-# boundary is a comparison of two instruments, not of two fleets.
-#
-# 2026-08-09/1 — the round-5 pair: one regression fix, one honesty fix.
-#
-#   V-I1 guard 5  the numeral fingerprint is ENDPOINT-AWARE. Round 5 scored
-#         V-I1 0-for-1 on live fires — its one absorption (critique b14bf715)
-#         demoted a fully-earned hard fail because "issued 6 Aug 06:00, expires
-#         8 Aug 08:00" and "issued August 6 at 7:25AM until August 6 at 8:00AM"
-#         flatten to the same magnitude set. Every clock-time / month-day
-#         endpoint the claim pins must now match the quote AS an endpoint, or
-#         the quote does not confirm. One-directional (can only WITHDRAW a
-#         confirmation); the 61-pair replay under 2026-08-05/1 flips only
-#         b14bf715.
-#   rec #8 (2/2)  an unassessable row publishes faithfulness_score = NULL on
-#         the critique's verification block and the trace envelope, instead of
-#         a raw 1.0 that entered the population mean and read as a perfect
-#         pass. ``overall_score`` stays the real capped float (the lateral /
-#         gate key); the raw tally on the report object is unchanged.
-#
-# DIRECTION OF THE EXPECTED SHIFT — small and honest-side. Hard-fail count may
-# rise by the b14bf715 class (a suppression withdrawn is a hard fail restored);
-# mean faithfulness computed over ``faithfulness_score`` falls slightly because
-# unassessable rows leave the numerator instead of contributing 1.0 — which is
-# a denominator correction, not a fleet movement. Pooling across this boundary
-# would read both as quality changes; the split key is what makes them legible
-# as the measurement corrections they are.
-#
-# 2026-08-10/1 — V-I1 guard 6: the confirmation fingerprint reads PROSE
-#   DIRECTION (round-5 §10-5; judge_quote_rules.py's guard-6 banner carries the
-#   mechanism). A claim taking one side of a direction axis whose "confirming"
-#   quote takes the OPPOSITE side about the same subject was never confirmed —
-#   the suppression withdraws. Withdraw-only like guard 5; the 69-pair replay
-#   flips only 037f769f. EXPECTED SHIFT: hard-fail count rises by this class.
-# ---------------------------------------------------------------------------
-
-#: Stamped into every faithfulness critique's ``data.verification`` block.
-JUDGE_PIPELINE_VERSION = "2026-08-10/1"
+# THE JUDGE PIPELINE VERSION — the population SPLIT key. The stamp, its bump
+# discipline and the full per-train lineage (what each train changed, which
+# way the population moves, why pooling across a boundary lies) live in the
+# sibling judge_pipeline_version.py (extracted 2026-08-15 — the size-gate
+# seam). Re-exported here: every consumer imports it FROM verify, and the
+# critique/trace contract is unchanged.
+from .judge_pipeline_version import (  # noqa: E402,F401 — re-exported surface
+    JUDGE_PIPELINE_VERSION,
+)
 
 JUDGE_PROFILE_CURRENT = "current"
 JUDGE_PROFILE_INDEPENDENT = "independent"
@@ -1510,7 +1369,9 @@ class FaithfulnessReport:
     checkable_claims: int
     supported_claims: int
     unsupported_spans: list[UnsupportedSpan] = field(default_factory=list)
-    # 'deterministic' (floor only — flag off or judge degraded) | 'llm'.
+    # 'deterministic' (floor only — flag off or judge degraded) | 'llm' |
+    # 'unsampled' (J2 — the sampling gate deliberately did not select this
+    # finding; the floor is the whole verdict, honest by construction).
     judge_status: str = "deterministic"
     # When the judge was MEANT to run (flag on) but couldn't: the soft-fail
     # label so the operator sees WHY the score is the floor, never a guess.
@@ -2331,38 +2192,11 @@ class JudgeProfile:
 
 
 
-# The absence-branch judge system prompt (design §3.4). A NEGATIVE-specific
-# rubric: the free-latitude "is this cited?" framing that produced the 0.0/0.2/
-# 1.0 spread is replaced with an explicit supported/contradicted/unsupported
-# rubric for absence claims, scoped to the searched evidence set. Output is the
-# SAME flat ``{"verdicts": [...]}`` shape the shared judge emits (deterministic
-# parse; no nested schema — nested crashed the pipeline twice).
-_ABSENCE_JUDGE_SYSTEM = (
-    "You are a faithfulness judge grading ABSENCE / NEGATIVE claims — statements "
-    "that something did NOT occur, was NOT observed, or is NOT evidenced. You are "
-    "given the evidence set the analyst searched (the [N] -> evidence map below) "
-    "and a list of absence claims. For each absence claim decide EXACTLY ONE "
-    "verdict:\n"
-    "- supported: the evidence set genuinely does NOT contain the thing the claim "
-    "says is absent, AND the claim's scope matches the evidence searched (a claim "
-    "scoped to 'the reviewed signals' / a named country / a stated corpus is "
-    "judged against THAT scope, not the whole world).\n"
-    "- contradicted: the evidence set plainly SHOWS the very thing the claim says "
-    "is absent (e.g. the claim says 'no strikes reported' but a cited item reports "
-    "a strike). A contradicted absence is the highest-severity error.\n"
-    "- unsupported: the claim asserts an absence that is UNBOUNDED or unscoped "
-    "('nothing is happening', 'there is no risk anywhere') that the searched "
-    "evidence cannot possibly establish, OR names a specific missing "
-    "event/number/place with a scope the evidence set does not cover.\n"
-    "Do NOT mark a scoped, evidence-consistent absence 'unsupported' merely "
-    "because a negative has no citation — a correctly-scoped negative over a "
-    "searched set is the normal, faithful shape of an honest low-risk read. "
-    'Output strict JSON only: {"verdicts": ["supported"|"contradicted"|'
-    '"unsupported", ...]} with one verdict per claim, in order.'
-    + _JUDGE_QUOTE_RULE
-    + _JUDGE_QUALIFIER_RULE
-    + " Output only the JSON object."
-)
+# The absence-branch judge system prompt lives in ``judge_absence_rubric`` (brick
+# 6), re-exported above. RUST-2 replaced the 2026-07-16 verdict-definition-only
+# rubric with the doctrine-shaped ``absence.v4``: identity, both error costs,
+# what a slice-scoped negative IS, the evidence map's unlabelled analyst prose,
+# the four verdicts, this route's OWN adjudicated failure record, five fences.
 
 # The versioned profile registry (design §2.2 / §5.2 step 2). ``absence`` and
 # ``citation_support`` carry a prompt this train; the other three kinds are
@@ -2376,6 +2210,12 @@ _ABSENCE_JUDGE_SYSTEM = (
 # carry, so a judge on this stamp is answering from a different evidence view
 # than one on 2026-08-03/1. The three stubbed kinds have no prompt and no floor
 # semantics of their own, so they do not move.
+#
+# RUST-2 (2026-08-21) bumps the ABSENCE kind ONLY, ``absence.v3 -> absence.v4``:
+# a new system prompt (doctrine rewrite) that is also the first rubric in the
+# tree to advertise the fourth verdict. ``citation_support`` does NOT move — its
+# prompt is byte-identical, which is what keeps the absence measurement
+# attributable to the absence rewrite alone (D5 Q4's control-arm reasoning).
 _JUDGE_PROFILES: dict[str, JudgeProfile] = {
     CLAIM_KIND_CITATION_SUPPORT: JudgeProfile(
         kind=CLAIM_KIND_CITATION_SUPPORT,
@@ -2384,7 +2224,7 @@ _JUDGE_PROFILES: dict[str, JudgeProfile] = {
     ),
     CLAIM_KIND_ABSENCE: JudgeProfile(
         kind=CLAIM_KIND_ABSENCE,
-        version="absence.v3",
+        version=ABSENCE_PROFILE_VERSION,
         judge_system=_ABSENCE_JUDGE_SYSTEM,
     ),
     CLAIM_KIND_SYNTHESIS: JudgeProfile(
@@ -4547,6 +4387,10 @@ _DEMOTION_COUNTERS: dict[str, str] = {
     _VERDICT_QUOTE_CONFIRMS: "hardfail_demoted_quote_confirms",
     _VERDICT_CONTRADICTED_MACHINE_ROW: "hardfail_demoted_machine_row",
     _VERDICT_ROUTE_EXCLUDED: "hardfail_demoted_route_excluded",
+    # RUST-3 — not a hard->soft demotion but the same mechanism and the same
+    # table: a verdict the severity chain WITHDREW because it was not earned,
+    # with the counter a panel reads it by. Named for what was withdrawn.
+    _VERDICT_NONPROP_UNEARNED: "nonprop_withdrawn_carries_particular",
 }
 
 
@@ -4556,7 +4400,13 @@ def _judge_reason(verdict: str) -> str:
     Shared by ``unsupported_spans`` and ``claim_verdicts`` so the two can never
     disagree about a claim's class again (W2: the ledger arm used to collapse
     both demotion labels back to ``judge_unsupported``).
+
+    RUST-3: an EARNED ``not_a_proposition`` never reaches this function — it is
+    filtered out of the graded population upstream, so there is no reason to map
+    and no failure to name. Only the WITHDRAWN form has a reason.
     """
+    if verdict == _VERDICT_NONPROP_UNEARNED:
+        return _JUDGE_NONPROP_UNEARNED
     if verdict == "contradicted":
         return "judge_contradicted"
     if verdict == _VERDICT_CONTRADICTED_UNQUOTED:
@@ -4639,7 +4489,13 @@ async def _maybe_llm_judge(
 
     Engages ONLY when ``_llm_judge_enabled()`` AND a ``judge_llm`` handler is
     supplied.  The judge re-grades each claim "does this follow from its cited
-    evidence?" → supported / unsupported / contradicted.  ANY error, an absent
+    evidence?" → supported / unsupported / contradicted / not_a_proposition.
+    RUST-3: the fourth answer is not a grade — an EARNED ``not_a_proposition``
+    leaves the population entirely (no span, no ledger row, out of ``checkable``
+    and out of ``branch_scores``, counted under
+    ``claims_ungraded_nonpropositional``), so a span that asserts nothing is
+    neither credited as a pass nor charged as a defect. An UNEARNED one is a
+    soft ``judge_nonpropositional_unearned`` failure. ANY error, an absent
     handler, or the flag being off → return the deterministic floor LABELLED
     ``judge-unavailable`` (``judge_status`` stays ``'deterministic'``).  NEVER
     fabricates a score. ``judge_prompt_profile`` (P2-4, default ``current`` via
@@ -4750,8 +4606,30 @@ async def _maybe_llm_judge(
     # function, which is how the sixth would have been forgotten. Emitted only
     # when non-zero, exactly as before — every pre-V-I counter map is unchanged.
     demotions: dict[str, int] = {}
+    # RUST-3 — the EARNED fourth verdict. A span the judge declined and the
+    # severity chain honoured is UNGRADED: it is not supported, it is not a
+    # failure, it produces no span and no ledger row, and it leaves the
+    # denominator. That is exactly V-F's treatment of a span dropped at split
+    # time, and for the same reason — grading a span that asserts nothing
+    # manufactures a defect.
+    #
+    # It DOES enter ``judged_texts``, withdrawing the FLOOR's span on the same
+    # text too, and that is the point rather than a leak: the artifact this
+    # verdict removes IS a floor ``no_citation`` sitting on tool output (lens 5's
+    # J-5; the live specimen was the span "Let's do vector_search."), so leaving
+    # the floor's copy standing would keep the identical failure under another
+    # name. What bounds it is the EARN TEST, never the dedup — a span carrying a
+    # checkable particular is never withdrawn, so no invented event, number, name
+    # or date leaves the population this way. C1 already makes the judge
+    # authoritative over the prose it saw.
+    ungraded_nonpropositional = 0
+    floor_counted_nonpropositional = 0
     for claim_text, verdict, quote in verdicts:
         judged_texts.add(claim_text.strip())
+        if verdict == VERDICT_NOT_A_PROPOSITION:
+            ungraded_nonpropositional += 1
+            floor_counted_nonpropositional += _is_fact_asserting(claim_text)
+            continue
         if verdict == "supported":
             supported += 1
         else:
@@ -4766,7 +4644,16 @@ async def _maybe_llm_judge(
                     detail=_judge_detail(verdict, quote),
                 )
             )
-    checkable = len(verdicts)
+    if ungraded_nonpropositional:
+        demotions["claims_ungraded_nonpropositional"] = ungraded_nonpropositional
+        logger.info(
+            "verify.judge.nonpropositional n=%d of %d graded spans — the judge "
+            "declined them as carrying no proposition and each EARNED the "
+            "declination; they leave the denominator, uncounted either way",
+            ungraded_nonpropositional,
+            len(verdicts),
+        )
+    checkable = len(verdicts) - ungraded_nonpropositional
     judge_score = 1.0 if checkable == 0 else supported / checkable
 
     # (#116c) Reconcile the surfaced span set so supported + unsupported ≤
@@ -4807,6 +4694,14 @@ async def _maybe_llm_judge(
     subclaim = _uses_subclaim_convention(citations)
     judge_ledger: list[ClaimVerdict] = []
     for claim_text, verdict, quote in verdicts:
+        # RUST-3: an ungraded non-proposition is provenance, not a verdict. It
+        # gets a COUNTER, never a ledger row — the V-F rule verbatim ("NEVER
+        # graded, scored, or persisted as a verdict row"). Persisting one would
+        # also need a fourth ``ClaimVerdict.verdict`` value, and every SQL
+        # lateral and UI badge downstream reads that field as one of exactly
+        # three; a receipts counter costs none of them anything.
+        if verdict == VERDICT_NOT_A_PROPOSITION:
+            continue
         markers = _markers_in_claim(claim_text, subclaim=subclaim)
         if verdict == "supported":
             judge_ledger.append(ClaimVerdict.supported(claim_text, list(markers)))
@@ -4829,7 +4724,17 @@ async def _maybe_llm_judge(
     ]
     return FaithfulnessReport(
         faithfulness_score=refined_score,
-        checkable_claims=max(floor.checkable_claims, effective_checkable),
+        # RUST-3: the FLOOR counted any ungraded non-proposition its own
+        # ``_is_fact_asserting`` admitted (tool output passes it — two letter
+        # runs is the whole bar). The judge has since said there is no claim
+        # there, so that span leaves this headline too, or the platform publishes
+        # a claim COUNT it has just agreed is wrong. The ``max`` floors the
+        # result at the real judge denominator, so this can never subtract a span
+        # the floor had not counted.
+        checkable_claims=max(
+            floor.checkable_claims - floor_counted_nonpropositional,
+            effective_checkable,
+        ),
         supported_claims=supported,
         # The judge's semantic spans + any floor structural span the judge did NOT
         # re-grade + the advisory (uncounted) notes.
@@ -4977,7 +4882,13 @@ async def _judge_claim_partition(
     out: list[tuple[str, str]] = []
     for verdict, quote in zip(raw, quotes):
         v = str(verdict).strip().lower()
-        if v not in ("supported", "unsupported", "contradicted"):
+        # RUST-3: the accepted vocabulary is the FOUR-token contract. Anything
+        # outside it still coerces to ``unsupported``, exactly as before — the
+        # only change is that ``not_a_proposition`` stopped being "anything
+        # outside it". A judge on ANY route may now say a span asserts nothing;
+        # whether it is honoured is the severity chain's decision, not the
+        # parser's (only the absence rubric currently ADVERTISES the token).
+        if v not in JUDGE_VERDICT_TOKENS:
             v = "unsupported"
         out.append((v, quote))
     return out
@@ -4992,10 +4903,22 @@ async def _run_judge(
 ) -> tuple[list[tuple[str, str, str]], dict[str, dict[str, int | float]]]:
     """Call the judge LLM; return ``([(claim, verdict, quote), ...], branch_scores)``.
 
-    ``verdict`` ∈ {supported, unsupported, contradicted, contradicted_unquoted,
-    contradicted_unrefuted, prior_read_conflict}, in ORIGINAL claim order.
-    ``branch_scores`` maps each claim-kind that was JUDGED to
-    ``{"checkable", "supported", "score"}`` (design §2.3 telemetry).
+    ``verdict`` is one of the FOUR contract tokens a judge may emit (supported,
+    unsupported, contradicted, not_a_proposition) or one of the sentinels the
+    severity chain substitutes when a verdict did not earn its class
+    (contradicted_unquoted, contradicted_unrefuted, prior_read_conflict,
+    contradicted_off_scope, quote_confirms, contradicted_machine_row,
+    route_excluded, nonpropositional_unearned), in ORIGINAL claim order.
+    ``branch_scores`` maps each claim-kind that was GRADED to ``{"checkable",
+    "supported", "score"}`` (design §2.3); a ``not_a_proposition`` is in no
+    bucket.
+
+    RUST-3 (2026-08-21): ``not_a_proposition`` is the judge saying the span
+    carries nothing to be faithful to, and it is EARNED
+    (``judge_absence_rubric.nonproposition_is_earned``) — a span asserting a
+    checkable particular cannot be nothing, so that verdict withdraws to
+    ``nonpropositional_unearned`` and the claim fails soft. An earned one is
+    returned as-is; the CALLER drops it (see :func:`_maybe_llm_judge`).
 
     V-G1 (2026-08-03): ``prior_read_conflict`` is the third demotion class — the
     quote is verbatim evidence, but evidence that is another FINDING the claim
@@ -5083,13 +5006,21 @@ async def _run_judge(
             + _JUDGE_QUALIFIER_RULE
             + "\n\n"
             + tier_rubric
-            + f"N -> sub-claim: {json.dumps({str(k): v for k, v in evidence.items()})}"
+            # RUST-1: ensure_ascii=False — what the judge SEES is what
+            # quote_corpus SCORES (the default escaped every non-ASCII char,
+            # so a verbatim copy could never resolve; see judge_quote_rules).
+            + "N -> sub-claim: "
+            + json.dumps(
+                {str(k): v for k, v in evidence.items()}, ensure_ascii=False
+            )
         )
         # The absence rubric is scoped to the SAME evidence map so the negative
         # judge sees exactly what the analyst searched (design §3.4 per-claim lead).
         absence_evidence_line = (
             "N -> sub-claim (the evidence the analyst searched): "
-            f"{json.dumps({str(k): v for k, v in evidence.items()})}"
+            + json.dumps(
+                {str(k): v for k, v in evidence.items()}, ensure_ascii=False
+            )
         )
         # V-D: the evidence THIS run showed the judge (see quote_corpus below).
         evidence_values: dict[Any, Any] = dict(evidence)
@@ -5124,10 +5055,17 @@ async def _run_judge(
             + _JUDGE_QUOTE_RULE
             + _JUDGE_QUALIFIER_RULE
             + "\n\n"
-            f"[N] -> evidence: {json.dumps(cited)}"
+            # RUST-1: ensure_ascii=False — what the judge SEES is what
+            # quote_corpus SCORES. The default escaped every non-ASCII char
+            # (an e-acute shipped as the six chars backslash-u00e9), so the
+            # judge's most compliant behavior — copying a span VERBATIM from
+            # this map — was exactly the one that could never resolve (36%
+            # of contradiction attempts, measured; see judge_quote_rules).
+            f"[N] -> evidence: {json.dumps(cited, ensure_ascii=False)}"
         )
         absence_evidence_line = (
-            f"[N] -> evidence (the evidence the analyst searched): {json.dumps(cited)}"
+            "[N] -> evidence (the evidence the analyst searched): "
+            f"{json.dumps(cited, ensure_ascii=False)}"
         )
         evidence_values = dict(cited)
 
@@ -5215,9 +5153,35 @@ async def _run_judge(
         The earned quote rides back out so the caller can PERSIST it: a hard
         fail nobody can audit is a hard fail nobody can trust, and that holds
         for the demotions too.
+
+        RUST-3 adds the one test the FOURTH verdict must survive. It runs FIRST,
+        because "is there a proposition here at all?" is prior to every question
+        about a quote. An earned ``not_a_proposition`` is returned intact and the
+        caller drops it; an unearned one is WITHDRAWN to
+        :data:`_VERDICT_NONPROP_UNEARNED` and the claim fails soft, so a judge
+        can never retire a span carrying a checkable particular.
         """
+        if verdict == VERDICT_NOT_A_PROPOSITION:
+            if nonproposition_is_earned(claim):
+                return verdict, ""
+            logger.info(
+                "verify.judge.nonprop_withdrawn claim=%r — the judge declined "
+                "this span as a non-proposition, but it asserts a checkable "
+                "particular, so the declination was not earned",
+                claim[:120],
+            )
+            return _VERDICT_NONPROP_UNEARNED, ""
         if verdict != "contradicted":
             return verdict, ""
+        # RUST-1: canonicalize FIRST. A span copied verbatim from the rendered
+        # evidence map can carry JSON string escapes as literal characters
+        # (the six chars backslash-u00e9 for an e-acute under the old
+        # rendering; the two
+        # chars ``\n`` for a line break under BOTH renderings). When only the
+        # un-escaped form resolves, the whole chain below
+        # — and the PERSISTED audit quote — reasons on that form, so the
+        # restatement/carve-out/fingerprint tests see real bytes, not escapes.
+        quote = _canonical_judge_quote(quote, quote_corpus)
         if not _quote_resolves(quote, quote_corpus):
             return _VERDICT_CONTRADICTED_UNQUOTED, ""
         if machine_corpus and not _quote_resolves(quote, testimony_corpus):
@@ -5362,6 +5326,11 @@ async def _run_judge(
         verdict, earned_quote = verdicts_by_idx[i]
         out.append((claim, verdict, earned_quote))
         kind = kinds[i]
+        # RUST-3: an EARNED non-proposition is not a graded claim, so it enters
+        # no branch denominator — counting it would dilute a route's sub-score
+        # with spans nobody graded.
+        if verdict == VERDICT_NOT_A_PROPOSITION:
+            continue
         bucket = branch_scores.setdefault(
             kind, {"checkable": 0, "supported": 0, "score": 0.0}
         )
@@ -5720,6 +5689,7 @@ async def verify_finding_faithfulness(
     slice_conn: Any | None = None,
     run_id: Any | None = None,
     eval_block: Any = None,
+    judge_sampling: JudgeSamplingPolicy | None = None,
 ) -> FaithfulnessReport:
     """MANDATORY faithfulness verify over ONE finding's cited prose.
 
@@ -5787,6 +5757,19 @@ async def verify_finding_faithfulness(
         ``None`` → the branch is a no-op (byte-identical for every existing
         caller); an unreadable slice degrades to today's behavior, counted
         ``absence_slice_unavailable``, never a fabricated pass.
+    judge_sampling:
+        OPTIONAL (J2, 2026-08-15) — the resolved :class:`JudgeSamplingPolicy`
+        (finding id + kind/analyst + descriptor-driven rate/always-list).
+        ``None`` → no gate (every existing caller and replay harness is
+        byte-identical). A policy that does NOT select this finding keeps the
+        deterministic floor under the PROVISIONAL ceiling, publishes
+        ``judge_status='unsampled'`` (an honest state, never an error), and
+        spends NO judge tokens anywhere in the pass — the V-B stage-2 absence
+        check included. The decision is deterministic per finding id
+        (hash-vs-rate, replayable, no RNG) and is applied BEFORE the flag /
+        handler gates: an unsampled row reads 'unsampled' even when the judge
+        is off or down, because its population membership must not depend on
+        judge health.
     """
     floor = _deterministic_floor(body, citations, finding_confidence)
     # V-F: record the NON-PROPOSITIONAL spans the splitter dropped (a bare
@@ -5832,13 +5815,25 @@ async def verify_finding_faithfulness(
             floor,
             await stale_leader_vs_facts_spans(facts_conn, f"{title}\n{body}"),
         )
-    report = await _maybe_llm_judge(
-        floor,
-        body=body,
-        citations=citations,
-        judge_llm=judge_llm,
-        judge_prompt_profile=judge_prompt_profile,
-    )
+    # J2 (2026-08-15) — THE SAMPLING GATE. Decided FIRST, before the flag /
+    # handler gates inside _maybe_llm_judge, so a finding's membership in the
+    # unsampled stratum depends only on its id and the descriptor's rate —
+    # never on judge health. Unselected ⇒ the floor is the whole verdict,
+    # labelled honestly, and judge_llm is nulled so NO judge tokens are spent
+    # anywhere downstream (V-B stage 2 would otherwise still call it).
+    if judge_sampling is not None and not judge_sampling.should_judge():
+        floor.judge_status = JUDGE_STATUS_UNSAMPLED
+        floor.bump("judge_unsampled")
+        judge_llm = None
+        report = floor
+    else:
+        report = await _maybe_llm_judge(
+            floor,
+            body=body,
+            citations=citations,
+            judge_llm=judge_llm,
+            judge_prompt_profile=judge_prompt_profile,
+        )
     # V-C: metadata claims are decided by LOOKUP against the columns the
     # citations captured — AFTER the judge, because the judge structurally
     # cannot grade them (their truthmaker is not in any evidence text) and this

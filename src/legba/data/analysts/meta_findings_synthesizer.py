@@ -68,6 +68,89 @@ from ..provenance.consumption import (
 )
 from ._llm_budget import CHARS_PER_TOKEN, budget_chars
 from .claim_contradiction import detect_contradictions, render_tension_block
+# FRAME-1 (2026-08-20) — the composition's ADMISSIBILITY WINDOW and its two-tier
+# evidence, in the sibling leaf ``composition_window``. Imported ONE WAY and
+# RE-EXPORTED: the C-TIER periphery selection/render moved there under the
+# module-size gate (this file sat three lines under its ceiling) and the
+# head-age / coverage-ledger / newest-passing-head machinery was written there
+# rather than here for the same reason. Every existing importer — including
+# every test reaching for ``synth._select_periphery`` /
+# ``synth._defuse_child_ref_markers`` — resolves unchanged through these names.
+from .composition_window import (  # noqa: F401 — re-exported surface
+    FLOOR_FALLBACK_KEY,
+    HORIZON_ROW_KEY,
+    MAX_TITLE_CHARS,
+    PERIPHERY_BODY_CHARS,
+    PERIPHERY_CAP,
+    PERIPHERY_TIER,
+    STALE_HEAD_DISCLOSE_HOURS,
+    _defuse_child_ref_markers,
+    _EVIDENCE_FLOOR_KEY,
+    _EVIDENCE_TIER_KEY,
+    _periphery_ids,
+    _render_periphery_block,
+    _row_body_excerpt,
+    _row_severity_delta,
+    _row_severity_level,
+    _row_severity_rank,
+    _select_periphery,
+    _SEVERITY_RANK,
+    _stamp_horizon,
+    age_suffix,
+    build_coverage_ledger,
+    floor_fallback_suffix,
+    head_ages_stamp,
+    max_head_age_hours,
+    read_floor_fallback_heads,
+    read_periphery_findings,
+    render_coverage_ledger_block,
+    select_floor_fallback,
+    units_missing_from_basis,
+)
+# FRAME-2 (2026-08-20) — THE CARRY. The window ledger AND the CONTINUITY section
+# it joins live in the sibling leaf ``window_ledger``: the ledger is shared with
+# the UNIT layer (one definition of the selection, the render, the marker defuse
+# and the clause — a second copy would drift on the first edit), and the
+# continuity render moved there under the module-size gate, which is the seam
+# FRAME-1's own ceiling note named. Imported ONE WAY and RE-EXPORTED, so every
+# existing importer — including every test reaching for
+# ``synth._render_continuity_block`` / ``synth._continuity_selection`` /
+# ``synth.SITUATION_REGISTER_CAP`` — resolves unchanged through these names.
+from .window_ledger import (  # noqa: F401 — re-exported surface
+    CONTINUITY_CITATION_KEY,
+    CONTINUITY_LEDGER_RECEIPT,
+    CONTINUITY_LEDGER_ROW_KEY,
+    CONTINUITY_PRIOR,
+    CONTINUITY_PRIOR_BODY_CHARS,
+    CONTINUITY_PRIOR_LOOKBACK_HOURS,
+    CONTINUITY_PRIOR_RECEIPT,
+    CONTINUITY_ROW_KEY,
+    CONTINUITY_SITUATIONS,
+    CONTINUITY_SITUATIONS_RECEIPT,
+    CONTINUITY_SITUATIONS_ROW_KEY,
+    CONTINUITY_WINDOW_LEDGER,
+    SITUATION_REGISTER_CAP,
+    SITUATION_REGISTER_EVIDENCE_CHARS,
+    SITUATION_REGISTER_NAME_CHARS,
+    SITUATION_REGISTER_REF_KIND,
+    SITUATION_REGISTER_TRAJECTORY_DEPTH,
+    SITUATION_REGISTER_WHY_CHARS,
+    WINDOW_LEDGER_REF_KIND,
+    _as_float,
+    _continuity_selection,
+    _iso_text,
+    _ledger_entries,
+    _ledger_selection,
+    _register_situations,
+    _render_continuity_block,
+    _render_prior_read_lines,
+    _render_situation_register_lines,
+    ledger_finding_ids,
+    read_window_ledger,
+    select_ledger_entries,
+    window_ledger_citation,
+    window_ledger_rule,
+)
 from ..provenance.models import FindingPayload
 from ...runtime.analyst_method import AnalystMethodResult, LLMHandlerLike
 
@@ -124,7 +207,8 @@ five regions degrade → ~24 country heads, still well under 64). ``_orient`` wa
 if it ever trims on the world path (a dropped input == a region/country the world
 read cannot see)."""
 
-MAX_TITLE_CHARS: int = 200
+#: ``MAX_TITLE_CHARS`` now lives in ``composition_window`` (re-exported above) —
+#: it moved with the periphery render, its other caller.
 MAX_BODY_CHARS: int = 600
 """FLOOR on the per-input body excerpt — it used to be the ceiling.
 
@@ -223,12 +307,15 @@ per-(unit,target) ledger still lands in the trace ``data.freshness``)."""
 # is excluded by tag. GLOBAL meta runs (no target binding, ``target_filter=None``)
 # are UNAFFECTED — they keep the legacy cross-target, unfiltered read.
 #
-# Default 0.0 = "floor-0 gate": the gate STRUCTURE is wired (verify must have run
-# and produced a structured, non-failed finding) but the numeric bar starts at
-# the loosest admissible value so nothing verified is silently dropped by an
-# un-calibrated threshold. Raise it OPS-side via LEGBA_COMPOSITION_VERIFY_FLOOR
-# (no schema change / registry rebuild) once the score distribution is calibrated.
-DEFAULT_VERIFY_FLOOR: float = 0.0
+# Default 0.50 (raised from 0.0 on 2026-08-15, operator decision): the shipped
+# default now matches the reference deployment's calibrated ops setting — the
+# outside review found the README's "only verified sub-claims compose" claim
+# stronger than the floor-0 default, and the fix chosen was to raise the
+# default rather than soften the words. The original floor-0 rationale (don't
+# drop data on an UN-calibrated threshold) no longer applies: 0.50 has been
+# the measured live floor since 2026-07. Env-overridable both directions via
+# LEGBA_COMPOSITION_VERIFY_FLOOR (no schema change / registry rebuild).
+DEFAULT_VERIFY_FLOOR: float = 0.50
 """Minimum ``effective_confidence`` a verified sub-claim must clear to enter the
 per-country composition slice. Env-overridable via ``LEGBA_COMPOSITION_VERIFY_FLOOR``."""
 
@@ -260,17 +347,20 @@ VERIFY_FLOOR_ENV: str = "LEGBA_COMPOSITION_VERIFY_FLOOR"
 #
 #   * ``LEGBA_COMPOSITION_TIERED_EVIDENCE`` unset/off (code DEFAULT OFF) — the
 #     legacy behavior byte-for-byte: the basis bar is ``_resolve_verify_floor``
-#     (env floor, default 0.0) and NO periphery is gathered or rendered.
+#     (env floor, default :data:`DEFAULT_VERIFY_FLOOR` = 0.50 since 2026-08-15)
+#     and NO periphery is gathered or rendered.
 #   * flag ON — the split engages on EVERY composition read (PER-COUNTRY,
 #     REGION, WORLD, and THEMATIC): the basis bar becomes the SPLIT floor = the
 #     env floor when the operator pinned ``LEGBA_COMPOSITION_VERIFY_FLOOR``,
 #     else :data:`TIERED_BASIS_FLOOR_DEFAULT` (0.50 — the scorecard's
 #     system-wide verification floor, lockstep-tested against
-#     ``scorecard_banding.FAITH_FLOOR``). Rationale: at the legacy 0.0 default
-#     the "split" would be vacuous (nothing verified is ever below 0.0), so
-#     turning the flag on without a meaningful bar would silently keep the
-#     blend it exists to fix. ``DEFAULT_VERIFY_FLOOR`` itself is UNCHANGED —
-#     the OFF path never moves.
+#     ``scorecard_banding.FAITH_FLOOR``). Rationale, from when the OFF-path
+#     default was 0.0: at a 0.0 bar the "split" is vacuous (nothing verified is
+#     ever below 0.0), so flipping the flag without a meaningful bar keeps the
+#     blend it exists to fix. Since the 2026-08-15 raise the two constants AGREE
+#     at 0.50 — the flag no longer moves the bar, it only adds the periphery
+#     section. The copy stays (not collapsed into ``DEFAULT_VERIFY_FLOOR``): it
+#     mirrors the SCORECARD floor, a different decision holding the same number.
 #   * WORLD / THEMATIC scope note (the former SEAMS §44, resolved 2026-07):
 #     their periphery gather is the complement over the SAME declared analyst
 #     roster + target scope their PRIMARY fetch uses (thematic: the unit across
@@ -282,9 +372,10 @@ VERIFY_FLOOR_ENV: str = "LEGBA_COMPOSITION_VERIFY_FLOOR"
 #     gathering the fallback tier's complement too would double-surface the same
 #     weak lane. The legacy global meta stays untiered, byte-for-byte.
 #
-# DEFAULT OFF (flip note): because flag-ON meaningfully moves the basis bar
-# (0.0 → 0.50 at the default env), the byte-path is NOT identical to today even
-# when the periphery set is empty — so per the shipping rule this defaults OFF.
+# DEFAULT OFF (flip note): written when flag-ON moved the basis bar (0.0 → 0.50
+# at the then-default env), making the byte-path non-identical even with an
+# empty periphery. The bar no longer moves (both constants are 0.50), but the
+# flag still adds a rendered section whenever periphery exists — default stands.
 # Flip: ``LEGBA_COMPOSITION_TIERED_EVIDENCE=1`` (optionally pin the bar via
 # ``LEGBA_COMPOSITION_VERIFY_FLOOR``). With the flag ON and an EMPTY periphery
 # the rendered PROMPT is byte-identical to the same-floor legacy render (the
@@ -300,33 +391,10 @@ registry-slim idiom (importing the handler package would drag ~20 sub-handler
 modules into this kind module); lockstep is asserted by
 ``tests/data_pkg/test_composition_tiered_evidence.py``."""
 
-PERIPHERY_CAP: int = 8
-"""Max periphery items rendered per composition — worst-first (severity rank,
-then recency), so the cap keeps the items most worth surfacing."""
-
-PERIPHERY_BODY_CHARS: int = 400
-"""Periphery body excerpt cap — tighter than ``MAX_BODY_CHARS`` (periphery is
-hedged context, never the load-bearing narrative)."""
-
-PERIPHERY_TIER: str = "periphery"
-"""The tier token: the ``_evidence_tier`` row marker READ_SLICE stamps on
-periphery rows AND the ``tier`` value the cite phase stamps on a citation that
-resolves into the periphery section (the verify pass keys its hedge-required
-rule on it)."""
-
-_EVIDENCE_TIER_KEY: str = "_evidence_tier"
-_EVIDENCE_FLOOR_KEY: str = "_evidence_floor"
-
-#: ``severity:<level>`` → worst-first rank for the periphery cap sort. Missing /
-#: unknown level ranks -1 (sorts last — an unscored item never displaces a
-#: scored one). Mirrors ``scorecard_banding.SEVERITY_TO_BAND``'s level set.
-_SEVERITY_RANK: dict[str, int] = {
-    "critical": 4,
-    "high": 3,
-    "elevated": 2,
-    "moderate": 1,
-    "low": 0,
-}
+#: ``PERIPHERY_CAP`` / ``PERIPHERY_BODY_CHARS`` / ``PERIPHERY_TIER``, the two
+#: ``_evidence_*`` row-marker keys and ``_SEVERITY_RANK`` moved to
+#: ``composition_window`` with the selection + render they belong to (FRAME-1,
+#: 2026-08-20) and are re-exported at the top of this module.
 
 
 def _tiered_evidence_enabled() -> bool:
@@ -343,9 +411,11 @@ def _resolve_split_floor(descriptor: Any) -> float:
 
     The env floor keeps working as the basis bar when the operator pinned it
     (clamped to ``[0.0, 1.0]``, same parse as :func:`_resolve_verify_floor`);
-    unset ⇒ :data:`TIERED_BASIS_FLOOR_DEFAULT` (0.50, the scorecard lockstep) —
-    NOT ``DEFAULT_VERIFY_FLOOR`` (0.0), at which the split would be vacuous.
-    ``descriptor`` is accepted for parity with :func:`_resolve_verify_floor`.
+    unset ⇒ :data:`TIERED_BASIS_FLOOR_DEFAULT` (0.50, the scorecard lockstep)
+    rather than ``DEFAULT_VERIFY_FLOOR`` — a separate constant from when the
+    latter was 0.0 and the split would have been vacuous. They agree at 0.50
+    today but answer different questions, so the mirror stays. ``descriptor``
+    is accepted for parity with :func:`_resolve_verify_floor`.
     """
     raw = os.getenv(VERIFY_FLOOR_ENV)
     if raw is not None:
@@ -359,132 +429,13 @@ def _resolve_split_floor(descriptor: Any) -> float:
     return TIERED_BASIS_FLOOR_DEFAULT
 
 
-# CONTINUITY (Phase 1, 2026-07-31) — TEMPORAL CONTINUITY VIA CITABLE REFS.
-#
-# The units are deliberately STATELESS slice-of-now analyzers, and so was every
-# composition above them: each cycle re-derived the picture from scratch, so a
-# new event could never read as "this ESCALATES the situation we were already
-# watching". Phase 1 gives the compositions (country / region / thematic) and the
-# WORLD read a memory — WITHOUT a new kind, a new schema, or a trajectory ledger
-# (that is Phase 2).
-#
-# TWO HARD LESSONS BIND THE DESIGN:
-#
-#   1. The world_context RAG ROLLBACK. An UNCITED prior leaking into cited
-#      analysis is this platform's NAMED failure mode (the uncited-prior-leak
-#      mechanism). So continuity context enters ONLY as CITABLE REFS: each
-#      continuity block gets its own ``[[ref:N]]`` ordinal in the SAME flat
-#      resolution space as the basis + periphery sub-claims, and the prompt
-#      requires the model to cite it exactly like any other evidence. The verify
-#      pass grades a clause resting on a continuity ref against that ref's
-#      ``evidence_text`` with NO change to the verify path — a continuity block
-#      is just another rendered block with an ordinal.
-#   2. TEMPORAL COLLAPSE. The prior read carries its OWN ``produced_at`` and each
-#      situation its OWN ``last_event_at`` / age, both rendered INTO the block;
-#      the prompt clause anchors every temporal statement on those dates and
-#      forbids anchoring on run/fetch time (the tradecraft preamble's rule 6,
-#      restated where it can actually bite).
-#
-# TWO REFS, both bounded, both absent-by-default:
-#
-#   * PRIOR READ (``continuity_prior_ref``) — THE SAME TARGET's previous
-#     non-superseded, VERIFIED head from THIS composition analyst. One ref,
-#     labeled as the prior read, carrying its produced_at + age. First run (or a
-#     prior head that never cleared verify) ⇒ simply ABSENT and the slice is
-#     byte-compatible with the pre-continuity read.
-#   * OPEN-SITUATION REGISTER (``continuity_situations_ref``) — a compact,
-#     bounded register of the target-relevant OPEN ``situations`` rows (name,
-#     status, intensity, event_count, last_event_at, age), rendered as ONE
-#     referenceable evidence block. Scope-filtered to the composition's target
-#     the SAME way the rest of its slice is scoped (per-country: the country;
-#     region: its member desks; thematic: its desk allow-list; world: unscoped).
-#
-# NOT WIRED into the LEGACY global meta (``analyst_meta_synthesizer.yaml``) — it
-# keeps the standing "legacy read byte-for-byte" discipline every branch honors.
-#
-# BEST-EFFORT, DEGRADE-NEVER-BREAK: the continuity gather is an ADDITIVE
-# enrichment (the same posture ``read_open_contention`` has at the actor layer).
-# Any error reading it logs and yields NO continuity rows — a compose never fails
-# because its memory was unavailable.
-CONTINUITY_ROW_KEY: str = "_continuity"
-"""Row marker READ_SLICE stamps on a continuity row so the DB-less ``_run`` can
-partition it out of the BASIS/PERIPHERY tiers on DATA, never on env. Value is
-:data:`CONTINUITY_PRIOR` or :data:`CONTINUITY_SITUATIONS`."""
-
-CONTINUITY_PRIOR: str = "prior_read"
-"""Marker value: the row IS this target's previous verified composition head."""
-
-CONTINUITY_SITUATIONS: str = "situations_register"
-"""Marker value: the row is the synthetic open-situation REGISTER block."""
-
-CONTINUITY_SITUATIONS_ROW_KEY: str = "_situations"
-"""Key on the synthetic register row carrying its bounded situation dicts."""
-
-CONTINUITY_PRIOR_RECEIPT: str = "continuity_prior_ref"
-"""Receipt key: 1 when a prior-read ref entered the slice, else 0."""
-
-CONTINUITY_SITUATIONS_RECEIPT: str = "continuity_situations_ref"
-"""Receipt key: 1 when the situation-register ref entered the slice, else 0."""
-
-CONTINUITY_PRIOR_LOOKBACK_HOURS: int = 168
-"""How far back the prior-read lookup reaches (7 days) — INDEPENDENT of the
-slice window, because "the previous read" is a per-head fact, not a per-slice
-one: a composition on a 24h window whose last cycle was skipped still has a
-prior read worth diffing against. Bounded so a months-old head is never dressed
-up as "the prior read"; the block always shows its produced_at + age so the model
-(and the verify pass) can see exactly how stale the memory is."""
-
-CONTINUITY_PRIOR_BODY_CHARS: int = 900
-"""Body excerpt cap for the prior-read block. Wider than
-:data:`PERIPHERY_BODY_CHARS` (the diff is the whole point — a truncated prior
-read produces a fabricated-looking "change") but well under the basis
-``MAX_BODY_CHARS`` * the slice size, so the block cannot dominate the turn."""
-
-SITUATION_REGISTER_CAP: int = 8
-"""Max open situations rendered in the register — worst-first (intensity, then
-recency). A register is a compact ORIENTING index, not a second slice."""
-
-SITUATION_REGISTER_NAME_CHARS: int = 120
-"""Per-frame name cap in the register. Tighter than :data:`MAX_TITLE_CHARS` — a
-situation name is a short frame LABEL, and the cap is what bounds the register's
-worst-case footprint (and therefore its captured evidence text) to a known size."""
-
-SITUATION_REGISTER_TRAJECTORY_DEPTH: int = 3
-"""How many DATED deltas per frame the register carries (continuity P2, D5).
-Three is the plan's number and is what a reader needs to see a direction rather
-than a point: one delta is an event, three is a trend or the absence of one."""
-
-SITUATION_REGISTER_WHY_CHARS: int = 180
-"""Per-delta ``why`` cap in the register. A ledger ``why`` is already one
-sentence; this bounds the pathological case so the register's worst-case
-footprint (and therefore its captured evidence text) stays a known size."""
-
-SITUATION_REGISTER_EVIDENCE_CHARS: int = 5000
-"""Cap on the register's captured ``evidence_text``. Sized to hold the WHOLE
-rendered register at its own bounds (:data:`SITUATION_REGISTER_CAP` frames x
-~225 chars of frame line + :data:`SITUATION_REGISTER_TRAJECTORY_DEPTH` trajectory
-lines of ~250 + header ~ 4.4k) rather than reusing
-:data:`MAX_EVIDENCE_TEXT_CHARS` (600, sized for ONE sub-claim body). Load-bearing:
-``verify._ordinal_evidence_map`` applies NO cap of its own, so the synth-side
-capture IS what the judge grades against — a 600-char cut would silently hide the
-tail of the register and false-demote a faithful claim about a frame the model was
-actually shown."""
-
-SITUATION_REGISTER_REF_KIND: str = "situation_register"
-"""``ref_kind`` stamped on a citation that resolves into the register block.
-
-DELIBERATELY NOT ``'finding'``: the register is not an ``analyst_outputs`` row,
-and it has NO single substrate id, so the citation carries NO ``ref_id`` — it
-carries ``situation_ids`` (the REAL ``situations`` uuids behind the block)
-instead. Fabricating a ``ref_id`` (e.g. the top situation's) to make a drill
-link resolve would be exactly the dishonesty this platform refuses. Consumers
-that key on ``ref_kind == 'finding'`` (``scorecard_reconcile.composition_usages``,
-``verify._uses_subclaim_convention``) skip it unchanged."""
-
-CONTINUITY_CITATION_KEY: str = "continuity"
-"""Citation field naming WHICH continuity ref a citation resolved into
-(:data:`CONTINUITY_PRIOR` / :data:`CONTINUITY_SITUATIONS`). Additive — a basis
-or periphery citation never carries it."""
+# CONTINUITY (Phase 1, 2026-07-31) + the WINDOW LEDGER (FRAME-2) — the
+# composition's MEMORY SECTION. Its vocabulary (the row markers, the receipt
+# keys, the prior-read + register bounds, the ref kinds) and its renders live
+# in ``window_ledger`` and are re-exported at the top of this file; the DB
+# READS that feed them (``read_prior_composition_head``, ``read_open_situations``,
+# ``_attach_trajectory``, ``_gather_continuity_rows``) stay here, where the rest
+# of this kind's substrate access lives.
 
 
 # S2-T2 REGION composition — the region-frame target-id prefix.
@@ -671,400 +622,28 @@ class MetaFindingsDeps(Protocol):
 # ---------------------------------------------------------------------------
 # Prompt module (DSPy wrapping deferred to L-176 / L-105 §2)
 # ---------------------------------------------------------------------------
-
-
-from ._tradecraft import (  # noqa: E402
-    COMPOSITION_BODY_SHAPE,
-    CONSEQUENCE_RULE,
-    NO_INSTRUMENT_READINGS,
-    as_of_rule,
-    with_preamble,
-)
-
-_SYSTEM_PROMPT = with_preamble(
-    """TASK — second-order synthesis. You are given FIRST-ORDER FINDINGS from OTHER analysts (each with title, body, confidence, evidence, and a source analyst_id). Produce ONE second-order FINDING that is only visible when these outputs are considered together: the higher-order pattern, the convergent claim, the contradiction, or the emergent narrative. Lead `body` with the BLUF. DO NOT re-state any individual finding verbatim. Cite which analysts ground each claim (by analyst_id). If the findings disagree, surface the disagreement rather than averaging it away.
-Respond with strict JSON, nothing else: {"title": "...", "body": "...", "confidence": 0.0-1.0, "evidence": ["..."], "tags": ["..."]}"""
-)
-
-
-# CONTINUITY prompt clause (Phase 1) — ONE definition, four compositions.
 #
-# The clause is LETTERED per prompt (each composition prompt numbers its rules
-# (a)…(n) and the sequences differ), so it is generated rather than pasted — a
-# copy per prompt would drift the moment one is edited, and the whole point of a
-# continuity contract is that every composition floor states it identically.
-#
-# It encodes exactly four obligations, in the order a reader needs them:
-#   1. SAY WHAT CHANGED versus the cited prior read (the deliverable).
-#   2. ANCHOR "when" on the blocks' OWN dates/ages — never run/fetch time (the
-#      temporal-collapse guard; the tradecraft preamble states this generally,
-#      this restates it where a prior-read block makes it bite).
-#   3. NO-CHANGE IS AN ANSWER — say so plainly rather than re-deriving, which is
-#      what makes a stateless re-derivation visibly different from a real diff.
-#   4. NEVER assert continuity that is not grounded in one of the two blocks, and
-#      when NEITHER is shown, name the run as a FIRST read. This is the clause
-#      that keeps the RAG-rollback failure mode (an uncited prior leaking into
-#      cited analysis) structurally unavailable: the ONLY licensed sources of
-#      "before" are two blocks that must be cited like any other evidence.
-#: D1 anchored for the COMPOSITION layer. A composition has no slice header —
-#: its dated anchors are the ``produced_at=`` values the block renderer prints
-#: on every shown block, so the as-of is taken from the newest of those. Same
-#: zero-new-facts property as the unit form: the date is a copy of rendered
-#: text, never a read of the wall clock.
-_COMPOSITION_AS_OF = as_of_rule(
-    "'*As of <date>; composed from <N> <unit|country|region|desk> reads, "
-    "latest <time>.*'. Take the date and time from the MOST RECENT produced_at "
-    "printed on a shown block — rendered as a human calendar date and time, "
-    "never as the raw ISO/microsecond value — and take the count from the "
-    "blocks actually shown. If the shown blocks span more than a day, say so "
-    "in the same line ('reads span 1-3 August')."
-)
+# MOVED to ``composition_prompts`` (VOICE-4, 2026-08-21) under the module-size
+# gate, and re-exported here so every existing importer resolves unchanged —
+# ``synth._COMPOSITION_SYSTEM``, the sibling variants, the legacy global-meta
+# ``_SYSTEM_PROMPT``, and the shared rule generators the voice-contract pins
+# reach for. The seam is the section banner that was already drawn here: the
+# moved code is pure prompt-STRING construction and touches no row, no dep and
+# no runtime surface, which is what makes the split invisible to every caller.
 
-
-def _continuity_rule(letter: str) -> str:
-    """The continuity rule text, lettered for one composition prompt.
-
-    PHASE-V — carries the D1 as-of clause in front of the continuity
-    obligations, and repairs the two lines D5 traced the machine-internals leak
-    to. Both repairs are one-liners with outsized effect, because the model was
-    reading each as a REPORTING REQUIREMENT rather than as the anti-embellishment
-    guard it was written to be:
-
-      * The worked example ``'no material change since the prior read of <its
-        produced_at>'`` invited a literal substitution of the column value, so
-        56/117 compositions narrated a microsecond ISO timestamp at the
-        operator. It now shows a human date and states the rendering rule.
-      * ``'describe a situation ONLY as ... its own name, status, intensity and
-        event count'`` was meant to CAP what may be said about a frame; it read
-        as a list of fields to print, so 27/117 compositions reported
-        ``intensity 54.59 and 302 events`` as prose. The cap now names only the
-        two reader-facing fields, and the two instrument readings are explicitly
-        decide-with-never-print.
-    """
-    return (
-        _COMPOSITION_AS_OF + " "
-        f"({letter}) CONTINUITY — a PRIOR READ block (this same target's previous "
-        "verified read, carrying its OWN produced_at) and/or an OPEN SITUATION "
-        "REGISTER block (the currently-open situation frames for this scope, each "
-        "with its own status, intensity, event count and last_event_at/age) may be "
-        "shown at the END of the evidence, each with its own [[ref:N]] handle. When "
-        "either is shown you MUST: (1) state EXPLICITLY what CHANGED versus the "
-        "cited prior read — name the change and cite the prior read by its "
-        "[[ref:N]] handle exactly like any other block; (2) anchor EVERY temporal "
-        "statement on the dates and ages printed IN those blocks (the prior read's "
-        "produced_at, a situation's last_event_at / age) — NEVER on 'today', 'now', "
-        "'as of this run', or the time you are running; (3) if nothing material "
-        "changed, SAY SO plainly and briefly (e.g. 'no material change since the "
-        "3 August morning read [[ref:N]]' — a HUMAN calendar date derived from the "
-        "block's produced_at, NEVER the raw ISO/microsecond timestamp) rather than "
-        "re-deriving the "
-        "same picture in different words; (4) describe a situation ONLY as the "
-        "register states it — its own name and status — "
-        "and never upgrade, downgrade, or re-date it beyond what the register "
-        "shows. The register's intensity score and event_count are internal "
-        "instrument readings: USE them to decide, never PRINT them, and never "
-        "promote a NEGATIVE finding into a named 'situation frame'. NEVER assert "
-        "continuity of ANY kind — an escalation, a "
-        "de-escalation, a trend, an 'ongoing'/'longstanding' framing, or that "
-        "something has 'been building' — unless it is grounded in the cited PRIOR "
-        "READ block or the SITUATION REGISTER block. If NEITHER block is shown "
-        "this is a FIRST read of this target: say so plainly and make NO claim "
-        "about what came before. "
-    )
-
-
-# ---------------------------------------------------------------------------
-# PHASE-V D6 — the composition rule set, generated per prompt
-# ---------------------------------------------------------------------------
-#
-# Every composition reads like the minutes of a status meeting because that is
-# what it was asked for. 94 of 117 sampled compositions ran an OBSERVATION /
-# JUDGMENT roll call — one bullet per unit in fixed order, then the same items
-# again with "Assessment:" in front — and the residual "judgment" was one
-# tautological sentence. Three prompt lines produce that, and all three are
-# repaired here rather than in three hand-edited copies:
-#
-#   * The COVERAGE rule was stated as an EQUAL-AIRTIME obligation whose worked
-#     example was a unit-naming sentence, so the model satisfied it with an
-#     enumeration and had no room left for an argument. Its integrity guarantee
-#     (never silently drop a shown block) is real and is KEPT — it just moves to
-#     a footer.
-#   * The HEDGE rule handed the model the bureaucratic register verbatim ("the
-#     units indicate / suggest"), so hedging became a house voice instead of a
-#     calibration duty.
-#   * The ONLY structural instruction was "lead body with a one-line BLUF", so
-#     the model invented a skeleton — and the skeleton the other two rules imply
-#     is the roll call.
-#
-# WHAT IS DELIBERATELY NOT TOUCHED: the TRACEABILITY rule in every prompt (a
-# [[ref:N]] marker is a PROMISE that block N literally states the claim it tags;
-# never introduce a fact, proper noun, or specific not present in a cited
-# block). D6's one risky line — "say what these blocks TOGETHER show that none
-# shows alone" — is exactly the line that invites synthesis beyond the evidence,
-# and TRACEABILITY is what polices it. The shape rule below must never ship
-# without it.
-
-
-def _shape_rule(letter: str, *, block_noun: str, lead: str) -> str:
-    """The (d)-slot SHAPE rule: judgment in the body, coverage in a footer."""
-    return (
-        f"({letter}) {COMPOSITION_BODY_SHAPE} "
-        f"The BLUF names {lead}. '## The picture' is CONNECTED ARGUMENT: what "
-        f"these {block_noun} TOGETHER show that none shows alone, ordered by "
-        "consequence — every clause still carrying its [[ref:N]] and still "
-        "bound by the TRACEABILITY rule below, which is what keeps 'together' "
-        "from becoming 'invented'. Do NOT write a paragraph or a bullet per "
-        f"{block_noun[:-1] if block_noun.endswith('s') else block_noun}, do NOT "
-        "restate a shown block verbatim, and do NOT emit an OBSERVATION / "
-        "JUDGMENT skeleton or any other section list of your own. "
-    )
-
-
-def _tension_rule(letter: str, *, block_noun: str, a: str, b: str) -> str:
-    """The (c)-slot DISAGREEMENT rule + where the disagreement is written.
-
-    Extends the existing directional-disagreement rule to FACTUAL disagreement,
-    which is the leg that failed silently and visibly: on one desk, one day, the
-    energy_security unit reported the Strait of Hormuz "remains effectively
-    shut" while economic_coercion reported "no concrete closure is in place" —
-    and the country composition inherited both blocks and narrated them as
-    agreement. The old rule only ever asked about sub-claims pointing in
-    different DIRECTIONS; two blocks asserting incompatible states of the same
-    FACT sailed through it.
-    """
-    return (
-        f"({letter}) SURFACE DISAGREEMENT in the '## Tension' section — do NOT "
-        f"average it into a false consensus. When {a} and {b} point in "
-        f"different directions, NAME BOTH and cite BOTH diverging {block_noun} "
-        "via their two [[ref:N]] ordinals. DISAGREEMENT INCLUDES FACTUAL "
-        "DISAGREEMENT, not only directional disagreement: BEFORE you write, "
-        "check whether two shown blocks assert incompatible STATES OF THE SAME "
-        "FACT (one says a chokepoint is closed, another says no closure is in "
-        "place). When they do, name both sources, quote both "
-        "characterizations, cite both [[ref:N]] handles, and say which is "
-        "better supported and why — do NOT silently adopt one, and do NOT "
-        "combine them into a sentence that implies they agree. When the shown "
-        "blocks genuinely agree, say so plainly in one line rather than "
-        "manufacturing a tension. "
-    )
-
-
-def _hedge_rule(letter: str, *, tic: str, worked: str) -> str:
-    """The (b)-slot HEDGE rule — a calibration duty, not a house voice."""
-    return (
-        f"({letter}) HEDGE to the evidence — weaken your language as "
-        "effective_confidence drops, and attribute a judgment to the source "
-        "that made it when it matters who said it. Hedging is a CALIBRATION "
-        f"DUTY, not a house voice: do NOT open clauses with '{tic}' as a tic. "
-        f"Prefer a dated, attributed statement ('{worked}') over an agentless "
-        "hedge. "
-    )
-
-
-def _coverage_rule(letter: str, *, block_noun: str, unit_noun: str) -> str:
-    """The coverage rule — integrity guarantee kept, airtime obligation dropped."""
-    return (
-        f"({letter}) COVERAGE IS A FOOTER, NOT THE BODY. Every shown "
-        f"{unit_noun} must still be accounted for — silently dropping one is an "
-        f"integrity failure — but a {unit_noun} whose read is unremarkable is "
-        "accounted for by NAMING IT IN THE '## Coverage' LINE, not by giving it "
-        f"a bullet in the body. A {unit_noun} with NO block shown is an "
-        "unassessed GAP: name it in that same line as a gap and NEVER infer, "
-        f"estimate, or invent its state. A {unit_noun} earns space in '## The "
-        f"picture' ONLY when it changes the read. Do not claim to cover a "
-        f"{unit_noun} whose block is not shown, and never attach a [[ref:N]] to "
-        "a gap. "
-    )
-
-
-# P3 per-COUNTRY composition system prompt.
-#
-# Selected in-kind by the runtime's ``options["target_id"]`` stamp (set only when
-# the run is target-scoped — a per-country composition descriptor). The GLOBAL
-# meta run keeps ``_SYSTEM_PROMPT`` byte-for-byte. Distinct from the global
-# synthesis prompt in three load-bearing ways: (1) it cites EVERY factual clause
-# with an inline ``[[ref:N]]`` ordinal marker resolving to the Nth sub-claim in
-# the rendered bundle (so the composition is itself citable and a LATER stage
-# can run a faithfulness verify OVER the composition); (2) it hedges to
-# ``effective_confidence`` and weakens language as the evidence weakens; (3) it
-# surfaces disagreement between sub-claims rather than averaging a false
-# consensus, and narrates an HONEST EMPTY read (confidence 0.0, no fabricated
-# evidence) when a country has no verified sub-claims.
-_COMPOSITION_SYSTEM = with_preamble(
-    """TASK — per-country COMPOSITION. You are given the VERIFIED, faithfulness-checked SUB-CLAIMS (first-order unit findings) for ONE country from up to seven bounded units (leadership_transition, energy_security, escalation, narrative_coordination, internal_stability, military_posture, economic_coercion). Each block STARTS with a [[ref:N]] handle (a small integer N) and shows its source unit analyst_id, effective_confidence (already min(confidence, faithfulness)), title and body. Produce ONE second-order per-country READ. RULES: (a) CITE EVERY factual clause inline with a [[ref:N]] marker using EXACTLY the small integer N shown as the [[ref:N]] handle at the START of the sub-claim block it rests on; NEVER invent an N and NEVER cite an N not shown; a clause with no sub-claim behind it must NOT assert a fact. """
-    + _hedge_rule(
-        "b",
-        tic="the units indicate / suggest",
-        worked="the escalation desk's 3 August read has ...",
-    )
-    + _tension_rule(
-        "c",
-        block_noun="sub-claim blocks",
-        a="one unit's sub-claim",
-        b="another's",
-    )
-    + _shape_rule(
-        "d",
-        block_noun="units",
-        lead=(
-            "the single most consequential thing on this desk and why it "
-            "matters — ranked on the STAKES the cited blocks describe (cited "
-            "loss of life or armed conflict, then cited disruption to a system "
-            "many actors depend on, then cited irreversibility, then cited "
-            "proximity), NEVER on which block scored the highest "
-            "effective_confidence and NEVER on which item merely changed"
-        ),
-    )
-    + """(e) HONEST EMPTY: if there are no verified sub-claims for this country, say so plainly with confidence 0.0 and NO fabricated evidence. (f) TRACEABILITY — a [[ref:N]] marker is a PROMISE that sub-claim block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown sub-claim blocks actually say. NEVER introduce a fact, proper noun, place-name, or event specific (a magnitude, date, location, or count) that is not present in a cited block — do NOT add concrete details a unit did not state (e.g. an event's magnitude or location, or a named actor, commitment, or position no block mentions). If you cannot ground a clause in a shown block, DROP the clause; an in-range [[ref:N]] does NOT license a claim its block does not make. (g) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence actually shown for a cited block, and invent NO per-unit confidence figure or a unit that is not present; do NOT silently change a unit's stated severity or which driver a unit called its lead — if you aggregate differing unit severities, say so explicitly (e.g. 'aggregating unit severities moderate+low -> moderate'). """
-    + NO_INSTRUMENT_READINGS
-    + " "
-    + _coverage_rule("h", block_noun="sub-claim blocks", unit_noun="unit")
-    + _continuity_rule("i")
-    + """Respond with strict JSON only: {"title":"...","body":"...with [[ref:N]] markers...","confidence":0.0-1.0,"evidence":["..."],"tags":["..."]}"""
-)
-
-
-# S2-T2 REGIONAL composition system prompt (region_composition).
-#
-# Selected in-kind for a REGION run (``options["target_id"]`` = ``region_<slug>``;
-# dispatched at the ``region_scoped`` branch below). Mirrors ``_COMPOSITION_SYSTEM``
-# but REGION-worded: the cited "sub-claims" are the per-COUNTRY reads
-# (country_composition findings) of ONE region, so the read cites a COUNTRY-READ via
-# its [[ref:N]] ordinal handle and its load-bearing surface is CROSS-COUNTRY
-# disagreement WITHIN the region. It additionally consumes an appended CONTESTED
-# FACTS block (open public.fact_contention disputes) and marks any touched dispute
-# ``[[contested:<contention_id>]]`` naming BOTH arbiter-surfaced sides. (The true
-# WORLD run composes REGIONS via ``_WORLD_OVER_REGIONS_SYSTEM`` below.)
-_REGION_COMPOSITION_SYSTEM = with_preamble(
-    """TASK — REGIONAL COMPOSITION. You are given the VERIFIED, faithfulness-checked per-COUNTRY READS (second-order country_composition findings) for the member countries of ONE world region, one or more per country. Each block STARTS with a [[ref:N]] handle (a small integer N) and shows its source analyst_id, effective_confidence (already min(confidence, faithfulness)), title and body. You MAY also be given a CONTESTED FACTS block: open disputes over a single fact (subject+predicate) where the arbiter surfaced more than one value cluster. Produce ONE second-order REGIONAL READ over the shown country reads. RULES: (a) CITE EVERY factual clause inline with a [[ref:N]] marker using EXACTLY the small integer N shown as the [[ref:N]] handle at the START of the COUNTRY READ block it rests on; NEVER invent an N, NEVER cite a raw signal, and NEVER cite an N not shown; a clause with no country read behind it must NOT assert a fact. """
-    + _hedge_rule(
-        "b",
-        tic="the country reads indicate / suggest",
-        worked="Sudan's 3 August country read carries ...",
-    )
-    + _tension_rule(
-        "c",
-        block_noun="country-read blocks",
-        a="one country's read",
-        b="another's",
-    )
-    + _shape_rule(
-        "d",
-        block_noun="country reads",
-        lead=(
-            "the specific REGION this read covers (infer it from the shown "
-            "country reads, which are ALL members of ONE region) and the "
-            "single most consequential thing in it — do NOT open with a global "
-            "'The world faces...' frame; this is a REGION, not the world"
-        ),
-    )
-    + CONSEQUENCE_RULE
-    + " "
-    + """(e) CONTESTED FACTS: when a claim touches a listed contested group, NAME both surfaced sides and mark it [[contested:<contention_id>]] using EXACTLY a contention_id shown in the block; NEVER pick a side the arbiter did not surface and NEVER invent a contested id. (f) HONEST EMPTY: if there are no country reads, say so plainly with confidence 0.0 and NO fabricated evidence. (g) TRACEABILITY — a [[ref:N]] marker is a PROMISE that country-read block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown country reads actually say. NEVER introduce a country, actor, event specific, or figure not present in a cited country-read block; if you cannot ground a clause in a shown block, DROP it (an in-range [[ref:N]] does NOT license a claim its block does not make). (h) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence shown for a cited block, and do NOT silently alter a country read's severity or the driver it called its lead; make any aggregation explicit. """
-    + NO_INSTRUMENT_READINGS
-    + " "
-    + _coverage_rule("i", block_noun="country-read blocks", unit_noun="country")
-    + _continuity_rule("j")
-    + """Respond with strict JSON only: {"title":"...","body":"...with [[ref:N]] (and any [[contested:<id>]]) markers...","confidence":0.0-1.0,"evidence":["..."],"tags":["..."]}"""
-)
-
-# Back-compat alias — the constant was named ``_WORLD_COMPOSITION_SYSTEM`` in
-# round-1, a misnomer: it is REGION-scoped (dispatched only for region runs). The
-# name/comment now say REGIONAL; the alias keeps existing references (tests,
-# imports) resolving to the renamed constant.
-_WORLD_COMPOSITION_SYSTEM = _REGION_COMPOSITION_SYSTEM
-
-
-# S2-T3 GLOBAL (world) composition over REGIONS system prompt.
-#
-# Selected in-kind by the runtime's ``options["composition"]`` stamp on the
-# target-LESS world_assessor run. Mirrors ``_REGION_COMPOSITION_SYSTEM`` but
-# REGION-worded: the cited blocks are per-REGION reads (region_composition
-# findings), so the load-bearing surface is CROSS-REGION disagreement. Because
-# the world read DEGRADES a region with no region read to that region's country
-# reads, a shown block may instead be one of a region's per-COUNTRY reads (still
-# a real, cited block). It additionally consumes the CONTESTED FACTS block (open
-# public.fact_contention disputes) and a REGION COVERAGE block that NAMES any
-# region with NO read at all — the model must surface those as unassessed gaps.
-# Distinct constant from ``_REGION_COMPOSITION_SYSTEM`` so the S2-T2 region compose
-# (which composes COUNTRY reads and keeps that prompt) is untouched.
-_WORLD_OVER_REGIONS_SYSTEM = with_preamble(
-    """TASK — GLOBAL world COMPOSITION over REGIONS. You are given the VERIFIED, faithfulness-checked per-REGION READS (second-order region_composition findings), one per region. For a region that had NO region read this cycle, one or more of its per-COUNTRY reads are shown IN ITS PLACE (a degrade — treat them as that region's available evidence). Each block STARTS with a [[ref:N]] handle (a small integer N) and shows its source analyst_id, effective_confidence (already min(confidence, faithfulness)), title and body. You MAY also be given a CONTESTED FACTS block (open disputes over a single fact where the arbiter surfaced more than one value cluster) and a REGION COVERAGE block naming world regions that have NO read at all this cycle. Produce ONE second-order WORLD READ. RULES: (a) CITE EVERY factual clause inline with a [[ref:N]] marker using EXACTLY the small integer N shown as the [[ref:N]] handle at the START of the read block it rests on; NEVER invent an N, NEVER cite a raw signal, and NEVER cite an N not shown; a clause with no read behind it must NOT assert a fact. """
-    + _hedge_rule(
-        "b",
-        tic="the region reads indicate / suggest",
-        worked="the Africa read of 3 August carries ...",
-    )
-    + _tension_rule(
-        "c",
-        block_noun="region-read blocks",
-        a="one region's read",
-        b="another's",
-    )
-    + _shape_rule(
-        "d",
-        block_noun="region reads",
-        lead=(
-            "the single most consequential situation on this board and why it "
-            "matters. THIS IS THE WORLD HEADLINE: it is read as the tower's "
-            "answer to 'what matters most right now', so getting the ranking "
-            "right is this read's whole job"
-        ),
-    )
-    + CONSEQUENCE_RULE
-    + " "
-    + """(e) CONTESTED FACTS: when a claim touches a listed contested group, NAME both surfaced sides and mark it [[contested:<contention_id>]] using EXACTLY a contention_id shown in the block; NEVER pick a side the arbiter did not surface and NEVER invent a contested id. (f) REGION GAPS: if the REGION COVERAGE block lists a region as having NO read, NAME that region plainly in the '## Coverage' line as an unassessed gap with NO current read — do NOT infer, estimate, or invent its state, and NEVER attach a [[ref:N]] to a gap region. (g) HONEST EMPTY: if there are no reads at all, say so plainly with confidence 0.0 and NO fabricated evidence. (h) TRACEABILITY — a [[ref:N]] marker is a PROMISE that block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown reads actually say. NEVER introduce a region, country, actor, event specific, or figure not present in a cited block; if you cannot ground a clause in a shown block, DROP it (an in-range [[ref:N]] does NOT license a claim its block does not make). (i) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence shown for a cited block, and do NOT silently alter a read's severity or the driver it called its lead; make any aggregation explicit. """
-    + NO_INSTRUMENT_READINGS
-    + " "
-    + _coverage_rule("j", block_noun="region-read blocks", unit_noun="region")
-    + _continuity_rule("k")
-    + """Respond with strict JSON only: {"title":"...","body":"...with [[ref:N]] (and any [[contested:<id>]]) markers...","confidence":0.0-1.0,"evidence":["..."],"tags":["..."]}"""
-)
-
-
-# S2-T4 THEMATIC (escalation) composition system prompt.
-#
-# Selected in-kind by the runtime's ``options["thematic_dimension"]`` stamp on the
-# target-LESS thematic run. Mirrors ``_WORLD_OVER_REGIONS_SYSTEM`` but THEMATIC-
-# worded: the cited blocks are per-DESK escalation-unit reads (one per country
-# desk), so the load-bearing surface is CROSS-DESK convergence/divergence of
-# ESCALATION risk. It consumes a DESK COVERAGE block naming any desk with no
-# escalation head (absence-honest gaps). The CORRELATION rule is load-bearing: two
-# desks whose reads rest on the SAME underlying wire signal are NOT independent
-# corroboration — the kind's T7 guard de-duplicates the evidence numerically, and
-# the prompt tells the model not to treat shared-signal desks as independent.
-# Distinct constant from ``_WORLD_OVER_REGIONS_SYSTEM`` so the world/region
-# compositions are untouched.
-_THEMATIC_COMPOSITION_SYSTEM = with_preamble(
-    """TASK — GLOBAL THEMATIC COMPOSITION over ESCALATION. You are given the VERIFIED, faithfulness-checked per-DESK ESCALATION READS (first-order `escalation` unit findings), ONE per country desk, each for a DIFFERENT country. Each block STARTS with a [[ref:N]] handle (a small integer N) and shows its source analyst_id, its DESK (target_id — the country the read is for), effective_confidence (already min(confidence, faithfulness)), title and body. You MAY also be given a DESK COVERAGE block naming desks that have NO escalation read this cycle. Produce ONE second-order GLOBAL ESCALATION READ that surveys near-term escalation risk ACROSS the desks. RULES: (a) CITE EVERY factual clause inline with a [[ref:N]] marker using EXACTLY the small integer N shown as the [[ref:N]] handle at the START of the desk read block it rests on, and NAME the desk (country) it is about; NEVER invent an N, NEVER cite a raw signal, and NEVER cite an N not shown; a clause with no desk read behind it must NOT assert a fact. """
-    + _hedge_rule(
-        "b",
-        tic="the desk reads indicate / suggest",
-        worked="the Ukraine desk's 3 August read has ...",
-    )
-    + _tension_rule(
-        "c",
-        block_noun="desk-read blocks",
-        a="one desk's read",
-        b="another's",
-    )
-    + """(d) CORRELATION — two desks whose reads rest on the SAME underlying wire signal (a shared cross-border incident, one alliance move seen from both sides) are NOT independent corroboration; do NOT count them twice or let a single shared event inflate the global picture. When two cited desks clearly describe the SAME underlying event, SAY SO rather than presenting them as two independent data points. (e) DESK GAPS: if the DESK COVERAGE block lists a desk as having NO read, NAME that desk plainly in the '## Coverage' line as an unassessed gap with NO current escalation read — do NOT infer, estimate, or invent its state, and NEVER attach a [[ref:N]] to a gap desk. """
-    + _shape_rule(
-        "f",
-        block_noun="desk reads",
-        lead=(
-            "where global escalation risk is actually concentrated. THIS READ "
-            "FEEDS THE WORLD HEADLINE, so its ordering propagates: rank the "
-            "desks by stakes, and never present them as a list sorted by score"
-        ),
-    )
-    + CONSEQUENCE_RULE
-    + " "
-    + """(g) HONEST EMPTY: if there are no desk reads at all, say so plainly with confidence 0.0 and NO fabricated evidence. (h) TRACEABILITY — a [[ref:N]] marker is a PROMISE that desk-read block N literally states, in substance, the exact claim it tags; you may ONLY summarize, aggregate and reconcile what the shown desk reads actually say. NEVER introduce a country, actor, event specific, or figure not present in a cited block; if you cannot ground a clause in a shown block, DROP it (an in-range [[ref:N]] does NOT license a claim its block does not make). (i) NUMBERS & SEVERITY — state NO numeric confidence value other than an effective_confidence shown for a cited block, and do NOT silently alter a desk read's severity or the vector it called its lead; make any aggregation explicit. """
-    + NO_INSTRUMENT_READINGS
-    + " "
-    + _continuity_rule("j")
-    + """Respond with strict JSON only: {"title":"...","body":"...with [[ref:N]] markers naming each desk...","confidence":0.0-1.0,"evidence":["..."],"tags":["..."]}"""
+from .composition_prompts import (  # noqa: E402,F401 — re-exported surface
+    _COMPOSITION_SYSTEM,
+    _REGION_COMPOSITION_SYSTEM,
+    _SYSTEM_PROMPT,
+    _THEMATIC_COMPOSITION_SYSTEM,
+    _WORLD_COMPOSITION_SYSTEM,
+    _WORLD_OVER_REGIONS_SYSTEM,
+    _composition_as_of,
+    _continuity_rule,
+    _coverage_rule,
+    _hedge_rule,
+    _shape_rule,
+    _tension_rule,
 )
 
 
@@ -1173,25 +752,12 @@ def _extract_contested_markers(
 # where an in-range collision is silently reinterpreted as pointing at THIS
 # tier's block N (the WRONG evidence) rather than being caught by the honest
 # out-of-range filter.
-_CHILD_REF_REWRITE_RE = _REF_MARKER_RE
-
-
-def _defuse_child_ref_markers(text: str) -> str:
-    """Rewrite a lower tier's embedded ``[[ref:N]]`` markers to a visually
-    distinct, non-resolvable form before ``text`` is rendered as a PARENT
-    tier's evidence.
-
-    ``[[ref:N]]`` becomes ``(child ref N)`` — unambiguous both from this
-    tier's OWN ``[[ref:N]]`` ordinal space and from a first-order unit's
-    bracketed ``[N]`` signal index, while still preserving the information
-    that the child cited something there. Pure / idempotent; text with no
-    embedded marker (the overwhelming common case: first-order unit bodies
-    never contain ``[[ref:N]]``) is returned unchanged with no allocation
-    beyond the input.
-    """
-    if not text or "[[ref:" not in text:
-        return text
-    return _CHILD_REF_REWRITE_RE.sub(lambda m: f"(child ref {m.group(1)})", text)
+# ``_defuse_child_ref_markers`` moved to ``composition_window`` with the body
+# excerpt + periphery render that call it (FRAME-1, size gate) and is
+# re-exported at the top of this module. Its regex is a deliberate second
+# spelling of ``_REF_MARKER_RE`` above — same language, different question (that
+# one parses the model's OUTPUT, this one rewrites INPUT text) — held in lockstep
+# by ``tests/data_pkg/test_composition_head_window.py``.
 
 
 # A2 (verify-path structural fix, 2026-07-31) — bound on the UNMARKED-BASIS
@@ -1771,12 +1337,31 @@ def _render_user_prompt(
             # already carries, and the periphery block has rendered it since it was
             # written. Omitted when the input carries no severity tag — never
             # invented.
+            #
+            # FRAME-3: that severity is now the dimension's STANDING STATE, and
+            # the movement it used to conflate rides beside it as
+            # ``severity_delta``. Rendering only the first half would hand this
+            # layer a number whose meaning had changed under it with nothing
+            # saying so — the R1 C-B defect moved up one floor rather than
+            # fixed. Also omitted when unstamped: a desk whose prompt has not
+            # been flipped renders exactly as it did before.
             _sev = _row_severity_level(row)
             sev_part = f" severity={_sev}" if _sev else ""
+            _delta = _row_severity_delta(row)
+            sev_part += f" severity_delta={_delta}" if _delta else ""
+            # FRAME-1: the head's own DATE, written as a human writes it, plus
+            # its AGE. Under the 336h admissibility horizon a shown block can be
+            # days old, and the composition's job is to SAY so — but the
+            # tradecraft rules forbid the model printing a raw ISO stamp AND
+            # forbid it computing a date, so the human form has to be on the
+            # page for a dated sentence to be a copy rather than a derivation.
+            # ``age_suffix`` is empty for an undatable row, keeping that (never
+            # observed in production) render byte-identical.
             attribution = (
                 f"      analyst_id={analyst_id} {fid_part}"
                 f"effective_confidence={conf_val}{sal_part}{sev_part}"
-                f" produced_at={produced_at}"
+                f" produced_at={produced_at}{age_suffix(row)}"
+                f"{floor_fallback_suffix(row)}"
             )
         else:
             attribution = (
@@ -1799,163 +1384,12 @@ def _render_user_prompt(
 # ---------------------------------------------------------------------------
 # C-TIER — periphery selection + rendering (two-tier composition evidence)
 # ---------------------------------------------------------------------------
-
-
-def _row_severity_level(row: Mapping[str, Any]) -> str | None:
-    """The ``severity:<level>`` level from a finding row's stamped tags.
-
-    A finding's ``data`` column is the FindingPayload envelope, so its tags land
-    at ``data -> 'tags'`` (see the meta-filter note on
-    :func:`read_other_analyst_findings`). Tolerates a JSON-encoded ``data``
-    string (asyncpg without a JSONB codec). The LAST valid tag wins (the analyst
-    contract emits exactly one); absent/unknown → ``None``.
-    """
-    env = row.get("data")
-    if isinstance(env, str):
-        try:
-            env = json.loads(env)
-        except (ValueError, TypeError):
-            return None
-    if not isinstance(env, Mapping):
-        return None
-    tags = env.get("tags")
-    if not isinstance(tags, (list, tuple)):
-        return None
-    level: str | None = None
-    for tag in tags:
-        if not isinstance(tag, str) or not tag.startswith("severity:"):
-            continue
-        candidate = tag.split(":", 1)[1].strip().lower()
-        if candidate in _SEVERITY_RANK:
-            level = candidate
-    return level
-
-
-def _row_severity_rank(row: Mapping[str, Any]) -> int:
-    """Worst-first sort rank for :func:`_select_periphery` (missing → -1)."""
-    level = _row_severity_level(row)
-    return _SEVERITY_RANK.get(level, -1) if level is not None else -1
-
-
-def _row_body_excerpt(row: Mapping[str, Any], cap: int) -> str:
-    """The row's body excerpt — column first, then ``data.body`` (the same
-    fallback chain :func:`_render_user_prompt` uses), with the SAME
-    child-``[[ref:N]]``-marker defuse (periphery rows for a region/world/
-    thematic composition are the SAME lower-tier composition heads as the
-    basis rows, just below the floor — they carry the identical pollution
-    risk)."""
-    body = row.get("body")
-    if not isinstance(body, str):
-        data = row.get("data")
-        if isinstance(data, str):
-            try:
-                data = json.loads(data)
-            except (ValueError, TypeError):
-                data = None
-        inner = data.get("body") if isinstance(data, Mapping) else None
-        body = inner if isinstance(inner, str) else ""
-    return _defuse_child_ref_markers(body)[:cap]
-
-
-def _select_periphery(
-    rows: Sequence[Mapping[str, Any]], *, cap: int = PERIPHERY_CAP
-) -> list[Mapping[str, Any]]:
-    """Deterministic worst-first periphery selection: severity rank DESC, then
-    recency DESC, then row id (pure tiebreak) — so the cap keeps the items most
-    worth surfacing and the same input set always yields the same list. Pure;
-    unit-tested for cap + order determinism."""
-
-    def _key(row: Mapping[str, Any]) -> tuple[int, str, str]:
-        v = row.get("produced_at")
-        if v is None:
-            rec = ""
-        elif isinstance(v, str):
-            rec = v
-        else:
-            iso = getattr(v, "isoformat", None)
-            rec = iso() if callable(iso) else str(v)
-        return (_row_severity_rank(row), rec, str(row.get("id") or ""))
-
-    ordered = sorted(rows, key=_key, reverse=True)
-    return list(ordered[:cap])
-
-
-def _periphery_ids(rows: Sequence[Mapping[str, Any]]) -> list[str]:
-    """The kept periphery rows' finding ids (envelope honesty; malformed ids
-    are skipped, mirroring ``_orient``)."""
-    out: list[str] = []
-    for row in rows:
-        uid = _coerce_uuid(row.get("id"))
-        if uid is not None:
-            out.append(str(uid))
-    return out
-
-
-def _render_periphery_block(
-    rows: Sequence[Mapping[str, Any]],
-    *,
-    start_ordinal: int,
-    floor: float | None,
-) -> str:
-    """Render the PERIPHERY tier as an explicit delimited prompt section.
-
-    Ordinals CONTINUE the basis numbering (``start_ordinal = len(basis)+1``) so
-    ``[[ref:N]]`` stays one flat resolution space — the cite phase maps ordinal
-    ``N`` to the Nth rendered block across BOTH sections, and the verify pass
-    tells the tiers apart by the ``tier`` stamp on the resolved citation, never
-    by re-parsing the prompt. Each item carries its honest status
-    (``below_floor`` with its score, or ``unverified``) so the model sees WHY
-    the item is quarantined. Returns ``""`` for an empty set — the empty-
-    periphery prompt is byte-identical to the untiered render.
-    """
-    if not rows:
-        return ""
-    floor_txt = (
-        f"{float(floor):.2f}" if isinstance(floor, (int, float)) else "(unset)"
-    )
-    header = (
-        "=== WEAKLY-SUPPORTED / UNVERIFIED SIGNALS "
-        f"(below the verification floor {floor_txt}) ===\n"
-        f"The {len(rows)} item(s) below did NOT clear the verification floor: "
-        "each either scored below it on its faithfulness verify "
-        "(status=below_floor) or never passed one (status=unverified). They are "
-        "NOT established facts and MUST NOT be cited as established fact. Rules "
-        "for this section:\n"
-        "  - These items may inform HEDGED context only. Any claim resting "
-        "solely on an item below MUST be attributed and hedged (e.g. "
-        '"weakly-supported reporting suggests ..." / "an unverified read '
-        'indicates ..."). The verify pass flags unhedged use.\n'
-        "  - Where an item below CONFLICTS with a verified finding above, "
-        "SURFACE the tension explicitly — a brief, hedged 'Tensions worth "
-        "watching' note naming both sides — never drop it and never blend it "
-        "in silently.\n"
-        "  - Do NOT let these items set the BLUF or the severity; the verified "
-        "findings above are the load-bearing evidence.\n"
-        "  - Cite these by their [[ref:N]] handle exactly like the findings "
-        "above.\n\n"
-    )
-    body_lines: list[str] = []
-    for i, row in enumerate(rows, start=start_ordinal):
-        title = str(row.get("title") or "(untitled)")[:MAX_TITLE_CHARS]
-        analyst_id = str(row.get("analyst_id") or "(unknown)")
-        produced_at = row.get("produced_at")
-        status = "unverified" if row.get("faithfulness_score") is None else "below_floor"
-        eff = row.get("effective_confidence")
-        try:
-            score_part = f" effective_confidence={float(eff):.2f}" if eff is not None else ""
-        except (TypeError, ValueError):
-            score_part = ""
-        level = _row_severity_level(row)
-        sev_part = f" severity={level}" if level else ""
-        body = _row_body_excerpt(row, PERIPHERY_BODY_CHARS)
-        body_lines.append(
-            f"[[ref:{i}]] {title}\n"
-            f"      analyst_id={analyst_id} status={status}{score_part}{sev_part}"
-            f" produced_at={produced_at}\n"
-            f"      body: {body}"
-        )
-    return header + "\n".join(body_lines)
-
+# MOVED to ``composition_window`` (FRAME-1, 2026-08-20) under the module-size
+# gate, and re-exported at the top of this module: ``_row_severity_level`` /
+# ``_row_severity_rank`` / ``_row_body_excerpt`` / ``_select_periphery`` /
+# ``_periphery_ids`` / ``_render_periphery_block``. The seam is the one FRAME-1
+# needed anyway — the periphery IS "what the floor withheld", the same fact the
+# coverage ledger states from the other side, and both read rows the same way.
 
 # ---------------------------------------------------------------------------
 # CONTINUITY (Phase 1) — the prior-read + open-situation-register refs
@@ -2206,31 +1640,6 @@ async def _attach_trajectory(
         ]
 
 
-def _iso_text(value: Any) -> str | None:
-    """A JSON-safe timestamp string: ISO-8601 for a datetime, the string itself
-    when the driver already handed one back, ``None`` otherwise. Wider than
-    :func:`_iso_or_none` (datetime-only) because a register entry that silently
-    lost its ``last_event_at`` to a str/datetime mismatch would render as
-    ``(none)`` — an invented absence, which is the one thing the register must
-    never report."""
-    iso = getattr(value, "isoformat", None)
-    if callable(iso):
-        return iso()
-    if isinstance(value, str) and value.strip():
-        return value
-    return None
-
-
-def _as_float(value: Any) -> float | None:
-    """Float coercion that returns ``None`` rather than a fabricated 0.0."""
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def _as_int(value: Any) -> int | None:
     """Int coercion that returns ``None`` rather than a fabricated 0."""
     if value is None or isinstance(value, bool):
@@ -2239,138 +1648,6 @@ def _as_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
-
-
-def _continuity_selection(
-    rows: Sequence[Mapping[str, Any]],
-) -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | None]:
-    """Split the marked continuity rows into ``(prior_row, register_row)``.
-
-    FIRST-wins per kind (READ_SLICE emits at most one of each; a duplicate would
-    be a bug, and taking the first keeps the ordinal space deterministic rather
-    than silently renumbering). Either may be ``None`` — both refs are
-    independently optional.
-    """
-    prior: Mapping[str, Any] | None = None
-    register: Mapping[str, Any] | None = None
-    for row in rows:
-        kind = row.get(CONTINUITY_ROW_KEY)
-        if kind == CONTINUITY_PRIOR and prior is None:
-            prior = row
-        elif kind == CONTINUITY_SITUATIONS and register is None:
-            register = row
-    return prior, register
-
-
-def _register_situations(row: Mapping[str, Any] | None) -> list[Mapping[str, Any]]:
-    """The situation dicts carried on a register row (``[]`` when absent)."""
-    if row is None:
-        return []
-    raw = row.get(CONTINUITY_SITUATIONS_ROW_KEY)
-    if not isinstance(raw, (list, tuple)):
-        return []
-    return [s for s in raw if isinstance(s, Mapping)]
-
-
-def _render_prior_read_lines(row: Mapping[str, Any], ordinal: int) -> list[str]:
-    """The PRIOR READ sub-block — one citable ordinal, dated by its OWN clock."""
-    title = str(row.get("title") or "(untitled)")[:MAX_TITLE_CHARS]
-    produced_at = _iso_text(row.get("produced_at")) or "(unknown)"
-    age = _as_float(row.get("age_hours"))
-    age_part = f" age={age:.1f}h" if age is not None else ""
-    eff = _as_float(row.get("effective_confidence"))
-    eff_part = f" effective_confidence={eff:.2f}" if eff is not None else ""
-    analyst_id = str(row.get("analyst_id") or "(unknown)")
-    body = _row_body_excerpt(row, CONTINUITY_PRIOR_BODY_CHARS)
-    return [
-        f"[[ref:{ordinal}]] PRIOR READ (this target's previous verified read): {title}",
-        f"      analyst_id={analyst_id} produced_at={produced_at}{age_part}{eff_part}",
-        f"      body: {body}",
-    ]
-
-
-def _render_situation_register_lines(
-    situations: Sequence[Mapping[str, Any]], ordinal: int
-) -> list[str]:
-    """The OPEN SITUATION REGISTER sub-block — ONE citable ordinal for the whole
-    register (it is a single orienting index, not N pieces of evidence)."""
-    lines = [
-        f"[[ref:{ordinal}]] OPEN SITUATION REGISTER "
-        f"({len(situations)} open frame(s) in scope, highest-intensity first):",
-    ]
-    for s in situations:
-        intensity = s.get("intensity_score")
-        intensity_txt = (
-            f"{float(intensity):.2f}" if isinstance(intensity, (int, float)) else "n/a"
-        )
-        events = s.get("event_count")
-        events_txt = str(events) if isinstance(events, int) else "n/a"
-        age = s.get("age_days")
-        age_txt = f"{float(age):.1f}d" if isinstance(age, (int, float)) else "n/a"
-        state = s.get("trajectory_state")
-        lines.append(
-            f"      - {s.get('name')} :: status={s.get('status')} "
-            f"intensity={intensity_txt} events={events_txt} "
-            f"last_event_at={s.get('last_event_at') or '(none)'} open_for={age_txt}"
-            + (f" trajectory={state}" if state else "")
-        )
-        # CONTINUITY P2 — the frame's own DATED deltas, newest first. This is
-        # what turns "what changed since the prior read" from a reconstruction
-        # into a quotation: the model is shown the ledger's dated answer and
-        # cites the register block for it, so a trajectory claim is graded
-        # against the trajectory record rather than against a snapshot.
-        for delta in s.get("trajectory") or ():
-            if not isinstance(delta, Mapping):
-                continue
-            lines.append(
-                f"          * {delta.get('occurred_at') or '(undated)'} "
-                f"{delta.get('delta')}: {delta.get('why')}"
-            )
-    return lines
-
-
-def _render_continuity_block(
-    prior: Mapping[str, Any] | None,
-    situations: Sequence[Mapping[str, Any]],
-    *,
-    start_ordinal: int,
-) -> str:
-    """Render the CONTINUITY section — up to two citable blocks, or ``""``.
-
-    Ordinals CONTINUE the basis+periphery numbering (``start_ordinal =
-    len(basis) + len(periphery) + 1``) so ``[[ref:N]]`` stays ONE flat resolution
-    space: the cite phase maps ordinal ``N`` to the Nth rendered block across all
-    three sections, and no consumer has to re-parse the prompt to tell them
-    apart (the resolved citation's ``continuity`` stamp does that).
-
-    Returns ``""`` when there is neither a prior read nor an open situation — so
-    a FIRST run's prompt is byte-identical to the pre-continuity render.
-    """
-    if prior is None and not situations:
-        return ""
-    header = [
-        "=== CONTINUITY (what this desk already knew) ===",
-        "The block(s) below are the ONLY licensed source of 'before'. Cite them "
-        "by their [[ref:N]] handle exactly like any other evidence, state what "
-        "CHANGED against them, and take every date from the block itself — never "
-        "from the time you are running. If nothing material changed, say that "
-        "plainly. Never assert a trend, escalation, or 'ongoing' framing that "
-        "these blocks do not support. Where a frame carries dated trajectory "
-        "lines, those ARE the record of how it moved — use them for direction "
-        "and their dates for timing; where a frame carries none, the system has "
-        "no trajectory for it, which is not the same as it being steady.",
-        "",
-    ]
-    body_lines: list[str] = []
-    ordinal = start_ordinal
-    if prior is not None:
-        body_lines.extend(_render_prior_read_lines(prior, ordinal))
-        ordinal += 1
-    if situations:
-        if body_lines:
-            body_lines.append("")
-        body_lines.extend(_render_situation_register_lines(situations, ordinal))
-    return "\n".join(header + body_lines)
 
 
 async def _gather_continuity_rows(
@@ -2382,8 +1659,9 @@ async def _gather_continuity_rows(
     prior_target_id: str | None,
     situation_target_id: str | None = None,
     situation_target_ids: Sequence[str] | None = None,
+    ledger_target_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Gather the (at most two) marked CONTINUITY rows for a composition read.
+    """Gather the (at most three) marked CONTINUITY rows for a composition read.
 
     BEST-EFFORT by contract: this is an ADDITIVE enrichment on top of an already
     complete slice, so ANY failure (a missing relation, a degraded read replica,
@@ -2392,8 +1670,16 @@ async def _gather_continuity_rows(
     because its memory was unavailable. The same posture the actor layer takes
     around ``read_open_contention``.
 
-    The two refs are gathered INDEPENDENTLY (each in its own try) so a failure of
-    one never suppresses the other.
+    The refs are gathered INDEPENDENTLY (each in its own try) so a failure of
+    one never suppresses the others.
+
+    ``ledger_target_id`` (FRAME-2 §2.2) turns on the WINDOW LEDGER at DESK scope
+    — every dimension's verified, severity-tagged heads over the trailing
+    fortnight. Passed ONLY by the per-country branch, deliberately: a country
+    composition's job IS cross-dimension synthesis over one desk, while a region
+    or world read would be handed five-to-twenty-four desks' fortnights, which
+    is a second evidence slice wearing a ledger's clothes. The plan lists
+    widening it as an R2 decision, not a round-1 one.
 
     An EMPTY ``analyst_ids`` short-circuits to ``[]`` with NO query — extending
     ``read_other_analyst_findings``'s "refuse the query rather than scan" contract
@@ -2444,6 +1730,26 @@ async def _gather_continuity_rows(
                 CONTINUITY_SITUATIONS_ROW_KEY: situations,
             }
         )
+
+    if ledger_target_id:
+        try:
+            entries = select_ledger_entries(
+                await read_window_ledger(conn, target_id=str(ledger_target_id))
+            )
+        except Exception as exc:  # pragma: no cover — best-effort enrichment
+            logger.warning(
+                "meta_findings_synthesizer.continuity.window_ledger.failed "
+                "target_id=%s err=%s — this compose reads WITHOUT its fortnight",
+                ledger_target_id, exc,
+            )
+            entries = []
+        if entries:
+            out.append(
+                {
+                    CONTINUITY_ROW_KEY: CONTINUITY_WINDOW_LEDGER,
+                    CONTINUITY_LEDGER_ROW_KEY: entries,
+                }
+            )
     return out
 
 
@@ -2641,6 +1947,7 @@ async def read_other_analyst_findings(
     verify_floor: float | None = None,
     include_meta: bool = False,
     dedupe_heads: bool = False,
+    include_superseded: bool = False,
 ) -> list[dict[str, Any]]:
     """Fetch ``analyst_outputs`` rows where ``kind='finding'`` for a set
     of source analysts.
@@ -2745,13 +2052,23 @@ async def read_other_analyst_findings(
     # desks) — none of the target/meta filters is set there, so it needs its own
     # switch. DISTINCT ON (analyst_id, target_id) with a single constant analyst_id
     # then yields exactly one head per target_id (one per desk).
+    #
+    # FRAME-1 ``include_superseded`` (the GB-drone class): the ONE caller that
+    # sets it is the newest-floor-PASSING fallback gather. The head-fold is a
+    # freshness relation, and combining it with the verify floor means a unit
+    # whose LIVE head failed verification has NO admissible head at all — even
+    # when an in-horizon prior head passed at 0.571. Dropping the supersession
+    # predicate (and ONLY that predicate) makes the DISTINCT ON below yield the
+    # newest PASSING head per (unit, desk), superseded or not; the caller then
+    # keeps only the units the floor actually withheld and stamps each with the
+    # newer failing head it stands in for. Default False ⇒ byte-for-byte.
     dedupe_composition = (
         target_id is not None
         or target_ids is not None
         or include_meta
         or dedupe_heads
     )
-    if dedupe_composition:
+    if dedupe_composition and not include_superseded:
         where.append("f.superseded_by IS NULL")
 
     if target_id is not None:
@@ -2839,105 +2156,13 @@ async def read_other_analyst_findings(
     return [dict(r) for r in rows]
 
 
-async def read_periphery_findings(
-    conn,  # type: ignore[no-untyped-def]
-    *,
-    analyst_ids: Sequence[str],
-    time_window_hours: int,
-    floor: float,
-    limit: int = 32,
-    target_id: str | None = None,
-    target_ids: Sequence[str] | None = None,
-    include_meta: bool = False,
-) -> list[dict[str, Any]]:
-    """C-TIER — gather the PERIPHERY tier: what the basis bar EXCLUDED.
-
-    The exact COMPLEMENT of the :func:`read_other_analyst_findings`
-    ``verify_floor`` admissibility over the same scope (same analyst set,
-    window, target scope, meta filter, head-fold dedupe, coerce-tag drop),
-    inverted on the verify leg:
-
-      * LEFT (not INNER) join to the latest ``Faithfulness verify%`` critique —
-        an UNVERIFIED head is periphery (claim-bearing but ungraded), not
-        invisible;
-      * admitted iff ``v.faithfulness_score IS NULL`` (unverified) OR
-        ``LEAST(confidence, faithfulness) < floor`` (verify-scored below the
-        bar) — i.e. exactly the rows the basis gather refuses;
-      * coerce-fallback (``unstructured``/``coerce_failed``) rows stay excluded
-        OUTRIGHT — a garbage body is not claim-bearing signal, it is noise;
-      * ``effective_confidence`` is NULL for an unverified row (an explicit
-        CASE — SQL ``LEAST`` ignores NULLs, which would otherwise launder a raw
-        confidence into a verified-looking score), so an ungraded head can
-        never raise a ceiling or masquerade as verified.
-
-    Every returned row is stamped ``_evidence_tier='periphery'`` +
-    ``_evidence_floor=<floor>`` so the DB-less ``_run`` partitions on data, not
-    env. The DB fetch is head-folded + capped at ``limit``; the worst-first
-    PERIPHERY_CAP selection happens in the pure :func:`_select_periphery` so
-    the ordering rule is unit-testable without a database.
-    """
-    if not analyst_ids:
-        return []
-
-    params: list[Any] = [list(analyst_ids), int(time_window_hours)]
-    where: list[str] = [
-        "f.kind = 'finding'",
-        "f.analyst_id = ANY($1::TEXT[])",
-        "f.produced_at > NOW() - make_interval(hours => $2)",
-        "f.superseded_by IS NULL",
-    ]
-    if not include_meta:
-        where.append("(f.data -> 'data' ->> 'meta') IS DISTINCT FROM 'true'")
-    if target_id is not None:
-        params.append(str(target_id))
-        where.append(f"f.target_id = ${len(params)}")
-    elif target_ids is not None:
-        params.append([str(t) for t in target_ids])
-        where.append(f"f.target_id = ANY(${len(params)}::TEXT[])")
-    params.append(float(floor))
-    where.append(
-        "(v.faithfulness_score IS NULL"
-        f" OR LEAST(f.confidence, v.faithfulness_score) < ${len(params)})"
-    )
-    where.append(
-        "(f.data -> 'tags' ?| array['unstructured','coerce_failed']) IS NOT TRUE"
-    )
-
-    sql = f"""
-    SELECT * FROM (
-        SELECT DISTINCT ON (f.analyst_id, f.target_id)
-               f.id, f.kind, f.title, f.body, f.confidence, f.severity, f.data,
-               f.target_id, f.target_version, f.analyst_id, f.analyst_version,
-               f.produced_at, f.derived_from, f.schema_uri, f.run_id,
-               CASE WHEN v.faithfulness_score IS NULL THEN NULL
-                    ELSE LEAST(f.confidence, v.faithfulness_score)
-               END AS effective_confidence,
-               v.faithfulness_score AS faithfulness_score
-        FROM analyst_outputs f
-        LEFT JOIN LATERAL (
-            SELECT (cr.data->>'overall_score')::real AS faithfulness_score
-              FROM analyst_outputs cr
-             WHERE cr.kind = 'critique'
-               AND cr.data->>'analyzed_output_id' = f.id::text
-               AND cr.data->>'overall_score' IS NOT NULL
-               AND cr.title LIKE 'Faithfulness verify%'
-             ORDER BY cr.produced_at DESC, cr.id DESC
-             LIMIT 1
-        ) v ON TRUE
-        WHERE {' AND '.join(where)}
-        ORDER BY f.analyst_id, f.target_id, f.produced_at DESC, f.id DESC
-    ) dedup
-    ORDER BY dedup.produced_at DESC
-    LIMIT {int(limit)}
-    """
-    rows = await conn.fetch(sql, *params)
-    out: list[dict[str, Any]] = []
-    for r in rows:
-        row = dict(r)
-        row[_EVIDENCE_TIER_KEY] = PERIPHERY_TIER
-        row[_EVIDENCE_FLOOR_KEY] = float(floor)
-        out.append(row)
-    return out
+# The C-TIER PERIPHERY GATHER (``read_periphery_findings``), the FRAME-1
+# newest-floor-PASSING fallback (``read_floor_fallback_heads``) and the
+# horizon denormalizer (``_stamp_horizon``) live in ``composition_window``
+# with the selection + render they feed, and are re-exported at the top of
+# this module. The fallback takes the BASIS reader below as a parameter,
+# because that is exactly what it is: the basis gather run again with the
+# supersession predicate dropped.
 
 
 # ---------------------------------------------------------------------------
@@ -3926,6 +3151,8 @@ async def _run(
     )
     prior_row, register_row = _continuity_selection(continuity_rows)
     register_situations = _register_situations(register_row)
+    ledger_row = _ledger_selection(continuity_rows)
+    ledger_entries = _ledger_entries(ledger_row)
     periphery_rows = [
         r for r in tiered_pool if r.get(_EVIDENCE_TIER_KEY) == PERIPHERY_TIER
     ]
@@ -3944,6 +3171,19 @@ async def _run(
     periphery_sel = (
         _select_periphery(periphery_rows) if periphery_rows else []
     )
+    # FRAME-1: the ADMISSIBILITY HORIZON READ_SLICE resolved for this run,
+    # denormalized onto every row it returned (the ``_region_coverage`` idiom).
+    # Read once from the first row that carries it; harmlessly absent on a
+    # direct/legacy caller, which then renders and stamps exactly as before.
+    # Scanned over ALL inputs rather than the basis pool: a slice whose only
+    # surviving row is a CONTINUITY ref still knows the window it was read
+    # under, which is what lets the empty-slice sentence name it.
+    _horizon_hours: int | None = None
+    for _row in inputs:
+        _h = _row.get(HORIZON_ROW_KEY)
+        if isinstance(_h, (int, float)) and not isinstance(_h, bool) and _h > 0:
+            _horizon_hours = int(_h)
+            break
     # RECEIPTS — how many continuity refs actually entered this slice. Reported
     # wherever the slice reports its composition stats (the ``orient`` step on
     # BOTH the normal and the honest-empty path, its own ``continuity`` step, and
@@ -3954,6 +3194,7 @@ async def _run(
     continuity_receipts: dict[str, int] = {
         CONTINUITY_PRIOR_RECEIPT: 1 if prior_row is not None else 0,
         CONTINUITY_SITUATIONS_RECEIPT: 1 if register_situations else 0,
+        CONTINUITY_LEDGER_RECEIPT: 1 if ledger_entries else 0,
     }
 
     # A per-COUNTRY read fuses only its own ~7 unit heads, so the narrow default
@@ -4038,6 +3279,28 @@ async def _run(
         # the weak signal is RECORDED, never lost: the envelope names the
         # periphery ids + the floor, and the body says why nothing composed.
         empty_body = "The other-analyst output slice for this run was empty."
+        # FRAME-1 (§3): the empty-slice sentence, re-worded to its only
+        # now-possible HONEST forms. "No source findings to synthesize" was
+        # printed over seven 42-hour-old heads on the BF desk because a 24h
+        # wall-clock gate had filtered them out; under the admissibility horizon
+        # an empty basis means one of exactly two things, and the sentence must
+        # say WHICH — a true absence across the whole horizon, or a floor
+        # withholding (never "no read", per the audit precedent).
+        _empty_window = (
+            f" within the trailing {_horizon_hours}h "
+            f"({_horizon_hours / 24.0:.0f} days)"
+            if _horizon_hours
+            else ""
+        )
+        empty_title = "No source findings to synthesize"
+        if is_composition and _horizon_hours:
+            empty_body = (
+                f"No desk read exists{_empty_window}: no source analyst produced "
+                "a verified head inside the admissibility horizon, so there is "
+                "nothing to compose. This is an absence of READS, not a reading "
+                "of calm."
+            )
+            empty_title = f"No desk read{_empty_window}"
         if tiered_evidence:
             empty_data["evidence_tiers"] = {
                 "basis_count": 0,
@@ -4046,15 +3309,20 @@ async def _run(
                 "floor": _tier_floor,
             }
             if periphery_sel:
-                empty_body = (
-                    "The verified (basis) other-analyst slice for this run was "
-                    f"empty. {len(periphery_sel)} below-floor/unverified "
-                    "signal(s) were present (recorded in data.evidence_tiers) "
-                    "but a composition is never synthesized from weak signals "
-                    "alone."
+                _floor_txt = (
+                    f"{_tier_floor:.2f}" if _tier_floor is not None else "the floor"
                 )
+                empty_body = (
+                    f"Every read on this desk{_empty_window} sits BELOW THE "
+                    f"VERIFICATION FLOOR ({_floor_txt}): "
+                    f"{len(periphery_sel)} below-floor/unverified signal(s) were "
+                    "present (recorded in data.evidence_tiers) but a composition "
+                    "is never synthesized from weak signals alone. This is a "
+                    "verification withholding, NOT an absence of reads."
+                )
+                empty_title = "All reads below the verification floor"
         finding = FindingPayload(
-            title="No source findings to synthesize",
+            title=empty_title,
             body=empty_body,
             confidence=0.0,
             tags=["empty_slice", "meta"],
@@ -4263,8 +3531,10 @@ async def _run(
             prior_row,
             register_situations,
             start_ordinal=_continuity_start_ordinal,
+            ledger=ledger_entries,
         ),
-        when=is_composition and (prior_row is not None or register_situations),
+        when=is_composition
+        and (prior_row is not None or register_situations or ledger_entries),
         position=_BLOCK_APPEND,
         separator="\n\n",
     )
@@ -4320,6 +3590,39 @@ async def _run(
         "desk_coverage",
         lambda: _render_desk_coverage_block(desk_coverage),
         when=desk_coverage,
+        position=_BLOCK_APPEND,
+        separator="\n",
+    )
+    # FRAME-1 (§3 + §4.2/4.3): the HEAD WINDOW block — the horizon this read
+    # admitted heads under, the staleness the model is obliged to disclose, and
+    # the deterministic per-unit COVERAGE LEDGER (in basis / below floor / not
+    # verified / no read at all). A DIRECTIVE, appended beside the other
+    # coverage blocks and carrying NO [[ref:N]] ordinal: it is the run's own
+    # bookkeeping about what it was shown, and minting an ordinal for
+    # bookkeeping would put a fabricated anchor in the citation space.
+    #
+    # The ledger half needs a DENOMINATOR — the subscription-resolved unit
+    # roster on ``options['source_analyst_ids']``. Without it we could only
+    # enumerate the units that DID arrive, which is precisely the blindness the
+    # ledger exists to remove, so the ledger is simply omitted (and the block
+    # degrades to the horizon + staleness lines). Roster-based coverage is
+    # per-COUNTRY only: region/world/thematic runs already carry their own
+    # per-region / per-desk coverage blocks over their own denominators.
+    _head_ledger = (
+        build_coverage_ledger(provided, sliced, periphery_rows)
+        if (target_scoped and not region_scoped and provided)
+        else []
+    )
+    _max_head_age = max_head_age_hours(sliced)
+    _blocks.add(
+        "head_window",
+        lambda: render_coverage_ledger_block(
+            _head_ledger,
+            horizon_hours=_horizon_hours,
+            floor=_tier_floor,
+            max_age_hours=_max_head_age,
+        ),
+        when=is_composition and (_horizon_hours is not None or _head_ledger),
         position=_BLOCK_APPEND,
         separator="\n",
     )
@@ -4379,6 +3682,11 @@ async def _run(
             "kind": "citable_refs",
             **continuity_receipts,
             "situations": len(register_situations),
+            # FRAME-2: how much fortnight this compose was actually handed. The
+            # 0/1 receipt says the block was OFFERED; this says how thin it was,
+            # which is the difference between "the carry is working" and "the
+            # carry resolved to two lines and nobody noticed".
+            "window_ledger_lines": len(ledger_entries),
             "start_ordinal": _continuity_start_ordinal,
         },
     ]
@@ -4479,12 +3787,16 @@ async def _run(
         # C-TIER: the ordinal space spans basis THEN periphery (the same order
         # the render stamped), so a periphery citation resolves like any other
         # — the ``tier`` stamp below is what tells the verify pass apart.
-        # CONTINUITY extends that ONE space by up to two more blocks, in the same
-        # order the render emitted them (prior read, then register), so ordinal N
-        # still means "the Nth rendered block" with no drift.
+        # CONTINUITY extends that ONE space by up to three more blocks, in the
+        # SAME order ``_render_continuity_block`` emitted them (prior read, then
+        # window ledger, then register), so ordinal N still means "the Nth
+        # rendered block" with no drift. This sequence and that render are the
+        # one place the memory order is written down; they must move together.
         continuity_seq: list[Mapping[str, Any]] = []
         if prior_row is not None:
             continuity_seq.append(prior_row)
+        if ledger_entries and ledger_row is not None:
+            continuity_seq.append(ledger_row)
         if register_situations and register_row is not None:
             continuity_seq.append(register_row)
         num_subclaims = len(sliced) + len(periphery_sel) + len(continuity_seq)
@@ -4500,6 +3812,13 @@ async def _run(
         citations: list[dict[str, Any]] = []
         for n in resolved_ords:
             src_row = index_by_ordinal[n]
+            # FRAME-2 — the WINDOW LEDGER takes the same honest shape as the
+            # register for the same reason (a synthetic multi-row block with no
+            # single drill target), built by its own module so the unit layer
+            # and this one cite it identically.
+            if src_row.get(CONTINUITY_ROW_KEY) == CONTINUITY_WINDOW_LEDGER:
+                citations.append(window_ledger_citation(ledger_entries, n))
+                continue
             # CONTINUITY — the open-situation REGISTER is not an
             # ``analyst_outputs`` row and has NO single substrate id, so it gets
             # its own citation shape: ``ref_kind='situation_register'`` with the
@@ -4775,7 +4094,9 @@ async def _run(
     # and so a cycle where the memory was ABSENT reads as absent rather than as
     # a first run. Stamped only when a ref was actually offered, so every
     # pre-continuity / first-run compose is byte-for-byte unchanged.
-    if is_composition and (prior_row is not None or register_situations):
+    if is_composition and (
+        prior_row is not None or register_situations or ledger_entries
+    ):
         continuity_env: dict[str, Any] = dict(continuity_receipts)
         if prior_row is not None:
             _prior_uid = _coerce_uuid(prior_row.get("id"))
@@ -4792,7 +4113,35 @@ async def _run(
                 for s in register_situations
                 if s.get("situation_id")
             ]
+        if ledger_entries:
+            # FRAME-2 envelope honesty: WHICH fortnight this compose was shown,
+            # by real member id. The R2 attribution re-run reads it to ask the
+            # decisive question — was the missed major IN the ledger the read
+            # was handed, or was the ledger itself empty?
+            continuity_env["window_ledger_ids"] = ledger_finding_ids(ledger_entries)
+            continuity_env["window_ledger_lines"] = len(ledger_entries)
         finding.data["continuity"] = continuity_env
+
+    # --- HEAD AGES (FRAME-1 §6.1, composition only) --------------------
+    # The composition STAMPS the per-unit head ages it consumed. Two consumers,
+    # one number: the read itself now discloses staleness in prose, and the §6
+    # cadence-staleness gauge (``production_gauge_staleness``) reads this stamp
+    # rather than re-deriving an age — so what the operator is paged about is
+    # exactly what the product was shown. Derived from rows already in hand at
+    # render time: zero extra queries. Absent (never 0.0) when no consumed row
+    # carries a parsable timestamp — an ungauged composition and a fresh one
+    # must not read the same.
+    if is_composition:
+        _head_ages = head_ages_stamp(sliced, horizon_hours=_horizon_hours)
+        if _head_ages is not None:
+            finding.data["head_ages"] = _head_ages
+            steps.append({
+                "phase": "head_ages",
+                "kind": "stamp_window",
+                "heads": len(_head_ages.get("heads", [])),
+                "max_h": _head_ages.get("max_h"),
+                "horizon_h": _head_ages.get("horizon_h"),
+            })
 
     # --- FORWARD CONSUMPTION (KW-1, migration 0106) ---------------------
     # The consumption points, captured exactly where they were decided:
@@ -5508,13 +4857,18 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
         # CONTINUITY — the region's own prior read (the FRAME's head, target_id =
         # the region frame id) + the open situations of its MEMBER desks (the
         # same scope this branch's evidence is read over).
-        return rows + await _gather_continuity_rows(
-            conn,
-            descriptor=descriptor,
-            analyst_ids=ids,
-            verify_floor=_floor,
-            prior_target_id=str(target_filter),
-            situation_target_ids=member_ids,
+        # FRAME-1: the horizon rides the rows (see ``_stamp_horizon``).
+        return _stamp_horizon(
+            rows
+            + await _gather_continuity_rows(
+                conn,
+                descriptor=descriptor,
+                analyst_ids=ids,
+                verify_floor=_floor,
+                prior_target_id=str(target_filter),
+                situation_target_ids=member_ids,
+            ),
+            time_window_hours,
         )
 
     # THEMATIC branch (S2-T4) — a target-LESS run whose descriptor carries a
@@ -5562,13 +4916,18 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
         # CONTINUITY — the thematic head is TARGET-LESS, so its prior read is the
         # target-less lane; the situation register follows the SAME desk scope the
         # thematic evidence does (the dyad allow-list, or every desk when unset).
-        return rows + await _gather_continuity_rows(
-            conn,
-            descriptor=descriptor,
-            analyst_ids=ids,
-            verify_floor=_floor,
-            prior_target_id=None,
-            situation_target_ids=(list(_desks) if _desks else None),
+        # FRAME-1: the horizon rides the rows (see ``_stamp_horizon``).
+        return _stamp_horizon(
+            rows
+            + await _gather_continuity_rows(
+                conn,
+                descriptor=descriptor,
+                analyst_ids=ids,
+                verify_floor=_floor,
+                prior_target_id=None,
+                situation_target_ids=(list(_desks) if _desks else None),
+            ),
+            time_window_hours,
         )
 
     # WORLD branch (S2-T3) — the target-LESS verify-declaring global meta = the
@@ -5616,12 +4975,17 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
         # UNSCOPED: the world read's evidence scope is the whole roster, so
         # narrowing its register to one desk would be a different aperture than
         # the read it annotates.
-        return rows + await _gather_continuity_rows(
-            conn,
-            descriptor=descriptor,
-            analyst_ids=ids,
-            verify_floor=_floor,
-            prior_target_id=None,
+        # FRAME-1: the horizon rides the rows (see ``_stamp_horizon``).
+        return _stamp_horizon(
+            rows
+            + await _gather_continuity_rows(
+                conn,
+                descriptor=descriptor,
+                analyst_ids=ids,
+                verify_floor=_floor,
+                prior_target_id=None,
+            ),
+            time_window_hours,
         )
 
     # Two branches (BYTE-FOR-BYTE the P3-T2 per-country + legacy read when the
@@ -5671,12 +5035,35 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
                 target_id=target_id,
                 include_meta=False,
             )
+            # FRAME-1 (§3): a unit whose LIVE head failed the floor gets its
+            # newest floor-PASSING head back into the basis (the GB-drone
+            # class), while the newer failing head stays in the periphery with
+            # its date and score. Gated on the tiered flag DELIBERATELY: with
+            # the periphery unrendered, promoting an older passing head would
+            # show a days-old read as the desk's current one and say nothing
+            # about the newer read that failed — a different dishonesty from the
+            # one being fixed. The two halves ship and flip together.
+            fallback = await read_floor_fallback_heads(
+                conn,
+                basis_reader=read_other_analyst_findings,
+                analyst_ids=ids,
+                time_window_hours=time_window_hours,
+                floor=verify_floor,
+                basis_rows=rows,
+                periphery_rows=periphery,
+                target_id=target_id,
+                include_meta=False,
+            )
+            if fallback:
+                rows = rows + await _attach_freshness(conn, fallback)
             for row in rows:
                 row[_EVIDENCE_FLOOR_KEY] = verify_floor
             rows = rows + periphery
         # CONTINUITY — the per-COUNTRY composition: its own prior head for THIS
-        # desk + THIS desk's open situations. The LEGACY global meta below the
-        # guard gets NONE, keeping the standing byte-for-byte legacy discipline.
+        # desk, THIS desk's open situations, and (FRAME-2) THIS desk's WINDOW
+        # LEDGER — the fortnight of severity-tagged reads every dimension on the
+        # desk actually produced. The LEGACY global meta below the guard gets
+        # NONE, keeping the standing byte-for-byte legacy discipline.
         rows = rows + await _gather_continuity_rows(
             conn,
             descriptor=descriptor,
@@ -5684,7 +5071,12 @@ async def READ_SLICE(  # noqa: N802 — host-discovered constant alias
             verify_floor=verify_floor,
             prior_target_id=target_id,
             situation_target_id=target_id,
+            ledger_target_id=target_id,
         )
+        # FRAME-1: the horizon rides the rows to the DB-less ``_run`` (see
+        # ``_stamp_horizon``). Stamped LAST so every row — basis, periphery,
+        # fallback and continuity — carries it.
+        _stamp_horizon(rows, time_window_hours)
     return rows
 
 
@@ -5710,7 +5102,19 @@ __all__ = [
     "DEFAULT_MAX_TOKENS",
     "DEFAULT_TEMPERATURE",
     "DEFAULT_VERIFY_FLOOR",
+    "FLOOR_FALLBACK_KEY",
     "HANDLER_VERSION",
+    "HORIZON_ROW_KEY",
+    "MAX_TITLE_CHARS",
+    "STALE_HEAD_DISCLOSE_HOURS",
+    "age_suffix",
+    "build_coverage_ledger",
+    "floor_fallback_suffix",
+    "head_ages_stamp",
+    "max_head_age_hours",
+    "render_coverage_ledger_block",
+    "select_floor_fallback",
+    "units_missing_from_basis",
     "KIND_NAME",
     "LLMHandlerLike",
     "MAX_FULL_BODY_CHARS",
@@ -5789,6 +5193,7 @@ __all__ = [
     "build_prompt_module",
     "read_open_contention",
     "read_open_situations",
+    "read_floor_fallback_heads",
     "read_other_analyst_findings",
     "read_periphery_findings",
     "read_prior_composition_head",

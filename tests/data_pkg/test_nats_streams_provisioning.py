@@ -29,6 +29,8 @@ from legba.data.registry.streams import (
     DLQ_EVENTS_STREAM,
     STACK_EVENTS_STREAM,
     STACK_EVENTS_SUBJECTS,
+    VAULT_EVENTS_STREAM,
+    VAULT_EVENTS_SUBJECTS,
     VOCABULARY_EVENTS_STREAM,
     VOCABULARY_EVENTS_SUBJECTS,
     ensure_runtime_event_streams,
@@ -72,26 +74,29 @@ def stream_name_suffix() -> str:
 
 async def test_ensure_runtime_event_streams_creates_all_three(nats_store, stream_name_suffix):
     # Start clean — delete any pre-existing streams so we get `created=True`.
-    # NOTE: the helper now provisions four streams (L-221 added
-    # LEGBA_DLQ_EVENTS); this test still focuses on the original three,
-    # but we delete + assert all four so the result-count assertion stays
-    # honest.
+    # NOTE: the helper now provisions five streams (L-221 added
+    # LEGBA_DLQ_EVENTS; 3f7f4728 "feat(vault): rotation eviction hook" added
+    # LEGBA_VAULT_EVENTS for the RUST-5 vault-rotation cache-invalidation
+    # hook); this test still focuses on the original three, but we delete +
+    # assert all five so the result-count assertion stays honest.
     for name in (
         DESCRIPTOR_EVENTS_STREAM,
         STACK_EVENTS_STREAM,
         VOCABULARY_EVENTS_STREAM,
         DLQ_EVENTS_STREAM,
+        VAULT_EVENTS_STREAM,
     ):
         await _delete_stream_if_present(nats_store, name)
 
     results = await ensure_runtime_event_streams(nats_store)
 
-    assert len(results) == 4
+    assert len(results) == 5
     by_name = {r.name: r for r in results}
     assert by_name[DESCRIPTOR_EVENTS_STREAM].created is True
     assert by_name[STACK_EVENTS_STREAM].created is True
     assert by_name[VOCABULARY_EVENTS_STREAM].created is True
     assert by_name[DLQ_EVENTS_STREAM].created is True
+    assert by_name[VAULT_EVENTS_STREAM].created is True
 
     # Subject + retention shape per the spec.
     desc = by_name[DESCRIPTOR_EVENTS_STREAM]

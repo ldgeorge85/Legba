@@ -719,6 +719,100 @@ _PARSED_TO_RAW = {
 _HHMM_RE = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?\b")
 
 
+# THE HUMAN-PROSE DATE CLASS. Drupal's default "long" date format —
+# ``l, F j, Y - H:i`` — renders pubDate as readable prose instead of RFC822:
+# "Thursday, July 30, 2026 - 15:47". feedparser cannot identify it at all
+# (``published_parsed`` is None), ``parsedate_to_datetime`` and
+# ``fromisoformat`` both raise, and the numeric patterns above do not match —
+# so EVERY entry of such a feed arrived with ``published_at`` NULL.
+#
+# Measured on source.crisisgroup.latest (2026-08-16): 29 of 29 lifetime
+# signals carry a null published_at and 82 of 82 polls recorded no
+# ``newest_entry_ts``. With no observation the gauge's upstream-quiet
+# discriminator cannot fire, so a feed that had simply gone quiet upstream
+# (its own newest entry, 2026-07-30 15:47, was already ingested on 07-31)
+# read as a 394-hour production DROUGHT and paged at severity high. The feed
+# was publishing its date the whole time; we could not read it.
+#
+# Only the two WORD tokens are localized — Drupal renders the weekday and
+# month in the CONTENT ITEM's language, so one feed mixes English with e.g.
+# "Vendredi, juillet 24, 2026 - 13:43" (fr) and "Perşembe, Temmuz 23, 2026 -
+# 15:54" (tr). The weekday is decorative and is skipped WITHOUT being checked
+# against the date (RFC 5322 parsers ignore the day-name too, and validating
+# it would only reject feeds over a field that carries no information). The
+# month name is load-bearing, and we decode ENGLISH ONLY: that is the exact,
+# closed set we can be certain of. A month word we do not know yields None —
+# no date, exactly the status quo — rather than a guess. Understating the
+# feed's newest entry is also the SAFE direction for the gauge: it biases
+# toward "upstream quiet", never toward a false deficit.
+_MONTHS_EN = {
+    "january": 1, "jan": 1,
+    "february": 2, "feb": 2,
+    "march": 3, "mar": 3,
+    "april": 4, "apr": 4,
+    "may": 5,
+    "june": 6, "jun": 6,
+    "july": 7, "jul": 7,
+    "august": 8, "aug": 8,
+    "september": 9, "sep": 9, "sept": 9,
+    "october": 10, "oct": 10,
+    "november": 11, "nov": 11,
+    "december": 12, "dec": 12,
+}
+
+# Fully anchored: the WHOLE string must be this shape, so a partial match on
+# junk cannot slip through. The month table and the ``datetime`` construction
+# below do the rest of the rejecting (an unknown month word, or an impossible
+# day like February 30, both yield None).
+_LONG_FORM_DATE_RE = re.compile(
+    r"""^
+    (?:[^\s,]+,\s+)?            # optional weekday name + comma — ignored
+    ([A-Za-z]+)\s+              # month name (English decoded; else reject)
+    (\d{1,2}),\s+               # day of month
+    (\d{4})                     # 4-digit year
+    \s*-\s*                     # Drupal's literal " - " separator
+    ([01]?\d|2[0-3]):([0-5]\d)  # HH:MM, 24-hour
+    (?::([0-5]\d))?             # optional :SS
+    $""",
+    re.VERBOSE,
+)
+
+
+def _parse_long_form_datetime(norm: str) -> datetime | None:
+    """Parse the Drupal ``l, F j, Y - H:i`` prose date shape.
+
+    ``norm`` must already be whitespace-normalized. Returns a UTC-aware
+    datetime, or ``None`` when the string is not exactly this shape or its
+    month word is not English.
+
+    The wire format carries NO timezone, so the instant is stamped UTC in
+    keeping with every other naive-datetime path in this module. Where the
+    publisher is really on a positive offset this reads slightly EARLY, which
+    is the harmless direction: it cannot manufacture the future-skew junk the
+    26h ceiling exists to reject, and it stays well inside the gauge's 6h
+    upstream-quiet tolerance.
+    """
+    m = _LONG_FORM_DATE_RE.match(norm)
+    if m is None:
+        return None
+    month = _MONTHS_EN.get(m.group(1).lower())
+    if month is None:
+        return None
+    try:
+        return datetime(
+            year=int(m.group(3)),
+            month=month,
+            day=int(m.group(2)),
+            hour=int(m.group(4)),
+            minute=int(m.group(5)),
+            second=int(m.group(6) or 0),
+            tzinfo=timezone.utc,
+        )
+    except ValueError:
+        # Impossible calendar date (e.g. "February 30") — reject, don't round.
+        return None
+
+
 def _struct_time_is_midnight(st: struct_time) -> bool:
     """True iff a feedparser struct_time sits at exactly 00:00:00.
 
@@ -738,15 +832,20 @@ def _raw_has_explicit_time(raw: str) -> bool:
 
 
 def _parse_tolerant_datetime(raw: str) -> datetime | None:
-    """Best-effort parse for whitespace-mangled / 2-digit-year date shapes.
+    """Best-effort parse for whitespace-mangled / 2-digit-year / prose shapes.
 
     Recovers the iaea-style ``"26-06-26  13:30"`` (2-digit year, no day-name,
-    no timezone, double-spaced) that feedparser collapses to midnight. The
-    string is whitespace-normalized, then matched against a small set of
-    explicit ``strptime`` patterns. A bare 2-digit year is expanded to 20YY
-    (these are current-news feeds — a 2-digit year is this century). Returns a
-    UTC-aware datetime, or ``None`` when no pattern matches (caller falls
-    through to the standard RFC822 / ISO parsers).
+    no timezone, double-spaced) that feedparser collapses to midnight, and the
+    Drupal-style ``"Thursday, July 30, 2026 - 15:47"`` prose date that
+    feedparser cannot identify at all. The string is whitespace-normalized,
+    then matched against the prose shape and a small set of explicit
+    ``strptime`` patterns. A bare 2-digit year is expanded to 20YY (these are
+    current-news feeds — a 2-digit year is this century). Returns a UTC-aware
+    datetime, or ``None`` when nothing matches (caller falls through to the
+    standard RFC822 / ISO parsers).
+
+    Every shape here is fully anchored: this is a list of formats we have
+    actually observed on the wire, not a general date guesser.
     """
     if not raw:
         return None
@@ -754,6 +853,12 @@ def _parse_tolerant_datetime(raw: str) -> datetime | None:
     norm = re.sub(r"\s+", " ", raw).strip()
     if not norm:
         return None
+
+    # The prose shape is tried first; it starts with a letter and so cannot
+    # collide with the numeric patterns below.
+    long_form = _parse_long_form_datetime(norm)
+    if long_form is not None:
+        return long_form
 
     # Patterns are tried most-specific first. Each is a (strptime fmt,
     # two_digit_year) pair; the flag tells us to expand a %y century-window

@@ -33,23 +33,25 @@ from legba.data.provenance.verify import (
 
 
 def test_version_value_and_shape() -> None:
-    """ONE bump per train, ``<train date>/<n>`` — V-I1 guard 6.
+    """ONE bump per train, ``<train date>/<n>`` — RUST-1, the EVIDENCE-BYTES
+    fix (panel 2026-08-16 §V-1).
 
-    Bumped from ``2026-08-09/1`` (guard 5 + rec #8's NULL score) for one
-    verify-BEHAVIOR change, the round-5 §10-5 class: the V-I1 confirmation
-    fingerprint now reads PROSE DIRECTION. A claim taking one side of a
-    direction axis (no-change/new, rise/fall, open/closed, begin/end,
-    above/below, improve/worsen) whose "confirming" quote takes the OPPOSITE
-    side about the same subject was never confirmed by it — the suppression
-    withdraws. Critique ``037f769f`` ("no material change since the prior
-    7 August read" suppressed by a quote reporting a casualty figure "absent
-    from the prior 7 August read" — every numeral and the one endpoint match,
-    the PROSE diverges) is the live case; the 69-pair replay under the
-    2026-08-05/1 + 2026-08-09/1 stamps flips only it. Withdraw-only, like
-    guard 5, so hard-fail count may RISE by exactly this class — a measurement
-    correction; pooling across the boundary would read it as a fleet movement.
+    Bumped from ``2026-08-15/1`` (Phase J) because the hard/soft SPLIT moves:
+    the evidence map was shown to the judge ``ensure_ascii=True``-escaped
+    while ``quote_corpus`` scored the UNESCAPED values, so a span copied
+    VERBATIM from what the judge was shown could never resolve when it
+    contained non-ASCII or crossed a newline — 36% of contradiction attempts
+    failed to resolve their quote (77 ``judge_contradicted_unquoted`` vs
+    114+21 resolved over 14 days). Now the render sites pass
+    ``ensure_ascii=False`` AND the quote side un-escapes literal JSON string
+    escapes before resolution (both renderings repaired; raw form tried
+    first, so pure-ASCII single-line behavior is byte-identical). EXPECTED
+    SHIFT: hard-fail count RISES and the unquoted demotion FALLS,
+    concentrated on non-ASCII-heavy sources; the SCORE is unchanged by
+    construction. Pooling across this boundary would read the severity-split
+    correction as a fleet movement.
     """
-    assert JUDGE_PIPELINE_VERSION == "2026-08-10/1"
+    assert JUDGE_PIPELINE_VERSION == "2026-08-21/1"
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}/\d+", JUDGE_PIPELINE_VERSION)
 
 
@@ -77,13 +79,23 @@ async def test_stamped_on_the_trace_envelope_too(monkeypatch) -> None:
 
 def test_one_stamp_for_the_whole_train() -> None:
     """A single module constant — a per-call or per-kind stamp would let two
-    findings from the same deploy land in different populations."""
+    findings from the same deploy land in different populations.
+
+    2026-08-15: the constant + its lineage banner moved to the sibling
+    ``judge_pipeline_version`` module (the size-gate seam); ``verify``
+    re-exports it, so the ONE assignment lives there and the historical import
+    surface (``from ...verify import JUDGE_PIPELINE_VERSION``) is unchanged.
+    """
+    import legba.data.provenance.judge_pipeline_version as JPV
     import legba.data.provenance.verify as V
 
     assert isinstance(V.JUDGE_PIPELINE_VERSION, str)
-    src = __import__("inspect").getsource(V)
-    # Exactly one assignment; every other occurrence is a read.
-    assert src.count("JUDGE_PIPELINE_VERSION = ") == 1
+    # The re-export IS the module constant — one stamp, two import paths.
+    assert V.JUDGE_PIPELINE_VERSION == JPV.JUDGE_PIPELINE_VERSION
+    inspect = __import__("inspect")
+    # Exactly one assignment, in the extracted module; verify only imports.
+    assert inspect.getsource(JPV).count("JUDGE_PIPELINE_VERSION = ") == 1
+    assert inspect.getsource(V).count("JUDGE_PIPELINE_VERSION = ") == 0
 
 
 # ---------------------------------------------------------------------------

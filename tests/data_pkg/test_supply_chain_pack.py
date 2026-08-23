@@ -332,7 +332,11 @@ def test_unit_takes_the_default_verify_profile_on_the_core_plane():
 
 
 def test_unit_ships_no_action_pack_grant():
-    assert _raw(_UNIT_FILE)["action_packs"] == []
+    # 3bd55d5c (2026-08-21): the tree deliberately caught up to the live
+    # head's escalate_finding grant — see the mirrored comment in
+    # tests/data_pkg/test_voice4_flip_kit.py::
+    # test_only_the_prompt_changed_against_the_pre_flip_descriptor.
+    assert _raw(_UNIT_FILE)["action_packs"] == [{"pack_id": "escalate_finding"}]
 
 
 def test_unit_prompt_carries_the_six_vectors_and_a_direction():

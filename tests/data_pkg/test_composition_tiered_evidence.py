@@ -243,11 +243,13 @@ async def test_flag_off_per_country_read_is_byte_identical(monkeypatch):
     conn = _CapturingConn(rows=[])
     await synth.READ_SLICE(conn, descriptor=_descriptor(_UNITS), target_filter="country_g20_in")
     # Exactly ONE *evidence* gather (the legacy verify-floored basis read), floor
-    # 0.0 — no periphery leg. The trailing call is the Phase-1 CONTINUITY
-    # open-situation register, which is orthogonal to the tier split (the
-    # descriptor stub carries no identity block, so no prior-read query fires).
-    assert len(conn.calls) == 2
-    assert "FROM situations" in conn.calls[-1][0]
+    # 0.0 — no periphery leg. The trailing calls are the memory-section gathers,
+    # both orthogonal to the tier split: the Phase-1 CONTINUITY open-situation
+    # register and (FRAME-2) the WINDOW LEDGER. The descriptor stub carries no
+    # identity block, so no prior-read query fires.
+    assert len(conn.calls) == 3
+    assert "FROM situations" in conn.calls[1][0]
+    assert "CASE f.severity" in conn.calls[-1][0]
     query, params = conn.calls[0]
     assert "JOIN LATERAL" in query and "LEFT JOIN LATERAL" not in query
     assert "LEAST(f.confidence, v.faithfulness_score) >= $4" in query
@@ -264,9 +266,12 @@ async def test_flag_on_per_country_read_splits_basis_and_periphery(monkeypatch):
         conn, descriptor=_descriptor(_UNITS), target_filter="country_g20_in"
     )
     # TWO evidence gathers: the basis read at the SPLIT floor (0.50), then the
-    # periphery complement at the SAME floor (+ the Phase-1 continuity register).
-    assert len(conn.calls) == 3
-    assert "FROM situations" in conn.calls[-1][0]
+    # periphery complement at the SAME floor — plus the two memory-section
+    # gathers (the Phase-1 continuity register and FRAME-2's window ledger),
+    # neither of which is a tier.
+    assert len(conn.calls) == 4
+    assert "FROM situations" in conn.calls[2][0]
+    assert "CASE f.severity" in conn.calls[-1][0]
     basis_q, basis_p = conn.calls[0]
     peri_q, peri_p = conn.calls[1]
     assert "LEAST(f.confidence, v.faithfulness_score) >= $4" in basis_q

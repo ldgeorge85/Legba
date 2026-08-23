@@ -38,12 +38,16 @@ import pytest
 
 SUITE = Path(__file__).resolve().parents[2] / "scripts" / "host_nightly_suite.sh"
 
-# A known-failure node id (dspy is worker-only) and a known SHARED-STATE one.
-# Both are on the script's allowlists; neither may page. These constants must
-# track the LIVE lists — the 2026-08-09 stale-entry retirement moved
-# KNOWN_SHARED off the collection_requirements entry (retired after three
-# clean nights) onto one that still fires.
-KNOWN = "tests/runtime/test_optimizer_gepa_loop.py::test_in_process_returns_bounded_result"
+# A known-failure node id (LEGBA_TEST_STRICT infra escalation) and a known
+# SHARED-STATE one. Both are on the script's allowlists; neither may page.
+# These constants must track the LIVE lists — the 2026-08-09 stale-entry
+# retirement moved KNOWN_SHARED off the collection_requirements entry
+# (retired after three clean nights) onto one that still fires. RUST-4
+# (2026-08-21) retired the whole dspy-worker-only KNOWN_FAILURES section this
+# constant used to point into (those 11 tests now carry an explicit
+# `pytest.mark.skip` instead of an allowlist entry — see docs/SEAMS.md #53) —
+# KNOWN now points at a still-live entry from the infra-escalation section.
+KNOWN = "tests/data_pkg/agency/test_agency_hard_gate.py::test_process_media_pack_enqueues_real_job"
 KNOWN_SHARED = (
     "tests/data_pkg/test_postgres_pool_search_path.py::test_actor_state_table_reachable_from_every_acquire"
 )

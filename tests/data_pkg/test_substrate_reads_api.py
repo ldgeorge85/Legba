@@ -1099,6 +1099,183 @@ async def test_findings_reachability_facets_preserve_verification_fold(
 
 
 # ---------------------------------------------------------------------------
+# GLASS-1 — the server-side verification facet (`verified=` / `judge_status=`).
+# The Live Feed's verification chips used to sieve the fetched page client-side
+# (wrong at any real corpus size); these pin that the filter now runs in the
+# route's WHERE, over the SAME surfaced verification block the badge reads, and
+# that pagination counts the FILTERED population.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_filter_verified_true_and_false(
+    substrate_app, client: AsyncClient,
+):
+    """`verified=true` returns ONLY rows whose surfaced verification block
+    carries a measured faithfulness_score; `verified=false` returns everything
+    else — never verified, a faithfulness critique WITHOUT a verification
+    block, and a structural-verified row (its block has no faithfulness_score:
+    re-computation is not the faithfulness pass)."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("verified-facet")
+
+    verified_fid = await _insert_finding(
+        pg_store, title="verified", confidence=0.9, target_id=tid,
+    )
+    await _insert_critique(
+        pg_store, analyzed_output_id=verified_fid, overall_score=0.9,
+        data_extra={"verification": {
+            "faithfulness_score": 0.9, "judge_status": "llm",
+        }},
+    )
+    unverified_fid = await _insert_finding(
+        pg_store, title="never verified", confidence=0.7, target_id=tid,
+    )
+    # A faithfulness critique whose payload carries NO verification block —
+    # the surfaced block is null, so the row reads unverified (honest absence).
+    scoreless_fid = await _insert_finding(
+        pg_store, title="critiqued without a block", confidence=0.8, target_id=tid,
+    )
+    await _insert_critique(
+        pg_store, analyzed_output_id=scoreless_fid, overall_score=0.8,
+    )
+    structural_fid = await _insert_finding(
+        pg_store, title="structural, recomputation-verified", confidence=1.0,
+        severity=None, target_id=tid, analyst_id="geo_convergence_scan",
+    )
+    await _insert_critique(
+        pg_store, analyzed_output_id=structural_fid, overall_score=1.0,
+        title="Structural verify (verified)",
+        data_extra={"verification": {
+            "structural_verify": True, "structural_verified": True,
+            "checkable_claims": 1, "supported_claims": 1,
+        }},
+    )
+
+    r = await client.get(
+        "/api/v1/findings", params={"target_id": tid, "verified": "true"},
+    )
+    assert r.status_code == 200, r.text
+    assert {row["id"] for row in r.json()["data"]} == {str(verified_fid)}
+
+    r = await client.get(
+        "/api/v1/findings", params={"target_id": tid, "verified": "false"},
+    )
+    assert r.status_code == 200, r.text
+    assert {row["id"] for row in r.json()["data"]} == {
+        str(unverified_fid), str(scoreless_fid), str(structural_fid),
+    }
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_filter_judge_status_each_value(
+    substrate_app, client: AsyncClient,
+):
+    """`judge_status=` matches each of the three run modes exactly — and the J2
+    `unsampled` stratum is a FIRST-CLASS value: one query returns exactly the
+    rows the sampling gate skipped. An unverified row (no block, hence no
+    judge_status) matches NO value; an unsampled row still counts as VERIFIED
+    (the deterministic floor ran — an honest state, never an error)."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("judge-facet")
+
+    by_status: dict[str, UUID] = {}
+    for status_val in ("llm", "deterministic", "unsampled"):
+        fid = await _insert_finding(
+            pg_store, title=f"judged {status_val}", confidence=0.9, target_id=tid,
+        )
+        await _insert_critique(
+            pg_store, analyzed_output_id=fid, overall_score=0.7,
+            data_extra={"verification": {
+                "faithfulness_score": 0.7, "judge_status": status_val,
+            }},
+        )
+        by_status[status_val] = fid
+    # No critique at all → no judge_status → matches no value.
+    await _insert_finding(
+        pg_store, title="never verified", confidence=0.7, target_id=tid,
+    )
+
+    for status_val, fid in by_status.items():
+        r = await client.get(
+            "/api/v1/findings",
+            params={"target_id": tid, "judge_status": status_val},
+        )
+        assert r.status_code == 200, r.text
+        assert {row["id"] for row in r.json()["data"]} == {str(fid)}, status_val
+
+    # The unsampled row IS verified — the floor measured a faithfulness score.
+    r = await client.get(
+        "/api/v1/findings",
+        params={"target_id": tid, "verified": "true", "judge_status": "unsampled"},
+    )
+    assert r.status_code == 200, r.text
+    assert {row["id"] for row in r.json()["data"]} == {str(by_status["unsampled"])}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_judge_status_rejects_unknown_value(client: AsyncClient):
+    """The `JudgeStatus` enum is closed — an unknown value is a request error,
+    never a silent empty page."""
+    r = await client.get("/api/v1/findings", params={"judge_status": "bogus"})
+    assert r.status_code == 422
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_verified_filter_composes_with_cursor_pagination(
+    substrate_app, client: AsyncClient,
+):
+    """The filtered COUNT drives pagination: 5 verified rows interleaved with 2
+    unverified ones, walked at limit=2 under `verified=true`, page as (2, 2, 1)
+    over ONLY the verified rows — full pages of the filtered population, not
+    fetched-then-discarded ones (the client-side sieve this facet replaces)."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("verified-page")
+    now = datetime.now(timezone.utc)
+    verified_ids: list[str] = []
+    for i in range(7):
+        fid = await _insert_finding(
+            pg_store, title=f"vf-{i}", confidence=0.9, target_id=tid,
+            produced_at=now - timedelta(seconds=i),
+        )
+        if i in (2, 5):
+            continue  # two interleaved unverified rows — must never appear
+        await _insert_critique(
+            pg_store, analyzed_output_id=fid, overall_score=0.8,
+            data_extra={"verification": {
+                "faithfulness_score": 0.8, "judge_status": "llm",
+            }},
+        )
+        verified_ids.append(str(fid))
+
+    seen: list[str] = []
+    cursor: str | None = None
+    page_count = 0
+    while True:
+        params: dict[str, Any] = {
+            "limit": 2, "target_id": tid, "verified": "true",
+        }
+        if cursor:
+            params["cursor"] = cursor
+        r = await client.get("/api/v1/findings", params=params)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        page_count += 1
+        seen.extend(row["id"] for row in body["data"])
+        cursor = body["next_cursor"]
+        if cursor is None:
+            break
+        assert page_count < 10
+
+    assert page_count == 3
+    assert seen == verified_ids  # newest-first, no dupes, no unverified leaks
+
+
+# ---------------------------------------------------------------------------
 # Situations
 # ---------------------------------------------------------------------------
 

@@ -44,7 +44,31 @@
 #   max_attempts (3) · max_text_chars (200000) · timeout_seconds (30) ·
 #   run_deadline_seconds (1200) · forbid_license_classes
 #   (anti_ai_walled / tos_restrictive / personal_use_only) ·
-#   web_origin_license_gate (fail_closed)
+#   web_origin_license_gate (fail_closed) · unknown_license_gate (archive)
+#
+# LICENCE POSTURE — the one option worth a paragraph. `unknown_license_gate`
+# ships `archive`: a source whose licence was never classified still has its
+# bytes archived. That is the LIC-1 posture, and it was calibrated against a
+# finite, operator-reviewed catalog — a finding about ~48 specific feeds on a
+# specific date, not a property of the world. If you registered your own feeds,
+# it was never measured for you.
+#
+#   RECOMMENDATION: classify your catalog (payload.license_class via the LIC-2
+#   SourceScope stamp), then set this to `fail_closed`. Under fail_closed an
+#   unset/`unknown` licence withholds the BYTES and keeps the metadata — the
+#   sidecar still records the URL, class and origin, and the run receipt counts
+#   the refusals as `skipped_license_unknown` so the policy's cost is visible
+#   before and after the flip.
+#
+# It is ONE registry PUT — add to a `method.options` block:
+#
+#   method:
+#     options:
+#       unknown_license_gate: fail_closed
+#
+# No code change, no migration, no redeploy. Left at the default here because
+# moving a shipped default under an operator who did not ask for it is the
+# failure mode this handler is written against.
 #
 # Registered via scripts/bringup_register_evidence_archiver.py or the registry
 # REST API. Ships DRAFT — the operator activates after migration 0104 is

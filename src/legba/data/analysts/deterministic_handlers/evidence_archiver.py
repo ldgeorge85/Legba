@@ -122,6 +122,46 @@ publishers. Under the old rule such a hit would arrive with
     ``"fail_closed"`` (default) | ``"inherit"`` (fall back to the curated
     fail-open posture).
 
+**R-4 — THE CURATED FAIL-OPEN POSTURE IS NOW AN OPTION, NOT A LAW.**
+Everything above leaves one asymmetry standing: a REGISTERED source whose
+licence was never classified still archives, because the LIC-1 review found no
+anti-LLM EULA among the ~48 feeds active at the time. That was a finding about
+a specific catalog on a specific date, not a property of the world, and an
+operator who registers their own feeds inherits a posture that was never
+measured for them. So the posture is now governed rather than assumed:
+
+  * ``options.unknown_license_gate`` = ``"archive"`` (**DEFAULT — today's
+    behaviour, byte for byte**) | ``"fail_closed"``.
+  * Under ``"fail_closed"`` a candidate whose ``license_class`` is unset or the
+    reviewed-but-indeterminate ``"unknown"`` does NOT get its bytes archived,
+    whatever its origin. It is recorded with the SAME terminal status the R-3b
+    skip uses (``skipped_license_unreviewed`` — the constraint vocabulary is
+    closed, and that status already means exactly "we never reviewed this
+    source, so we are not keeping its bytes") and its OWN run counter,
+    ``skipped_license_unknown``, so the two policies stay separately priceable
+    in the receipt. At ROW level they separate on ``retrieval_origin``: web
+    rows are the R-3b population, NULL/curated rows the R-4 one.
+  * The gate runs AFTER the R-3b gate, so a web-origin row keeps being counted
+    as ``skipped_license_unreviewed``; turning R-4 on never re-attributes a
+    skip that R-3b was already making.
+  * An UNRECOGNISED option value keeps the DEFAULT and logs a WARNING — the
+    descriptor channel also drops it with a ``handler_options`` trace note
+    (choices are declared in ``legba.data.analysts.handler_options``). Neither
+    direction of typo changes policy silently.
+
+**THE RECOMMENDATION: run ``fail_closed`` unless your catalog is allowlisted.**
+Fail-open is defensible only while every source that can reach this handler has
+been licence-reviewed — which is true of the reference deployment and is not
+true by default of anyone else's. The honest sequence for an operator is:
+classify the feeds you registered (``payload.license_class`` via the LIC-2
+``SourceScope`` stamp), then flip the gate; the ``skipped_license_unknown``
+counter tells you what the flip costs before and after. Flipping it is ONE
+registry PUT against the ``evidence_archiver`` descriptor —
+``method.options.unknown_license_gate: fail_closed`` — with no code change, no
+migration, and no redeploy. The default stays ``archive`` here because changing
+a shipped default's behaviour under an operator who did not ask is the failure
+mode this whole module is written against.
+
 **RETENTION HONESTY.** Archived objects are evidence — this handler NEVER
 deletes them, and nothing else does either (the sidecar has no TTL; archived
 signals are upgraded to ``evidence_hold``, which signals_retention exempts).
@@ -176,6 +216,13 @@ Output ``data`` keys (the cadence receipt the operator reads):
                               unset/unknown licence. Bytes withheld, metadata
                               kept, counted separately from skipped_license so
                               the cost of fail-closed is measurable.
+    skipped_license_unknown
+                        int — R-4 fail-closed refusals: ANY row (curated
+                              included) with unset/unknown licence, when
+                              ``options.unknown_license_gate='fail_closed'``.
+                              Always 0 at the shipped default. Shares the
+                              sidecar STATUS with the R-3b skip (closed CHECK
+                              vocabulary) but never its counter.
     web_origin_examined int — candidates carrying a web retrieval origin
     skipped_size        int — objects over the size cap (recorded)
     fetch_failed        int — fetch/store failures this run (attempt-counted)
@@ -248,6 +295,19 @@ STATUS_SKIPPED_LICENSE_UNREVIEWED = "skipped_license_unreviewed"
 #: ``options.web_origin_license_gate`` values.
 WEB_ORIGIN_GATE_FAIL_CLOSED = "fail_closed"
 WEB_ORIGIN_GATE_INHERIT = "inherit"
+
+#: R-4 — the CODE-level posture for an unreviewed licence on ANY row, curated
+#: included. ``True`` = archive (the LIC-1 fail-OPEN default), which is what
+#: ships. Kept as a module constant for the same reason
+#: ``WEB_ORIGIN_UNKNOWN_LICENSE_ARCHIVES`` is: a future decision to invert the
+#: SHIPPED default is one line here, and the option below keeps working either
+#: way round. Recommendation for a self-registered catalog is fail-closed —
+#: see the R-4 section of the module docstring.
+UNKNOWN_LICENSE_ARCHIVES: bool = True
+
+#: ``options.unknown_license_gate`` values.
+UNKNOWN_LICENSE_GATE_ARCHIVE = "archive"
+UNKNOWN_LICENSE_GATE_FAIL_CLOSED = "fail_closed"
 
 _USER_AGENT = "legba-evidence-archiver/0.1"
 
@@ -447,6 +507,33 @@ def web_origin_license_unreviewed(
     if not fail_closed:
         return False
     if not is_web_retrieved(retrieval_origin):
+        return False
+    return license_class is None or license_class in UNREVIEWED_LICENSE_CLASSES
+
+
+def license_unreviewed(
+    license_class: str | None, *, fail_closed: bool = False,
+) -> bool:
+    """True when this row has NO affirmative licence verdict AND policy says no.
+
+    The R-4 gate, origin-blind on purpose — it is the CURATED-source rule
+    :func:`license_forbids_retention` deliberately leaves fail-open, made
+    governable:
+
+      * ``fail_closed=False`` (``options.unknown_license_gate='archive'``, the
+        SHIPPED DEFAULT) → always ``False``: nothing changes, for any row;
+      * ``fail_closed=True`` and ``license_class`` unset or ``"unknown"`` →
+        ``True``: withhold the bytes, keep the metadata;
+      * an AFFIRMATIVE class → ``False`` (archives normally). A REVIEWED
+        FORBIDDING class was already refused upstream by
+        :func:`license_forbids_retention`, so this predicate never sees one as
+        an archive decision.
+
+    Deliberately NOT collapsed with :func:`web_origin_license_unreviewed`: that
+    one is scoped to web origins and defaults ON, this one spans every row and
+    defaults OFF. Two policies, two dials, two counters.
+    """
+    if not fail_closed:
         return False
     return license_class is None or license_class in UNREVIEWED_LICENSE_CLASSES
 
@@ -697,6 +784,12 @@ def _zero_counters() -> dict[str, int]:
         # what fail-closed costs, which is the question that decides whether to
         # move to ledger-on-first-sight.
         "skipped_license_unreviewed": 0,
+        # R-4 — the curated fail-closed policy's own counter. Always 0 at the
+        # shipped default; distinct from the R-3b counter so an operator can
+        # price the two policies separately even though the sidecar rows share
+        # a status (the CHECK vocabulary is closed; retrieval_origin separates
+        # them at row level).
+        "skipped_license_unknown": 0,
         "web_origin_examined": 0,
         "skipped_size": 0,
         "fetch_failed": 0,
@@ -769,6 +862,7 @@ async def _archive_one(
     max_text_chars: int,
     max_attempts: int,
     web_origin_fail_closed: bool = True,
+    unknown_fail_closed: bool = False,
 ) -> None:
     """Fetch + store + record ONE candidate signal (all outcomes recorded)."""
     signal_id = row["id"]
@@ -806,6 +900,27 @@ async def _archive_one(
                 f"retrieval_origin {retrieval_origin!r} is web-retrieved and "
                 f"license_class is {license_class!r} — bytes NOT archived "
                 "(fail-closed for unreviewed open-web domains); metadata kept"
+            ),
+        )
+        return
+
+    # ---- R-4 fail-closed gate — ANY row with no affirmative licence ----
+    # OFF at the shipped default, so this branch is unreachable unless the
+    # operator PUT `unknown_license_gate: fail_closed` on the descriptor. It
+    # runs AFTER the R-3b gate on purpose: a web row is already accounted for
+    # above, so turning this on never re-attributes an existing skip. Same
+    # pre-fetch position — nothing is downloaded and then discarded.
+    if license_unreviewed(license_class, fail_closed=unknown_fail_closed):
+        counters["skipped_license_unknown"] += 1
+        await _record(
+            pool, signal_id=signal_id,
+            status=STATUS_SKIPPED_LICENSE_UNREVIEWED,
+            attempts=attempts - 1, fetched_url=url, license_class=license_class,
+            retrieval_origin=retrieval_origin,
+            last_error=(
+                f"license_class is {license_class!r} and "
+                "unknown_license_gate='fail_closed' — bytes NOT archived "
+                "(no affirmative permission to retain); metadata kept"
             ),
         )
         return
@@ -972,6 +1087,29 @@ async def _sweep(pool: Any, options: Mapping[str, Any]) -> dict[str, int]:
         )
         web_origin_fail_closed = gate != WEB_ORIGIN_GATE_INHERIT
 
+    # R-4 — the curated posture. DEFAULT "archive" = today's behaviour exactly.
+    # Only the exact literal "fail_closed" engages it; an unrecognised value
+    # keeps the DEFAULT and says so at WARNING, because a typo must not move a
+    # licence policy in EITHER direction silently. (The descriptor channel
+    # already rejects out-of-choices values with a handler_options trace note;
+    # this covers the direct-call path too.)
+    unknown_fail_closed = not UNKNOWN_LICENSE_ARCHIVES
+    raw_gate = options.get("unknown_license_gate")
+    if raw_gate is not None:
+        gate_u = str(raw_gate)
+        if gate_u == UNKNOWN_LICENSE_GATE_FAIL_CLOSED:
+            unknown_fail_closed = True
+        elif gate_u == UNKNOWN_LICENSE_GATE_ARCHIVE:
+            unknown_fail_closed = False
+        else:
+            logger.warning(
+                "evidence_archiver.unknown_license_gate.bad_value value=%r — "
+                "keeping the default (%s)",
+                raw_gate,
+                UNKNOWN_LICENSE_GATE_ARCHIVE if UNKNOWN_LICENSE_ARCHIVES
+                else UNKNOWN_LICENSE_GATE_FAIL_CLOSED,
+            )
+
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             _SELECT_CANDIDATES_SQL,
@@ -998,6 +1136,7 @@ async def _sweep(pool: Any, options: Mapping[str, Any]) -> dict[str, int]:
                 forbid=forbid, max_bytes=max_bytes,
                 max_text_chars=max_text_chars, max_attempts=max_attempts,
                 web_origin_fail_closed=web_origin_fail_closed,
+                unknown_fail_closed=unknown_fail_closed,
             )
     return counters
 
@@ -1013,12 +1152,20 @@ def _build_finding(counters: Mapping[str, int]) -> FindingPayload:
         f"{counters.get('skipped_license_unreviewed', 0)} web-unreviewed-skipped, "
         f"{counters.get('fetch_failed', 0)} failed"
     )
+    # R-4 — appended ONLY when the policy actually refused something, so the
+    # shipped-default title is unchanged character for character.
+    if counters.get("skipped_license_unknown", 0):
+        title += (
+            f", {counters['skipped_license_unknown']} unknown-licence-skipped"
+        )
     body = "\n".join(f"{k}={v}" for k, v in counters.items())
     tags = ["deterministic", "evidence_archiver"]
     if counters.get("archived", 0):
         tags.append("archived")
     if counters.get("skipped_license_unreviewed", 0):
         tags.append("web_origin_license_unreviewed")
+    if counters.get("skipped_license_unknown", 0):
+        tags.append("unknown_license_fail_closed")
     return FindingPayload(
         title=title[:2048],
         body=body[:65536],
@@ -1065,6 +1212,10 @@ __all__ = [
     "WEB_ORIGIN_GATE_FAIL_CLOSED",
     "WEB_ORIGIN_GATE_INHERIT",
     "WEB_ORIGIN_UNKNOWN_LICENSE_ARCHIVES",
+    "UNKNOWN_LICENSE_ARCHIVES",
+    "UNKNOWN_LICENSE_GATE_ARCHIVE",
+    "UNKNOWN_LICENSE_GATE_FAIL_CLOSED",
+    "license_unreviewed",
     "CAS_PREFIX",
     "cas_object_ref",
     "cas_path",

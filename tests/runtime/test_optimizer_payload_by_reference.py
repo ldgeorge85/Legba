@@ -276,6 +276,7 @@ async def test_materialize_degrades_to_empty_on_fetch_failure(monkeypatch) -> No
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skip(reason="optimizer plane mothballed 2026-08-21 (RUST-4)")
 @pytest.mark.asyncio
 async def test_empty_training_set_still_noops(monkeypatch) -> None:
     """gepa.py L283 ``if not workflow_input.training_set`` — the noop_empty

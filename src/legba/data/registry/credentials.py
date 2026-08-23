@@ -29,6 +29,15 @@ Key contracts:
     row, flips the previous version's `is_current=false`. Old versions are
     preserved so audit replays of old descriptor versions can resolve.
 
+  * Rotation eviction: every `store_secret` call (first-store AND rotation)
+    publishes `vault.secret.rotated.<secret_id>` (see `vault_events.py`) via
+    an injected `RegistryEventEmitter`, so a runtime process's cached LLM
+    handlers (which resolved-and-cached the OLD plaintext at build time) get
+    invalidated instead of serving stale credentials until a recreate — see
+    `legba.runtime.nats_informer.NatsVaultRotationInformer`. Defaults to
+    `NullEventEmitter` (no-op) so a bare `CredentialVault(store)` — the shape
+    every non-server construction site uses — is unaffected.
+
 Credentials are NEVER serialized into the descriptor payload sent to NATS
 or stored in `stack_components.body`. The registry's `register()` walks the
 body for Secret references and verifies them via `verify_exists`; if a
@@ -49,6 +58,8 @@ from nacl.utils import random as nacl_random
 
 from ..config import PostgresConfig
 from ..postgres import PostgresStore
+from .emitter import NullEventEmitter, RegistryEventEmitter
+from .vault_events import vault_event_payload, vault_subject
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +142,14 @@ class CredentialVault:
 
     `master_key` may be passed in for tests; otherwise read from
     `LEGBA_DATA_MASTER_KEY` per the bootstrap convention (config.py).
+
+    `emitter` is the same `RegistryEventEmitter` protocol `StackRegistry`
+    depends on (`NATSEventEmitter` in production, `NullEventEmitter` in
+    tests / every construction site that doesn't pass one). Only the
+    registry API server's construction wires a real emitter today — the
+    runtime process's own `CredentialVault(pg_store)` instances (read-time
+    resolution) have nothing to publish and stay on the `NullEventEmitter`
+    default.
     """
 
     def __init__(
@@ -138,12 +157,14 @@ class CredentialVault:
         store: PostgresStore,
         *,
         master_key: bytes | None = None,
+        emitter: RegistryEventEmitter | None = None,
     ):
         self._store = store
         # Defer key resolution until first use so unit tests that don't touch
         # the vault don't need the env var.
         self._master_key = master_key
         self._box: SecretBox | None = None
+        self._emitter = emitter or NullEventEmitter()
 
     @classmethod
     def from_env(cls, pg: PostgresConfig | None = None) -> "CredentialVault":
@@ -244,6 +265,25 @@ class CredentialVault:
             secret_id,
             next_version,
             actor,
+        )
+        # Eviction hook: publish AFTER the write commits, so a subscriber that
+        # reacts by re-resolving never race-reads the pre-rotation row. This
+        # covers first-store too (next_version == 1) — nothing has a handler
+        # built off a not-yet-existing secret, so that sweep is a no-op; the
+        # alternative (branching on rotation-vs-create) buys nothing and adds
+        # a code path nobody would exercise differently. No try/except here —
+        # same convention as `StackRegistry._emit`'s call sites: the emitter
+        # itself (`NATSEventEmitter`/`NullEventEmitter`) already swallows and
+        # logs publish failures, so the Postgres write above stays the source
+        # of truth regardless of NATS reachability.
+        await self._emitter.publish(
+            vault_subject("rotated", secret_id),
+            vault_event_payload(
+                action="rotated",
+                secret_id=secret_id,
+                actor=actor,
+                version=next_version,
+            ),
         )
         return next_version
 

@@ -98,9 +98,20 @@ _MAX_DESCRIPTORS = 500
 #: graded them. ``judge_status`` lives in the projected verification block; the
 #: pre-P2-4 legacy NULL reads as ``deterministic``, which is conservative in the
 #: right direction (an unknown grader is not a working one).
+#:
+#: J2 (2026-08-15): ``judge_status='unsampled'`` rows are EXCLUDED from every
+#: aggregate here. The sampling gate deliberately did not send them to the
+#: judge, so they are not evidence about judge HEALTH in either direction —
+#: counting them in the denominator would page a permanent fake outage at any
+#: sample rate below the floor, and the alarm this gauge exists for (the
+#: 26-hour silence) lives entirely inside the population the gate DID select.
 _JUDGE_SQL = """
     SELECT
-      count(*)::int AS critiques,
+      count(*) FILTER (
+        WHERE coalesce(
+          c.data->'data'->'verification'->>'judge_status', 'deterministic'
+        ) <> 'unsampled'
+      )::int AS critiques,
       count(*) FILTER (
         WHERE coalesce(
           c.data->'data'->'verification'->>'judge_status', 'deterministic'
@@ -109,6 +120,9 @@ _JUDGE_SQL = """
       count(*) FILTER (
         WHERE (c.data->'data'->'verification'->>'judge_llm_ref') IS NOT NULL
           AND (c.data->'data'->'verification'->>'judge_llm_ref') <> ''
+          AND coalesce(
+            c.data->'data'->'verification'->>'judge_status', 'deterministic'
+          ) <> 'unsampled'
       )::int AS judge_wired,
       max(c.created_at) FILTER (
         WHERE c.data->'data'->'verification'->>'judge_status' = 'llm'

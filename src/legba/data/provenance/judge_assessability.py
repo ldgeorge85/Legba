@@ -28,8 +28,10 @@ where a shared verify-module name is genuinely needed).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Mapping
 
 if TYPE_CHECKING:  # pragma: no cover — annotations only
@@ -405,6 +407,108 @@ def is_provisional(judge_status: Any) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# 3b. JUDGE SAMPLING — which findings the LLM judge grades at all
+# ---------------------------------------------------------------------------
+# J2 (2026-08-15, FORWARD_PLAN §1). The judge plane moved to a rate-limited
+# free tier (~50 calls/day), so verification is SAMPLED, not exhaustive. The
+# policy below decides, per finding, whether the LLM judge runs. Three rules,
+# all of them replayable:
+#
+#   * DETERMINISTIC, NO RNG. The sample coordinate is a hash of the finding id
+#     mapped into [0, 1); a finding is judged iff its coordinate < the rate.
+#     The same finding id yields the same verdict on every replay, every
+#     harness, every host — a random.random() here would make the judged
+#     population unreconstructable.
+#   * THE ALWAYS-LIST WINS. Kinds (or analyst ids) named in
+#     ``judge_sample_always`` are judged regardless of the rate. The default
+#     names the synthesis tops — compositions + world + journal — because a
+#     fabricated composition under the system's seal costs more than an
+#     unsampled unit finding, and their combined volume (~25/day) fits the
+#     budget.
+#   * AN ABSENT RATE IS NO GATE. ``rate=None`` (no descriptor option) judges
+#     everything, byte-identical to the pre-J2 tree. The gate only exists
+#     where a descriptor says so.
+#
+# An UNSAMPLED finding keeps the deterministic floor + the PROVISIONAL ceiling
+# exactly as a judge-off run does, but publishes ``judge_status='unsampled'``
+# — a new HONEST state. Never 'error': nothing failed, and never
+# 'deterministic'-with-a-reason: the row was not skipped by an outage, it was
+# deliberately not selected. ``overall_score`` stays a real float (the SQL
+# laterals filter on it), so unsampled rows demote-and-remain-visible instead
+# of vanishing from the goldset/archiver/composition basis.
+
+#: ``FaithfulnessReport.judge_status`` for a finding the sampling gate
+#: deliberately did not send to the LLM judge. Non-``llm`` ⇒ provisional
+#: (``is_provisional`` needs no change), so the 0.85 ceiling applies.
+JUDGE_STATUS_UNSAMPLED = "unsampled"
+
+#: The default ``judge_sample_always`` membership: the finding KINDS that are
+#: always judged when a rate is set and no explicit list overrides it.
+#: Compositions (country/region/escalation/world ride meta_findings_synthesizer;
+#: the correlator and the situation tracker grade through the same composition
+#: verify path) + the journal family. Unit findings (``inline_target``) are the
+#: sampled population.
+JUDGE_SAMPLE_ALWAYS_DEFAULT: tuple[str, ...] = (
+    "meta_findings_synthesizer",
+    "cross_analyst_correlator",
+    "situation_tracker",
+    "journal_assessor",
+)
+
+
+def judge_sample_unit(finding_id: Any) -> float:
+    """The finding's deterministic sample coordinate in ``[0, 1)``.
+
+    SHA-256 over the canonicalized id string (stripped, lowercased — so a UUID
+    object, its str, and a case-varied hex spelling all land identically),
+    first 8 bytes as an unsigned int over 2^64. Uniform, stable across
+    processes/hosts/replays, and independent of everything except the id.
+    """
+    canonical = str(finding_id).strip().lower()
+    digest = hashlib.sha256(canonical.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big") / 2.0**64
+
+
+@dataclass(frozen=True)
+class JudgeSamplingPolicy:
+    """The resolved per-finding sampling decision inputs (J2).
+
+    Built by the CALLER (the actor seam, from descriptor options merged into
+    the run options) and handed to ``verify_finding_faithfulness``; the
+    decision itself is computed here so the verify path owns its own gate.
+    ``rate=None`` means NO gate (judge everything — the pre-J2 contract);
+    ``always=None`` means the code default membership above, while an explicit
+    empty tuple CLEARS it (an operator saying "sample even the compositions").
+    """
+
+    finding_id: str
+    kind: str = ""
+    analyst_id: str = ""
+    rate: float | None = None
+    always: tuple[str, ...] | None = None
+
+    def should_judge(self) -> bool:
+        """``True`` ⇒ the LLM judge grades this finding (subject to the
+        existing flag/handler gates); ``False`` ⇒ ``judge_status='unsampled'``.
+        """
+        if self.rate is None:
+            return True
+        always = (
+            JUDGE_SAMPLE_ALWAYS_DEFAULT if self.always is None else self.always
+        )
+        if (self.kind and self.kind in always) or (
+            self.analyst_id and self.analyst_id in always
+        ):
+            return True
+        rate = float(self.rate)
+        if rate <= 0.0:
+            return False
+        if rate >= 1.0:
+            return True
+        return judge_sample_unit(self.finding_id) < rate
+
+
+# ---------------------------------------------------------------------------
 # 4. THE CRITIQUE CONTRACT — where a tally becomes a published verdict
 # ---------------------------------------------------------------------------
 # Moved here from verify.py 2026-08-05 (Q-1). The payload builder is the single
@@ -658,9 +762,13 @@ def build_faithfulness_critique_payload(
 __all__ = [
     "DENOMINATOR_COVERAGE_STATEMENT",
     "DENOMINATOR_TRIGGERED_INDICATOR",
+    "JUDGE_SAMPLE_ALWAYS_DEFAULT",
+    "JUDGE_STATUS_UNSAMPLED",
+    "JudgeSamplingPolicy",
     "MIN_ASSESSABLE_CLAIMS",
     "build_faithfulness_critique_payload",
     "denominator_caveat_counters",
+    "judge_sample_unit",
     "PROVISIONAL_SCORE_CEILING",
     "SCORE_STATE_SCORED",
     "SCORE_STATE_UNASSESSABLE",

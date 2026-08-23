@@ -1,0 +1,122 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# ============================================================================
+# WHAT THIS IS, AND — MORE IMPORTANTLY — WHAT IT IS NOT
+# ============================================================================
+#
+# This workflow runs the checks that need NOTHING but the source tree: the ruff
+# ratchet and the four structural gates. It deliberately does NOT run the test
+# suite, and a green badge here MUST NOT be read as "the tests pass".
+#
+# Roughly ten thousand of this repo's tests need a live substrate — Postgres
+# with Apache AGE, Qdrant, OpenSearch, NATS, a Dapr sidecar and placement
+# service, and in places a reachable vLLM endpoint. `tests/data_pkg/conftest.py`
+# starts those containers itself when they are absent, `tests/conftest.py`
+# escalates infra-gated SKIPS to FAILURES by default (LEGBA_TEST_STRICT), and
+# `scripts/run_tests_in_container.sh` runs the suite inside an image built FROM
+# the runtime image because the host interpreter cannot even collect it. None of
+# that is reproducible on a hosted runner in a way that would mean anything, and
+# a CI job that spun up half the stack and skipped the rest would produce a
+# green tick over untested code — the exact dishonesty the rest of this repo
+# exists to prevent.
+#
+# THE REAL GATE IS THE NIGHTLY SUITE: `scripts/host_nightly_suite.sh` (lint →
+# full ordered pass → full shuffled pass under a logged seed), run by cron on a
+# host with the stack up, paging the operator on the first unexpected failure.
+# See docs/RUNBOOK.md §24.4. This workflow is the cheap pre-filter in front of
+# it, not a replacement for it.
+#
+# So the honest scope, stated once:
+#
+#   IN   ruff (the pyproject ratchet — identical config to the nightly's lint
+#        phase), module-size ceilings, the no-undeclared-stubs seam gate, the
+#        dspy/litellm hot-path ban, and the strict-mode gate's own unit tests.
+#   OUT  every test touching Postgres/AGE, Qdrant, OpenSearch, NATS, Dapr, the
+#        registry HTTP surface, any LLM plane, the UI, and the descriptor
+#        schema tests (those import handler modules that pull fastapi,
+#        feedparser, telethon, … — installable, but then this job is a
+#        five-minute dependency build pretending to be a smoke test).
+#
+# ADDING A CHECK HERE: it qualifies only if it passes with the four packages
+# below installed and no services running. Verify that locally before adding it
+# — `pip install 'pytest>=8,<9' pytest-asyncio pydantic ruff` in a clean venv,
+# then run it with PYTHONPATH=src. If it needs anything else, it belongs in the
+# nightly, not here.
+# ============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  structural:
+    name: lint + structural gates (no substrate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Tracks requires-python = ">=3.11" and [tool.ruff] target-version.
+          python-version: "3.11"
+
+      - name: Install the tooling (and only the tooling)
+        # pytest<9 — 9.x trips a CPython AST SystemError during assertion
+        #   rewriting, which is why scripts/run_tests_in_container.sh pins it too.
+        # pytest-asyncio — asyncio_mode = "auto" in pyproject applies to every run.
+        # pydantic — tests/conftest.py's autouse registry-leak guard imports
+        #   legba.data.schemas. That subpackage is pydantic-only; the gates
+        #   themselves are stdlib. This is the whole reason the job needs no
+        #   package install and no service.
+        # ruff — UNPINNED, exactly as the nightly's test image installs it. If a
+        #   new ruff release adds a rule inside a selected family, this job and
+        #   the nightly go red on the same day and the pyproject ignore ledger
+        #   gets an entry. Pinning here would hide that from CI and leave the
+        #   operator to find it at 04:00.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'pytest>=8,<9' pytest-asyncio pydantic ruff
+          ruff --version
+
+      - name: Lint — the pyproject ruff ratchet
+        # Same invocation as host_nightly_suite.sh phase 1. The contract in
+        # pyproject.toml is that this is green on the tree exactly as it stands.
+        run: ruff check .
+
+      - name: Structural gates
+        # PYTHONPATH=src rather than an editable install: the four gate modules
+        # read the tree off disk, and the only import of `legba` in the path is
+        # the conftest fixture above. Installing the package would pull ~40
+        # runtime dependencies to change nothing about what these assert.
+        #
+        # The file list is explicit on purpose — see the header. A test that is
+        # merely fast does not belong here; it has to need no services at all.
+        env:
+          PYTHONPATH: src
+        run: |
+          pytest -q -rfE \
+            tests/test_module_size_gate.py \
+            tests/test_no_undeclared_stubs.py \
+            tests/test_runtime_no_dspy_litellm.py \
+            tests/test_strict_mode_gate.py
+
+      - name: Scope reminder
+        if: success()
+        run: |
+          echo "PASSED: lint + structural gates only."
+          echo "This says NOTHING about the ~10k substrate-backed tests."
+          echo "Those run in scripts/host_nightly_suite.sh on a host with the stack up."

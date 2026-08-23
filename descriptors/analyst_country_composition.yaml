@@ -52,30 +52,36 @@ subscription:
   # The synth reads the OUTPUTS of these six units, not raw signals. READ_SLICE
   # resolves this set from other_analysts[].id and — because the run is
   # target-scoped — restricts to the RUNNING country's findings, verify-floored.
-  # 24h window: each unit fires 2x/day, so a 24h look-back holds two fires of
-  # each of the six units for the country.
+  # FRAME-1 (2026-08-20, ratified): the window on these SOURCES is an
+  # ADMISSIBILITY HORIZON, not a freshness cliff. 24h was a wall-clock gate over
+  # an 11h-cooldown cadence that HOLDS on a quiet desk: on 2026-08-20 the BF
+  # units had last fired 42h earlier, the trailing-24h slice was mechanically
+  # empty, and the product printed "No source findings to synthesize" over seven
+  # heads carrying the window's major story. 336h (14 days) admits each unit's
+  # NEWEST head — the head-fold already yields exactly one per (unit, desk) — and
+  # the composition now prints each head's date + age and states its staleness.
   other_analysts:
     - id: leadership_transition
       data_types: [finding]
-      time_window: 24h
+      time_window: 336h
     - id: energy_security
       data_types: [finding]
-      time_window: 24h
+      time_window: 336h
     - id: escalation
       data_types: [finding]
-      time_window: 24h
+      time_window: 336h
     - id: narrative_coordination
       data_types: [finding]
-      time_window: 24h
+      time_window: 336h
     - id: internal_stability
       data_types: [finding]
-      time_window: 24h
+      time_window: 336h
     - id: military_posture
       data_types: [finding]
-      time_window: 24h
+      time_window: 336h
     - id: economic_coercion
       data_types: [finding]
-      time_window: 24h
+      time_window: 336h
     # S1-T6: proliferation_watch is a NARROW unit (has_tag("nuclear_watch") — 8
     # desks). Safe to list here: the READ_SLICE is verify-floored via an INNER
     # JOIN, so on the 17 non-nuclear desks it contributes ZERO rows (naturally
@@ -84,7 +90,7 @@ subscription:
     # on the non-nuclear desks + break the DIMENSIONS==_DEFAULT_UNITS invariant).
     - id: proliferation_watch
       data_types: [finding]
-      time_window: 24h
+      time_window: 336h
   substrate:
     direct_queries: false        # reads via the kind's READ_SLICE, not ad-hoc SQL
 

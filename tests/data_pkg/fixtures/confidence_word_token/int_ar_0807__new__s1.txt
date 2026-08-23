@@ -1,0 +1,33 @@
+{
+  "title": "Argentina – Escalating mass protests over property bill",
+  "body": "*As of 7 August 2026; slice covers the trailing 3 days to that date; 24 signals.*\n\n**BLUF:** Protests against the private‑property bill have intensified in Buenos Aires, raising Argentina’s internal‑stability risk to a moderate level.\n\n## What changed\n\nNo prior assessment exists for this three‑day window, so this is the first report of large‑scale street mobilisations in the desk’s current collection.\n\n## Why it matters\n\nArgentina’s baseline coup vulnerability is modest – the country has not experienced a successful coup since 1976 and its officer corps remains formally loyal – but chronic economic distress and a polarized elite create a background risk. The surge of several thousand demonstrators on 6–7 August, reported by DW, Al Jazeera and Le Monde, shows a sudden popular trigger that can erode regime legitimacy and pressure security forces to act hard‑line [1][2][4]. Police use of tear gas, rubber bullets and water cannons demonstrates state repression that may deepen opposition resolve while also signalling the government’s willingness to crack down [1][2]. The ruling bloc’s concession – withdrawing the foreign‑land‑ownership chapter on 5 August – tempers the protest momentum, but the core grievance over “selling the homeland” remains unresolved, leaving the unrest trajectory open to further escalation.\n\n## What would change this read\n\nA credible report of defections, mutiny, or refusal‑to‑obey orders by a regular‑army or national‑police unit would shift the assessment toward higher coup risk. The desk does not presently collect systematic “military insider” reports; such intelligence would be needed to revise the verdict.\n\n## Indicators\n\n- Nationwide protest wave: sustained multi‑city demonstrations against the property bill, reported on 6–7 August [1][2][4].\n- State‑of‑emergency: no declaration or communications shutdown observed in this window.\n- Security‑force defection: no reports of army or police units refusing orders observed.\n",
+  "confidence": 0. nine,
+  "evidence": ["1","2","4","12","21","24"],
+  "tags": ["topic:internal_stability", "severity:moderate"],
+  "indicators": [
+    {
+      "id": "security-force-defection",
+      "statement": "Confirmed defection, mutiny, or refusal-of-orders by a security-force unit",
+      "status": "not_observed",
+      "horizon_date": "21 August 2026",
+      "first_seen": "7 August 2026",
+      "citations": []
+    },
+    {
+      "id": "nationwide-protest-wave",
+      "statement": "Sustained multi-city protests reported for three or more consecutive days",
+      "status": "triggered",
+      "horizon_date": "14 August 2026",
+      "first_seen": "7 August 2026",
+      "citations": ["1"]
+    },
+    {
+      "id": "state-of-emergency",
+      "statement": "Declaration of a state of emergency or nationwide communications shutdown",
+      "status": "not_observed",
+      "horizon_date": "7 September 2026",
+      "first_seen": "7 August 2026",
+      "citations": []
+    }
+  ]
+}

@@ -77,6 +77,31 @@ class LLMProviderConfig(BaseModel):
             "primary", ["primary", "fallback", "cheap"]
         )
     )
+    # -- spend metering (#22, 2026-08-15) -----------------------------------
+    # Per-COMPONENT list price, USD per 1M tokens. The vllm-family handler
+    # (every `.openai_compat` component: the self-hosted primary AND the
+    # hosted PAYG judge lanes — Cerebras, OpenRouter) reads these when set
+    # and stamps `cost_estimate_usd` onto each call's receipt; ABSENT means
+    # the handler falls back to its subprovider PRICE_TABLE, which for vllm
+    # is empty = $0.00 — the self-hosted posture, byte-identical to before
+    # these fields existed. Component config rather than a code table because
+    # the price belongs to the ENDPOINT the component names, and a provider
+    # price change is a registry PUT, not a deploy.
+    price_input_per_m: Number | None = None
+    price_output_per_m: Number | None = None
+    # Daily spend ceiling, USD per UTC day, read by the `llm_daily_burn`
+    # production-gauge loop (production_gauge_metering.py) straight off the
+    # component row. Absent = the loop reports the component's burn as
+    # ungauged/no_burn_threshold and NEVER pages — the honest default for $0
+    # lanes. Set it on every lane where money can actually move.
+    daily_burn_alert_usd: Number | None = None
+    # -- client concurrency (#21, 2026-08-15) --------------------------------
+    # Per-component cap on in-flight chat completions from ONE process (an
+    # asyncio semaphore in the vllm-family handler). Absent = unlimited =
+    # the historical behavior. This is the client-side half of headroom
+    # safety: the ai1 saturation watch sees the queue, this keeps one legba
+    # process from BEING the queue.
+    max_concurrent: Number | None = None
 
     @model_validator(mode="after")
     def _require_one_auth_mode(self) -> "LLMProviderConfig":

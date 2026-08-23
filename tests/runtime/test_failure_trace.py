@@ -118,21 +118,23 @@ class _TraceCapturingConn:
         assert "INSERT INTO analyst_traces" in query, query
         # Positional order per receipts.py: run_id($1) analyst_id($2)
         # analyst_version($3) target_id($4) cadence_trigger($5) ...
-        # status($15) error_payload($16) run_started_at($17) run_ended_at($18)
+        # prompt_rendered($9) prompt_sha256($10) ... output_row_refs($14)
+        # output_payload($15) status($16) error_payload($17)
+        # run_started_at($18) run_ended_at($19)
         self._rows.append(
             {
                 "run_id": args[0],
                 "analyst_id": args[1],
                 "target_id": args[3],
                 "cadence_trigger": args[4],
-                "output_row_refs": args[12],
-                "output_payload": json.loads(args[13]),
-                "status": args[14],
+                "output_row_refs": args[13],
+                "output_payload": json.loads(args[14]),
+                "status": args[15],
                 "error_payload": (
-                    json.loads(args[15]) if args[15] is not None else None
+                    json.loads(args[16]) if args[16] is not None else None
                 ),
-                "run_started_at": args[16],
-                "run_ended_at": args[17],
+                "run_started_at": args[17],
+                "run_ended_at": args[18],
             }
         )
 

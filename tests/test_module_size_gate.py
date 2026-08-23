@@ -67,11 +67,43 @@ CEILINGS: dict[str, int] = {
     # and the next extraction seam is the JUDGE subsystem (prompt registry +
     # ``_run_judge`` + the quote/severity rules).
     "data/provenance/verify.py": 5910,  # 5853 @ 2026-08-05 — the V-D/W2/V-G1/V-G3 QUOTE RULES extracted to judge_quote_rules.py and the CITATION MARKER parsing/drift set to citation_markers.py (judge-subsystem bricks 4 and 5, the seam named in the banner above), ceiling re-seeded down twice in the V-I train. DO NOT RAISE.
-    "data/analysts/meta_findings_synthesizer.py": 5810,  # 5279 @ 2026-08-02
+    # LOWERED 2026-08-20 (FRAME-1): the C-TIER two-tier evidence subsystem — the
+    # periphery GATHER, its worst-first selection and its render, plus the
+    # row-reading primitives all three share — moved to
+    # ``data/analysts/composition_window.py`` alongside the new admissibility-
+    # window machinery (head ages, the coverage ledger, the newest-passing-head
+    # routing), which the synthesizer imports ONE WAY and re-exports. The train
+    # ADDED ~290 lines of composition behavior and the file still came down 57;
+    # the ratchet closes on the new floor. Next seam in this file: the CONTINUITY
+    # render (prior-read + situation-register lines + their selection), which is
+    # FRAME-2's own surface.
+    # LOWERED AGAIN 2026-08-20 (FRAME-2): the seam the note above NAMED was
+    # taken. The composition's CONTINUITY section — the prior-read and
+    # situation-register renders, their selection helpers and the whole
+    # continuity/register constant vocabulary — moved to
+    # ``data/analysts/window_ledger.py`` beside the WINDOW LEDGER that is now the
+    # third block in that same section, and the synthesizer imports the lot ONE
+    # WAY and re-exports it. The train ADDED a whole carry mechanism and the file
+    # still came down 168 lines; the ratchet closes on the new floor. Next seam
+    # in this file: the SLICE ASSEMBLY branches (``_assemble_world_region_slice``
+    # / ``_assemble_thematic_unit_slice`` / their roster resolvers), which are a
+    # cohesive "how a composition's inputs are gathered per mode" unit and the
+    # largest remaining block that is not the prompt text itself.
+    # LOWERED AGAIN 2026-08-21 (VOICE-4): the note above set the slice-assembly
+    # seam aside as "not the prompt text itself" — this train took THE PROMPT
+    # TEXT. The four composition system prompts, the legacy global-meta prompt
+    # and every shared rule generator moved to
+    # ``data/analysts/composition_prompts.py`` (1,005 lines), which the
+    # synthesizer imports ONE WAY and re-exports, so ``synth._COMPOSITION_SYSTEM``
+    # and the voice-contract pins resolve unchanged. The train ADDED ~8k chars of
+    # doctrine to each of the four prompts and the file still came down 398
+    # lines; the ratchet closes on the new floor. The slice-assembly seam named
+    # above is STILL the next one here.
+    "data/analysts/meta_findings_synthesizer.py": 5250,  # 5192 @ 2026-08-21 (VOICE-4); 5585 @ 2026-08-20 (FRAME-2); 5750 @ 2026-08-20 (FRAME-1); 5279 @ 2026-08-02
     "runtime/dapr_actors.py": 4110,  # 3735 @ 2026-08-02
     "data/analysts/inline_target.py": 3930,  # 3882 @ 2026-08-05 — slice rendering extracted to slice_render.py, ceiling re-seeded down
     "runtime/substrate_query_port.py": 3910,  # 3551 @ 2026-08-02
-    "data/analysts/journal_assessor.py": 3050,  # 2767 @ 2026-08-02
+    "data/analysts/journal_assessor.py": 3000,  # 2965 @ 2026-08-11 (leak guards extracted)
     "runtime/grounding.py": 3000,  # 2719 @ 2026-08-02
     "runtime/analyst_deps_builder.py": 2990,  # 2715 @ 2026-08-02
     "runtime/dapr_host.py": 2950,  # 2676 @ 2026-08-02

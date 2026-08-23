@@ -38,6 +38,7 @@ from legba.data.registry import (
     StackValidationError,
     VaultLockedError,
     stack_subject,
+    vault_subject,
 )
 from legba.data.registry.credentials import MASTER_KEY_ENV
 from legba.data.registry.stack import (
@@ -311,15 +312,15 @@ async def store(migrated_pg: PostgresConfig) -> PostgresStore:
 
 
 @pytest_asyncio.fixture
-async def vault(store: PostgresStore) -> CredentialVault:
-    return CredentialVault(
-        store, master_key=bytes.fromhex(_TEST_MASTER_KEY_HEX),
-    )
+async def emitter() -> NullEventEmitter:
+    return NullEventEmitter()
 
 
 @pytest_asyncio.fixture
-async def emitter() -> NullEventEmitter:
-    return NullEventEmitter()
+async def vault(store: PostgresStore, emitter: NullEventEmitter) -> CredentialVault:
+    return CredentialVault(
+        store, master_key=bytes.fromhex(_TEST_MASTER_KEY_HEX), emitter=emitter,
+    )
 
 
 @pytest_asyncio.fixture
@@ -388,6 +389,47 @@ async def test_vault_missing_secret_raises(vault: CredentialVault):
         await vault.resolve("no.such.thing")
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_vault_rotation_publishes_eviction_event(
+    vault: CredentialVault, emitter: NullEventEmitter,
+):
+    """RUST-5 — the eviction hook: a rotation must publish so a runtime
+    process's handler cache can invalidate instead of serving the OLD
+    plaintext until a container recreate."""
+    sid = "test.unit.rotating_key"
+
+    v1 = await vault.store_secret(sid, "hunter2", actor="lewis")
+    assert v1 == 1
+    assert emitter.subjects() == [vault_subject("rotated", sid)]
+    subject, payload = emitter.published[-1]
+    assert subject == f"vault.secret.rotated.{sid}"
+    assert payload["secret_id"] == sid
+    assert payload["action"] == "rotated"
+    assert payload["actor"] == "lewis"
+    assert payload["version"] == 1
+    # No plaintext, no ciphertext — mirrors the INFO log line's redaction.
+    assert "hunter2" not in str(payload)
+
+    v2 = await vault.store_secret(sid, "hunter3", actor="lewis")
+    assert v2 == 2
+    assert emitter.subjects() == [
+        vault_subject("rotated", sid), vault_subject("rotated", sid),
+    ]
+    assert emitter.published[-1][1]["version"] == 2
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_vault_without_emitter_is_a_quiet_default(store: PostgresStore):
+    """Every non-server construction site (`CredentialVault(pg_store)`, no
+    `emitter=`) must behave exactly as before RUST-5 — a bare vault is a
+    valid, complete construction, not a partially-wired one."""
+    bare = CredentialVault(store, master_key=bytes.fromhex(_TEST_MASTER_KEY_HEX))
+    v1 = await bare.store_secret("test.unit.bare_key", "hunter2", actor="lewis")
+    assert v1 == 1  # publish-to-NullEventEmitter is a silent no-op, not a raise
+
+
 # ---------------------------------------------------------------------------
 # Integration — registry CRUD.
 # ---------------------------------------------------------------------------
@@ -398,6 +440,11 @@ async def test_vault_missing_secret_raises(vault: CredentialVault):
 async def test_register_postgres_cluster_round_trip(
     registry: StackRegistry, seeded_secrets, emitter: NullEventEmitter
 ):
+    # `seeded_secrets` itself now publishes ``vault.secret.rotated.*`` (RUST-5)
+    # over this SAME shared emitter; clear so the assertion below still reads
+    # as "the first event THIS test's action published", not an artifact of
+    # fixture ordering.
+    emitter.clear()
     row = await registry.register(_postgres_cluster(), actor="lewis")
     assert row.kind == "postgres"
     assert row.state == LifecycleState.DRAFT

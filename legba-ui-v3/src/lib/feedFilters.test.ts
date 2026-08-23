@@ -128,6 +128,35 @@ describe('verification facet', () => {
     expect(matchesFilter(v, vv, onlyUnverified)).toBe(false)
   })
 
+  it('judge: matches how the verify pass ran — unsampled is a first-class value', () => {
+    const llm = finding({ id: 'llm', verification: { faithfulness_score: 0.9, judge_status: 'llm' } })
+    const unsampled = finding({
+      id: 'uns',
+      verification: { faithfulness_score: 0.6, judge_status: 'unsampled' },
+    })
+    const bare = finding({ id: 'bare', verification: null })
+    const lv = deriveRowVerdict(llm, 2)
+    const uv = deriveRowVerdict(unsampled, 2)
+    const bv = deriveRowVerdict(bare, 0)
+    const onlyLlm = parseFilterInput('judge:llm')
+    expect(matchesFilter(llm, lv, onlyLlm)).toBe(true)
+    expect(matchesFilter(unsampled, uv, onlyLlm)).toBe(false)
+    const onlyUnsampled = parseFilterInput('judge:unsampled')
+    expect(matchesFilter(unsampled, uv, onlyUnsampled)).toBe(true)
+    expect(matchesFilter(llm, lv, onlyUnsampled)).toBe(false)
+    // No verify block → no judge_status → matches NO value (honest absence).
+    expect(matchesFilter(bare, bv, onlyLlm)).toBe(false)
+    expect(matchesFilter(bare, bv, onlyUnsampled)).toBe(false)
+    // …and an unsampled row is still VERIFIED (the deterministic floor ran).
+    expect(isVerified(uv)).toBe(true)
+  })
+
+  it('accepts the judge_status: alias and is single-valued (last pick wins)', () => {
+    const p = parseFilterInput('judge_status:llm judge:unsampled')
+    expect(p.chips).toEqual([{ key: 'judge', value: 'unsampled' }])
+    expect(serializeFilter(p)).toBe('judge:unsampled')
+  })
+
   it('P0-4 — deriveRowVerdict flags verify-exempt structural rows', () => {
     // Via the analyst_id registry mirror (live-tail rows carry no stamp)…
     const tail = finding({
@@ -260,6 +289,45 @@ describe('serverFilterParams — the facets the REST routes answer themselves', 
       .toEqual(['since', 'target_id'])
   })
 
+  it('pushes the verification facet — verified + judge_status, unsampled first-class', () => {
+    const opts = { supports: FINDINGS_SERVER_FACETS, now: NOW }
+    expect(serverFilterParams(parseFilterInput('verified:true'), opts)).toEqual({
+      verified: 'true',
+    })
+    expect(serverFilterParams(parseFilterInput('verified:false'), opts)).toEqual({
+      verified: 'false',
+    })
+    expect(serverFilterParams(parseFilterInput('judge:unsampled'), opts)).toEqual({
+      judge_status: 'unsampled',
+    })
+    expect(serverFilterParams(parseFilterInput('verified:true judge:llm'), opts)).toEqual({
+      verified: 'true',
+      judge_status: 'llm',
+    })
+    // Signals are never verify-assessed — the route takes neither param.
+    expect(
+      serverFilterParams(parseFilterInput('verified:true judge:llm'), {
+        supports: SIGNALS_SERVER_FACETS,
+        now: NOW,
+      }),
+    ).toEqual({})
+  })
+
+  it('mirrors the matcher on odd verification values (never a divergent push)', () => {
+    const opts = { supports: FINDINGS_SERVER_FACETS, now: NOW }
+    // matchChip treats any non-true/yes value as "not verified" — the push
+    // says exactly that, so the two passes agree.
+    expect(serverFilterParams(parseFilterInput('verified:yes'), opts)).toEqual({
+      verified: 'true',
+    })
+    expect(serverFilterParams(parseFilterInput('verified:nope'), opts)).toEqual({
+      verified: 'false',
+    })
+    // An unknown judge value stays client-side (where it matches nothing) —
+    // pushing it would 422 the whole page instead.
+    expect(serverFilterParams(parseFilterInput('judge:garbage'), opts)).toEqual({})
+  })
+
   it('never pushes free text (the route matches whole tokens; typing would blank the list)', () => {
     expect(
       serverFilterParams(parseFilterInput('cou'), { supports: FINDINGS_SERVER_FACETS, now: NOW }),
@@ -285,6 +353,23 @@ describe('serverFilterParams — the facets the REST routes answer themselves', 
     expect(matchesFilter(wrongTarget, deriveRowVerdict(wrongTarget, 0), f, NOW)).toBe(false)
     expect(matchesFilter(wrongSeverity, deriveRowVerdict(wrongSeverity, 0), f, NOW)).toBe(false)
     expect(matchesFilter(match, deriveRowVerdict(match, 0), f, NOW)).toBe(true)
+
+    // Same property for the verification facet: a row the server's
+    // `verified=true&judge_status=unsampled` would exclude also fails the
+    // client pass (which still gates live-tail rows).
+    const vf = parseFilterInput('verified:true judge:unsampled')
+    expect(serverFilterParams(vf, { supports: FINDINGS_SERVER_FACETS, now: NOW })).toEqual({
+      verified: 'true',
+      judge_status: 'unsampled',
+    })
+    const llmRow = finding({ verification: { faithfulness_score: 0.9, judge_status: 'llm' } })
+    const bareRow = finding({ verification: null })
+    const unsampledRow = finding({
+      verification: { faithfulness_score: 0.6, judge_status: 'unsampled' },
+    })
+    expect(matchesFilter(llmRow, deriveRowVerdict(llmRow, 2), vf, NOW)).toBe(false)
+    expect(matchesFilter(bareRow, deriveRowVerdict(bareRow, 0), vf, NOW)).toBe(false)
+    expect(matchesFilter(unsampledRow, deriveRowVerdict(unsampledRow, 2), vf, NOW)).toBe(true)
   })
 })
 

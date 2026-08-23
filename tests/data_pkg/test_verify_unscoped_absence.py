@@ -33,6 +33,7 @@ import yaml
 
 from legba.data.provenance.verify import (
     FAIL_CLASS_SOFT,
+    _ABSENCE_JUDGE_SYSTEM,
     _UNSCOPED_ABSENCE,
     unscoped_absence_spans,
     build_faithfulness_critique_payload,
@@ -244,7 +245,7 @@ class _PartitionJudge:
     async def chat_complete(
         self, messages, *, max_tokens=None, temperature=None, system=None, **kw
     ):
-        if system and "ABSENCE / NEGATIVE claims" in system:
+        if system and system == _ABSENCE_JUDGE_SYSTEM:
             self.absence_calls += 1
             return _Response('{"verdicts": ["supported"]}')
         return _Response('{"verdicts": ["supported", "supported"]}')

@@ -86,6 +86,19 @@ grounding:
 
 method:
   kind: llm_planner
+  # J2 (2026-08-15, FORWARD_PLAN §1) — the verify-path judge SAMPLING gate.
+  # Unit findings are the SAMPLED verify population: the LLM faithfulness
+  # judge grades a DETERMINISTIC 10% of this unit's findings (SHA-256 of the
+  # finding id vs the rate — replayable, no RNG; the free-tier judge lane is
+  # ~50 calls/day). Unsampled findings keep the deterministic floor under the
+  # PROVISIONAL ceiling and publish judge_status='unsampled' — an honest
+  # state, never an error — with overall_score still populated. The
+  # always-judged membership defaults in code to compositions + world +
+  # journal (judge_assessability.JUDGE_SAMPLE_ALWAYS_DEFAULT); a
+  # judge_sample_always list here overrides that default (an explicit []
+  # clears it).
+  options:
+    judge_sample_rate: 0.10
   # Autonomous-research prompt. It (1) PICKS a research question live from the
   # substrate via tools, (2) INVESTIGATES it over the full-text corpus, (3) emits
   # ONE STRICT-JSON FindingPayload with cite-the-prose [N] markers so the verify

@@ -18,6 +18,34 @@ machine ``reason`` — NEVER a fabricated band, never a hand-weighted number ove
 raw prose, never a synthesized basis id. Basis ids are ONLY ever real
 ``analyst_outputs.id`` rows returned by the gather query.
 
+FRAME-3 — SEVERITY AS STATE (``planning/FRAME_PROGRAM_2026-08-20.md`` §0.6, §7
+train 3). R4 has always mapped the severity tag; what changed is what that tag
+MEANS. A desk used to tag the severity of its SLICE DELTA, so a war in its
+fourth month tagged ``severity:low`` on a week that added nothing to it and
+this engine banded the dimension ``low`` off that tag — CORRECTNESS-R1 measured
+37/37 non-exact bands sitting BELOW the reference, and named it the C-B driver.
+The unit contract now splits the tag: ``severity`` is the STANDING level of the
+dimension and the slice movement rides a separate
+``severity_delta:<rose|fell|steady|new>``.
+
+Three consequences, all of them deliberate:
+
+  * **R4 bands the STANDING level.** No rule changed here — the tag it reads
+    simply now answers the question the band was always claiming to answer.
+  * **THE DELTA NEVER TOUCHES THE BAND.** It is reported on the verdict beside
+    the band, never folded into it. A band is a statement about a CONDITION;
+    letting movement move it would re-import the defect from the other side
+    (a war "steady" for a fortnight would decay a rung a fortnight).
+  * **DAMPING IS UNTOUCHED** (§0.6, and H-DAMPING was refuted at ~1
+    discordance): the one-rung demote still keys on effective confidence and
+    nothing else.
+
+An ABSENT delta is first-class and expected — every head written before the
+prompt flip reached its desk has none — and reads ``None``, never ``steady``.
+:data:`BANDING_SEMANTICS` stamps which contract a verdict was computed under so
+a before/after band diff is a machine comparison rather than a guess about when
+the desks flipped.
+
 Design constraints (why keying/severity are what they are):
 
   * **Dimension key is the unit ``analyst_id``, NOT the LLM topic tag.** The
@@ -57,6 +85,8 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional, Sequence
+
+from ...provenance.models import severity_delta_from_tags
 
 # ---------------------------------------------------------------------------
 # Constants — the whole rule table.
@@ -122,6 +152,20 @@ SEVERITY_TO_BAND: dict[str, str] = {
 #: Sentinel band for a dimension with no qualifying verified claim.
 INSUFFICIENT: str = "insufficient-evidence"
 
+#: FRAME-3 — WHICH severity contract a verdict was computed under, stamped on
+#: every banded card. The engine's rules did not change; the MEANING of the tag
+#: they read did, which is the kind of change that is invisible in a band value
+#: and therefore has to be recorded beside it. ``delta`` means severity is the
+#: dimension's slice movement (pre-FRAME-3); ``standing`` means it is the
+#: dimension's standing state, with the movement in ``severity_delta``.
+#:
+#: A CONSTANT, not a computation: the semantics are a property of the prompt
+#: contract the desks run under, and a card cannot detect from one row's tags
+#: which contract wrote it. It moves when the flip lands, and the §7 gate — a
+#: before/after band diff on one conflict desk and one quiet desk — is exactly
+#: the check that it moved for the right reason.
+BANDING_SEMANTICS: str = "standing"
+
 #: Coerce-fallback tags: a finding whose body could not be structured. Its
 #: score is *vacuously* faithful, so it must be dropped by tag (mirrors the
 #: composition gate drop in meta_findings_synthesizer ~L690).
@@ -161,6 +205,17 @@ class Claim:
     def is_coerce_fallback(self) -> bool:
         return any(t in _COERCE_TAGS for t in self.tags)
 
+    @property
+    def severity_delta(self) -> Optional[str]:
+        """FRAME-3 — the desk's own movement call, or ``None`` when unstamped.
+
+        Read from the SAME tag list the standing severity comes from, through
+        the one shared reader, so the two can never disagree about which tags a
+        claim carries. ``None`` for every head written before the flip reached
+        its desk — reported as absent, never defaulted to ``steady``.
+        """
+        return severity_delta_from_tags(self.tags)
+
 
 @dataclass(frozen=True)
 class DimensionVerdict:
@@ -170,11 +225,19 @@ class DimensionVerdict:
     the severity tag and the folded numbers. For anything else:
     ``band=INSUFFICIENT``, ``basis=[]``, all numeric fields ``None``, and a
     machine ``reason``.
+
+    FRAME-3 adds ``severity_delta`` — the desk's movement call, carried BESIDE
+    the band and never inside it. ``band`` answers "what is the state of this
+    dimension"; ``severity_delta`` answers "what did this cycle do to it". They
+    are separate questions and this is the row where a reader can finally see
+    both: a ``high`` band with ``steady`` is a war that is still on, which used
+    to be indistinguishable from a war nobody looked at.
     """
 
     band: str
     basis: list[str]
     severity_tag: Optional[str] = None
+    severity_delta: Optional[str] = None
     effective_confidence: Optional[float] = None
     confidence: Optional[float] = None
     critic_score: Optional[float] = None  # the folded faithfulness score
@@ -187,6 +250,7 @@ class DimensionVerdict:
             "band": self.band,
             "basis": list(self.basis),
             "severity_tag": self.severity_tag,
+            "severity_delta": self.severity_delta,
             "effective_confidence": self.effective_confidence,
             "confidence": self.confidence,
             "critic_score": self.critic_score,
@@ -269,11 +333,17 @@ def band_dimension(
         two demotions never collide.
       * **R2 ``below-floor``** — ``effective_confidence < conf_floor``.
       * **R3 ``no-severity-tag``** — no valid ``severity:<level>`` tag.
-      * **R4 band** — ``base = SEVERITY_TO_BAND[level]``; if
+      * **R4 band** — ``base = SEVERITY_TO_BAND[level]``, where ``level`` is
+        the dimension's STANDING state (FRAME-3; see the module note); if
         ``effective_confidence >= conf_confident`` the band is ``base``; if
         ``conf_floor <= effective_confidence < conf_confident`` the band is
         ``demote_one(base)`` with ``damped=True`` ("low-faithfulness reads
         lower" — one rung DOWN, clamped at ``low``, NEVER a promotion).
+
+    The claim's ``severity_delta`` is carried onto the R4 verdict UNUSED by any
+    rule — the band is a statement about the condition, and no movement call
+    may raise, demote or damp it. R0-R3 carry no delta at all: an insufficient
+    verdict has no claim it is entitled to report anything about.
 
     The basis of any real band is exactly ``[claim.finding_id]`` — the exact row
     that drove it. An insufficient verdict always carries ``basis=[]``.
@@ -314,6 +384,7 @@ def band_dimension(
         band=band,
         basis=[claim.finding_id],
         severity_tag=level,
+        severity_delta=claim.severity_delta,
         effective_confidence=eff,
         confidence=claim.confidence,
         critic_score=claim.faithfulness_score,
@@ -342,6 +413,12 @@ def band_target(
     The ``composition`` claim is surfaced as its own aggregate node naming its
     basis id — it is NEVER folded into a fabricated overall band. When absent the
     node is ``{present: False, basis: []}``.
+
+    The verdict carries :data:`BANDING_SEMANTICS` so a card records WHICH
+    severity contract produced it. Without it a ``low`` band from before the
+    FRAME-3 flip and a ``low`` band after it are the same three characters
+    meaning two different things, and the §7 before/after gate would be reading
+    a diff it could not attribute.
     """
     ts = generated_at or datetime.now(timezone.utc).isoformat()
 
@@ -367,6 +444,7 @@ def band_target(
     return {
         "target_id": target_id,
         "generated_at": ts,
+        "banding_semantics": BANDING_SEMANTICS,
         "floors": {
             "conf_floor": conf_floor,
             "conf_confident": conf_confident,

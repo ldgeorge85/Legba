@@ -64,7 +64,7 @@ from ...registry.health import HealthState, StackComponentHealth
 # R11 per-run receipt accounting. ``legba.data.run_accounting`` is stdlib-only
 # and its package ``__init__`` imports nothing, so this costs no import weight
 # and cannot cycle back into the stack plane. No account bound → no-op.
-from ...run_accounting import prompt_digest, record_llm_call
+from ...run_accounting import prompt_digest, record_llm_call, record_prompt_rendered
 from ...schemas.stack import LLMProviderConfig
 
 logger = logging.getLogger(__name__)
@@ -546,6 +546,15 @@ class LLMProviderHandler:
         chosen_model = model or cfg.model_name.raw  # type: ignore[union-attr]
         chosen_max_tokens = max_tokens or int(cfg.max_tokens.raw)  # type: ignore[union-attr]
 
+        # RUST-5 — ``analyst_traces.prompt_rendered``. Captured from the
+        # ORIGINAL (pre-translation) ``messages``/``system`` — the same args
+        # every caller passes regardless of provider — so this is one
+        # provider-agnostic line instead of per-subprovider wire-shape
+        # bookkeeping. Overwrites the run account's single slot; a no-op when
+        # no account is bound (registry process, filter plane, ad-hoc
+        # scripts, most tests). See run_accounting.py's module docstring.
+        record_prompt_rendered(system, messages)
+
         # Budget gate (best-effort; runtime enforces out-of-band per KC-5).
         if ctx is not None and ctx.budget is not None:
             envelope = await ctx.budget.check_envelope()
@@ -693,6 +702,25 @@ class LLMProviderHandler:
                         finish_reason=response.finish_reason,
                         tool_call_count=len(response.tool_calls),
                     )
+                    # UPSTREAM SERVING PROVIDER (2026-08-16). `model` and
+                    # `subprovider` name what we ASKED for and which handler
+                    # class asked — neither names who actually served it. A
+                    # router (OpenRouter) picks a provider per request, and
+                    # measurement showed that choice is NOT cosmetic: the same
+                    # model id, same prompt and same 94 critiques flipped 13.6%
+                    # of pass/fail verdicts between two providers of the same
+                    # weights (Nvidia vs DeepInfra) — including a pass-stratum
+                    # claim, on a plane whose stated invariant is zero false
+                    # passes. That drift was the same magnitude as an entire
+                    # doctrine prompt rewrite, and it was structurally
+                    # invisible: no receipt field could carry it, so no gauge
+                    # could page on it. Recorded only when the response names
+                    # one, so every non-routed provider's receipt stays
+                    # byte-identical and the field's PRESENCE is itself the
+                    # evidence that a router chose on our behalf.
+                    served_by = (response.raw_response or {}).get("provider")
+                    if isinstance(served_by, str) and served_by:
+                        fields["served_by"] = served_by
                     # Prompt-caching receipt (Anthropic). Recorded only when
                     # NON-ZERO so every uncached provider's receipt stays
                     # byte-identical, and so `cache_read_tokens` appearing in

@@ -21,6 +21,7 @@ a real concrete provider handler over ``httpx.MockTransport`` → the real
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -158,11 +159,12 @@ class _FakeConn:
     async def execute(self, query: str, *args):
         assert "INSERT INTO analyst_traces" in query
         self._store["args"] = args
-        # receipts.py column order: … intermediate_steps($10), llm_calls($11),
-        # tool_calls($12) …
-        self._store["llm_calls"] = json.loads(args[10])
-        self._store["tool_calls"] = json.loads(args[11])
+        # receipts.py column order: … prompt_rendered($9), prompt_sha256($10),
+        # intermediate_steps($11), llm_calls($12), tool_calls($13) …
+        self._store["llm_calls"] = json.loads(args[11])
+        self._store["tool_calls"] = json.loads(args[12])
         self._store["prompt_rendered"] = args[8]
+        self._store["prompt_sha256"] = args[9]
 
 
 class _FakePool:
@@ -183,7 +185,10 @@ class _FakePool:
         return _Acq()
 
 
-async def _record(pool: _FakePool, *, llm_calls, tool_calls) -> None:
+async def _record(
+    pool: _FakePool, *, llm_calls, tool_calls,
+    prompt_rendered: str | None = None, prompt_sha256: str | None = None,
+) -> None:
     """Drive the REAL receipt chain exactly as ``AnalystActor.run`` does."""
     chain = RuntimeReceiptChain(pool)  # type: ignore[arg-type]
     now = datetime.now(timezone.utc)
@@ -196,7 +201,8 @@ async def _record(pool: _FakePool, *, llm_calls, tool_calls) -> None:
         input_row_refs=[],
         input_payload=None,
         prompt_module_hash=None,
-        prompt_rendered=None,
+        prompt_rendered=prompt_rendered,
+        prompt_sha256=prompt_sha256,
         output_row_refs=[],
         output_payload={"title": "t"},
         run_started_at=now,
@@ -244,13 +250,14 @@ async def test_llm_run_lands_llm_calls_in_the_trace_row():
     assert entry["at"]
 
 
-async def test_prompt_is_evidenced_by_digest_not_by_its_text():
-    """``prompt_rendered`` stays NULL; the bounded digest carries the evidence.
-
-    Persisting the rendered prompt would put up to the full 32k-token input
-    budget on every one of ~12.5k traces/48h. The sha256 + char count let an
-    auditor re-render and prove identity without the bloat, and are two scalars
-    rather than an unbounded blob.
+async def test_per_call_llm_calls_carries_a_bounded_digest_not_the_text():
+    """Each ``llm_calls[]`` entry stays digest-only — sha256 + char count, no
+    text. This is UNCHANGED by RUST-5: a run can make many calls (GATHER
+    rounds), and persisting the full prompt on EVERY one of them into that
+    JSONB array would reintroduce the row-bloat the digest exists to avoid.
+    RUST-5 wires the trace-level ``prompt_rendered`` column separately (see
+    ``test_prompt_rendered_is_wired_end_to_end`` below) — ONE bounded text
+    per trace, not one per call.
     """
     handler = await _handler(
         lambda _req: httpx.Response(200, json=_completion_body())
@@ -260,6 +267,8 @@ async def test_prompt_is_evidenced_by_digest_not_by_its_text():
         await handler.chat_complete(_MESSAGES, system="you are a desk")
         calls = run_accounting.current_llm_calls()
         pool = _FakePool()
+        # This caller does NOT thread current_prompt_rendered() through — the
+        # column stays NULL, exactly as it always has, when nobody supplies it.
         await _record(pool, llm_calls=calls, tool_calls=[])
     finally:
         run_accounting.reset_run_accounting(token)
@@ -281,6 +290,68 @@ async def test_prompt_is_evidenced_by_digest_not_by_its_text():
     assert other != entry["prompt_sha256"]
 
 
+async def test_prompt_rendered_is_wired_end_to_end():
+    """RUST-5 — the real path: chat_complete -> current_prompt_rendered() ->
+    receipt_chain.record() -> the analyst_traces row carries the rendered
+    prompt AND its full sha256, mirroring exactly what
+    ``dapr_actors.py``'s trace-write call site now does.
+    """
+    handler = await _handler(
+        lambda _req: httpx.Response(200, json=_completion_body())
+    )
+    token = run_accounting.bind_run_accounting()
+    try:
+        await handler.chat_complete(_MESSAGES, system="you are a desk")
+        calls = run_accounting.current_llm_calls()
+        rendered, sha = run_accounting.current_prompt_rendered()
+        pool = _FakePool()
+        await _record(
+            pool, llm_calls=calls, tool_calls=[],
+            prompt_rendered=rendered, prompt_sha256=sha,
+        )
+    finally:
+        run_accounting.reset_run_accounting(token)
+        await handler.on_retire(None)  # type: ignore[arg-type]
+
+    assert pool.store["prompt_rendered"] == (
+        "[SYSTEM]\nyou are a desk\n\n[USER]\nassess Iran"
+    )
+    assert pool.store["prompt_sha256"] == sha
+    assert len(sha) == 64
+    # Byte-verifiable: re-hashing the (untruncated) stored text reproduces
+    # the stored sha256 — the claim render_prompt_pack.py's replay depends on.
+    assert (
+        hashlib.sha256(pool.store["prompt_rendered"].encode("utf-8")).hexdigest()
+        == pool.store["prompt_sha256"]
+    )
+
+
+async def test_prompt_rendered_is_capped_with_a_truncation_marker():
+    """A prompt over the cap is truncated with an explicit marker; the sha256
+    ALWAYS covers the FULL untruncated text, never the capped text."""
+    big_user_content = "x" * (run_accounting._MAX_PROMPT_RENDERED_CHARS + 5_000)
+    handler = await _handler(
+        lambda _req: httpx.Response(200, json=_completion_body())
+    )
+    token = run_accounting.bind_run_accounting()
+    try:
+        await handler.chat_complete(
+            [{"role": "user", "content": big_user_content}], system="sys",
+        )
+        rendered, sha = run_accounting.current_prompt_rendered()
+    finally:
+        run_accounting.reset_run_accounting(token)
+        await handler.on_retire(None)  # type: ignore[arg-type]
+
+    assert len(rendered) < len(big_user_content)
+    assert "TRUNCATED" in rendered
+    assert sha in rendered  # the marker names the full-text hash to verify against
+    # The hash does NOT match the truncated text — it is over the FULL text.
+    assert hashlib.sha256(rendered.encode("utf-8")).hexdigest() != sha
+    full_text = f"[SYSTEM]\nsys\n\n[USER]\n{big_user_content}"
+    assert hashlib.sha256(full_text.encode("utf-8")).hexdigest() == sha
+
+
 # ---------------------------------------------------------------------------
 # 2) A deterministic (no-LLM) run records [] — matching the column default.
 # ---------------------------------------------------------------------------
@@ -291,6 +362,7 @@ async def test_deterministic_run_records_empty_lists_not_null():
     try:
         assert run_accounting.current_llm_calls() == []
         assert run_accounting.current_tool_calls() == []
+        assert run_accounting.current_prompt_rendered() == (None, None)
         pool = _FakePool()
         await _record(
             pool,
@@ -305,7 +377,11 @@ async def test_deterministic_run_records_empty_lists_not_null():
     # only via the row existing at all.
     assert pool.store["llm_calls"] == []
     assert pool.store["tool_calls"] == []
-    assert pool.store["args"][10] == "[]"
+    assert pool.store["args"][11] == "[]"
+    # RUST-5: a deterministic run made no LLM call, so there is nothing to
+    # render — the column stays NULL (never a truncation marker over nothing).
+    assert pool.store["prompt_rendered"] is None
+    assert pool.store["prompt_sha256"] is None
 
 
 # ---------------------------------------------------------------------------

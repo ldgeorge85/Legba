@@ -35,14 +35,21 @@ method:
   prompt_module: legba.prompts.consult_on_demand.v1
   llm:
     # 2026-06-22: deep_consult runs on the Anthropic plane (operator: consult +
-    # deep_consult are the ONLY Anthropic users). max_tokens IS sent + enforced
-    # here (Anthropic requires it). TO REVERT to the core plane: set raw back
-    # to llm.primary.openai_compat.
+    # deep_consult are the ONLY Anthropic users). TO REVERT to the core plane:
+    # set raw back to llm.primary.openai_compat.
+    #
+    # 2026-08-15: max_tokens is the OPERATIVE per-call output budget for the
+    # workflow's analyze stage (the deps builder threads it into
+    # max_analyze_tokens via resolve_output_budget; LEGBA_CONSULT_MAX_TOKENS
+    # demoted to a loudly-logged emergency override). 32768 is enabled by the
+    # Anthropic handler streaming every generation; well under the Opus
+    # line's documented 128k per-request output ceiling (handler clamps +
+    # logs past it).
     primary:
       factory_kind: stack_ref
       raw: llm.anthropic.opus_4_7
       expected_family: llm_provider
-    max_tokens: 16384
+    max_tokens: 32768
   budget_tokens_per_day: 2000000
 
 cadence:

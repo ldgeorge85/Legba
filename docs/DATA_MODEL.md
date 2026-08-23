@@ -257,6 +257,13 @@ never a fresh judgment:
 - each band is derived from the finding's `severity:<level>` tag and its folded
   `effective_confidence`, and **names the ≥1 verified-claim id it rests on** (the
   row's `derived_from`), so a lineage walk resolves the basis with zero dangling;
+- that tag is the dimension's **standing state** — where it stands on the desk
+  today, not how far it moved this slice (FRAME-3, 2026-08-21). The movement rides
+  a separate `severity_delta:<rose|fell|steady|new>` tag, is reported on the
+  verdict beside the band, and **never enters** it; each card stamps
+  `banding_semantics` so a band written under the older delta-severity contract is
+  distinguishable from one written under this. An absent delta reads `null`, never
+  `steady`;
 - the rules **demote, never promote**: a claim below the confidence floor, or
   below the dedicated faithfulness floor, reads `low-faithfulness`; a dimension
   with no qualifying verified claim reads `insufficient-evidence` with an explicit

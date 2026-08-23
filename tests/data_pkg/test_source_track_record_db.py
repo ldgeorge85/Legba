@@ -434,43 +434,57 @@ async def test_assurance_route_earned_section(api_app, client):
 async def test_source_list_projection_earned_win_rate(api_app, client):
     _, pg_store = api_app
     desc_id = f"source.rss.earned_{uuid4().hex[:8]}"
-    r = await client.post(
-        "/api/v1/registry/descriptors/source", json=_source_body(desc_id),
-    )
-    assert r.status_code == 201, r.text
-
-    def _row(payload: list[dict[str, Any]]) -> dict[str, Any]:
-        m = [x for x in payload if x["descriptor_id"] == desc_id]
-        assert len(m) == 1
-        return m[0]
-
-    # Ungraded/unmeasured: the additive field is present and null.
-    r = await client.get("/api/v1/registry/sources")
-    assert r.status_code == 200, r.text
-    row = _row(r.json())
-    assert row["earned_win_rate"] is None
-    assert row["assurance_grade"] is None       # sibling projection intact
-
-    # A measured record surfaces as the smoothed rate.
-    async with pg_store.acquire() as conn:
-        await conn.execute(
-            """
-            INSERT INTO source_track_records
-                (source_id, wins, losses, contested_total, win_rate_smoothed,
-                 win_rate_lower, low_sample)
-            VALUES ($1, 9, 1, 10, $2, 0.6, false)
-            ON CONFLICT (source_id) DO NOTHING
-            """,
-            desc_id, (9 + 2) / (10 + 4),
+    # RETIRE the registered descriptor on the way out, failure path included.
+    # This registration was the polluter behind the 2026-08-17/18 nightly
+    # shuffled FAILs: the head stayed in the session-shared source_descriptors
+    # table, and test_collection_requirements' candidate assertions are
+    # statements about that whole table, so its clean_slate sentinel
+    # (correctly) refused to run them. Scoped to exactly the rows this test
+    # created, per the m23 idiom — a suite-wide wipe here would make THIS
+    # file the polluter.
+    try:
+        r = await client.post(
+            "/api/v1/registry/descriptors/source", json=_source_body(desc_id),
         )
-    r = await client.get("/api/v1/registry/sources")
-    assert _row(r.json())["earned_win_rate"] == pytest.approx((9 + 2) / (10 + 4))
+        assert r.status_code == 201, r.text
 
-    # Detail view carries the same stamp.
-    r = await client.get(f"/api/v1/registry/sources/{desc_id}")
-    assert r.status_code == 200, r.text
-    assert r.json()["earned_win_rate"] == pytest.approx((9 + 2) / (10 + 4))
+        def _row(payload: list[dict[str, Any]]) -> dict[str, Any]:
+            m = [x for x in payload if x["descriptor_id"] == desc_id]
+            assert len(m) == 1
+            return m[0]
 
+        # Ungraded/unmeasured: the additive field is present and null.
+        r = await client.get("/api/v1/registry/sources")
+        assert r.status_code == 200, r.text
+        row = _row(r.json())
+        assert row["earned_win_rate"] is None
+        assert row["assurance_grade"] is None       # sibling projection intact
+
+        # A measured record surfaces as the smoothed rate.
+        async with pg_store.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO source_track_records
+                    (source_id, wins, losses, contested_total, win_rate_smoothed,
+                     win_rate_lower, low_sample)
+                VALUES ($1, 9, 1, 10, $2, 0.6, false)
+                ON CONFLICT (source_id) DO NOTHING
+                """,
+                desc_id, (9 + 2) / (10 + 4),
+            )
+        r = await client.get("/api/v1/registry/sources")
+        assert _row(r.json())["earned_win_rate"] == pytest.approx((9 + 2) / (10 + 4))
+
+        # Detail view carries the same stamp.
+        r = await client.get(f"/api/v1/registry/sources/{desc_id}")
+        assert r.status_code == 200, r.text
+        assert r.json()["earned_win_rate"] == pytest.approx((9 + 2) / (10 + 4))
+    finally:
+        async with pg_store.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM source_descriptors WHERE descriptor_id = $1",
+                desc_id,
+            )
 
 @pytest.mark.integration
 @pytest.mark.asyncio

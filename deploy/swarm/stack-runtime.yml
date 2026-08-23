@@ -263,6 +263,15 @@ services:
         limits:
           memory: 4G
 
+  # RUST-4 MOTHBALL (2026-08-21): hosts deep_consult_workflow; optimizer
+  # plane mothballed 2026-08-21. This service STAYS deployed — it also
+  # registers deep_consult_workflow (build_workflow_runtime() registers both
+  # workflows unconditionally on the same runtime). Only the optimizer half
+  # is mothballed: both optimizer descriptors are annotated `state: paused`
+  # (tree-only), and optimizer.py::run_method refuses loud
+  # (OptimizerMothballedError) regardless. See docs/SEAMS.md #53 and
+  # planning/RUST4_EVIDENCE_2026-08-21.md (docker-compose.yml carries the
+  # same note on its copy of this service).
   legba-dapr-workflow-worker:
     image: localhost:5000/legba/legba-dapr-workflow-worker:latest
     logging: *default-logging

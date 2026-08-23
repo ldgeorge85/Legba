@@ -163,6 +163,12 @@ def test_fail_class_mapping_table() -> None:
         # R2: the input set asserted P and not-P and the composition did not name
         # the disagreement. Soft (no fabricated fact), and the costliest of them.
         "unsurfaced_input_contradiction": FAIL_CLASS_SOFT,
+        # RUST-3: the judge answered "not_a_proposition" on a span that DOES
+        # carry a checkable particular, so the declination was not earned and
+        # was withdrawn. Soft — the claim stays graded and failing, exactly as
+        # it did before the fourth verdict existed. An EARNED one is ungraded
+        # and reaches no table at all.
+        "judge_nonpropositional_unearned": FAIL_CLASS_SOFT,
     }
     # Unknown reasons degrade conservatively (soft, never a fabricated hard).
     assert fail_class_for_reason("some_future_reason") == FAIL_CLASS_SOFT
