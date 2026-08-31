@@ -153,6 +153,74 @@ _VARIANT_DAGGER_CITATION_RE = re.compile(r"[【［〔〖]\s*(\d+)\s*†[^】］�
 def _expand_ref_list(digits: str) -> str:
     """``"2, 6, 7"`` -> ``"[[ref:2]][[ref:6]][[ref:7]]"`` (one marker each)."""
     return "".join(f"[[ref:{n.strip()}]]" for n in digits.split(","))
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-29 — THE PRIOR-READ REFERENCE, spelled out (task #62).
+#
+# WHAT THIS IS, STATED HONESTLY, because the number that commissioned it did not
+# survive re-measurement. A bounded unit's DESK GROUNDING blocks are citable in
+# the same flat ``[N]`` space as its signals, and the PRIOR READ — this desk's
+# own previous verified head — is rendered LAST, so it lands on the ordinal one
+# past the slice. Desks self-cite it as ``[N+1]``.
+#
+# The 2026-08-27 DQ sweep called that a 53.6% citation RED. The 2026-08-29 sweep
+# v2 FALSIFIED the finding: the baseline resolved prose markers against
+# ``analyst_traces.input_row_refs``, a bare ``uuid[]`` of consumed substrate rows
+# that by construction cannot hold a grounding block, so the method flagged every
+# legitimate grounding citation. Re-measured against the actual ground truth
+# (``analyst_outputs.data->'data'->'citations'``): 0 of 6,556 markers unresolved,
+# 0 of 1,079 findings affected, and all 847 markers the old method flagged land
+# on registered grounding kinds (502 of them ``prior_read``). There is no
+# resolution debt here and this rule does not pay one down.
+#
+# What is left is real: the reference is convention-encoded. ``[121]`` in the
+# prose is spelled exactly like a signal citation, and only a consumer that joins
+# to the citation list AND knows ``GROUNDING_REF_KINDS`` can tell the two apart.
+# Two live consumers do not, and BOTH are on the read side, which is why the
+# grading corpus above cannot see them:
+#
+#   * ``data/registry/export_api.py::_stored_citations`` keeps only entries with
+#     a ``signal_id``. Grounding entries have none by design, so all five kinds
+#     are stripped from an exported document's Citations section — and a finding
+#     citing only grounding blocks prints "no resolved citations recorded".
+#   * ``legba-ui-v3/src/lib/citationsModel.ts`` special-cases exactly ONE kind
+#     (``situation_register``). ``window_ledger`` / ``desk_baseline`` /
+#     ``open_questions`` carry no ``ref_id`` and are dropped, surfacing as
+#     "Unresolved citation — no backing evidence" chips over evidence the verify
+#     pass scored as SUPPORTED; ``prior_read`` is typed as a ``signal`` and
+#     drills to its ``analyst_outputs`` uuid, which no signal lookup can resolve.
+#
+# THIS RULE FIXES NEITHER. Both read ``signal_id`` / ``ref_id`` shapes, not the
+# prose spelling, and neither would notice the form below. What this gives is a
+# way for the desk to SAY "prior read" and for the parsers to accept it being
+# said; the two consumers above are their own repair and are recorded as owed.
+#
+# THE FORM. ``(prior read ref N)`` is the licensed prose spelling: a desk may
+# write it instead of a bare ``[N]`` and lose nothing, because this rule rewrites
+# it to the canonical marker before anything parses. Same posture as every other
+# rule in this module — normalizing a variant can only ever ADD a resolvable
+# citation — and the same guarantee: the wrapper and the words "prior read" are
+# both REQUIRED, so ordinary prose is untouched.
+#
+# DELIBERATELY NOT MATCHED: ``[prior:N]``, the DEFUSED marker
+# ``unit_grounding._defuse_prior_read_markers`` writes into an embedded prior-read
+# body. That form exists precisely so the PREVIOUS run's ordinals resolve
+# NOWHERE, and a rule that re-armed it would hand this run's evidence map to last
+# cycle's numbering. The "read" token is what keeps the two apart.
+_PRIOR_READ_REF_RE = re.compile(
+    r"[(\[]\s*prior[\s_\-]*read\s*(?:ref(?:erence)?)?\s*[:\s]\s*(\d+)\s*[)\]]",
+    re.IGNORECASE,
+)
+
+#: The canonical spelling, generated once so the render, the clause and the
+#: parsers cannot drift apart on it.
+PRIOR_READ_REF_TEMPLATE = "(prior read ref {n})"
+
+
+def prior_read_ref(ordinal: int | str) -> str:
+    """The licensed prose form of a prior-read self-citation at ``ordinal``."""
+    return PRIOR_READ_REF_TEMPLATE.format(n=ordinal)
 #: An explicit ALLOWLIST, not "any non-digit content" — the guarantee that CJK
 #: prose using these glyphs survives untouched is worth keeping.
 _UNCITABLE_ANNOTATIONS: frozenset[str] = frozenset(
@@ -184,6 +252,12 @@ def _normalize_verify_markers(text: str) -> str:
     """Rewrite citation-marker drift variants to ASCII ``[N]`` before parsing."""
     if not text:
         return text
+    # The PRIOR-READ REFERENCE runs FIRST: it is disjoint from every rule below
+    # (each of those requires either a full-width bracket, a literal ``ref:``, or
+    # a bare comma-separated digit list — none of which this form is), and
+    # rewriting it up front means the rest of the function only ever sees
+    # canonical markers.
+    text = _PRIOR_READ_REF_RE.sub(lambda m: f"[{m.group(1)}]", text)
     text = _VARIANT_CITATION_RE.sub(lambda m: f"[{m.group(1).strip()}]", text)
     text = _PAREN_CITATION_LIST_RE.sub(
         lambda m: "".join(f"[{n.strip()}]" for n in m.group(1).split(",")),

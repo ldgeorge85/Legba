@@ -29,15 +29,16 @@
  * at its original component — see panel-registry/registry.ts HIDDEN_KINDS — so
  * a saved layout or ⌘K deep-link referencing any of the ids keeps resolving.
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { PanelProps } from '@/types'
-import { PanelTabStrip, type PanelTabDef } from '@/components/PanelTabs'
+import { initialTab, PanelTabStrip, type PanelTabDef } from '@/components/PanelTabs'
 import { PanelEmbedProvider } from '@/components/PanelEmbedContext'
 import WhyPanel from '@/panels/v4/WhyPanel'
 import LineagePanel from '@/panels/system/Lineage'
 import FlowPanel from '@/panels/v4/FlowPanel'
 import SituationTrajectoryPanel from '@/panels/system/SituationTrajectory'
 import NarrativesPanel from '@/panels/system/Narratives'
+import { emitRead } from '@/lib/readTelemetry'
 
 type Tab = 'why' | 'lineage' | 'flow' | 'trajectory' | 'narratives'
 
@@ -50,7 +51,30 @@ const TABS: readonly PanelTabDef[] = [
 ]
 
 export default function ProvenanceMerged(props: PanelProps) {
-  const [tab, setTab] = useState<Tab>('why')
+  // `initialTab` lands a deep-link on the right tab: the retired kinds
+  // (v4.why / system.lineage / v4.flow / system.situations /
+  // system.narratives) resolve here through panel-registry/aliases.ts, each
+  // naming the tab that IS its surface. An unknown value falls back to Why.
+  const [tab, setTab] = useState<Tab>(() => initialTab(props.initialTab, TABS, 'why') as Tab)
+
+  // READ TELEMETRY (D2e) — the lineage walk itself.
+  //
+  // PREMISE_REASON_TO_EXIST §2.2: "Receipt chains that are never walked...
+  // 59,771 preserved artifacts backing a trust operation nobody performs."
+  // That claim rested on Caddy logs, which cannot see a tab change inside a
+  // mounted panel. This can.
+  //
+  // Only the three WALK surfaces count: Why (the derivation graph), Lineage
+  // (the derived_from tracer) and Flow (the production path). Trajectory and
+  // Narratives live in the same wrapper for layout reasons but answer a
+  // different question, and folding them in would inflate the one number
+  // §2.2 is graded on.
+  useEffect(() => {
+    if (tab === 'why' || tab === 'lineage' || tab === 'flow') {
+      emitRead('lineage_walk', { subjectKind: 'provenance_tab', subjectId: tab })
+    }
+  }, [tab])
+
   return (
     <div className="flex h-full w-full flex-col bg-surf-2">
       <div className="flex items-center gap-2 border-b border-line bg-surf-3 px-density py-1.5">

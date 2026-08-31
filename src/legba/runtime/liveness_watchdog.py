@@ -34,9 +34,10 @@ STATE-TRANSITION EDGE — one durable ``alert_sink_deliveries`` row
 'entered'/'recovered') plus a P1-1 outward fan-out per transition, silence
 while a condition persists, restart-safe via a ledger-seeded state map. The
 empty-streak check additionally discriminates honest-quiet feeds (newest
-observed upstream entry <= our last ingest → NO alert) from cursor/filter
-faults (upstream carries newer entries yet polls yield 0 → escalate) using
-the ``newest_entry_ts`` evidence the source handlers record per poll.
+observed upstream entry <= our last ingest → silent below a much higher
+prolonged-quiet bound, escalated past it) from cursor/filter faults (upstream
+carries newer entries yet polls yield 0 → escalate) using the
+``newest_entry_ts`` evidence the source handlers record per poll.
 """
 
 from __future__ import annotations
@@ -108,10 +109,63 @@ _SOURCE_CADENCE_MIN_THRESHOLD_S = 3.0 * 3600.0
 # cadence window expires.
 _EMPTY_STREAK_ENV = "LEGBA_SOURCE_EMPTY_STREAK_THRESHOLD"
 _DEFAULT_EMPTY_STREAK = 5
-# How many recent poll-outcome rows per source the streak read pulls back. The
-# streak only counts leading 'empty' rows, so a window comfortably above the
-# threshold is enough to confirm the run and see the breaking row (if any).
+# Floor for how many recent poll-outcome rows per source the streak read pulls
+# back. The streak only counts leading 'empty' rows, so a window comfortably
+# above the threshold is enough to confirm the run and see the breaking row
+# (if any). This is a FLOOR, not the effective window — see
+# ``_empty_streak_fetch_window`` below: the real per-check window is sized
+# dynamically off the CONFIGURED thresholds, because a fixed floor alone
+# already broke once (2026-08-29 DQ sweep, finding 1).
 _EMPTY_STREAK_WINDOW = 20
+# 2026-08-29 DQ sweep (finding 1) — the FETCH WINDOW must strictly exceed
+# every threshold the streak is compared against, or the threshold is
+# structurally unreachable no matter how long the real streak runs.
+# ``_fetch_source_empty_streak_rows`` LIMITs its per-source pull, and
+# ``_evaluate_empty_streaks`` can only ever report a streak as long as the
+# rows it was handed. That is exactly how ``honest_quiet_streak_threshold``
+# (added below, default 36) shipped DEAD: the fixed window above (20) is
+# LESS than 36, so ``streak < honest_quiet_threshold`` was always true —
+# verified live: 8 sources pinned at exactly streak 20, zero
+# ``honest_quiet_prolonged`` alerts ever, source.who.news 0 signals/32 days /
+# 120 consecutive empty polls / active+healthy, unalerted. This margin is the
+# same shape as the sibling fix in
+# ``legba.data.analysts.deterministic_handlers.entity_gc._SOURCE_STREAK_WINDOW``
+# (``max(threshold + 5, floor)`` — "must exceed ... so a qualifying leading
+# run is never truncated by the LIMIT"), generalized to TWO independently
+# env-tunable thresholds so a future operator raising either one can't
+# silently reopen this gap. A bounded fetch sized off the configured
+# thresholds (rather than an unbounded per-source scan) is the cheaper of the
+# two structurally-correct fixes DQ_SWEEP_V2 §1 offered: a genuinely dead
+# source polled on a tight cadence (who.news: every ~15 min) can accumulate
+# an unbounded empty run over months, and nothing downstream needs to see
+# past "more rows than the highest configured threshold, plus enough slack to
+# also observe the breaking row" to prove the escalation correctly fires —
+# it does not need the EXACT true streak length, only a floor-correct one
+# (a streak longer than the window reports as ``window`` rows, which still
+# clears the threshold and still alerts; see
+# ``INGESTION_SMALLS_REPORT.md`` for the accepted precision trade-off).
+_EMPTY_STREAK_WINDOW_SLACK = 5
+
+# 2026-08-27 DQ sweep — the HONEST-QUIET ESCALATION BOUND. B0-12's
+# ``_classify_streak`` correctly exempts a run whose own crawl evidence shows
+# nothing newer than what is already ingested ('honest_quiet' — the weekly/
+# monthly-feed false-positive class), but that exemption had NO ceiling: it
+# silenced the streak at ANY length. The sweep's source.wto.news case is
+# exactly that gap wearing a different number — 110 consecutive empty/healthy
+# polls over 9 days, every one honestly evidenced as quiet by the same
+# discriminator, so ``state='active'`` and ``health_state='healthy'`` never
+# wavered while the source produced nothing at all. A single quiet week is
+# ordinary; a streak this long is operationally indistinguishable from the
+# source having died outright (moved, retired, or a parser silently
+# returning nothing while the fetch still 200s) — it deserves a "please look"
+# alert even though it is not a cursor fault. This threshold is deliberately
+# far above ``empty_streak_threshold``: it must not re-trip the exact
+# weekly/monthly feeds the honest-quiet exemption exists to protect, only the
+# ones quiet long past any plausible normal cadence. Contrast with 403/5xx
+# sources, which the circuit breaker already auto-pauses (source_actor) —
+# this is the "polls clean, says nothing, forever" case that path can't see.
+_HONEST_QUIET_STREAK_ENV = "LEGBA_SOURCE_HONEST_QUIET_STREAK_THRESHOLD"
+_DEFAULT_HONEST_QUIET_STREAK = 36
 
 # B0-12 — durable per-entity alert channels (``alert_sink_deliveries.
 # channel_name``; ``sink_target`` carries the entity id). The per-analyst /
@@ -173,6 +227,11 @@ class WatchdogConfig:
     # former per-episode re-alert heartbeat is gone — a continuing episode is
     # silent; alerts fire only on the entered/recovered transition edges.)
     empty_streak_threshold: int = _DEFAULT_EMPTY_STREAK
+    # 2026-08-27 sweep: even a run the B0-12 discriminator classifies
+    # 'honest_quiet' escalates once it reaches THIS (much higher) length —
+    # see the constant's docstring. Independent of ``empty_streak_threshold``,
+    # which never applies to an honest-quiet run at all.
+    honest_quiet_streak_threshold: int = _DEFAULT_HONEST_QUIET_STREAK
 
     @classmethod
     def from_env(cls) -> "WatchdogConfig":
@@ -182,6 +241,9 @@ class WatchdogConfig:
             check_interval_s=_env_float(_INTERVAL_ENV, _DEFAULT_CHECK_SECONDS),
             cadence_stall_factor=_env_float(_CADENCE_FACTOR_ENV, _DEFAULT_CADENCE_FACTOR),
             empty_streak_threshold=_env_int(_EMPTY_STREAK_ENV, _DEFAULT_EMPTY_STREAK),
+            honest_quiet_streak_threshold=_env_int(
+                _HONEST_QUIET_STREAK_ENV, _DEFAULT_HONEST_QUIET_STREAK
+            ),
         )
 
 
@@ -876,7 +938,8 @@ class LivenessWatchdog:
     async def check_source_empty_streak_once(self, now_monotonic: float) -> list[str]:
         """Escalate any source whose most-recent CONSECUTIVE 'empty' poll-outcome
         run has reached ``empty_streak_threshold`` — unless the run is
-        classified honest-quiet.
+        classified honest-quiet, in which case it instead escalates once it
+        reaches the much higher ``honest_quiet_streak_threshold``.
 
         This catches the xinhua/aljazeera dead-15d class: a feed that keeps
         firing HTTP-200-with-0-items, logs every poll health='healthy', and so
@@ -888,12 +951,26 @@ class LivenessWatchdog:
         B0-12 precision: each empty poll-outcome row may carry the handler's
         ``newest_entry_ts`` observation, which splits the qualifying streaks
         (see :func:`_evaluate_empty_streaks`) into honest-quiet (feed simply
-        has nothing newer than our last ingest → NO alert — this was the
-        B0-11 false-quiet class), cursor_fault (feed CARRIES newer entries
-        yet the polls yield 0 — the cursor/filter is eating live content →
-        escalate high), and unknown (no evidence → the pre-existing degraded
-        escalation). Leader-gated, boot-graced, transition-edge alerted
-        (entry + recovery only; a continuing episode is silent).
+        has nothing newer than our last ingest — silent below
+        ``honest_quiet_streak_threshold``, escalated at 'degraded' past it;
+        this was the B0-11 false-quiet class), cursor_fault (feed CARRIES
+        newer entries yet the polls yield 0 — the cursor/filter is eating
+        live content → escalate high), and unknown (no evidence → the
+        pre-existing degraded escalation). Leader-gated, boot-graced,
+        transition-edge alerted (entry + recovery only; a continuing episode
+        is silent).
+
+        2026-08-27 sweep: source.wto.news ran 110 consecutive empty/healthy
+        polls (9 days) that were *correctly* evidenced honest-quiet on every
+        one — so under the pre-fix rule it never escalated at all, at any
+        length. ``honest_quiet_streak_threshold`` is what makes a streak that
+        long escalate anyway.
+
+        2026-08-29 sweep (finding 1): that fix shipped structurally dead —
+        the fetch below is bounded by ``_empty_streak_fetch_window()``, sized
+        off the configured thresholds so it always strictly exceeds them (see
+        that method's docstring); the old fixed 20-row window could never
+        report a streak >= the default 36-length ``honest_quiet_threshold``.
         """
         if self._pg is None:
             return []
@@ -901,9 +978,13 @@ class LivenessWatchdog:
             return []
         if (now_monotonic - self._started_at) < self._cfg.stall_after_s:
             return []
-        rows = await self._fetch_source_empty_streak_rows()
+        rows = await self._fetch_source_empty_streak_rows(
+            window=self._empty_streak_fetch_window()
+        )
         degraded = _evaluate_empty_streaks(
-            rows, threshold=self._cfg.empty_streak_threshold
+            rows,
+            threshold=self._cfg.empty_streak_threshold,
+            honest_quiet_threshold=self._cfg.honest_quiet_streak_threshold,
         )
         states = await self._get_alert_states(ALERT_CHANNEL_SOURCE_DEGRADED)
         alerted: list[str] = []
@@ -925,15 +1006,45 @@ class LivenessWatchdog:
         )
         return alerted
 
-    async def _fetch_source_empty_streak_rows(self) -> list[dict[str, Any]]:
+    def _empty_streak_fetch_window(self) -> int:
+        """The per-source row LIMIT for the empty-streak fetch.
+
+        2026-08-29 DQ sweep, finding 1: must strictly exceed BOTH
+        ``empty_streak_threshold`` and ``honest_quiet_streak_threshold`` — a
+        window at or below a threshold makes that threshold structurally
+        unreachable, no matter how long the real streak runs, because
+        :func:`_evaluate_empty_streaks` can only ever see as many leading
+        rows as it was handed. Computed off the CONFIGURED values (not the
+        shipped defaults) so raising either threshold via its env knob can't
+        silently reopen the gap. Mirrors
+        ``legba.data.analysts.deterministic_handlers.entity_gc._SOURCE_STREAK_WINDOW``
+        (``max(threshold + slack, floor)``), generalized to two independent
+        thresholds. ``_EMPTY_STREAK_WINDOW_SLACK`` rows of margin beyond the
+        higher threshold is enough to also observe the breaking (non-empty)
+        row when the true streak is close to the bound; a streak longer than
+        the resulting window is reported at the window's length, which still
+        clears the threshold and still escalates (a deliberate, cheaper
+        alternative to an unbounded per-source scan — see the constant's
+        docstring).
+        """
+        return max(
+            _EMPTY_STREAK_WINDOW,
+            self._cfg.empty_streak_threshold + _EMPTY_STREAK_WINDOW_SLACK,
+            self._cfg.honest_quiet_streak_threshold + _EMPTY_STREAK_WINDOW_SLACK,
+        )
+
+    async def _fetch_source_empty_streak_rows(self, *, window: int) -> list[dict[str, Any]]:
         """The recent poll-outcome run per ACTIVE source, newest-first, plus the
         source's newest produced-signal timestamp.
 
-        Pulls the last ``_EMPTY_STREAK_WINDOW`` ``source_poll_outcomes`` rows for
-        each active source. Since migration 0114 a PRODUCTIVE poll writes an
-        ``outcome='success'`` row, which breaks the empty run directly. Every
-        row STILL carries ``last_signal`` (``max(signals.fetched_at)`` for the
-        source): ``_evaluate_empty_streaks`` uses it to RESET a streak whose
+        Pulls the last ``window`` ``source_poll_outcomes`` rows for each active
+        source — see :meth:`_empty_streak_fetch_window` for how the caller
+        sizes it (2026-08-29: it must strictly exceed the configured
+        thresholds, not just the ``_EMPTY_STREAK_WINDOW`` floor). Since
+        migration 0114 a PRODUCTIVE poll writes an ``outcome='success'`` row,
+        which breaks the empty run directly. Every row STILL carries
+        ``last_signal`` (``max(signals.fetched_at)`` for the source):
+        ``_evaluate_empty_streaks`` uses it to RESET a streak whose
         most-recent empty poll is OLDER than a produced signal (the source is
         alive again) — the only thing that could see a recovery across the
         pre-0114 rows, which remain on disk and where an actively-producing
@@ -943,9 +1054,9 @@ class LivenessWatchdog:
         handler's newest-observed-upstream-entry evidence the discriminator
         keys on (NULL for handlers that don't record it).
         """
-        # _EMPTY_STREAK_WINDOW is a trusted module-level int constant (not user
+        # ``window`` is caller-computed from trusted config ints (not user
         # input); inlined into the LATERAL LIMIT.
-        window = int(_EMPTY_STREAK_WINDOW)
+        window = int(window)
         async with self._pg.acquire() as conn:
             rows = await conn.fetch(
                 f"""
@@ -1007,6 +1118,37 @@ class LivenessWatchdog:
             )
             tag = "cursor_fault"
             kind = "source_cursor_fault"
+        elif fault_class == "honest_quiet_prolonged":
+            # 2026-08-27 sweep (source.wto.news — 110 consecutive
+            # empty/healthy polls, 9 days, every one honestly evidenced
+            # quiet). The discriminator's own evidence says this is NOT a
+            # cursor/filter fault — the source's crawl really has observed
+            # nothing newer than what's already ingested — but a quiet spell
+            # this long is no longer distinguishable, operationally, from the
+            # source having quietly died. Worded differently from the plain
+            # 'unknown' case so an operator doesn't go looking for a
+            # cursor/filter bug that the evidence already rules out.
+            title = (
+                f"Source prolonged silence: {source_id} — {streak} consecutive "
+                "empty polls, no new upstream content ever observed"
+            )
+            body = (
+                f"Source '{source_id}' has returned {streak} consecutive empty "
+                f"polls (HTTP-200, 0 new signals){when_s}, at/above the "
+                f"honest-quiet escalation threshold of "
+                f"{self._cfg.honest_quiet_streak_threshold}. On every one of "
+                "those polls the handler's own crawl found nothing newer than "
+                "what is already ingested — by the B0-12 discriminator's "
+                "evidence this is an honestly quiet feed, NOT a cursor/filter "
+                "fault, so do not go looking for one. But a streak this long "
+                "stops reading as an ordinary quiet week: the source may have "
+                "moved, been retired, or changed its page structure so the "
+                "parser silently finds nothing while the fetch still 200s. "
+                "Health state is escalated to DEGRADED: re-probe the feed by "
+                "hand before trusting its continued 'healthy' poll outcomes."
+            )
+            tag = "honest_quiet_prolonged"
+            kind = "source_honest_quiet_prolonged"
         else:
             title = f"Source degraded: {source_id} — {streak} consecutive empty polls"
             body = (
@@ -1037,10 +1179,15 @@ class LivenessWatchdog:
         # age_seconds isn't meaningful for a streak escalation — drop the field
         # so it isn't misread as a 0-second-old signal.
         envelope.pop("age_seconds", None)
+        applicable_threshold = (
+            self._cfg.honest_quiet_streak_threshold
+            if fault_class == "honest_quiet_prolonged"
+            else self._cfg.empty_streak_threshold
+        )
         logger.error(
             "liveness_watchdog.source_degraded source=%s empty_streak=%d "
             "threshold=%d fault_class=%s — escalating",
-            source_id, streak, self._cfg.empty_streak_threshold, fault_class,
+            source_id, streak, applicable_threshold, fault_class,
         )
         await self._publish_alert(envelope)
         # B0-12: durable entry edge + outward fan-out.
@@ -1110,6 +1257,7 @@ def _evaluate_empty_streaks(
     rows: Any,
     *,
     threshold: int,
+    honest_quiet_threshold: int = _DEFAULT_HONEST_QUIET_STREAK,
 ) -> list[tuple[str, int, Any, str]]:
     """Pure empty-streak decision over poll-outcome rows — no DB, unit-testable.
 
@@ -1122,16 +1270,22 @@ def _evaluate_empty_streaks(
     each source, count the leading run of consecutive 'empty' rows; the run
     breaks on the first non-'empty' row — an 'error' or, since migration 0114,
     a 'success'. Returns ``(source_id, streak_len, newest_empty_at,
-    fault_class)`` for every source whose leading empty run is >=
-    ``threshold``, is NOT producing again, and is NOT classified honest-quiet.
+    fault_class)`` for every source whose leading empty run is >= ``threshold``
+    and is NOT producing again — INCLUDING a run classified honest-quiet, once
+    it separately clears ``honest_quiet_threshold``.
 
     B0-12 discriminator: the run's newest non-null ``newest_entry_ts`` is
     compared against ``last_signal`` by :func:`_classify_streak` —
     'honest_quiet' runs (upstream's newest observed entry <= our last ingest:
-    the feed is simply quiet) are EXCLUDED (no alert; 7/8 of the B0-11
-    "stalled cluster" were this class); 'cursor_fault' runs (upstream carries
-    NEWER entries yet 0 yielded) and 'unknown' runs (no evidence — handlers
-    that don't record the observation, pre-B0-12 rows) are returned.
+    the feed is simply quiet) stay SILENT below ``honest_quiet_threshold`` (7/8
+    of the B0-11 "stalled cluster" were this class) but escalate as
+    ``'honest_quiet_prolonged'`` once the streak reaches it — the 2026-08-27
+    sweep's source.wto.news gap: 110 consecutive empty/healthy polls, every one
+    honestly evidenced quiet, that the pre-fix rule would have silenced
+    forever regardless of length. 'cursor_fault' runs (upstream carries NEWER
+    entries yet 0 yielded) and 'unknown' runs (no evidence — handlers that
+    don't record the observation, pre-B0-12 rows) are returned at the lower
+    ``threshold`` exactly as before.
 
     Signal BOUND (supersedes the older newest-empty-only reset): before
     migration 0114 a PRODUCTIVE poll wrote NO outcome row, so this table alone
@@ -1193,7 +1347,13 @@ def _evaluate_empty_streaks(
         if streak >= threshold:
             fault_class = _classify_streak(newest_observed, last_signal)
             if fault_class == "honest_quiet":
-                continue  # the feed is simply quiet — stay silent (B0-12)
+                if honest_quiet_threshold <= 0 or streak < honest_quiet_threshold:
+                    continue  # still just quiet — stay silent (B0-12)
+                # 2026-08-27 sweep: quiet for THIS long, even honestly, is no
+                # longer distinguishable from dead — escalate, but tagged
+                # separately from cursor_fault/unknown so the alert body can
+                # say plainly that this is not a cursor/filter fault.
+                fault_class = "honest_quiet_prolonged"
             degraded.append((sid, streak, newest_empty_at, fault_class))
     return degraded
 

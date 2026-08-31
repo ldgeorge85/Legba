@@ -78,6 +78,49 @@ SEVERITY_DELTA_LEVELS: tuple[str, ...] = ("rose", "fell", "steady", "new")
 _SEVERITY_DELTA_TAG_PREFIX = "severity_delta:"
 
 
+# NEAR-MISS TOLERANCE (2026-08-25, composition-side hygiene, no verify stamp —
+# this reader has no judge in its path). The live fleet emitted
+# `severity_delta:rise` once (~0.25% of stamped deltas, out-of-vocabulary
+# against the rose|fell|steady|new contract). Mirrors the full-width-bracket
+# citation idiom (``citation_markers._VARIANT_CITATION_RE`` and friends):
+# narrow, evidenced, commented — normalize the near-miss SPELLING to its
+# vocabulary form before the membership check, rather than widen the
+# vocabulary itself. Only forms with ONE unambiguous canonical target are
+# here; anything else (``sideways``, ``up``, ``down``, ``higher``, …) is
+# still unrecognised and returns ``None`` — never guessed.
+#
+#   * ``rise`` -> ``rose``     LIVE-EVIDENCED (the ~0.25% out-of-vocabulary
+#                               emit this fix exists for).
+#   * ``rising`` -> ``rose``   the same verb's present-participle form.
+#   * ``fall`` / ``falls`` / ``falling`` -> ``fell``  the base and inflected
+#                               forms of the verb whose past tense (``fell``)
+#                               is already canonical.
+#   * ``fallen`` -> ``fell``   LIVE-EVIDENCED (2026-08-29 DQ sweep §6: one
+#                               ``severity_delta:fallen`` emit, 1/2340
+#                               stamped deltas — the past-PARTICIPLE form of
+#                               the same verb ``fall``/``falls``/``falling``
+#                               already normalize above; ``fell`` is its one
+#                               unambiguous canonical target, same rule).
+#                               NOT a banding-semantics change: this table
+#                               feeds only ``severity_delta_from_tags`` (a
+#                               desk's per-claim movement TAG), never
+#                               ``bands_semantics``/``semantics_changed``
+#                               (``scorecard_banding.py``'s H3-GUARD, migration
+#                               0187) — that guard compares only the
+#                               ``banding_semantics``/``damping_semantics``
+#                               card-level stamps, a disjoint pair this table
+#                               never touches. Verified before adding this
+#                               entry, not assumed.
+_SEVERITY_DELTA_NEAR_MISS: dict[str, str] = {
+    "rise": "rose",
+    "rising": "rose",
+    "fall": "fell",
+    "falls": "fell",
+    "falling": "fell",
+    "fallen": "fell",
+}
+
+
 def severity_delta_from_tags(tags: Any) -> str | None:
     """The ``severity_delta:<rose|fell|steady|new>`` value in a finding's tags.
 
@@ -87,6 +130,12 @@ def severity_delta_from_tags(tags: Any) -> str | None:
     substitute ``steady``: "nobody said" and "the desk checked and it held" are
     different facts, and papering the first over as the second is precisely the
     invention this platform refuses.
+
+    A narrow, evidenced set of NEAR-MISS spellings
+    (:data:`_SEVERITY_DELTA_NEAR_MISS` — ``rise``/``rising``/``fall``/
+    ``falls``/``falling``) normalizes to its unambiguous canonical level before
+    the vocabulary check; every other out-of-vocabulary form still returns
+    ``None`` rather than being guessed.
 
     The LAST valid tag wins (the prompt asks for exactly one), mirroring the
     unit-side readers rather than :func:`severity_from_tags`' highest-rank rule
@@ -102,6 +151,7 @@ def severity_delta_from_tags(tags: Any) -> str | None:
         if not s.lower().startswith(_SEVERITY_DELTA_TAG_PREFIX):
             continue
         candidate = s[len(_SEVERITY_DELTA_TAG_PREFIX):].strip().lower()
+        candidate = _SEVERITY_DELTA_NEAR_MISS.get(candidate, candidate)
         if candidate in SEVERITY_DELTA_LEVELS:
             level = candidate
     return level

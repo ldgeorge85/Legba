@@ -227,8 +227,8 @@ Idempotent. Re-runs skip already-applied migrations
 > A **fresh deploy** does not replay the full migration history: it applies the
 > single round-trip-proven baseline `deploy/baseline/0001_baseline.sql` (which builds
 > the schema + AGE graph and pre-seeds the ledger to head **0053**), then `migrate`
-> applies any **future** (`0054`+) migrations — currently `0054`…`0185`; live head
-> **0185** (`0095`/`0100`/`0110`/`0111` and several later slots intentionally
+> applies any **future** (`0054`+) migrations — currently `0054`…`0189`; live head
+> **0189** (`0095`/`0100`/`0110`/`0111` and several later slots intentionally
 > unused; the runner discovers by sorted glob, so gaps are harmless). Highlights: the contested-claims schema, the
 > `unit_reference_labels`
 > gold table, and the composition-tower supersession fold (`0054`…`0060`); the
@@ -243,10 +243,11 @@ Idempotent. Re-runs skip already-applied migrations
 > watchlist — all additive/idempotent); the follow-on wave (`0106`…`0116` —
 > forward consumption, review flags + bearing edges, retention policies,
 > retrieval origin, collection requirements, the source-quality view); and the
-> 2026-08 arc (`0117`…`0185`, sparse-numbered — hygiene closes, the
+> 2026-08 arc (`0117`…`0189`, sparse-numbered — hygiene closes, the
 > `entity_edges` graph substrate + backfills, corpus tombstones, the
 > `situation_events` trajectory ledger at `0184`, the merge-keeper repoint at
-> `0185`; see `DATA_MODEL.md` for the per-table detail). The audit-remediation migrations are **demote/close-only** (they
+> `0185`, and the four listed below; see `DATA_MODEL.md` for the per-table
+> detail). The audit-remediation migrations are **demote/close-only** (they
 > tombstone or re-fold junk, never hard-delete):
 >
 > - **0076** — entity re-fold + junk gate (`entity_profiles` 12,257 → 12,144).
@@ -254,6 +255,43 @@ Idempotent. Re-runs skip already-applied migrations
 > - **0078** — nexus junk + self-edge close and demonym/plural dyad canonicalize (reversible).
 > - **0079** — `cross_correlator` stale-head sweep (reversible).
 > - **0080** — state-media `source_credibility` seed + a cross-target mislabel close.
+>
+> The four **2026-08-27…30 migrations** need a word each, because two of them
+> move live rows rather than only adding structure:
+>
+> - **0186** — `analyst_traces.prompt_sha256`. Additive column + index; no
+>   backfill. See the `prompt_rendered` note in §11 (*Reconstruct a truncated
+>   rendered prompt*) for why the hash matters operationally.
+> - **0187** — `band_calibration_claims.semantics_migration` (boolean, default
+>   false). Additive. Lets the calibration aggregation exclude
+>   stamp-migration transitions **by query predicate** rather than by hiding
+>   them; the excluded count is reported on the route as
+>   `population.excluded_semantics_migration`.
+> - **0188** — situation mega-frame split. **The heaviest migration in this
+>   wave** (four statements, one idempotent transaction): re-stamps
+>   `analyst_outputs.situation_signature` on derived-key findings inside a
+>   120-day bound, re-stamps the matching `finding_supersessions` audit rows,
+>   splits each OPEN mega-frame into one `situations` row per producing
+>   dimension (parent id kept by the plurality-evidence dimension, the rest
+>   carry `data.trajectory_parent_id`, `intensity_score` scaled by member
+>   share), and re-bases `hypotheses.intensity_at_emit` by the same share,
+>   preserving the original in `intensity_at_emit_pre_0188`. That last
+>   statement is the guard that stops a re-scale from mass-refuting ~4,400
+>   live hypotheses. **Run `EXPLAIN` on statement (1) before the deploy
+>   window** — it is the largest UPDATE in the file and is narrowable from 120
+>   days to 45 if it looks heavy. Forward code is safe on either side of 0188
+>   (read-time normalization), so migrate-vs-recreate ordering is not
+>   load-bearing here.
+>   *Expected post-migration optics, not regressions:* open-frame population
+>   grows roughly 4–6× (≈49 → ≈200–300), per-frame intensity falls ~8×, and
+>   the first post-deploy tick emits a one-time burst of new thematic-proposal
+>   slugs (self-limiting). Size the tracker budget accordingly — see
+>   `LEGBA_SITUATION_TRACKER_MAX_SITUATIONS` in §4.0.5.
+> - **0189** — `read_events`, the append-only read-telemetry ledger (§4.1.1).
+>   Creates the table + four indexes and installs a trigger that makes
+>   `DELETE` and `UPDATE` **fail loud**; `TRUNCATE` stays permitted for test
+>   teardown and no app path uses it. No backfill — the ledger starts empty by
+>   construction and the 90-day read clock starts at deploy.
 >
 > The `migrate`-only path above is for an instance whose schema already exists.
 > `deploy/deploy.sh` does both steps for you.
@@ -313,6 +351,26 @@ Also set in the gitignored `.env`. These reach the containers via `env_file`
 | `LEGBA_ARCHIVE_ROOT` | filesystem root of the evidence-archive CAS store (`data/archive.py`) | `/var/lib/legba/archive` (the compose-mounted `legba_archive` volume) |
 | `LEGBA_ANALYST_TRACES_TTL_DAYS` | TTL for the `analyst_traces_retention` purge handler (draft; mig 0101 adds its age-only purge-scan index; FK-safe — critiques cascade, DLQ rows null out). Keep the TTL **well above 7 days** (30+ recommended — the telemetry API aggregates a 7-day window over `analyst_traces`; documented guidance, not code-enforced) | `0` → **disabled** (ships inert; a positive value is the operator opt-in). Since X-1 (2026-07-29) the TTL can ALSO ride the descriptor as `method.options.ttl_days` — a `PUT /api/v1/descriptors/analyst/analyst_traces_retention` with no rebuild and no container recreate, which is now the preferred path. Resolution order: run options (which the descriptor block feeds) → this env var → the `retention_policies` row |
 | `LEGBA_SIGNALS_RETENTION_TTL_DAYS` | TTL for the `signals_retention` purge handler (same env-fallback class as the traces TTL — SEAMS #43 RESOLVED). Purges aged signals + their `signal_entity_links` / `signal_aliases` children; `retain_always` / `evidence_hold` rows are NEVER purged regardless of age. **Deleting signals is a bigger call than telemetry — leave unset until deliberately decided**; deliberately not present in any shipped .env or descriptor | `0` → **disabled** (the shipped posture). Since X-1 also settable as `method.options.ttl_days` on the descriptor; the shipped descriptor carries no options block, so the default stands |
+
+### 4.0.5 Alert-budget, register-budget + verify keys (2026-08-27…30 wave)
+
+Same activation path as §4.0.1 — these reach the containers via `env_file`,
+so a `.env` edit plus `--force-recreate` is enough; no rebuild. Every one of
+them **also** has a descriptor `method.options` equivalent (the X-1 path,
+§4.0.3), which is the preferred lever because it needs no container recreate
+at all. Resolution order is the X-1 order: run options → env var → code
+default.
+
+| Key | Purpose | Default behavior when unset |
+|---|---|---|
+| `LEGBA_ALERT_DAILY_PAGE_BUDGET` | Fleet-wide cap on how many alerts actually PAGE per UTC day (descriptor option `daily_page_budget`). Survivors rank worst-first by severity then magnitude tier; everything over budget still writes its row tagged `data.budget_deferred=true` — **never a silent drop** | `5`. A malformed or negative value falls back to 5; `0` is honoured and means "page nothing" |
+| `LEGBA_ALERT_BUDGET_PER_KIND_CAP` | Max slots any single `trigger_class` may take out of that daily budget, **day-cumulative across scans** (descriptor option `budget_per_kind_cap`). Exists because one always-critical class (`situation_escalation` is 100% `severity=critical`) would otherwise win every slot every day; a slot no other kind can fill stays **unused** rather than backfilled with more of the capped kind | `3` |
+| `LEGBA_ALERT_CONTENTION_FLIP_ENABLED` / `LEGBA_ALERT_GEO_CONVERGENCE_ENABLED` | The **kill list** (descriptor options `contention_flip_enabled` / `geo_convergence_enabled`). Both classes ship **OFF**. The scans still run and their watermarks still advance *as if fired*, so re-enabling is a config flip and not a backlog replay; the would-have-fired count rides the run receipt | OFF (killed). Replay basis: these two classes were 646 pages / 5 days |
+| *(descriptor-only)* `suppress_steady_state` / `steady_cooldown_hours` | The steady-state guard on `verified_finding` alerts: suppress only when the desk's banded severity is unchanged AND the finding's `severity_delta` reads `steady`/absent AND the desk was paged within the cooldown. A `rose`/`fell`/`new` tag ALWAYS pages. Suppressed candidates write their row tagged `suppressed:true` | guard ON, cooldown `24` hours. **Fails toward paging**: no prior desk record → page; unparseable timestamp → page |
+| `LEGBA_SITUATION_TRACKER_MAX_SITUATIONS` | Per-tick selection budget for the situation tracker (descriptor option on `analyst_situation_tracker`; ceiling 500). **Set this at the 0188 deploy** — the mega-frame split multiplies the open-frame population 4–6×, and leaving the budget at 12 buys under one full pass per day. Sizing (hourly cadence, 24 ticks/day, declared 2M token/day budget): `24` → ~2–3 passes/day at ~52% of budget; `36` → ~3–4 passes at ~79%; `48` → ~4–6 passes but **~105% of budget** (needs `budget_tokens_per_day` raised to ~2.5M first). **24–36 is the affordable middle** | `12` (the shipped descriptor value; env currently unset). Env beats descriptor beats default |
+| `LEGBA_JUDGE_FLOOR_ESCALATION` | Kill switch for floor-triggered judging — an unjudged finding about to be excluded by the composition verify floor is sent to the judge first, so the floor may only exclude on **judged** evidence | **unset = ON.** Set `=0` to disable; no rebuild. Expect ~+43% judge-plane volume (~136 → ~195 calls/day) and a fleet-mean faithfulness that moves UP — a selection change, not a quality change (partition on the new `judge_trigger` marker across the deploy date) |
+| `LEGBA_COMPOSITION_VERIFY_FLOOR` | Pre-existing. Deliberately **reused** as the floor-escalation threshold rather than duplicated, so the exclusion bar and the escalation bar cannot drift apart | `0.50` |
+| `LEGBA_SOURCE_HONEST_QUIET_STREAK_THRESHOLD` | Streak length past which an `honest_quiet` poll outcome escalates anyway, tagged `honest_quiet_prolonged`. The exemption protects genuinely low-cadence feeds; this bound catches a feed that is permanently dead but still polling cleanly (the motivating case ran 110 clean empty polls over 9 days, state `active`, no alert). Sizes the watchdog's own poll-history fetch window: `max(20, empty_streak+5, honest_quiet_streak+5)` | `36` (→ a 41-row fetch window). **Expect a burst of `honest_quiet_prolonged` escalations on the first post-deploy cycle** for the sources currently pinned at the old 20-row window — intended, not a regression |
 
 ### 4.0.2 Default-OFF / opt-in flag audit (C5-3, 2026-07-28)
 
@@ -396,8 +454,114 @@ The 2026-07-28 wave added a further `/api/v1/v3` read family — `since` /
 `sources/{id}/assurance` and the `source_credibility` reads — and
 `system/staleness-debt`. The per-route table is `ARCHITECTURE.md` §8.7.
 
+The 2026-08-29/30 wave adds two more, both bearer-gated like the rest:
+
+| Path | Purpose |
+|---|---|
+| `POST /api/v1/read-events` · `GET /api/v1/read-events/rollup?days=N` | the read-telemetry ledger — see §4.1.1 |
+| `GET /api/v1/v3/system/external-audit?days=N` | the standing external auditor's heartbeat + verdict board — see §4.1.2 |
+
 All gated by `Authorization: Bearer <LEGBA_REGISTRY_API_TOKEN>` —
 fail-closed (503) when the token is unset, unless `LEGBA_DEV_MODE=1` (§4).
+
+### 4.1.1 Read telemetry — `read_events` (migration 0189)
+
+The platform receipts ~80 write tables and, until this wave, receipted no
+**read** at all. `read_events` is an append-only attention ledger; the console
+emits at seven chokepoint surfaces (not call sites), batched behind a bounded
+queue and flushed on tab close.
+
+- `POST /api/v1/read-events` — appends a batch, **202 Accepted**, body
+  `{accepted, rejected, reasons}`. Per-event validation: a malformed event is
+  dropped and counted (deduped reasons), never a batch-wide 422 — one bad
+  event must not lose 199 good ones. An out-of-vocabulary `event_kind` is the
+  one hard 422. One `executemany` INSERT per batch, no joins at write time.
+- `GET /api/v1/read-events/rollup?days=N` — daily cells by kind plus the
+  headline scalars. `days` defaults to 30 and is bounded `[1, 365]` (422
+  outside). The grouping happens in Postgres; the route never streams the raw
+  log to a caller.
+- **Closed vocabulary, enforced by a CHECK constraint** (seven values):
+  `panel_open`, `workspace_open`, `finding_open`, `lineage_walk`,
+  `citation_drill`, `consult_open`, `brief_read`. Adding a kind is a
+  migration, deliberately — an open text column lets a typo in a UI emitter
+  silently create a kind no rollup counts.
+- **Append-only at the database**: a trigger makes `DELETE` and `UPDATE` fail
+  loud. `TRUNCATE` is still permitted (test teardown only; no app path uses
+  it).
+- Load bound: ≤1 POST per 4s per tab, ≤200 events per batch. A failed batch
+  is **dropped, not retried** — a retry would backdate a week of reading into
+  one minute and corrupt the very number this table exists to produce.
+- **No retention policy ships**, deliberately: the 90-day read clock wants
+  the whole log. Adding retention later is a forward-only migration.
+- Operator grading (SELECT-only, needs no panel): count distinct days with a
+  `brief_read` over a trailing 90-day window, beside `active_days`,
+  `lineage_walk`, `citation_drill` and `finding_open` counts. **Watch the
+  bias**: `panel_open` is by far the highest-volume kind, so a naive "reads
+  total" looks healthy even when the morning read is never opened. The
+  scoreboard panel discloses this in-surface and the grading query never uses
+  `panel_open` as a headline.
+- This is a schema-adjacent change: **rebuild the registry image first, wait
+  healthy, then the runtime** (the standing deploy-race rule).
+
+### 4.1.2 Standing external auditor + its heartbeat
+
+`standing_auditor` is a deterministic META analyst (daily, `12 5 * * *`, 22h
+cooldown) that samples the world read plus a rotating subset of desk reads,
+extracts 1–2 checkable world-claims per head, checks each against live
+external search **through the `web_access` action pack** (never ad-hoc HTTP),
+and writes a verdict per claim: `SUPPORTED` / `CONTRADICTED` / `NOT_FOUND` /
+`UNCHECKED`. A `CONTRADICTED` verdict on a `high`/`critical` claim writes a
+`kind='alert'` row (no outward page). Registered `TRACE_ONLY` — the real
+product is side-written critique / alert / heartbeat rows.
+
+**Bring-up order**
+
+1. **Prereqs.** The `web_access` pack must be registered with a `web_search`
+   provider bound (`scripts/bringup_register_action_packs.py`), and migration
+   0091 applied (fleet-wide already — the auditor reuses
+   `alert_trigger_watermarks` under `trigger_class='external_audit'`, no new
+   migration). With either missing the auditor still runs and files a loudly
+   **unaudited** heartbeat naming the gap.
+2. **Registry image first**, wait healthy, then the runtime — the new
+   sub-handler and the new route both ship in the registry image.
+3. Register create-only:
+   `PYTHONPATH=src python3 scripts/bringup_register_standing_auditor.py`.
+4. **It ships `state: draft`.** Activation is an explicit operator decision —
+   PUT the descriptor with `identity.state=active` (the "Update a descriptor"
+   recipe in §11), then recreate the runtime to spin the actor.
+5. First-run check:
+   ```
+   curl -sS -H "Authorization: Bearer $LEGBA_REGISTRY_API_TOKEN" \
+     "http://127.0.0.1:8090/api/v1/v3/system/external-audit?days=7" | jq '.heartbeat'
+   ```
+   `present=true, degraded=false, claims_checked>0` is a working auditor;
+   otherwise `degraded_reason` names the gap.
+
+**Operating notes**
+
+- **Every run writes a heartbeat, including a run that audits nothing** — so
+  "nothing to contradict" and "the auditor is dead" can never look alike from
+  outside. The route reports `stale` past `stale_after_hours=30`.
+- **Check the heartbeat, not `analyst_traces.status`.** The handler
+  deliberately sets `status='success'` even when degraded (a degraded run IS
+  a completed run), and the liveness watchdog reads that column — so cadence
+  health alone cannot tell you the auditor stopped auditing.
+- **Both planes or neither**: with no search binding the handler refuses to
+  spend a core-plane call at all. Missing DB access **raises**; every other
+  gap **degrades** with the reason named.
+- `contradiction_rate` is computed over *checked* claims and is **absent, not
+  `0.0`**, when nothing was checked. The route never 500s at a polling panel.
+- Scope is descriptor-tunable with no code change and no rebuild:
+  `window_hours` (48), `max_desks` (3), `max_claims_per_head` (2),
+  `max_claims_total` (6), `search_limit` (5). Worst case per day: ≤4 heads
+  read, ≤10 core-plane calls, ≤6 external searches (inside the pack
+  governor's 120/h · 20/min), well within the descriptor's 120k token/day
+  budget.
+- Its verdicts carry their own `EXTERNAL_AUDIT_PIPELINE_VERSION`, a
+  deliberately separate population key from `JUDGE_PIPELINE_VERSION` — the
+  two instruments must never pool.
+- Once alerting's daily budget is live, give `trigger_class='external_audit'`
+  a slot in the kind vocabulary (§4.0.5) — the rows already carry the class.
 
 ### 4.2 Runtime bootstrap startup log signposts
 
@@ -1198,6 +1362,51 @@ both publish):
 wscat -c "ws://127.0.0.1:8090/api/v1/registry/events?filter=legba.dlq.%3E" \
       -H "Authorization: Bearer dev"
 ```
+
+### Reconstruct a truncated rendered prompt (the 32k trace cap)
+
+**Know this before you plan an audit around `prompt_rendered`.**
+`analyst_traces.prompt_rendered` is capped at
+`_MAX_PROMPT_RENDERED_CHARS = 32_000` (`src/legba/data/run_accounting.py`).
+For a desk with a verbose system prompt, the static prompt plus the
+authoritative-context and situation-register blocks can consume the entire
+32,000 characters **before a single numbered signal is stored** — so on those
+desks the persisted trace *cannot* show which evidence the desk actually
+read. A truncation is never silent (the stored value carries an explicit
+marker naming the full length), but the practical consequence is real: an
+instruction of the form "grep `prompt_rendered` for country X" is not
+executable on the desks where it matters most.
+
+Two things make the gap workable today:
+
+- **`prompt_sha256` is always computed over the FULL, untruncated text**
+  (its own column since migration 0186 — deliberately not folded into the
+  receipt hash). So a capped row is still byte-verifiable against a
+  re-rendered prompt: re-render with `scripts/render_prompt_pack.py` and
+  compare hashes. If they match, the re-render IS the prompt, and you can
+  read the part the column lost.
+- **`analyst_traces.input_row_refs`** is the reachability answer, and it is
+  not truncated. It is a `uuid[]` of the substrate rows the run consumed, so
+  to prove *whether a desk was shown a given story*, intersect it against
+  `signals` rather than grepping the prompt text:
+
+  ```sql
+  SELECT s.id, s.title, s.published_at
+    FROM analyst_traces t
+    JOIN signals s ON s.id = ANY (t.input_row_refs)
+   WHERE t.run_id = '<run-id>'
+     AND s.title ILIKE '%<term>%';
+  ```
+
+  This is the fallback that a 2026-08 blindness diagnosis had to use, and it
+  answered the question the prompt grep could not. Note the direction of the
+  evidence: `input_row_refs` proves the row was **in the slice**, not that it
+  survived into the rendered prompt — for that you need the hash-verified
+  re-render above.
+
+Raising the cap (or storing the numbered-signal block in its own column) is a
+known open item, deliberately not done in the 2026-08 wave: the row-bloat
+argument that set the cap has not been re-measured.
 
 ### Deploy a code change to `legba-models`
 
@@ -2328,6 +2537,30 @@ host, or the local SearXNG/search-component config), respect
 `/etc/legba-watchdog.disabled`, log to `/var/log/legba-watchdog.log`, and page
 via the local ntfy **web UI** topic only (never the phone app).
 
+> **2026-08-27 fix — the LLM heartbeat had never once succeeded.** Its
+> completion / long-context probes defaulted `APP_CONTAINER` to the
+> **registry** container, which is deliberately the lighter control-plane
+> image and does not carry the runtime's parsing deps. The probe's own
+> `ModuleNotFoundError` was raised outside any `try`/`except`, so `main()`
+> died before printing anything the shell could classify — and the shell then
+> reported *"container unreachable?"*, which was false every single time: the
+> container was healthy throughout. **4,331 false fires since 2026-08-04,
+> zero successful runs ever.** Three changes: `APP_CONTAINER` now defaults to
+> the runtime-dapr container (the actual actor host, and the one the search
+> canary already exec'd into); the probe body wraps its **own** imports, so
+> an import failure prints a classified
+> `FAIL … reason=probe_broken:<Error>` line instead of vanishing; and the
+> bash side checks the container's real running state before concluding
+> anything, so **`probe_broken` (the probe crashed) and
+> `container_unreachable` (the container really is down) stay distinct
+> verdicts**. If you see either word in the log, they now mean what they say.
+> No `/etc` change was needed — both cron entries invoke the scripts from
+> this checkout's live path, so the fix activates on the next tick.
+>
+> The wrong-container class was swept and does not repeat: the stall watchdog
+> only runs `psql`, the search canary already targeted the right container,
+> and the GPU-host vLLM watchdogs only `curl`.
+
 **Cron — all three host watchdogs share one file.** Neither heartbeat script
 installs its own line; they live beside the §24 stall watchdog in
 `/etc/cron.d/legba-watchdog`, on deliberately different intervals so three
@@ -2549,6 +2782,19 @@ size the collector before it surprises you:
 - **Memory** — one `docker logs --follow` CLI process per container, ~15 MB RSS
   each, **~225 MB** across the project. That is the honest price of the simple
   design; `LEGBA_LOGSHIP_SERVICES` trims it.
+
+> **2026-08-27 — the budget is now per-service, not global.** One global
+> `MAX_BYTES × (KEEP+1)` = 128 MiB applied to every compose service, and the
+> runtime-dapr container's by-design high-volume reminder-GC existence-check
+> logging outpaces it — measured at ~17.3 MiB/hour, i.e. ~174 MB retained
+> across a 9.5-hour window. The effect was silent: a three-day span of
+> runtime logs was simply unrecoverable when it was wanted for a forensics
+> pass. A `MAX_BYTES_OVERRIDE` map now applies **360 MiB/file × 4 files =
+> 1,440 MiB (~83 h retention at the measured rate)** to `legba-runtime-dapr`
+> alone. Deliberately not a raised global default: that would have added
+> ~19 GB on a host already at 86–92% disk, for services that do not need it.
+> If another service ever starts losing its window, add it to the override
+> map rather than raising the global.
 
 **Two failure modes this script was caught making, during its own bring-up
 test** — both are in the file's comments, and both would have made it *look*

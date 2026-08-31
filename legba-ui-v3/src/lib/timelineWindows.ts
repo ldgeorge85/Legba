@@ -20,6 +20,8 @@
  *     surfaced on the item, not invented as a floating edge.
  */
 
+import { SEVERITY_COLOR as SEVERITY_RAMP } from '@/v4/world/types'
+
 // ---------------------------------------------------------------------------
 // Wire shapes — mirror `timeline_api.TimelineItem` / `TimelineResponse` 1:1.
 // ---------------------------------------------------------------------------
@@ -75,13 +77,11 @@ export const KIND_COLOR: Record<TimelineItemKind, string> = {
   fact: '#34d399', // emerald-400
 }
 
-/** Severity → finding-bar color (matches the map/timeline overlay palette). */
-export const SEVERITY_COLOR: Record<string, string> = {
-  critical: '#ef4444',
-  high: '#f59e0b',
-  medium: '#3b82f6',
-  low: '#10b981',
-}
+/**
+ * Severity → finding-bar color. The ONE severity ramp (v4/world/types.ts), not
+ * a private copy — see the note in `lib/timelinePoints.ts`.
+ */
+export const SEVERITY_COLOR: Record<string, string> = SEVERITY_RAMP
 
 // ---------------------------------------------------------------------------
 // Shaped item

@@ -14,6 +14,7 @@
 import type { ComponentType } from 'react'
 import type { PanelKind, PanelKindDefinition, PanelProps, PanelRegistration } from '@/types'
 import { PANEL_ID_TO_KIND, PANEL_REGISTRY } from './registry'
+import { resolveRetiredPanelId } from './aliases'
 
 export type ResolvedPanel =
   | {
@@ -22,6 +23,8 @@ export type ResolvedPanel =
       definition: PanelKindDefinition
       Component: ComponentType<PanelProps>
       registration: PanelRegistration
+      /** Tab the survivor should open on when the row named a RETIRED panel. */
+      tab?: string
     }
   | { ok: false; reason: 'unknown_panel_id'; panel_id: string; registration: PanelRegistration }
 
@@ -30,12 +33,29 @@ export type ResolvedPanel =
  *
  * Strips a leading `panels.` prefix defensively even though the backend
  * normalizes it; harmless in either path.
+ *
+ * A `panel_id` that named a RETIRED kind resolves through the alias table
+ * (design §4.4 call site 1): the survivor renders, on the tab that IS the
+ * retired surface. This is why a retirement can drop the registry row without
+ * breaking a descriptor or a `ui_panel_registrations` row minted before it.
  */
 export function resolvePanel(reg: PanelRegistration): ResolvedPanel {
   const raw = reg.panel_id.trim()
   const normalized = raw.startsWith('panels.') ? raw.slice('panels.'.length) : raw
   const kind = PANEL_ID_TO_KIND[normalized]
   if (!kind) {
+    const alias = resolveRetiredPanelId(normalized)
+    if (alias) {
+      const survivor = PANEL_REGISTRY[alias.kind]
+      return {
+        ok: true,
+        kind: alias.kind,
+        definition: survivor.definition,
+        Component: survivor.Component,
+        registration: reg,
+        tab: alias.tab,
+      }
+    }
     return { ok: false, reason: 'unknown_panel_id', panel_id: normalized, registration: reg }
   }
   const entry = PANEL_REGISTRY[kind]

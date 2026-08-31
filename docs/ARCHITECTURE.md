@@ -52,7 +52,7 @@ sources    (1/source,      pipeline (NER/geo/   fan-out     (1/target,     (per-
 - **TIER 1 — INLINE, at-ingest, per-signal (deterministic, no LLM).** The `data/filters/` **baseline enrichment pipeline** runs *synchronously on each Signal at acquisition*, BEFORE fan-out, inside the `SourceActor`: `language_detect → geocode → ner_multilingual → classify → source_credibility → ingest_dedupe (dedupe_4tier, tiers 1-2) → fact_extractor`. It is deterministic / local-NLP (GLiREL + DeBERTa zero-shot + pycountry/Nominatim) — **no analyst LLM** — and its *writes are altitude-0 substrate*: the **enriched signal** (geo/language/tags/entity_classes promoted to indexed columns, in-place on the one `signals` row) plus **altitude-0 `facts`** (`source_type='ingestion'`, `valid_from`-stamped) + **entity rows / `signal_entity_links`** off the NER spans. This is the "enrich once, read many" tier (§6.1, Flow 1). See `data/filters/__init__.py` for the kind registry; `data/sources/baseline.py:282-294` for the tier ordering; `data/filters/dedupe.py:248` (`kind="dedupe_4tier"`); `data/filters/fact_extractor.py` (§5.7).
 - **TIER 2 — SLICE / CADENCE analysts (`data/analysts/`, LLM + deterministic reasoning).** These read *accumulated slices / substrate* on a Dapr reminder or a reactive trigger and *reason* — they do NOT run per-signal. This is altitudes 1-3 (findings, situations, hypotheses, nexuses, meta-findings, deep consult). The cost firewall between the two: heavy reasoning is cadence-batched so LLM cost is decoupled from the ingest firehose.
 
-**What triggers / schedules what** (Tier 2) — two mechanisms, both **Dapr reminders/triggers** (no external cron in the loop): **(a) reactive coalescing triggers** — per-target analysts fire when enough new signals accumulate (NATS-driven); **(b) cadence reminders** — cross-target & meta analysts fire on a schedule (the nine bounded reasoning UNITS + the `country_composition`/`region_composition`/`world_assessor` composition tower + the thematic `escalation_composition` on a ~6–12h beat, the deterministic I&W pair `indicator_tracker`/`collection_gap`, `competing_hypotheses`/`graph_mining`/`relationship_reifier` ~12h, `scorecard_producer`/`calibration_tracking` daily, `forecast_scoreboard` weekly; plus the 2026-07 deterministic wave — `alert_trigger_scan` every 10 min (which since 2026-07-29 also carries geo convergence as its sixth trigger class — the standalone `geo_convergence_scan` was folded into it and has since been retired live — and since 2026-08 the production gauge's `production_deficit` as its seventh) and `evidence_archiver` every 30 min feed the alert/archive loops, and the daily readout family `band_calibration_tracker` / `fact_decay_scan` / `source_track_record` / `narrative_mapper` / `desk_baseline` computes derived sidecars, all registered as drafts an operator activates). SourceActors schedule their own polls (the Tier-1 pipeline rides each poll). The reminder *is* the scheduler.
+**What triggers / schedules what** (Tier 2) — two mechanisms, both **Dapr reminders/triggers** (no external cron in the loop): **(a) reactive coalescing triggers** — per-target analysts fire when enough new signals accumulate (NATS-driven); **(b) cadence reminders** — cross-target & meta analysts fire on a schedule (the nine bounded reasoning UNITS + the `country_composition`/`region_composition`/`world_assessor` composition tower + the thematic `escalation_composition` on a ~6–12h beat, the deterministic I&W pair `indicator_tracker`/`collection_gap`, `competing_hypotheses`/`graph_mining`/`relationship_reifier` ~12h, `scorecard_producer`/`calibration_tracking` daily, `forecast_scoreboard` weekly; plus the 2026-07 deterministic wave — `alert_trigger_scan` every 10 min (which since 2026-07-29 also carries geo convergence as its sixth trigger class — the standalone `geo_convergence_scan` was folded into it and has since been retired live — the production gauge's `production_deficit` as its seventh since 2026-08, and `situation_escalation` as its eighth; §8.5 covers the three anti-noise mechanisms layered over them) and `evidence_archiver` every 30 min feed the alert/archive loops, and the daily readout family `band_calibration_tracker` / `fact_decay_scan` / `source_track_record` / `narrative_mapper` / `desk_baseline` computes derived sidecars, all registered as drafts an operator activates). SourceActors schedule their own polls (the Tier-1 pipeline rides each poll). The reminder *is* the scheduler.
 
 **Where Wikidata / grounding fit (out-of-band, decoupled by the substrate):** Wikidata is **not a live source** — it never touches the signal pipeline. It is a **seed** (`scripts/seed.py --source wikidata_leaders`, operator-run / cron-able) that writes *current* `head of state` facts INTO the substrate (superseding the stale officeholder). Separately, at *analysis time*, grounding-enabled analysts' **GROUND phase** READS those current facts back OUT of the substrate and injects a dated preamble into the LLM prompt (Flow 10). The two movements don't know about each other — the substrate is the hand-off. See §5.8.
 
@@ -66,7 +66,7 @@ sources    (1/source,      pipeline (NER/geo/   fan-out     (1/target,     (per-
 - **Maintenance / GC** (deterministic analysts on cadence, `data/analysts/deterministic_handlers/`): `fact_decay` / `nexus_decay` (temporal-confidence decay + expiry), `finding_supersession`, `entity_gc`, `signals_retention` (0036), `integrity_sweep`, `reminder_gc` (`runtime/reminder_gc.py`, GC of reminders for retired `actor_state` rows). These UPDATE/prune pre-existing rows.
 - **Per-source liveness watchdog** (`liveness_watchdog.check_source_cadence_once`, cadence): detects a silent source by comparing `now()` to `max(signals.fetched_at)` per source, then lateral-joins `source_poll_outcomes` (0046) for the *why* — `SourceActor.pull_once` writes one `source_poll_outcomes` row per poll: `success` (>=1 signal written, or an intra-source duplicate collapsed), `empty` (HTTP-200-with-0-signals), or `error`, carrying the handler's own health diagnosis so the watchdog alert (and the UI) can distinguish a genuinely quiet feed from a broken one. Success rows were added by 0114; before them a productive poll wrote nothing, so "no outcome row" was ambiguous between "the poll never ran" and "the poll worked", and no reader walking a RUN of rows could see a recovery.
 - **Meta-analysts over the substrate** (altitude 2): `meta_findings_synthesizer` / `cross_analyst_correlator` / `competing_hypotheses` / `calibration_tracking` — they read accumulated outputs, not signals (Tier-2 cadence, but analysis-of-analysis rather than first-order).
-- **Migrations** (`data/migrations/0001_baseline` + the forward chain `0032`…`0185`, current head **0185**; `0095`/`0100`/`0110`/`0111` and a few later slots intentionally unused — the runner discovers by sorted glob, so gaps are harmless): schema evolution, applied PG-direct out of band. Beyond 0060 the chain adds the contested-claims + data-quality-program migrations (0061–0075), the 2026-07-06 audit sweep (0076–0080: entity re-fold + junk gate, semantic/junk-fact close, nexus junk/self-edge/dyad canonicalize, cross_correlator stale-head sweep, state-media `source_credibility` seed — the 0077–0080 closes are reversible), and the signal-content-depth / NER-reenrich wave (0081–0085: the `signal_summarized` / `signal_indexed` / reindex-summarized / `signal_embedding` / `signal_reenriched` markers that drive the OpenSearch corpus + Qdrant embeddings + NER backfill). The chain adds the `facts`/`nexuses`/`seed_batches` rigor schema (0032–0034), the entity composite key / signals-retention / AGE-output-label / ACH `resolved_outcome` / consult-sessions tables (0035–0039), situations-as-first-class + repairs (0040–0042), the data-quality backfills (0043–0045), `source_poll_outcomes` (0046), the `acute_forecasts` pilot table (0047), the journal table (0048), the receipt/derived-from repairs + data cleanups (0049–0053), the contested-claims schema — `facts.source_credibility` (0054) + the `fact_contention` sidecar (0055, §5.9), a second dangling-`derived_from` prune (0056), the `unit_reference_labels` correctness-gold table (0057, §5.10), and the composition-supersession fold + critique index + null-target composition-head fold (0058–0060, supporting the one-live-head-per-desk composition tower).
+- **Migrations** (`data/migrations/0001_baseline` + the forward chain `0032`…`0189`, current head **0189**; `0095`/`0100`/`0110`/`0111` and a few later slots intentionally unused — the runner discovers by sorted glob, so gaps are harmless): schema evolution, applied PG-direct out of band. Beyond 0060 the chain adds the contested-claims + data-quality-program migrations (0061–0075), the 2026-07-06 audit sweep (0076–0080: entity re-fold + junk gate, semantic/junk-fact close, nexus junk/self-edge/dyad canonicalize, cross_correlator stale-head sweep, state-media `source_credibility` seed — the 0077–0080 closes are reversible), and the signal-content-depth / NER-reenrich wave (0081–0085: the `signal_summarized` / `signal_indexed` / reindex-summarized / `signal_embedding` / `signal_reenriched` markers that drive the OpenSearch corpus + Qdrant embeddings + NER backfill). The chain adds the `facts`/`nexuses`/`seed_batches` rigor schema (0032–0034), the entity composite key / signals-retention / AGE-output-label / ACH `resolved_outcome` / consult-sessions tables (0035–0039), situations-as-first-class + repairs (0040–0042), the data-quality backfills (0043–0045), `source_poll_outcomes` (0046), the `acute_forecasts` pilot table (0047), the journal table (0048), the receipt/derived-from repairs + data cleanups (0049–0053), the contested-claims schema — `facts.source_credibility` (0054) + the `fact_contention` sidecar (0055, §5.9), a second dangling-`derived_from` prune (0056), the `unit_reference_labels` correctness-gold table (0057, §5.10), and the composition-supersession fold + critique index + null-target composition-head fold (0058–0060, supporting the one-live-head-per-desk composition tower).
 
 ### 0.1 Substrate data inventory — what is kept where, written-by / read-by
 
@@ -823,7 +823,7 @@ The whole subsystem is **flag-gated and ships OFF by default** (both
 `LEGBA_FACT_CONTENTION` and `LEGBA_FACT_CONTENTION_LLM_TIEBREAK` default to OFF in
 code *and* in `docker-compose.yml` via `${VAR:-0}`); they are enabled (`=1`) only
 on this instance through the gitignored `.env`. The contested-claims schema landed
-at migrations 0054–0055; the current migration **head is 0185** (see `DATA_MODEL.md` for the wave tables).
+at migrations 0054–0055; the current migration **head is 0189** (see `DATA_MODEL.md` for the wave tables).
 
 **Per-fact source credibility (Wave 0, migration 0054).** A `facts.source_credibility
 real` column carries the trust weight of the most credible source backing a fact
@@ -1002,12 +1002,61 @@ Two components:
   published PROVISIONAL under a ceiling), never a fabricated number — and a
   `judge_availability` gauge pages when the judge goes quiet.
 
+The judge is **sampled** — the gate is a content-independent hash of the finding
+id, so whether a finding was judged has no relationship to whether it was any
+good. That is fine for measurement and was **not** fine as an exclusion basis:
+measured over 14 days, unsampled findings failed the composition's 0.50 floor at
+24.2% against 3.2% for judged ones, the gap being almost entirely a failure class
+the deterministic scorer cannot recognise and the judge can. So since 2026-08-29
+the floor may only ever exclude on JUDGED evidence: `judge_floor_escalation.py`
+re-enters any unjudged finding about to be excluded through
+`verify_finding_faithfulness` at rate 1.0 *first*. The escalation lives at the
+verify boundary, not in the composition query, and every critique carries a
+`judge_trigger` (`sampled` / `floor_escalation`) plus its pre-escalation score,
+so an escalated verdict is never pooled with a sampled one. Kill switch:
+`LEGBA_JUDGE_FLOOR_ESCALATION` (unset = ON).
+
+**The exemption rungs are clause-scoped, not span-scoped** (2026-08-29). Three
+deterministic exemptions — synthesis prefixes, assessment scaffolding, absence
+phrasing — used to grant a whole-span pass off a prefix or a substring, so a
+sentence that opened with a scaffold and then named three specific facts escaped
+scoring entirely. Each rung now tests positionally against the clause that earns
+it, gated by whether the rest of the span asserts a specific fact. Strictly
+additive to the denominator (+6,772 spans, none removed); the judged arm replays
+byte-identical.
+
+**A composition is graded against the reads it CITES**, not only against the
+prose it produced (`composition_integrity.py`, 2026-08-27) — four deterministic
+arms over evidence the pass already held in `citations[].evidence_text` and had
+never read: scope laundering (a desk's "in this desk's collection" qualifier
+deleted at the composition layer), an attribution whose direction its own cited
+head contradicts (HARD), an asserted desk-negative the desk never wrote, and a
+quote attributed to a desk that appears nowhere in its read. It carries **its
+own** collection-scope predicate — the shared lexicon minus the two time nouns,
+because a time bound answers *when* and only a collection bound answers *what
+was searched*. It is disjoint by construction from the unscoped-absence
+backstop, which skips any span carrying a citation marker: a laundered negative
+cites the head it laundered, so no span can be charged twice.
+
 The verdict is persisted as a `critique`, and the fold
 `effective_confidence = min(confidence, faithfulness_score)` is applied **at read
 time**. Verification **never hard-deletes** a finding — a low score gates a visible
 low-confidence tier. This is deliberate: Legba **measures
 groundedness, not truth**. A planted fabrication with no supporting citation is
 flagged unsupported.
+
+> **Every stamp partitions, and that has a cost worth stating.** Populations
+> keyed on `judge_pipeline_version` never pool across a rule revision, which is
+> correct and which starves any readout that needs resolved outcomes: band
+> calibration resolves a claim at 14 days while the mean stamp lifetime has been
+> ~2.3 days, so a claim can never be both currently-stamped and resolved — the
+> live population has been empty every day since 2026-08-04. The 2026-08-29
+> `STAMP_EXPECTED_SHIFTS` registry lets a reader pool *consecutive* stamps for a
+> metric family when the lineage's own prose affirmatively declares the family
+> cannot move across that boundary, disclosing the exact pooled stamp set on the
+> wire rather than widening silently. Applied to real lineage its yield is
+> **zero** — which is the finding: the residual defect is stamp CADENCE, not the
+> partition rule.
 
 **3 — Per-country composition.** `country_composition`
 (`descriptors/analyst_country_composition.yaml`, the `meta_findings_synthesizer`
@@ -1022,6 +1071,32 @@ country whose units
 produced no verify-passed sub-claim yields an empty slice → the kind emits a
 `confidence=0.0` "no source findings to synthesize" finding rather than inventing a
 read. Supersession keeps **one live head per desk**.
+
+> **The register is bookkeeping and may never be evidence that an event is
+> current** (2026-08-27). A situation's intensity used to decay on the MEMBER
+> clock — the `produced_at` of the desk reads clustered into the frame — which
+> the pipeline's own cadence winds. A dozen desk reads a day at a three-day
+> half-life sums to a permanently high number, and `last_event_at` was always
+> today, so a frame could never leave `active`: intensity was a measure of cron
+> frequency, not world activity. It now decays against
+> `trajectory.read_corroboration` — the newest SIGNIFICANT ledger delta, which
+> cannot be written without cited evidence and whose `occurred_at` IS the
+> evidence's — with the half-life keyed to evidence density, and demotes to
+> `dormant` past the desks' own 72-hour horizon. Demotion only: never promotes,
+> never auto-closes. A frame the ledger has never moved decays on age alone from
+> its own opening (the largest class in the fleet). A resolution-grounded close
+> now reaches `situations.status` rather than living only in the event ledger,
+> and both register renders carry `last_corroborated_at`, `evidence_age` and an
+> explicit stale / never-corroborated label. Verify counts
+> `register_self_corroboration` as a soft failure: a claim whose citations are
+> ALL register references asserting currency is the system citing itself.
+>
+> **Every composition also declares the evidence window it actually covers**
+> (`composition_window.evidence_window_span`): the true oldest/newest
+> `produced_at` among the CONSUMED heads, computed from rows already being read
+> and handed to the model as a copy-only block, then stamped onto the finding —
+> so a downstream reader checks the as-of line against data instead of trusting
+> prose. It replaced a model-derived instant that drifted by hours.
 
 **4 — Per-region composition.** `region_composition`
 (`descriptors/analyst_region_composition.yaml`, the same `meta_findings_synthesizer`
@@ -1048,11 +1123,16 @@ verdict-from-nowhere monolith (that framing is gone).
 META, the **12th OutputKind `scorecard`**, $0 SQL) writes **one banded row per
 active desk** — it enumerates any active target tagged `g20` or `watch` — from
 high-precision RULES over already-verified claims banded across a **14-day window**
-(severity tag × `effective_confidence`, **demote-never-promote**). Every band
+(severity tag × `effective_confidence`, where confidence decides **admission only**
+— H3 (2026-08-27) retired the one-rung damper, so the engine now neither demotes
+nor promotes and each row records the `damped_would_have_been` it would have
+shipped). Every band
 **names the verified-claim id it rests on** (`derived_from`, a §12 lineage walk
 resolves them, zero dangling); a dimension with **no qualifying verified claim**
 reads `insufficient-evidence` with an explicit reason (never a fabricated band);
-and a per-claim faithfulness below the floor demotes to `low-faithfulness`. It
+and a per-claim faithfulness below the floor excludes with `low-faithfulness`. H3
+also forbids abstaining silently beside a composition that consumed a head for the
+same desk — the card bands what the prose used, or names why it cannot. It
 never omits a country — an all-insufficient card is still emitted. **Honest today:**
 the live scorecard is a **mix** — some countries band, and some (e.g. the US) read
 **all-insufficient because their unit faithfulness is genuinely low**, which is the
@@ -1070,6 +1150,39 @@ the **exogenous calibration Brier** (`calibration_tracking`, §5.7); and the
 hidden**. A companion observability route `GET /api/v1/v3/eval/analyst_runtime`
 reports per-analyst run timing (count, avg/max wall-clock seconds, last run,
 non-success) read from `analyst_traces` (`data/registry/v3_api.py:1267`).
+
+**7 — The standing external audit (2026-08-29).** Every surface above grades
+*internal consistency* — does this read follow from what it cited, does this
+composition follow from its inputs. None of them can tell you whether the
+underlying claim is TRUE. `standing_auditor`
+(`data/analysts/deterministic_handlers/standing_auditor.py`, a `deterministic`
+META on the $0 core plane, daily) is the first analyst pointed outward: it
+samples the world read plus a deterministically-rotated subset of desk reads,
+extracts 1–2 checkable world-claims per head, checks each against live external
+search **through the governed `web_access` action pack** (never ad-hoc HTTP —
+the §8.8 external-retrieval discipline applies unchanged), and records
+`SUPPORTED` / `CONTRADICTED` / `NOT_FOUND` / `UNCHECKED` per claim. A
+CONTRADICTED verdict on a `high`/`critical` claim writes an `alert` row.
+
+Three design points carry the weight:
+
+- **A heartbeat on every run, including a run that audits nothing.** "There was
+  nothing to contradict" and "the auditor is dead" must never look alike from
+  outside; a judge outage once went unnoticed for exactly that reason. The
+  heartbeat rides the existing `alert_trigger_watermarks` table under a new
+  `trigger_class` (no migration) and is read by
+  `GET /v3/system/external-audit` (§8.7). It is stale past 30 hours.
+- **Both planes or neither** — with no search binding the handler refuses to
+  spend a core-plane call at all rather than "auditing" against nothing.
+  Missing database access RAISES; every other gap DEGRADES with the reason
+  named on the heartbeat. The run's `analyst_traces.status` stays `success`
+  even when degraded (a degraded run IS a completed run), which is precisely
+  why the heartbeat exists as a separate signal from cadence health.
+- **Its own population key.** Verdicts are stamped
+  `EXTERNAL_AUDIT_PIPELINE_VERSION`, deliberately separate from
+  `JUDGE_PIPELINE_VERSION`: two instruments measuring different things must
+  never pool. It ships as a **draft descriptor** — activation is an explicit
+  operator decision.
 
 **Forecasting returns only as a measured scoreboard.** `forecast_scoreboard`
 (`data/analysts/deterministic_handlers/forecast_scoreboard.py`, a `deterministic`
@@ -1171,6 +1284,24 @@ Signal matching is **two-stage** (`subscription/filter.py:62-108`):
 > Expensive (LLM) analysis is always coalesced; the cooldown is the cost
 > governor. LLM analysts fire reactively on the accumulation / cadence gates,
 > never per-signal.
+
+> **An analyst that does not READ signals is not WIRED to the signal trigger**
+> (2026-08-27). The country and region compositions declare
+> `subscription.targets.data_types == ["finding"]` — they read their own units'
+> heads at run time and never consume a raw signal — but `_wire_targets_and_triggers`
+> was registering a per-target coalescing trigger for every analyst matched onto
+> a target regardless of what it reads. With the accumulation floor at 2 and a
+> long cooldown shared with the composition's own deliberately-late scheduled
+> tick, two unrelated wire signals could wake a composition *hours before* that
+> day's later units had run — and the reactive fire's cooldown stamp then
+> suppressed the correctly-ordered scheduled tick outright. Measured: 30 of 31
+> country targets had desk heads landing after their own composition had frozen.
+> `_analyst_ids_for_target` now excludes any per-target analyst whose
+> `data_types` omits `"signal"` from trigger registration entirely, so a
+> finding-only composition runs on its own cadence alone. The ordering invariant
+> this makes load-bearing — every composition's scheduled hour lands strictly
+> after every one of its source units' fire hour, in both cycles — is pinned by
+> a test against the shipped descriptors.
 
 > **Bounded per-run dedup (matters for the actor-invoke budget).** The
 > `cross_source_dedup` deterministic analyst does **not** re-scan the whole
@@ -1527,10 +1658,54 @@ distinct style.
 The 2026-07-28 wave closed the loop from a verified state change to an
 operator's device without the console open. It is two decoupled halves: a
 **deterministic trigger analyst** decides *what* is alert-worthy (documented
-with the other analysts in `ANALYSIS.md` — `alert_trigger_scan`, seven trigger
-classes: six over verified state transitions plus the production gauge's
-`production_deficit`, with durable watermarks so a transition never re-fires), and a **modular sink plane** (`src/legba/data/alerts/`)
+with the other analysts in `ANALYSIS.md` — `alert_trigger_scan`, **eight**
+trigger classes: `band_crossing`, `verified_finding`, `contention_flip`,
+`baseline_deviation`, `watchlist_hit`, `geo_convergence`, the production
+gauge's `production_deficit`, and `situation_escalation` — the first class
+whose subject is a FRAME — with durable watermarks so a transition never
+re-fires), and a **modular sink plane** (`src/legba/data/alerts/`)
 decides *where* it goes.
+
+**Anti-noise at the trigger tier is now three ordered mechanisms** (2026-08-29),
+and the invariant across all three is that **a suppressed alert still writes
+its row** — the ledger records what was decided, so nothing is ever silently
+dropped:
+
+1. **The steady-state guard** (`_steady_state_guard.py`) suppresses a
+   `verified_finding` page only when the desk's banded severity is unchanged
+   AND the finding's own `severity_delta` reads `steady`/absent AND the desk
+   was paged within the cooldown (default 24h). A `rose`/`fell`/`new` tag
+   always pages. It fails *toward* paging: no prior record for a desk, or an
+   unparseable timestamp, pages. Its `verified_finding_state` watermark
+   namespace is a new `trigger_class` value in the existing
+   `alert_trigger_watermarks` table — no migration.
+2. **The daily page budget** (`_daily_page_budget.py`): at most 5 alerts
+   actually PAGE per UTC day, fleet-wide, ranked worst-first, with a
+   **kind-diversity cap** of 3 slots per `trigger_class` per day. The cap
+   exists because `situation_escalation` is 100% `severity=critical` and would
+   otherwise win every slot every day; a slot no other kind can fill stays
+   **unused** rather than being backfilled with more of the capped kind.
+   Over-budget candidates carry `data.budget_deferred=true`.
+3. **The kill list**: `contention_flip` and `geo_convergence` default OFF.
+   Their scans still run and their watermarks still advance *as if fired*, so
+   re-enabling is a config flip rather than a backlog replay, and the
+   would-have-fired count rides the run receipt.
+
+**A semantics-stamp mismatch is a MIGRATION, not a world event.** When the
+banding semantics change, every card straddling the change moves — and both
+the band-crossing scan and the calibration tracker would read that fleet-wide
+move as deteriorations and resolvable claims, i.e. the platform paging the
+operator about its own upgrade. `classify_band_transition` now pre-empts every
+other classification when the prior and current cards' stamps differ,
+returning a low-severity `SEMANTICS_MIGRATION` regardless of direction; the
+scan folds every dimension a desk's mismatch touches into **one** informational
+alert per desk rather than one per dimension; and `band_calibration_tracker`
+logs the transition with `semantics_migration=true` (migration `0187`) while
+the aggregation filters `WHERE NOT semantics_migration` — an exclusion that is
+a query predicate and is reported honestly as
+`population.excluded_semantics_migration`, never hidden. A stamp absent on the
+prior side reads as differing; both cards missing the same stamp read as
+unchanged, so untouched history stays byte-identical.
 
 - **The dispatcher.** `AlertSinkDispatcher` (`data/alerts/sinks.py`) fans one
   converged `AlertSinkPayload` out to every registered sink (`AlertSink` is a
@@ -1621,6 +1796,15 @@ like the rest of §4 in `RUNBOOK.md`):
 | `GET/POST/PUT/DELETE /v3/watchlist` | operator standing watches — **the first WRITE surface in the v3 route family** (update is PUT, delete is soft — `active=false`) |
 | `GET /v3/collection-requirements` (+ `/{id}`, `PATCH /{id}`) | the durable collection-requirement backlog — **disposition-only**. There is no POST and no DELETE (a test asserts both 404/405), the PATCH may touch only `status` / `reviewed_by` / `reviewed_at` / `disposition_note`, and nothing on this route can register or activate a source. `ACQUISITION.md` §6.1 |
 | `GET /v3/system/source-firing` | now grades each source's freshness (`ok` / `stale` / `warn` / `empty` / `ungraded`) against a cadence-derived budget |
+| `GET /v3/system/external-audit?days=` | the standing external auditor's board (§5.10) — the heartbeat (`present` / `age_hours` / `stale` past 30h / `degraded_reason` / `claims_checked` / `heads_sampled`), the verdict mix, `desks_audited`, and the CONTRADICTED rows by name with their source URLs. `contradiction_rate` is computed over *checked* claims and is **absent, never `0.0`**, when nothing was checked. Never 500s at a polling panel |
+
+Two routes were added **outside** the `/v3` family, under `/api/v1`, because
+they are a write-then-read pair rather than a substrate read:
+
+| Route | What it serves |
+|---|---|
+| `POST /api/v1/read-events` | the read-telemetry ledger's append path (migration `0189`) — **202 Accepted**, per-event validation so one malformed event is dropped and counted rather than failing a 200-event batch, one `executemany` INSERT, no joins at write time. The table is append-only at the database: a trigger makes `DELETE` and `UPDATE` fail loud, because an attention record you can quietly revise is not evidence. Vocabulary is a CHECK constraint over seven values, so a typo in a UI emitter cannot silently create a kind no rollup counts |
+| `GET /api/v1/read-events/rollup?days=` | the daily rollup by kind plus the headline scalars, `days` bounded `[1,365]`, grouped in Postgres — the route never streams the raw log, because a scoreboard on a refresh timer must not become a table scan |
 
 The **MCP surface** (`src/legba/ui/mcp_server.py`, the `legba-mcp` stdio
 image) now ships **seven built-in tools** — `substrate_findings`,
@@ -1867,7 +2051,7 @@ Two properties hold across every layer and are not bolt-ons:
 
 The full loop — **altitudes 0 through 3** — runs end-to-end from cold-start
 (empty volumes, the `0001_baseline.sql` baseline + the forward chain under
-`src/legba/data/migrations/`, current head **`0185`** — the early arc
+`src/legba/data/migrations/`, current head **`0189`** — the early arc
 `0032`…`0085` being the
 `facts`/`nexuses`/`seed_batches` schema plus the entity-profile composite key
 (`0035`), signals retention (`0036`), the AGE output label (`0037`), the ACH
@@ -1890,10 +2074,13 @@ poll `newest_entry_ts`, band-calibration claims, the source-assurance ledger,
 correctness labels + gold-set pinning, contention surfacing + the tie-break
 cache, fact-decay states, source track records, the traces-retention index,
 narratives + echo edges, desk baselines, the evidence archive, and the
-watchlist), and the 2026-08 arc through `0185` (bearing edges + review flags,
+watchlist), and the 2026-08 arc through `0189` (bearing edges + review flags,
 corpus tombstones, entity-graph backfills and merge repairs, the situation
-trajectory ledger `situation_events` at `0184`, and the proposed-edge repoint
-at `0185`) — see `DATA_MODEL.md` for the per-migration tables):
+trajectory ledger `situation_events` at `0184`, the proposed-edge repoint
+at `0185`, the `analyst_traces.prompt_sha256` column at `0186`, the
+band-calibration `semantics_migration` flag at `0187`, the situation
+mega-frame split at `0188`, and the append-only `read_events` ledger at
+`0189`) — see `DATA_MODEL.md` for the per-migration tables):
 
 - Real RSS sources (BBC / Deutsche Welle / Al Jazeera) acquire enriched signals —
   geo, language, and entity-class promoted to indexed columns; the

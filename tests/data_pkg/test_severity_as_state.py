@@ -314,6 +314,56 @@ def test_a_second_delta_tag_takes_the_last_one_and_never_crashes():
     ) == "fell"
 
 
+def test_the_live_evidenced_rise_near_miss_reads_as_rose():
+    """LIVE-EVIDENCED (2026-08-25): the fleet emitted ``severity_delta:rise``
+    once (~0.25% of stamped deltas), out-of-vocabulary against
+    ``rose|fell|steady|new``. ``rise`` has one unambiguous canonical target —
+    ``rose`` — so the real reader normalizes it instead of discarding the
+    model's stated movement as ``None``."""
+    assert severity_delta_from_tags(["severity_delta:rise"]) == "rose"
+
+
+def test_the_other_unambiguous_near_miss_spellings_also_normalize():
+    """The rest of the narrow, evidenced table
+    (:data:`legba.data.provenance.models._SEVERITY_DELTA_NEAR_MISS`) — same
+    unambiguous-canonical-target rule as ``rise``, exercised through the real
+    reader rather than asserted on the table directly."""
+    assert severity_delta_from_tags(["severity_delta:rising"]) == "rose"
+    assert severity_delta_from_tags(["severity_delta:fall"]) == "fell"
+    assert severity_delta_from_tags(["severity_delta:falls"]) == "fell"
+    assert severity_delta_from_tags(["severity_delta:falling"]) == "fell"
+    assert severity_delta_from_tags(["severity_delta:fallen"]) == "fell"
+
+
+def test_the_live_evidenced_fallen_near_miss_reads_as_fell():
+    """LIVE-EVIDENCED (2026-08-29 DQ sweep §6): the fleet emitted
+    ``severity_delta:fallen`` once (1/2340 stamped deltas), the past-
+    participle form of the same verb ``fall``/``falls``/``falling`` already
+    normalize — ``fell`` is its one unambiguous canonical target. Before this
+    fix it read as ``None`` (fails safe, per the "never guess" rule — the
+    finding's ``fallen`` movement call was simply dropped, not fabricated as
+    ``steady``)."""
+    assert severity_delta_from_tags(["severity_delta:fallen"]) == "fell"
+
+
+def test_a_near_miss_is_case_and_whitespace_tolerant_like_any_other_value():
+    """The near-miss lookup sits AFTER the existing ``.strip().lower()``, so it
+    inherits the same tolerance the canonical forms already have — no separate
+    normalization path to drift out of sync."""
+    assert severity_delta_from_tags(["severity_delta: RISE "]) == "rose"
+
+
+def test_an_ambiguous_or_unevidenced_near_miss_still_reads_none():
+    """Guardrail for the ``never guess`` rule: a plausible-looking but
+    UNEVIDENCED / ambiguous movement word (not in the narrow table) is not
+    silently mapped onto a level — it stays the honest ``None``, same as any
+    other out-of-vocabulary tag."""
+    assert severity_delta_from_tags(["severity_delta:sideways"]) is None
+    assert severity_delta_from_tags(["severity_delta:up"]) is None
+    assert severity_delta_from_tags(["severity_delta:down"]) is None
+    assert severity_delta_from_tags(["severity_delta:higher"]) is None
+
+
 # ===========================================================================
 # 2. THE UNIT PROMPT HALF — the contract, identical on every desk
 # ===========================================================================
@@ -537,11 +587,18 @@ async def test_the_movement_call_never_moves_the_band(delta: str | None):
     assert dim["severity_delta"] == delta
 
 
-def test_damping_is_untouched_by_the_split():
-    """§0.6 says damping is untouched (H-DAMPING was refuted at ~1 discordance).
-    The one-rung demote still keys on effective confidence and nothing else: the
-    same standing level with the same confidence damps identically whether the
-    desk called the slice ``rose``, ``steady``, or said nothing at all."""
+def test_the_movement_call_never_reaches_the_retired_damper_either():
+    """FRAME-3 §0.6 left damping untouched; H3 RETIRED it — and the property this
+    test was written to protect survives the retirement unchanged, which is the
+    point of keeping it.
+
+    The damper keyed on effective confidence and nothing else. Its retirement
+    record (``damped_would_have_been``) keys on effective confidence and nothing
+    else. So the same standing level at the same confidence produces the same
+    band AND the same record whether the desk called the slice ``rose``,
+    ``steady``, or said nothing at all — the movement call has never touched the
+    band, and it does not touch the band the band used to be either.
+    """
     bands = {
         label: sb.band_dimension(
             sb.Claim(
@@ -559,9 +616,11 @@ def test_damping_is_untouched_by_the_split():
         )
     }
     for label, verdict in bands.items():
-        assert verdict.band == "elevated", label  # one rung DOWN from high
-        assert verdict.damped is True, label
-        assert verdict.reason == "damped", label
+        assert verdict.band == "high", label            # the tag's band
+        assert verdict.damped is False, label
+        assert verdict.reason == "qualified-low-confidence", label
+        # identical across all three deltas — the retired rung, recorded
+        assert verdict.damped_would_have_been == "elevated", label
     assert bands["steady"].severity_delta == "steady"
     assert bands["absent"].severity_delta is None
 

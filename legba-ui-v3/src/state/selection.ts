@@ -24,6 +24,8 @@
  */
 import { create } from 'zustand'
 
+import { emitRead } from '@/lib/readTelemetry'
+
 export type SelectionKind =
   | 'target'
   | 'entity'
@@ -90,7 +92,26 @@ function sameRef(a: Selection | null, b: Selection | null): boolean {
 export const useSelection = create<SelectionState>((set) => ({
   selection: null,
   history: [],
-  select: (selection) =>
+  select: (selection) => {
+    // READ TELEMETRY (D2e) — this is the ONE chokepoint every "open a record"
+    // path in the app funnels through: `selectRow` from the panels, a bare
+    // `useSelection.getState().select` from `RecordLink`, the citation-drill
+    // fallback in `CitedProse`, the map and Flow click handlers. Instrumenting
+    // it here is why the count can be trusted; instrumenting the call sites
+    // would have missed whichever one was added next.
+    //
+    // Only `finding` emits: the wager's question is "did the operator drill a
+    // FINDING", and the 0189 vocabulary has no generic record-open kind, so a
+    // target/source/entity click is deliberately not counted as one.
+    //
+    // Emitted OUTSIDE the `set` updater on purpose — zustand may invoke an
+    // updater more than once, and a telemetry write is not idempotent.
+    if (selection && selection.kind === 'finding') {
+      emitRead('finding_open', {
+        subjectKind: 'finding',
+        subjectId: selection.id,
+      })
+    }
     set((s) => {
       // No-op re-select of the same record keeps history stable.
       if (sameRef(selection, s.selection)) return { selection }
@@ -100,7 +121,8 @@ export const useSelection = create<SelectionState>((set) => ({
       const trimmed = s.history.filter((h) => !sameRef(h, prev))
       const history = [...trimmed, prev].slice(-MAX_HISTORY)
       return { selection, history }
-    }),
+    })
+  },
   back: () =>
     set((s) => {
       const history = [...s.history]

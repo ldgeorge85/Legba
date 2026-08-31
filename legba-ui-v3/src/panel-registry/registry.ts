@@ -42,14 +42,12 @@ const AnalystCrossTarget = lazy(() => import('@/panels/analyst/CrossTarget'))
 const AnalystCritiques = lazy(() => import('@/panels/analyst/Critiques'))
 
 const SystemFindings = lazy(() => import('@/panels/system/Findings'))
-const SystemLineage = lazy(() => import('@/panels/system/Lineage'))
 const SystemBudget = lazy(() => import('@/panels/system/Budget'))
 const SystemOptimizer = lazy(() => import('@/panels/system/Optimizer'))
 const SystemDeadLetter = lazy(() => import('@/panels/system/DeadLetter'))
 // U-3 merge — Deep Consult folds into a depth toggle on Consult; the merged
 // wrapper mounts both original, unmodified components (merged/Consult.tsx).
 const SystemConsultMerged = lazy(() => import('@/panels/merged/Consult'))
-const SystemDeepConsult = lazy(() => import('@/panels/system/DeepConsult'))
 const SystemSettings = lazy(() => import('@/panels/system/Settings'))
 
 const RegistryTargets = lazy(() => import('@/panels/registry/Targets'))
@@ -87,12 +85,7 @@ const SystemWallMovers = lazy(() => import('@/panels/system/WallMovers'))
 // Product surfaces (UI-6 / Tier G — pivot)
 const SystemSearch = lazy(() => import('@/panels/system/Search'))
 const SystemEntities = lazy(() => import('@/panels/system/Entities'))
-const SystemEntityGraph = lazy(() => import('@/panels/system/EntityGraph'))
 const SystemGraphWalk = lazy(() => import('@/panels/system/GraphWalk'))
-const SystemNotableStructure = lazy(() => import('@/panels/system/NotableStructure'))
-const SystemAlertCenter = lazy(() => import('@/panels/system/AlertCenter'))
-const SystemWatchlist = lazy(() => import('@/panels/system/Watchlist'))
-const SystemEscalations = lazy(() => import('@/panels/system/Escalations'))
 const SystemReportExport = lazy(() => import('@/panels/system/ReportExport'))
 
 // The Inspector — unified detail surface (redesign Move 1, the keystone).
@@ -107,16 +100,12 @@ const SystemProductionGauge = lazy(() => import('@/panels/system/ProductionGauge
 const SystemJudgeStats = lazy(() => import('@/panels/system/JudgeStats'))
 const SystemSourceHealth = lazy(() => import('@/panels/system/SourceHealth'))
 const SystemEvalBoards = lazy(() => import('@/panels/system/EvalBoards'))
-const SystemSituationTrajectory = lazy(() => import('@/panels/system/SituationTrajectory'))
-const SystemNarratives = lazy(() => import('@/panels/system/Narratives'))
+const SystemReadScoreboard = lazy(() => import('@/panels/system/ReadScoreboard'))
 
 // v4 visual workspace panels (selection-linked singletons).
 const V4Map = lazy(() => import('@/panels/v4/MapPanel'))
-const V4Flow = lazy(() => import('@/panels/v4/FlowPanel'))
-const V4Why = lazy(() => import('@/panels/v4/WhyPanel'))
 const V4Assessment = lazy(() => import('@/panels/v4/AssessmentPanel'))
 const V4Kpi = lazy(() => import('@/panels/v4/KpiPanel'))
-const V4Timeline = lazy(() => import('@/panels/v4/TimelinePanel'))
 
 // U-3 merge — Provenance folds v4.why + system.lineage + v4.flow into one
 // tabbed surface (merged/Provenance.tsx mounts all three, unmodified).
@@ -215,10 +204,6 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     definition: def('system.findings', 'system_findings', 'system', null, 'Live Feed', false, ['personal', 'cis'], 'Radio'),
     Component: SystemFindings,
   },
-  'system.lineage': {
-    definition: def('system.lineage', 'system_lineage', 'system', null, 'Provenance Lineage', false, ['personal', 'cis'], 'Network'),
-    Component: SystemLineage,
-  },
   'system.budget': {
     definition: def('system.budget', 'system_budget', 'system', null, 'Budget Ledger', false, ['personal'], 'DollarSign'),
     Component: SystemBudget,
@@ -234,16 +219,10 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
   // (system.runtime → merged into system.actor_health; system.streams / system.users
   //  removed — S7-T2 consolidation.)
   'system.consult': {
-    // U-3 merge — Deep Consult is now a depth toggle here (merged/Consult.tsx).
+    // U-3 merge — Deep Consult is a depth toggle here (merged/Consult.tsx);
+    // `system.deep_consult` retired into the alias table (→ tab "deep").
     definition: def('system.consult', 'system_consult', 'system', null, 'Consult', false, ['personal'], 'MessageSquare'),
     Component: SystemConsultMerged,
-  },
-  'system.deep_consult': {
-    // U-3 merge — folded into Consult's depth toggle; hidden but still
-    // registered pointing at the ORIGINAL component (HIDDEN_KINDS below), so
-    // a saved layout referencing this id keeps resolving unchanged.
-    definition: def('system.deep_consult', 'system_deep_consult', 'system', null, 'Deep Consult', false, ['personal'], 'BrainCircuit'),
-    Component: SystemDeepConsult,
   },
   'system.settings': {
     definition: def('system.settings', 'system_settings', 'operator', null, 'Model Stack Settings', false, ['personal'], 'Settings'),
@@ -326,18 +305,18 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
   },
   // The Wall (P1-7) — the mission-control anchor: world-at-a-glance band grid
   // + movers-since-last-visit + newest high-severity verified + health corner.
-  // Ships in personal + cis; opened from the sidebar (Awareness) or the
-  // optional "Wall" layout preset. The default boot grid does NOT mount this
-  // whole panel (U-4 below mounts just its movers quadrant, standalone).
+  // Ships in personal + cis. The MORNING READ workspace mounts this whole
+  // panel as its top band (lib/workspaces.ts) — the standalone movers tile
+  // below is no longer seeded, because mounting a quadrant beside its own
+  // parent was the duplication the holistic design called out.
   'system.wall': {
     definition: def('system.wall', 'system_wall', 'system', null, 'The Wall', false, ['personal', 'cis'], 'LayoutGrid'),
     Component: SystemWall,
   },
-  // U-4 (COHERENCE_WAVES_PLAN_2026-07-28) — standalone movers-since-last-visit
-  // tile, boot-seeded alongside the KPI strip / feed / map / report / timeline
-  // (App.tsx). Hidden from the sidebar (HIDDEN_KINDS below) — see that set's
-  // comment for why this one is hidden for a DIFFERENT reason than the merge
-  // aliases it sits next to.
+  // U-4 (COHERENCE_WAVES_PLAN_2026-07-28) — standalone mount of JUST the
+  // Wall's movers-since-last-visit quadrant. Kept registered + hidden
+  // (HIDDEN_KINDS below) rather than aliased onto the Wall: a saved layout
+  // holding this tile keeps rendering the quadrant it asked for.
   'system.wall_movers': {
     definition: def('system.wall_movers', 'system_wall_movers', 'system', null, 'Movers Since Last Visit', false, ['personal', 'cis'], 'TrendingUp'),
     Component: SystemWallMovers,
@@ -350,16 +329,11 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     Component: SystemSearch,
   },
   'system.entities': {
-    // U-3 merge — Entity Graph + Notable Structure now live here as tabs
-    // (Entities.tsx renders them unmodified, see HIDDEN_KINDS below).
+    // U-3 merge — Entity Graph + Notable Structure live here as tabs
+    // (Entities.tsx renders them unmodified). Both original kinds RETIRED into
+    // panel-registry/aliases.ts, which lands a deep-link on the right tab.
     definition: def('system.entities', 'system_entities', 'operator', null, 'Entities', false, ['personal'], 'Boxes'),
     Component: SystemEntities,
-  },
-  'system.entity_graph': {
-    // U-3 merge — folded into Entities' "Graph" tab; hidden but still
-    // registered pointing at the ORIGINAL component (HIDDEN_KINDS below).
-    definition: def('system.entity_graph', 'system_entity_graph', 'operator', null, 'Entity Graph', false, ['personal'], 'Share2'),
-    Component: SystemEntityGraph,
   },
   'system.graph_walk': {
     // K-G4 — the graph WALK, and the one graph surface that is NOT folded into
@@ -368,41 +342,6 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     // `entity_edges` store that no other panel touches.
     definition: def('system.graph_walk', 'system_graph_walk', 'operator', null, 'Graph Walk', false, ['personal'], 'Network'),
     Component: SystemGraphWalk,
-  },
-  'system.notable_structure': {
-    // U-3 merge — folded into Entities' "Structure" tab (its actual content:
-    // a ranked cross-entity structural shortlist — tense actors, brokers,
-    // hostile edges, imbalanced triads, proxy chains); hidden but still
-    // registered pointing at the ORIGINAL component (HIDDEN_KINDS below).
-    definition: def('system.notable_structure', 'system_notable_structure', 'system', null, 'Notable Structure', false, ['personal', 'cis'], 'Spline'),
-    Component: SystemNotableStructure,
-  },
-  'system.alert_center': {
-    // U-3 merge — folded into Alerts & Watches' "Triggers" tab; hidden but
-    // still registered pointing at the ORIGINAL component (HIDDEN_KINDS
-    // below), so a saved layout referencing this id keeps resolving.
-    definition: def('system.alert_center', 'system_alert_center', 'system', null, 'Alert Center', false, ['personal', 'cis'], 'Bell'),
-    Component: SystemAlertCenter,
-  },
-  // Watchlist v2 (P5-6) — SERVER-side standing watches (entity/topic/place)
-  // over GET/POST/PUT/DELETE /api/v1/v3/watchlist; the alert_trigger_scan's
-  // watchlist_hit class pages on verified hits through the shared dispatcher.
-  // Live tier (real backend route), unlike the alert_center preview.
-  // U-3 merge — folded into Alerts & Watches' "Watches" tab; hidden but still
-  // registered pointing at the ORIGINAL component (HIDDEN_KINDS below).
-  'system.watchlist': {
-    definition: def('system.watchlist', 'system_watchlist', 'system', null, 'Watchlist', false, ['personal', 'cis'], 'Telescope'),
-    Component: SystemWatchlist,
-  },
-  // Escalation Deliveries — the human-visible alert edge (audit finding C3 /
-  // decision D1). Renders alert_sink_deliveries: did each escalation LAND
-  // (delivered) or go NOWHERE (failed / logged_only)? Live route
-  // (`GET /api/v1/v3/system/escalations`), so NOT a preview surface.
-  // U-3 merge — folded into Alerts & Watches' "Deliveries" tab; hidden but
-  // still registered pointing at the ORIGINAL component (HIDDEN_KINDS below).
-  'system.escalations': {
-    definition: def('system.escalations', 'system_escalations', 'system', null, 'Escalation Deliveries', false, ['personal', 'cis'], 'Siren'),
-    Component: SystemEscalations,
   },
   // --- U-3 merges — the new visible tabbed surfaces themselves ---
   // Provenance — folds v4.why + system.lineage + v4.flow into one tabbed
@@ -447,21 +386,6 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     definition: def('system.journal_gate', 'system_journal_gate', 'system', null, 'Journal Gate', false, ['personal'], 'Gavel'),
     Component: SystemJournalGate,
   },
-  // The situation register's frames + the trajectory ledger. Mounted as
-  // Provenance's "Trajectory" tab (merged/Provenance.tsx) and registered here
-  // as a standalone kind so ⌘K and saved layouts resolve it — hidden from the
-  // sidebar (HIDDEN_KINDS below) because the ≤23-row budget is fully spent and
-  // a tab is the blessed way to land a surface without re-arguing it.
-  'system.situations': {
-    definition: def('system.situations', 'system_situations', 'system', null, 'Situation Trajectory', false, ['personal', 'cis'], 'TrendingUp'),
-    Component: SystemSituationTrajectory,
-  },
-  // Reified contested-claim families + the source-echo graph. Same deal:
-  // Provenance's "Narratives" tab, registered + hidden for standalone resolve.
-  'system.narratives': {
-    definition: def('system.narratives', 'system_narratives', 'system', null, 'Narratives', false, ['personal', 'cis'], 'Waypoints'),
-    Component: SystemNarratives,
-  },
 
   // --- GLASS-3: the ops deck --------------------------------------------
   // Four VISIBLE Engine Room rows, deliberately not hidden and not folded into
@@ -499,23 +423,19 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     definition: def('system.eval_boards', 'system_eval_boards', 'system', null, 'Eval Boards', false, ['personal'], 'LayoutDashboard'),
     Component: SystemEvalBoards,
   },
+  // THE READ SCOREBOARD (D2e) — the only panel on the deck that measures the
+  // OPERATOR instead of the engine. Sits with the ops panels because it is
+  // read on the same errand ("is this thing working?") and because the answer
+  // it gives is the one the 90-day oracle wager is graded on.
+  'system.read_scoreboard': {
+    definition: def('system.read_scoreboard', 'system_read_scoreboard', 'system', null, 'Read Scoreboard', false, ['personal'], 'Eye'),
+    Component: SystemReadScoreboard,
+  },
 
   // --- v4 visual workspace panels (singletons; selection-linked) ---
   'v4.map': {
     definition: def('v4.map', 'v4_map', 'system', null, 'World Map', false, ['personal', 'cis'], 'Globe2'),
     Component: V4Map,
-  },
-  // U-3 merge — folded into Provenance's "Flow" tab; hidden but still
-  // registered pointing at the ORIGINAL component (HIDDEN_KINDS below).
-  'v4.flow': {
-    definition: def('v4.flow', 'v4_flow', 'system', null, 'Flow Canvas', false, ['personal', 'cis'], 'Workflow'),
-    Component: V4Flow,
-  },
-  // U-3 merge — folded into Provenance's "Why" tab; hidden but still
-  // registered pointing at the ORIGINAL component (HIDDEN_KINDS below).
-  'v4.why': {
-    definition: def('v4.why', 'v4_why', 'system', null, 'Why · Provenance', false, ['personal', 'cis'], 'GitBranch'),
-    Component: V4Why,
   },
   'v4.assessment': {
     definition: def('v4.assessment', 'v4_assessment', 'system', null, 'World Assessment', false, ['personal', 'cis'], 'ScrollText'),
@@ -527,13 +447,6 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
   'v4.kpi': {
     definition: def('v4.kpi', 'v4_kpi', 'system', null, 'At a Glance', false, ['personal', 'cis'], 'Gauge'),
     Component: V4Kpi,
-  },
-  // U-3 merge — folded into the merged Timeline's "Events" mode (system.
-  // timeline is now the visible survivor); hidden but still registered
-  // pointing at the ORIGINAL component (HIDDEN_KINDS below).
-  'v4.timeline': {
-    definition: def('v4.timeline', 'v4_timeline', 'system', null, 'Timeline', false, ['personal', 'cis'], 'Clock'),
-    Component: V4Timeline,
   },
 }
 
@@ -560,88 +473,57 @@ function def(
 //   * system.backfill        — backend POST is an honest 501 (cross-plane
 //                              runtime trigger not exposed through the registry)
 //   * system.optimizer.diff  — operator review aid over the GEPA loop
-//   * system.search / alert_center — client-only product surfaces (no
-//                              dedicated backend route yet)
+//   * system.search          — client-only product surface (no dedicated
+//                              backend route yet)
 // (system.report_export left this set in A10 — it now fronts the real
 // POST /api/v1/v3/export collection-basket route, shipped on the same train.)
+// (system.alert_center left this set when it RETIRED into the alias table —
+//  it is now Alerts & Watches' "Triggers" tab, which carries the preview badge
+//  on the tab itself; see panels/merged/AlertsWatches.tsx.)
 const PREVIEW_KINDS: ReadonlySet<PanelKind> = new Set([
   'system.optimizer.diff',
   'system.search',
-  'system.alert_center',
 ])
 for (const k of PREVIEW_KINDS) {
   PANEL_REGISTRY[k].definition.tier = 'preview'
 }
 
-// Hidden-but-registered set — merge/consolidation targets kept in the bundle
-// (so any saved layout or ⌘K deep-link still resolves them) but dropped from the
-// sidebar so the workstation catalog stays ~25-30 GOOD panels.  The S7-T1 §6
-// DROP set (system.pulse/eval/users/streams, registry.wirings/mutations,
-// dashboard.dynamic, registry.discovery, system.backfill/runtime/tenant_view,
-// system.targets.roster, v4.case) was DELETED outright in S7-T2 — those kinds no
-// longer exist.  What remains hidden here are LIVE panels merged into a peer:
-//   * system.optimizer.diff       — operator review aid folded under Optimizer
+// Hidden-but-registered set — SHRUNK to the surfaces that have no survivor yet.
+//
+// The twelve U-3/GLASS-2 merge originals that used to live here (v4.timeline,
+// v4.why, system.lineage, v4.flow, system.situations, system.narratives,
+// system.watchlist, system.alert_center, system.escalations,
+// system.deep_consult, system.entity_graph, system.notable_structure) are GONE
+// from this file entirely: they are now rows in `panel-registry/aliases.ts`,
+// which resolves a retired id onto the survivor that already renders it —
+// without a registry row, a component import, or a `hidden` flag to remember
+// (UI_HOLISTIC_DESIGN_2026-08-24 §4.4). Twelve rows of catalog that existed
+// only to be invisible became twelve lines of data.
+//
+// What is still hidden-but-registered is the set an alias CANNOT yet describe,
+// because no shipped surface renders it. Each needs a merge train first, and
+// hiding is the honest holding position until then — pointing an alias at an
+// approximation would silently lose the capability:
+//   * system.optimizer.diff       — the Optimizer's candidate drill (opened by
+//                                   its event bridge, not by a sidebar row)
 //   * source.subscription_builder — niche source-config; reachable via ⌘K
 //   * source.subscription_policy  — niche source-config; reachable via ⌘K
 //   * source.fanout               — niche explorer; reachable via ⌘K
-//   * system.stream_lag           — rolled into the System Status at-a-glance view
-// (system.report_export UNHIDDEN in A10 — no longer the Report panel's download
-// twin but the collection-basket export surface: the target of every "add to
-// export" affordance + the status-bar basket chip, backed by the live
-// POST /api/v1/v3/export route shipped on the same train.)
-//
-// U-3 (COHERENCE_WAVES_PLAN_2026-07-28 §U-3) added ten more merge targets —
-// the five merge sets' folded-away originals. Each stays registered pointing
-// at its ORIGINAL, unmodified component (panel-registry §1.9 alias
-// mechanism): a saved layout or ⌘K deep-link referencing the old id renders
-// exactly what it always did; the new tabbed/moded surface is what the
-// sidebar shows going forward.
-//   * v4.timeline                 — folded into Timeline's "Events" mode
-//   * v4.why / system.lineage / v4.flow
-//                                 — folded into Provenance's Why/Lineage/Flow tabs
-//   * system.alert_center / system.watchlist / system.escalations
-//                                 — folded into Alerts & Watches' tabs
-//   * system.deep_consult         — folded into Consult's depth toggle
-//   * system.entity_graph / system.notable_structure
-//                                 — folded into Entities' Graph/Structure tabs
-//
-// U-4 (COHERENCE_WAVES_PLAN_2026-07-28 §U-4) adds ONE more entry for a
-// DIFFERENT reason than every kind above: `system.wall_movers` is not a merge
-// alias for something deleted from the sidebar — it is a brand-new capability
-// (the boot-grid "what changed" tile) that is hidden on purpose because it is
-// already always-visible at cold boot (App.tsx's boot effect) and adding a
-// sidebar row for it would spend the U-3 ≤22-visible-row budget
-// (navGroups.test.ts) on a tile the operator never has to go looking for. It
-// still round-trips through a saved layout / ⌘K exactly like any other kind.
+//   * system.stream_lag           — consumer-lag detail; System Status shows
+//                                   the QUEUES rollup, not this drill
+//   * system.wall_movers          — the standalone movers tile. Not a merge
+//                                   original: the Wall carries movers as its
+//                                   own quadrant, so the landing workspace
+//                                   mounts the WALL and this tile stays
+//                                   reachable for anyone whose saved layout
+//                                   holds it.
 const HIDDEN_KINDS: ReadonlySet<PanelKind> = new Set<PanelKind>([
   'system.optimizer.diff',
   'source.subscription_builder',
   'source.subscription_policy',
   'source.fanout',
   'system.stream_lag',
-  'v4.timeline',
-  'v4.why',
-  'system.lineage',
-  'v4.flow',
-  'system.alert_center',
-  'system.watchlist',
-  'system.escalations',
-  'system.deep_consult',
-  'system.entity_graph',
-  'system.notable_structure',
   'system.wall_movers',
-  // GLASS-2 adds two entries for the U-3 merge-alias reason, in the forward
-  // direction: `system.situations` and `system.narratives` are NEW surfaces
-  // that land as tabs of the merged Provenance panel (Why / Lineage / Flow /
-  // Trajectory / Narratives) rather than as sidebar rows. The ≤23-visible-row
-  // budget (navGroups.test.ts) is spent to the last row, and that test's own
-  // terms for the next panel are "earn it, fold into a tab, or hide" — these
-  // fold, which is also where they belong: both answer "how did this get
-  // here" (a frame's state, a claim's carriage) alongside the three tabs
-  // already there. Registered-but-hidden keeps them fully reachable
-  // standalone via ⌘K and any saved layout, exactly like the merge aliases.
-  'system.situations',
-  'system.narratives',
 ])
 for (const k of HIDDEN_KINDS) {
   PANEL_REGISTRY[k].definition.hidden = true

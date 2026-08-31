@@ -151,12 +151,26 @@ def test_grounding_block_on_and_scoped(name: str):
     g = _raw_body(name)["grounding"]
     assert g["enabled"] is True
     assert g["scope"] == ["target_geo", "slice_entities"]
-    # The three substrate sources are ALWAYS present. internal_stability
+    # The base substrate sources are ALWAYS present. internal_stability
     # additionally carries `vector:world_context` — the opportunistic-RAG flip that
     # was KEPT (it passed the rag_watch rule where leadership_transition was rolled
-    # back, 2026-07-03). So assert the base three are a SUBSET, not an exact match,
+    # back, 2026-07-03). So assert the base set is a SUBSET, not an exact match,
     # and never forbid a kept vector source.
-    assert {"substrate", "situations", "graph_structure"} <= set(g["sources"])
+    #
+    # REGISTER-1g (2026-08-29) — `situations` LEFT THIS SET, deliberately. Both
+    # units are `kind: inline_target`, so `actor_substrate_slice` already hands
+    # them the desk's OPEN SITUATION REGISTER as a citable [N] block with the
+    # full H1 render repair (evidence age, NEVER/STALE labels, the
+    # self-corroboration rule). The `situations` source produced a SECOND,
+    # UNGUARDED copy of the same frames in the same context window. The register
+    # is still grounded here — by the kind, not by this line — which is why the
+    # assertion below is a REPLACEMENT and not a deletion.
+    assert {"substrate", "graph_structure"} <= set(g["sources"])
+    assert "situations" not in g["sources"], (
+        "REGISTER-1g: an inline_target desk already receives the guarded "
+        "unit_grounding register; re-declaring `situations` here puts an "
+        "unguarded second copy back into the prompt"
+    )
 
 
 @pytest.mark.parametrize("name", sorted(_NEW_UNITS))

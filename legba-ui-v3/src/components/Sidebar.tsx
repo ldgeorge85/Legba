@@ -11,6 +11,12 @@
  * (`navGroups.ts` TASK_ORDER), alphabetical otherwise — NOT purely
  * alphabetical.
  *
+ * THE CATALOG IS FOLDED (UI_HOLISTIC_DESIGN_2026-08-24). All five verb groups
+ * start collapsed and carry a count, so the sidebar opens as five rows plus the
+ * Desks content — not the thirty-six-row catalog the operator called unusable.
+ * The shell around it is unchanged: this is the menu being fixed, not the
+ * workstation being re-shelled.
+ *
  * Engine Room (U-3 §2) additionally nests the per-target and per-analyst
  * instance groups inside its own collapsible body (see the `group.id ===
  * 'operations'` branch below) rather than as separate top-level sections: all
@@ -53,13 +59,31 @@ import { selectRow } from '@/state/selection'
 
 const COLLAPSE_KEY = 'legba_nav_collapsed'
 
-/** Groups collapsed by default on first run — Engine Room (id: `operations`)
- *  folds away, and the registry-scale Targets/Analysts sections (~124/~64
- *  records live, nested INSIDE Engine Room per U-3 §2) start folded too, so
- *  the first screenful stays the five-group tree. The Desks group (U-2) is
- *  deliberately absent here — it is the new keystone entry point and must be
- *  open on a cold boot. */
-const DEFAULT_COLLAPSED = ['operations', 'targets', 'analysts']
+/**
+ * THE CATALOG FOLD (UI_HOLISTIC_DESIGN_2026-08-24 §1.2/§3.4, operator's call).
+ *
+ * Every verb group starts COLLAPSED, so the default menu is five rows — one
+ * per verb — plus the Desks section, which is the only genuinely content-shaped
+ * thing in the sidebar and stays open. Before this, three of the five groups
+ * rendered expanded and the sidebar opened as thirty-six panel rows: a table of
+ * contents for the codebase, presented as navigation. The rows are all still
+ * there, one click away, with a count on the header so a folded row says how
+ * much is behind it.
+ *
+ * Targets/Analysts (~124/~64 records, nested INSIDE Engine Room per U-3 §2)
+ * stay folded for the same reason they always did. The Desks group (U-2) is
+ * deliberately absent from this list — it is the keystone entry point and must
+ * be open on a cold boot.
+ */
+const DEFAULT_COLLAPSED = [
+  'awareness',
+  'investigation',
+  'analysis',
+  'products',
+  'operations',
+  'targets',
+  'analysts',
+]
 
 /** Short label for a country desk's confidence band chip (mirrors the Wall's
  *  choropleth legend wording). */
@@ -213,7 +237,10 @@ export function Sidebar({
         <CollapsibleSection
           key={group.id}
           id={group.id}
-          title={group.label}
+          // The count is what makes a FOLDED row honest: five verb rows that
+          // each say how many surfaces are behind them, instead of a wall of
+          // thirty-six rows (design §3.4 — the catalog is secondary).
+          title={`${group.label} (${group.kinds.length})`}
           collapsed={collapsed.has(group.id)}
           onToggle={() => toggleGroup(group.id)}
         >

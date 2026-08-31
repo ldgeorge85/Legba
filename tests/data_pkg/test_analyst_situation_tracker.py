@@ -286,21 +286,31 @@ async def _finding(
 async def _situation(
     conn: Any, *, name: str, members: list[UUID], target_id: str,
     last_event_hours_ago: float = 1.0, intensity: float = _TOP_INTENSITY,
-    status: str = "active",
+    status: str = "active", opened_days_ago: float = 1.0,
 ) -> UUID:
+    """One open frame.
+
+    ``opened_days_ago`` writes a REAL ``valid_from``, and since #64 that is
+    load-bearing rather than cosmetic: for a frame the ledger has never moved,
+    the opening IS the evidence clock the dormancy horizon is measured against
+    (``trajectory.evidence_anchor``). A fixture leaving it NULL would make every
+    seeded frame read as opened just now — which is how a dormancy test can pass
+    or fail for a reason that has nothing to do with the code under test.
+    """
     return await conn.fetchval(
         """
         INSERT INTO situations
             (id, data, name, status, category, last_event_at, event_count,
              intensity_score, target_id, derived_from, schema_uri,
-             situation_signature)
+             situation_signature, valid_from)
         VALUES ($1, '{}'::jsonb, $2, $3, '', $4, $5, $6, $7, $8,
-                'iglu:legba/situation/jsonschema/2-0-0', $9)
+                'iglu:legba/situation/jsonschema/2-0-0', $9, $10)
         RETURNING id
         """,
         uuid4(), name, status,
         datetime.now(timezone.utc) - timedelta(hours=last_event_hours_ago),
         len(members), intensity, target_id, members, f"sig:{uuid4().hex}",
+        datetime.now(timezone.utc) - timedelta(days=opened_days_ago),
     )
 
 
@@ -373,15 +383,33 @@ def test_the_verify_helper_scope_guard_admits_this_kind():
 
 
 def _candidate(handle: str = "S1", *, evidence: int = 2, **kw) -> st.SituationCandidate:
+    """One tracker candidate.
+
+    ``anchor_days_ago`` / ``corroborated`` set the EVIDENCE clock (#64) — the
+    field ``_dormancy_verdict`` now reads. It defaults to a fresh anchor, so a
+    candidate built without saying otherwise is one the world touched today and
+    no dormancy test fires on it by accident.
+
+    ``member_hours_ago`` sets the MEMBER clock independently, which is the whole
+    point of the re-key: the two are allowed to disagree, and before #64 only the
+    second one was consulted.
+    """
     now = datetime.now(timezone.utc)
+    anchor_days_ago = kw.pop("anchor_days_ago", 0.5)
     return st.SituationCandidate(
         situation_id=kw.pop("situation_id", uuid4()),
         handle=handle,
         name=kw.pop("name", "Situation: strait transit"),
         category="", target_id="country_g20_ir", status="active",
         intensity_score=5.0, event_count=4,
-        last_event_at=now - timedelta(hours=1), opened_at=now - timedelta(days=9),
+        last_event_at=now - timedelta(hours=kw.pop("member_hours_ago", 1)),
+        opened_at=now - timedelta(days=9),
         state=kw.pop("state", tj.INITIAL_STATE),
+        evidence_anchor_at=(
+            None if anchor_days_ago is None
+            else now - timedelta(days=anchor_days_ago)
+        ),
+        corroborated=kw.pop("corroborated", True),
         evidence=[
             st.EvidenceItem(
                 ordinal=i, finding_id=uuid4(), title=f"item {i}",
@@ -805,14 +833,20 @@ async def test_a_failed_batch_defers_rather_than_claiming_nothing_moved(scope):
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_a_long_quiet_situation_gets_a_dormancy_checkpoint(scope):
-    """D4: no attached news for the horizon => a checkpoint row, never a close."""
+    """D4: no attached news for the horizon => a checkpoint row, never a close.
+
+    Since #64 "no attached news" is measured on the EVIDENCE clock, so this frame
+    is seeded 30 days OPEN as well as 30 days quiet — a frame the ledger has
+    never moved anchors on its own opening.
+    """
     pool, target = scope
     name = f"Situation: quiet {uuid4().hex[:8]}"
     async with pool.acquire() as conn:
         old = await _finding(conn, title="Old", body="old", hours_ago=24 * 30,
                              target_id=target)
         sid = await _situation(conn, name=name, members=[old],
-                               last_event_hours_ago=24 * 30, target_id=target)
+                               last_event_hours_ago=24 * 30, target_id=target,
+                               opened_days_ago=30)
     run_method, kind_deps, _ok, _rc, _rs = await _build(pool, _StubLLM([]))
     await run_method([], {}, kind_deps)          # seed
 
@@ -838,3 +872,500 @@ async def test_a_long_quiet_situation_gets_a_dormancy_checkpoint(scope):
         assert (await tj.read_current_states(conn, [sid]))[str(sid)] == (
             tj.STATE_DORMANT
         )
+
+
+# ---------------------------------------------------------------------------
+# #64 — THE DORMANCY RE-KEY: which clock, and what it is actually worth
+#
+# `_dormancy_verdict` used to read `cand.last_event_at` — the newest MEMBER
+# finding's produced_at, i.e. the last time a DESK WROTE. Eight units write into
+# a country frame daily, so `now - last_event_at` was never a fortnight and the
+# transition was structurally unreachable: 0 of 2,052 live ledger rows have ever
+# reached `dormant`. It now reads the EVIDENCE clock (`evidence_anchor_at`), the
+# one H1 established and the register already decays on.
+# ---------------------------------------------------------------------------
+
+
+def test_dormancy_reads_the_evidence_clock_not_the_member_clock():
+    """THE HEADLINE. Desks wrote an hour ago; the world last moved this frame a
+    month ago. The member clock says active forever; the evidence clock says
+    dormant, which is what it is."""
+    fresh_desks_stale_world = _candidate(
+        "S1", evidence=0, member_hours_ago=1, anchor_days_ago=30,
+    )
+    verdict = st._dormancy_verdict(
+        fresh_desks_stale_world,
+        now=datetime.now(timezone.utc), dormancy_days=tj.DORMANCY_DAYS,
+    )
+    assert verdict is not None, (
+        "a frame whose desks are still typing but which the world has not "
+        "touched in a month is exactly the case the re-key exists for"
+    )
+    assert verdict.dormant is True
+    assert verdict.delta == tj.DELTA_UNCHANGED_CHECKPOINT
+    assert verdict.cited == []
+    # The sentence names the date it is dormant SINCE — the anchor, never "now".
+    assert "30 days" in verdict.why
+    assert st._day(fresh_desks_stale_world.evidence_anchor_at) in verdict.why
+
+
+def test_a_frame_the_world_moved_recently_does_not_go_dormant():
+    """The counterweight. Fresh evidence keeps a frame awake however quiet its
+    desks have been — and a frame already dormant or closed is never re-marked
+    (an append-only table with no correction path)."""
+    assert st._dormancy_verdict(
+        _candidate("S1", evidence=0, member_hours_ago=24 * 40, anchor_days_ago=2),
+        now=datetime.now(timezone.utc), dormancy_days=tj.DORMANCY_DAYS,
+    ) is None
+    for state in (tj.STATE_DORMANT, tj.STATE_CLOSED):
+        assert st._dormancy_verdict(
+            _candidate("S1", evidence=0, anchor_days_ago=99, state=state),
+            now=datetime.now(timezone.utc), dormancy_days=tj.DORMANCY_DAYS,
+        ) is None, state
+    # No clock at all — neither ledger nor opening — claims nothing. A dormancy
+    # row needs a date to be dormant SINCE and this analyst does not invent one.
+    assert st._dormancy_verdict(
+        _candidate("S1", evidence=0, anchor_days_ago=None),
+        now=datetime.now(timezone.utc), dormancy_days=tj.DORMANCY_DAYS,
+    ) is None
+
+
+def test_the_dormancy_verdict_is_stable_across_repeated_evaluation():
+    """TWO stabilities, and the second one is a defect the re-key would have
+    shipped.
+
+    (1) The function is pure: same candidate, same clock, same verdict.
+
+    (2) The ROW it produces must settle the frame. `read_current_states` takes
+    the ledger's newest row by `occurred_at DESC` — and a checkpoint used to be
+    dated `cand.last_event_at`, which the horizon guarantees is at least a
+    fortnight old and therefore OLDER than any recent row on that ledger. The
+    dormancy row would have filed itself behind the existing history, the frame's
+    current state would never have read `dormant`, and the verdict would have
+    fired again every hour into a table with no DELETE. Latent while the horizon
+    was unreachable; live the moment it is re-keyed.
+    """
+    now = datetime.now(timezone.utc)
+    cand = _candidate("S1", evidence=0, member_hours_ago=1, anchor_days_ago=30)
+    first = st._dormancy_verdict(cand, now=now, dormancy_days=tj.DORMANCY_DAYS)
+    second = st._dormancy_verdict(cand, now=now, dormancy_days=tj.DORMANCY_DAYS)
+    assert first is not None and second is not None
+    assert (first.delta, first.why, first.dormant) == (
+        second.delta, second.why, second.dormant
+    )
+
+    _p, events, _d, refused = st.build_update([first], now=now)
+    assert refused == 0
+    assert events[0].state_to == tj.STATE_DORMANT
+    assert events[0].occurred_at == now, (
+        "a dormancy row dated at the member clock files itself BEHIND the "
+        "ledger it is meant to settle, and re-fires forever"
+    )
+    # Having settled, the frame is not re-marked: the next tick reads `dormant`
+    # off the ledger and the verdict declines.
+    settled = _candidate(
+        "S1", evidence=0, member_hours_ago=1, anchor_days_ago=31,
+        state=tj.STATE_DORMANT,
+    )
+    assert st._dormancy_verdict(
+        settled, now=now, dormancy_days=tj.DORMANCY_DAYS,
+    ) is None
+
+
+def test_an_uncorroborated_frames_checkpoint_says_so_in_words():
+    """"The world stopped moving this" and "we have never adjudicated this" are
+    different facts that land in the same column, so the sentence has to carry
+    the difference — the NEVER-CORROBORATED discipline H1 set on the render
+    side."""
+    corroborated = st._dormancy_verdict(
+        _candidate("S1", evidence=0, anchor_days_ago=30, corroborated=True),
+        now=datetime.now(timezone.utc), dormancy_days=tj.DORMANCY_DAYS,
+    )
+    never = st._dormancy_verdict(
+        _candidate("S2", evidence=0, anchor_days_ago=30, corroborated=False),
+        now=datetime.now(timezone.utc), dormancy_days=tj.DORMANCY_DAYS,
+    )
+    assert "No evidence has moved this situation since" in corroborated.why
+    assert "never been corroborated" in never.why
+    assert "stood open since" in never.why
+
+
+# ---------------------------------------------------------------------------
+# THE MEASURED RATE — what this re-key is actually worth, on the live shape
+#
+# The 2026-08-29 register premise review measured the corroboration clock as
+# WINDABLE at pipeline time: 931/957 significant deltas carry an `occurred_at`
+# byte-equal to the cited desk finding's `produced_at`, the median gap between
+# ticks on a rendered frame is 0.38 days, and only 2 of 580 gaps clear even the
+# 3.0-day demotion bar. So the expected dormancy volume cannot be asserted from
+# the horizon alone — it has to be measured against a population shaped like the
+# live one. These two tests are that measurement.
+# ---------------------------------------------------------------------------
+
+#: The live active stratum: n=13 rendered frames, mean evidence-anchor age 0.84d,
+#: max ~3.5d (the two gaps in 580 that clear the register's 3.0d bar).
+_WINDABLE_ANCHOR_AGES_DAYS = [
+    0.1, 0.2, 0.38, 0.4, 0.5, 0.62, 0.8, 0.9, 1.1, 1.4, 2.0, 3.2, 3.5,
+]
+#: The never-adjudicated class: n=21 open frames with ZERO ledger rows of any
+#: kind, running 27.7 to 77.8 days old. Anchored on the frame's OPENING.
+_NEVER_CORROBORATED_AGES_DAYS = [
+    27.7, 29.0, 31.4, 33.0, 35.9, 38.2, 40.0, 42.6, 45.1, 47.3, 50.0,
+    52.8, 55.4, 58.0, 60.7, 63.2, 66.0, 68.9, 71.5, 74.4, 77.8,
+]
+
+
+def test_the_windable_corroboration_branch_produces_no_dormancy_at_all():
+    """MEASURED, AND REPORTED AS A LIMIT RATHER THAN A WIN.
+
+    Every frame the tracker is still adjudicating has its clock rewound about
+    every nine hours. Against a FORTNIGHT horizon that branch contributes
+    nothing — not "a little", nothing — and it would contribute nothing at the
+    3.0-day bar either, since only 2 of 580 measured gaps reach even that. The
+    re-key does not make an adjudicated frame go dormant and must not be sold as
+    though it does; making that branch stall needs a world anchor (the newest
+    signal NEW TO THE FRAME), which is a different and larger change.
+    """
+    now = datetime.now(timezone.utc)
+    fired = [
+        st._dormancy_verdict(
+            _candidate(f"S{i}", evidence=0, member_hours_ago=1,
+                       anchor_days_ago=age, corroborated=True),
+            now=now, dormancy_days=tj.DORMANCY_DAYS,
+        )
+        for i, age in enumerate(_WINDABLE_ANCHOR_AGES_DAYS)
+    ]
+    assert [v for v in fired if v is not None] == [], (
+        "the corroboration branch is windable at pipeline time; a fortnight gap "
+        "essentially never occurs while the tracker is still adjudicating"
+    )
+    assert max(_WINDABLE_ANCHOR_AGES_DAYS) < tj.DORMANCY_DAYS
+
+
+def test_every_predicted_dormancy_row_comes_from_the_unwindable_branch():
+    """...and this is where the volume actually is.
+
+    A frame the ledger has never moved anchors on its OPENING, and
+    `situations.valid_from` only ever moves EARLIER — the upsert writes
+    `LEAST(stored, min(members))`. So no amount of desk activity can make such a
+    frame look younger, which is precisely the property the windability critique
+    does not reach. All 21 clear the horizon on the first tick that examines
+    them, and the population is one-shot: each writes ONE row and then reads
+    `dormant` off its own ledger forever after.
+    """
+    now = datetime.now(timezone.utc)
+    population = [
+        _candidate(f"S{i}", evidence=0, member_hours_ago=1,
+                   anchor_days_ago=age, corroborated=False)
+        for i, age in enumerate(_NEVER_CORROBORATED_AGES_DAYS)
+    ]
+    fired = [
+        st._dormancy_verdict(c, now=now, dormancy_days=tj.DORMANCY_DAYS)
+        for c in population
+    ]
+    assert all(v is not None for v in fired)
+    assert len(fired) == len(_NEVER_CORROBORATED_AGES_DAYS) == 21
+
+    # THE RATE, stated as the report states it: 21 of a 34-frame population, all
+    # from the branch a re-citing pipeline cannot wind, none from the branch it
+    # can.
+    whole_population = population + [
+        _candidate(f"W{i}", evidence=0, anchor_days_ago=age, corroborated=True)
+        for i, age in enumerate(_WINDABLE_ANCHOR_AGES_DAYS)
+    ]
+    total = [
+        st._dormancy_verdict(c, now=now, dormancy_days=tj.DORMANCY_DAYS)
+        for c in whole_population
+    ]
+    assert len([v for v in total if v is not None]) == 21
+    assert len(whole_population) == 34
+
+    # ONE-SHOT, not a flood: once settled, the same population declines.
+    settled = [
+        st._dormancy_verdict(
+            _candidate(f"S{i}", evidence=0, anchor_days_ago=age,
+                       corroborated=False, state=tj.STATE_DORMANT),
+            now=now, dormancy_days=tj.DORMANCY_DAYS,
+        )
+        for i, age in enumerate(_NEVER_CORROBORATED_AGES_DAYS)
+    ]
+    assert [v for v in settled if v is not None] == []
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_a_frame_with_fresh_desk_writes_but_stale_evidence_goes_dormant(scope):
+    """THE RE-KEY THROUGH THE REAL BINDING PATH — descriptor off disk, deps
+    builder, `run_method`, live pool.
+
+    The frame's members are HOURS old (its desks are still writing) but they all
+    sit behind the watermark, and the ledger has never moved it. On the member
+    clock this frame could never go dormant; on the evidence clock it goes
+    dormant on the first tick that examines it.
+    """
+    pool, target = scope
+    name = f"Situation: busy desks quiet world {uuid4().hex[:8]}"
+    async with pool.acquire() as conn:
+        members = [
+            await _finding(conn, title=f"desk read {i}", body="no material change",
+                           hours_ago=i, target_id=target)
+            for i in range(1, 4)
+        ]
+        sid = await _situation(
+            conn, name=name, members=members, target_id=target,
+            last_event_hours_ago=1,        # the MEMBER clock: an hour old
+            opened_days_ago=40,            # the EVIDENCE clock: never corroborated
+        )
+    # Seed run: records watermarks for every open frame and emits nothing, so
+    # this frame's own fresh members are behind the cursor on the next tick.
+    run_method, kind_deps, _ok, _rc, _rs = await _build(pool, _StubLLM([]))
+    await run_method([], {}, kind_deps)
+
+    llm = _StubLLM([])
+    run_method, kind_deps, _ok, _rc, _rs = await _build(pool, llm)
+    result = await run_method([], {}, kind_deps)
+
+    mine = _my_events(result, sid)
+    assert len(mine) == 1, (
+        "the member clock reads one hour; only the evidence clock can make this "
+        "frame dormant"
+    )
+    assert mine[0].delta == tj.DELTA_UNCHANGED_CHECKPOINT
+    assert mine[0].state_to == tj.STATE_DORMANT
+    assert mine[0].derived_from == ()
+    assert "never been corroborated" in mine[0].why
+
+    async with pool.acquire() as conn:
+        assert await tj.record_situation_events(
+            conn, events=mine, source_output_id=uuid4(),
+        ) == 1
+        # It STICKS: the dormancy row is the ledger's newest by `occurred_at`,
+        # which is what makes the verdict stable rather than hourly.
+        assert (await tj.read_current_states(conn, [sid]))[str(sid)] == (
+            tj.STATE_DORMANT
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_a_corroborated_frame_inside_the_horizon_is_left_alone(scope):
+    """The other half, through the same real path: a frame the ledger moved
+    yesterday keeps its state, whatever its members' age. `read_corroboration`
+    is the read that decides, and this proves it is actually WIRED — before #64
+    the tracker never called it."""
+    pool, target = scope
+    async with pool.acquire() as conn:
+        member = await _finding(conn, title="Old read", body="old",
+                                hours_ago=24 * 40, target_id=target)
+        sid = await _situation(
+            conn, name=f"Situation: recently moved {uuid4().hex[:8]}",
+            members=[member], target_id=target,
+            last_event_hours_ago=24 * 40, opened_days_ago=60,
+        )
+        # A real significant delta, yesterday: the frame IS corroborated.
+        await tj.record_situation_events(
+            conn,
+            events=[tj.TrajectoryEvent(
+                situation_id=sid,
+                occurred_at=datetime.now(timezone.utc) - timedelta(days=1),
+                delta=tj.DELTA_ESCALATES,
+                why="the cited item reports a new deployment",
+                state_from=tj.STATE_WATCHING, state_to=tj.STATE_ESCALATING,
+                derived_from=(member,),
+            )],
+            source_output_id=uuid4(),
+            verification={"faithfulness_score": 0.9},
+        )
+    run_method, kind_deps, _ok, _rc, _rs = await _build(pool, _StubLLM([]))
+    await run_method([], {}, kind_deps)
+
+    run_method, kind_deps, _ok, _rc, _rs = await _build(pool, _StubLLM([]))
+    result = await run_method([], {}, kind_deps)
+    assert _my_events(result, sid) == [], (
+        "the world moved this frame yesterday; a 60-day-old opening must not "
+        "override a real corroboration"
+    )
+# ---------------------------------------------------------------------------
+# REGISTER-1f — the MIXED budget breaks the top-N absorbing state
+# ---------------------------------------------------------------------------
+
+#: Intensities for the 1f fixture, set ABOVE this file's ``_TOP_INTENSITY`` and
+#: strictly ordered against each other.
+#:
+#: ``_OPEN_SITUATIONS_SQL`` is GLOBAL — no target filter, by design, because the
+#: tracker is a global META sweep — so a selection test on a shared session DB is
+#: competing with every other open frame the suite has left lying around. Rather
+#: than truncate a table the append-only ledger and ``hypotheses`` both reference,
+#: the fixture wins both orderings OUTRIGHT: the loud frames are the highest
+#: intensity in the database, and the quiet frame is the highest-intensity
+#: NEVER-ADJUDICATED one, which is what the staleness leg's tie-break sorts on.
+_LOUD_INTENSITY = _TOP_INTENSITY * 2       # wins the intensity leg globally
+_QUIET_INTENSITY = _TOP_INTENSITY * 1.5    # loses it, wins the staleness leg
+_QUIET_2_INTENSITY = _TOP_INTENSITY * 1.4  # the next one in the backlog queue
+
+
+async def _mark_adjudicated(conn: Any, sid: UUID, *, hours_ago: float) -> None:
+    """Give a frame a ledger row, i.e. make it a frame the tracker HAS looked at.
+
+    ``created_at`` is set explicitly because that is the column the staleness leg
+    orders on — write time ("when did we last look"), never ``occurred_at`` (the
+    corroboration clock, which is the self-referential number 1f is getting OUT
+    of the selector).
+    """
+    when = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+    await conn.execute(
+        """
+        INSERT INTO situation_events
+            (situation_id, occurred_at, delta, state_from, state_to, why,
+             derived_from, source_output_id, created_at)
+        VALUES ($1, $2, 'unchanged_checkpoint', 'escalating', 'escalating',
+                'seeded by the REGISTER-1f fixture', '{}'::uuid[], $3, $2)
+        """,
+        sid, when, uuid4(),
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_a_quiet_never_adjudicated_frame_is_picked_up_by_the_staleness_leg(
+    scope,
+):
+    """REGISTER-1f. ``ORDER BY intensity_score DESC LIMIT 12`` was an ABSORBING
+    state: adjudicating a frame winds its corroboration clock, which raises its
+    persistence, which raises its intensity, which is what selects it again. Live
+    on 2026-08-29 the separation was total and gapless — 12/12 frames inside the
+    window adjudicated at mean persistence 0.956, 21 of the 37 below it NEVER
+    adjudicated at 0.296, and no frame anywhere between intensity 49.83 and 54.41.
+
+    Same seed, both selectors, through the REAL ``gather_candidates`` against the
+    REAL SQL. With the staleness leg switched off the quiet frame is invisible;
+    with it on the frame is picked up — and the loud frames are NOT evicted,
+    because the total budget never changed.
+    """
+    pool, target = scope
+    now = datetime.now(timezone.utc)
+    async with pool.acquire() as conn:
+        # THREE LOUD FRAMES — top of the intensity ranking, all adjudicated
+        # within the hour. These are the top-12 window.
+        loud: list[UUID] = []
+        for i in range(3):
+            sid = await _situation(
+                conn, name=f"1f loud {i} {uuid4().hex[:8]}", members=[],
+                target_id=target, intensity=_LOUD_INTENSITY,
+            )
+            await _mark_adjudicated(conn, sid, hours_ago=1)
+            loud.append(sid)
+
+        # TWO QUIET FRAMES — below the cut and NEVER adjudicated: zero ledger
+        # rows, which is 21 of the live register's 49 open frames. Two, not one,
+        # so the drain assertion at the end has somewhere for the slot to GO;
+        # with a single backlog frame "it keeps its slot" would be the correct
+        # answer and the assertion would be measuring the fixture.
+        quiet = await _situation(
+            conn, name=f"1f quiet {uuid4().hex[:8]}", members=[],
+            target_id=target, intensity=_QUIET_INTENSITY,
+        )
+        quiet_2 = await _situation(
+            conn, name=f"1f quiet-next {uuid4().hex[:8]}", members=[],
+            target_id=target, intensity=_QUIET_2_INTENSITY,
+        )
+        for sid in (quiet, quiet_2):
+            assert await conn.fetchval(
+                "SELECT count(*) FROM situation_events WHERE situation_id = $1",
+                sid,
+            ) == 0
+
+        common = dict(
+            watermarks={}, now=now, max_evidence=1,
+            window_hours=st.DEFAULT_WINDOW_HOURS, floor=st.DEFAULT_FLOOR,
+        )
+
+        # THE OLD SELECTOR — pure intensity top-N. The budget is spent on the
+        # three loud frames and the quiet one is never looked at.
+        before, _ = await st.gather_candidates(
+            conn, max_situations=3, staleness_fraction=0.0, **common,
+        )
+        before_ids = {c.situation_id for c in before}
+        assert set(loud) <= before_ids, "the loud frames must win the intensity leg"
+        assert quiet not in before_ids and quiet_2 not in before_ids, (
+            "fixture is not reproducing the defect: the quiet frames must be "
+            "BELOW the cut under a pure intensity ranking"
+        )
+        assert not any(c.selected_by_staleness for c in before)
+
+        # THE MIXED BUDGET — same TOTAL, one slot reserved. 4 slots at a 1/3
+        # fraction is 3 by intensity + 1 by staleness.
+        assert st.staleness_slots(4, st.DEFAULT_STALENESS_FRACTION) == 1
+        after, examined = await st.gather_candidates(
+            conn, max_situations=4, **common,
+        )
+        after_ids = {c.situation_id for c in after}
+        assert quiet in after_ids, (
+            "a never-adjudicated frame below the intensity cut must now be "
+            "picked up — this is the whole of 1f"
+        )
+        # The loud frames are NOT evicted: the relief valve is additive within a
+        # budget the operator set, not a reallocation away from real signal.
+        assert set(loud) <= after_ids
+        assert examined == len(after) == 4
+
+        # The leg is ATTRIBUTED, so the run receipt can say whether the valve is
+        # doing anything — and the quiet frame is on the staleness side of it.
+        by_id = {c.situation_id: c for c in after}
+        assert by_id[quiet].selected_by_staleness is True
+        assert all(by_id[s].selected_by_staleness is False for s in loud)
+
+        # AND THE LEG DRAINS: once the quiet frame has been adjudicated it goes
+        # to the BACK of the staleness queue rather than staying pinned to the
+        # front. That negative feedback sign is what makes this leg something the
+        # tracker cannot wind, unlike the intensity it produces.
+        await _mark_adjudicated(conn, quiet, hours_ago=0)
+        drained, _ = await st.gather_candidates(
+            conn, max_situations=4, **common,
+        )
+        stale_ids = {c.situation_id for c in drained if c.selected_by_staleness}
+        assert quiet not in stale_ids, (
+            "an adjudicated frame must yield its staleness slot to the next one"
+        )
+        assert quiet_2 in stale_ids, (
+            "and the next never-adjudicated frame must take it — a backlog that "
+            "does not advance is the absorbing state with an extra step"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_tick_budget_is_env_gated_and_the_split_is_proportional(
+    monkeypatch,
+):
+    """REGISTER-1f, the DIAL. #64's migration 0188 splits the ``sig:country_*``
+    mega-frames and multiplies the open-frame population an expected 4-6x, so the
+    budget has to be raisable on the day that lands — from the environment, not
+    from a registry write plus a redeploy.
+
+    And the split must be a RATIO, or raising the budget silently returns the
+    tick to a pure top-N with a fixed garnish: at 12 the reserved leg is 4, at 60
+    it must be 20, not 4.
+    """
+    monkeypatch.delenv(st._MAX_SITUATIONS_ENV, raising=False)
+    assert st.max_situations_budget() == st.DEFAULT_MAX_SITUATIONS == 12
+    assert st.max_situations_budget(20) == 20, "descriptor option is honored"
+
+    monkeypatch.setenv(st._MAX_SITUATIONS_ENV, "60")
+    assert st.max_situations_budget(12) == 60, "env wins over the descriptor"
+
+    # Degrade-not-break: a typo must not stop the tracker adjudicating.
+    monkeypatch.setenv(st._MAX_SITUATIONS_ENV, "not-a-number")
+    assert st.max_situations_budget(12) == 12
+    # Runaway guard: one tick fans every selected frame out to an LLM call.
+    monkeypatch.setenv(st._MAX_SITUATIONS_ENV, "100000")
+    assert st.max_situations_budget(12) == st.MAX_SITUATIONS_CEILING
+
+    # The split rides the budget.
+    assert st.staleness_slots(12) == 4      # 8 + 4, today
+    assert st.staleness_slots(60) == 20     # 40 + 20, post-0188
+    assert st.staleness_slots(24) == 8
+    # Neither leg can be starved to nothing by a degenerate budget/fraction.
+    assert st.staleness_slots(2) == 1
+    assert st.staleness_slots(1) == 0
+    assert st.staleness_slots(12, 0.0) == 0
+    assert st.staleness_slots(12, 1.0) == 11

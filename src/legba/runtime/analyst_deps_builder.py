@@ -298,6 +298,9 @@ async def build_analyst_run_method(
             descriptor, handler, deps, _resolve_primary_llm,
             embedding_service=embedding_service,
             nlp_client=nlp_client,
+            # standing_auditor needs it to fetch the web_access pack row; every
+            # other sub-handler ignores it.
+            registry_client=registry_client,
         )
     elif kind == "predictor":
         trio = await _build_predictor(descriptor, handler, _resolve_primary_llm)
@@ -1359,18 +1362,37 @@ async def _build_situation_tracker(
     a live probe run whose output can be read back — a dry-run flag here would
     just be a switch that ships off and gets forgotten.
     """
-    from ..data.analysts.situation_tracker import SituationTrackerDeps
+    from ..data.analysts.situation_tracker import (
+        SituationTrackerDeps,
+        max_situations_budget,
+    )
 
     llm = await resolve_llm()
     fields = (
-        "max_situations", "max_evidence", "batch_size", "window_hours",
-        "floor", "dormancy_days", "max_tokens", "temperature", "snippet_chars",
+        # ``staleness_fraction`` (REGISTER-1f) rides the same option idiom as
+        # its siblings: absent from the descriptor ⇒ the dataclass default.
+        "staleness_fraction", "max_evidence", "batch_size",
+        "window_hours", "floor", "dormancy_days", "max_tokens", "temperature",
+        "snippet_chars",
     )
     options: dict[str, Any] = {}
     for name in fields:
         default = getattr(SituationTrackerDeps, name)
         raw = _read_method_llm_option(descriptor, name, default=default)
         options[name] = type(default)(raw)
+    # REGISTER-1f — ``max_situations`` is the ONE option with an env override
+    # above the descriptor. #64's migration 0188 multiplies the open-frame
+    # population 4-6x, and the budget has to be answerable on the day that
+    # lands: an env var is a container restart, a descriptor option is a
+    # registry write plus a redeploy. Resolved HERE (deps are rebuilt on a
+    # descriptor-version change or a process restart) rather than inside
+    # ``gather_candidates``, so one tick can never straddle two budgets.
+    options["max_situations"] = max_situations_budget(
+        _read_method_llm_option(
+            descriptor, "max_situations",
+            default=SituationTrackerDeps.max_situations,
+        )
+    )
     return (
         handler.run_method,
         SituationTrackerDeps(
@@ -1439,6 +1461,7 @@ async def _build_deterministic(
     *,
     embedding_service: Any | None = None,
     nlp_client: Any | None = None,
+    registry_client: Any | None = None,
 ) -> tuple[Callable[..., Any], Any | None, OutputKind]:
     """deterministic — code-only sub-dispatched kind.
 
@@ -1604,6 +1627,35 @@ async def _build_deterministic(
         deps = await _wire_reenrich_translation(
             descriptor, deps, nlp_client=nlp_client
         )
+
+    # standing_auditor (D5) — the STANDING EXTERNAL-AUDIT plane. Two legs, both
+    # optional and both degrading to an observable heartbeat rather than a build
+    # failure (the handler reports the gap; see external_audit_binding):
+    #   * the $0 CORE plane, through the SAME shared helper as
+    #     signal_summarizer, so the Anthropic hard-refuse applies — an external
+    #     auditor is a scheduled analyst and may never route onto the billed
+    #     plane;
+    #   * the web_access ACTION PACK, as a real AgencyToolBinding. Every
+    #     external byte this analyst reads arrives through the registered
+    #     web_search pack tool (SSRF guard + governor + ledger); there is no
+    #     ad-hoc HTTP anywhere in its path.
+    if is_deterministic and sub_handler == "standing_auditor":
+        from ..data.analysts.deterministic_handlers.standing_auditor import (
+            LLM_DEPS_EXTRA_KEY as _AUDITOR_LLM_KEY,
+        )
+        from .external_audit_binding import wire_standing_auditor_web_pack
+
+        if component_id is not None:
+            deps = await _wire_deterministic_llm(
+                descriptor, deps, resolve_llm,
+                component_id=component_id,
+                extra_key=_AUDITOR_LLM_KEY,
+                purpose="standing_auditor",
+            )
+        if registry_client is not None:
+            deps = await wire_standing_auditor_web_pack(
+                descriptor, deps, registry_client=registry_client,
+            )
     return handler.run_method, deps, handler.output_kind
 
 

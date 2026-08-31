@@ -22,6 +22,7 @@ byte-for-byte.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -79,6 +80,44 @@ def test_classify_band_transition(frm, to, direction, severity):
 
 
 # ---------------------------------------------------------------------------
+# Pure — H3-GUARD: semantics_changed pre-empts every other classification.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "frm,to",
+    [
+        ("watch", "high"),        # would be deterioration/high
+        ("high", "watch"),        # would be improvement/medium
+        ("insufficient-evidence", "high"),  # would be evidence-gained/medium
+        ("garbage", "high"),      # would be indeterminate/medium
+    ],
+)
+def test_classify_band_transition_semantics_changed_preempts_everything(frm, to):
+    from legba.data.analysts.deterministic_handlers import scorecard_banding
+
+    assert ats.classify_band_transition(frm, to, semantics_changed=True) == (
+        scorecard_banding.SEMANTICS_MIGRATION,
+        scorecard_banding.SEMANTICS_MIGRATION_SEVERITY,
+    )
+
+
+def test_classify_band_transition_default_is_byte_identical_to_no_semantics_arg():
+    """Default `semantics_changed=False` reproduces every existing outcome —
+    a caller that never checks semantics gets the same answer it always has."""
+    cases = [
+        ("watch", "high"), ("low", "watch"), ("high", "critical"),
+        ("high", "watch"), ("critical", "low"),
+        ("insufficient-evidence", "high"), ("elevated", "insufficient-evidence"),
+        ("garbage", "high"),
+    ]
+    for frm, to in cases:
+        assert ats.classify_band_transition(frm, to) == (
+            ats.classify_band_transition(frm, to, semantics_changed=False)
+        )
+
+
+# ---------------------------------------------------------------------------
 # Pure — baseline exceedance
 # ---------------------------------------------------------------------------
 
@@ -92,6 +131,294 @@ def test_baseline_exceeds_mean_plus_two_sigma_with_floor():
     # At/below mean+2σ does not fire.
     assert ats.baseline_exceeds(9.0, 5.0, 2.0, min_current=5) is False
     assert ats.baseline_exceeds(9.1, 5.0, 2.0, min_current=5) is True
+
+
+# ---------------------------------------------------------------------------
+# Pure — FRAME-3 steady-state suppression guard (2026-08-29)
+# ---------------------------------------------------------------------------
+
+
+_NOW = datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc)
+
+
+def test_classify_finding_suppression_no_prior_state_never_suppresses():
+    suppress, reason = ats.classify_finding_suppression(
+        prev_state=None,
+        severity="high",
+        delta_tag="steady",
+        now=_NOW,
+        cooldown_hours=24,
+    )
+    assert (suppress, reason) == (False, "first_page_for_desk")
+
+
+def test_classify_finding_suppression_steady_within_cooldown_suppresses():
+    prev = {
+        "severity": "high",
+        "paged_at": (_NOW - timedelta(hours=2)).isoformat(),
+    }
+    assert ats.classify_finding_suppression(
+        prev_state=prev,
+        severity="high",
+        delta_tag="steady",
+        now=_NOW,
+        cooldown_hours=24,
+    ) == (True, "steady_state_within_cooldown")
+    # An ABSENT tag ("nobody said") is treated the same as steady, never
+    # invented as a claim of movement.
+    assert ats.classify_finding_suppression(
+        prev_state=prev,
+        severity="high",
+        delta_tag=None,
+        now=_NOW,
+        cooldown_hours=24,
+    ) == (True, "steady_state_within_cooldown")
+
+
+@pytest.mark.parametrize("delta_tag", ["rose", "fell", "new"])
+def test_classify_finding_suppression_delta_tag_vetoes_even_same_band(delta_tag):
+    """The model tag is read only as a VETO — it can force a page, but (per
+    the original 2026-08-21 deferral) is never trusted ALONE to suppress."""
+    prev = {
+        "severity": "high",
+        "paged_at": (_NOW - timedelta(hours=2)).isoformat(),
+    }
+    suppress, reason = ats.classify_finding_suppression(
+        prev_state=prev,
+        severity="high",
+        delta_tag=delta_tag,
+        now=_NOW,
+        cooldown_hours=24,
+    )
+    assert (suppress, reason) == (False, f"delta_tag_{delta_tag}")
+
+
+def test_classify_finding_suppression_band_changed_always_pages():
+    prev = {
+        "severity": "high",
+        "paged_at": (_NOW - timedelta(minutes=1)).isoformat(),
+    }
+    assert ats.classify_finding_suppression(
+        prev_state=prev,
+        severity="critical",
+        delta_tag="steady",
+        now=_NOW,
+        cooldown_hours=24,
+    ) == (False, "band_changed")
+
+
+def test_classify_finding_suppression_cooldown_elapsed_pages_as_heartbeat():
+    prev = {
+        "severity": "high",
+        "paged_at": (_NOW - timedelta(hours=25)).isoformat(),
+    }
+    assert ats.classify_finding_suppression(
+        prev_state=prev,
+        severity="high",
+        delta_tag="steady",
+        now=_NOW,
+        cooldown_hours=24,
+    ) == (False, "cooldown_elapsed")
+    # Exactly AT the boundary also pages (>=, never a fencepost trap).
+    prev_at_boundary = {
+        "severity": "high",
+        "paged_at": (_NOW - timedelta(hours=24)).isoformat(),
+    }
+    assert ats.classify_finding_suppression(
+        prev_state=prev_at_boundary,
+        severity="high",
+        delta_tag="steady",
+        now=_NOW,
+        cooldown_hours=24,
+    ) == (False, "cooldown_elapsed")
+
+
+def test_classify_finding_suppression_unparseable_timestamp_never_suppresses():
+    prev = {"severity": "high", "paged_at": "not-a-timestamp"}
+    assert ats.classify_finding_suppression(
+        prev_state=prev,
+        severity="high",
+        delta_tag="steady",
+        now=_NOW,
+        cooldown_hours=24,
+    ) == (False, "no_prior_page_timestamp")
+
+
+# ---------------------------------------------------------------------------
+# Pure — D2 90-day wager: daily page budget ranking + allocation
+# ---------------------------------------------------------------------------
+
+
+def _budget_cand(trigger_class: str, sev: str, *, delta_tag=None, title="t"):
+    data = {}
+    if delta_tag is not None or trigger_class == ats.TRIGGER_FINDING:
+        data["severity_delta_tag"] = delta_tag
+    return ats.AlertCandidate(
+        trigger_class=trigger_class,
+        severity=sev,
+        title=title,
+        body="",
+        target_id="d1",
+        data=data,
+    )
+
+
+def test_budget_magnitude_tier_band_crossing_beats_within_band():
+    band = _budget_cand(ats.TRIGGER_BAND, "high")
+    rose = _budget_cand(ats.TRIGGER_FINDING, "high", delta_tag="rose")
+    steady = _budget_cand(ats.TRIGGER_FINDING, "high", delta_tag="steady")
+    assert ats.budget_magnitude_tier(band) > ats.budget_magnitude_tier(rose)
+    assert ats.budget_magnitude_tier(rose) > ats.budget_magnitude_tier(steady)
+
+
+def test_budget_magnitude_tier_delta_rise_fall_beats_steady():
+    for delta in ("rose", "fell", "new"):
+        moved = _budget_cand(ats.TRIGGER_FINDING, "high", delta_tag=delta)
+        steady = _budget_cand(ats.TRIGGER_FINDING, "high", delta_tag="steady")
+        none_tag = _budget_cand(ats.TRIGGER_FINDING, "high", delta_tag=None)
+        assert ats.budget_magnitude_tier(moved) > ats.budget_magnitude_tier(steady)
+        assert ats.budget_magnitude_tier(moved) > ats.budget_magnitude_tier(none_tag)
+
+
+def test_apply_daily_page_budget_severity_first_then_magnitude_tier():
+    """Severity outranks magnitude: a medium band-crossing still loses to a
+    high steady-tag heartbeat — severity is the PRIMARY key."""
+    low_crossing = _budget_cand(ats.TRIGGER_BAND, "medium", title="crossing")
+    high_heartbeat = _budget_cand(
+        ats.TRIGGER_FINDING, "high", delta_tag="steady", title="heartbeat"
+    )
+    deferred = ats.apply_daily_page_budget(
+        [low_crossing, high_heartbeat], already_paged_today=0, budget=1
+    )
+    assert deferred == 1
+    assert high_heartbeat.data["budget_deferred"] is False
+    assert low_crossing.data["budget_deferred"] is True
+
+
+def test_apply_daily_page_budget_respects_already_paged_today():
+    cands = [_budget_cand(ats.TRIGGER_BAND, "high", title=f"c{i}") for i in range(3)]
+    deferred = ats.apply_daily_page_budget(
+        cands, already_paged_today=5, budget=5
+    )
+    assert deferred == 3
+    assert all(c.data["budget_deferred"] is True for c in cands)
+
+
+def test_apply_daily_page_budget_zero_or_negative_remaining_never_negative_slots():
+    cands = [_budget_cand(ats.TRIGGER_BAND, "high", title="only")]
+    deferred = ats.apply_daily_page_budget(
+        cands, already_paged_today=99, budget=5
+    )
+    assert deferred == 1
+    assert cands[0].data["budget_deferred"] is True
+
+
+def test_apply_daily_page_budget_marks_every_candidate_explicitly():
+    """Even survivors get an explicit False — never just absent."""
+    cands = [_budget_cand(ats.TRIGGER_BAND, "high", title="c1")]
+    ats.apply_daily_page_budget(cands, already_paged_today=0, budget=5)
+    assert cands[0].data["budget_deferred"] is False
+
+
+# ---------------------------------------------------------------------------
+# Pure — D2 addendum: the kind-diversity cap
+# ---------------------------------------------------------------------------
+
+
+def test_kind_cap_next_ranked_other_kind_wins_the_freed_slot():
+    """4 same-kind 'high' candidates + 1 lower-ranked other-kind 'medium'
+    candidate, cap=3, budget=5: the 4th same-kind candidate is capped OUT,
+    and the NEXT-ranked candidate — the other kind — wins the slot it freed,
+    even though it individually ranks below the capped-out one."""
+    band = [
+        _budget_cand(ats.TRIGGER_BAND, "high", title=f"band{i}") for i in range(4)
+    ]
+    contention = _budget_cand(ats.TRIGGER_CONTENTION, "medium", title="contention0")
+    cands = band + [contention]
+    deferred = ats.apply_daily_page_budget(
+        cands, already_paged_today=0, budget=5, per_kind_cap=3
+    )
+    assert deferred == 1
+    assert sum(1 for c in band if c.data["budget_deferred"] is False) == 3
+    assert sum(1 for c in band if c.data["budget_deferred"] is True) == 1
+    assert contention.data["budget_deferred"] is False, (
+        "the other kind must win the slot the capped-out band candidate freed"
+    )
+
+
+def test_kind_cap_all_one_kind_day_leaves_slots_unused_not_backfilled():
+    """6 same-kind candidates, cap=3, budget=5: only 3 page (the cap), the
+    other 3 are deferred, and the 2 UNUSED budget slots are never backfilled
+    with more of the capped kind — that would defeat the cap's purpose."""
+    cands = [
+        _budget_cand(ats.TRIGGER_BAND, "high", title=f"band{i}") for i in range(6)
+    ]
+    deferred = ats.apply_daily_page_budget(
+        cands, already_paged_today=0, budget=5, per_kind_cap=3
+    )
+    paged = [c for c in cands if c.data["budget_deferred"] is False]
+    assert len(paged) == 3, "the kind cap binds before the budget does"
+    assert deferred == 3
+
+
+def test_kind_cap_is_day_cumulative_via_already_paged_today_by_kind():
+    """A kind already at its cap from an EARLIER scan today must stay capped
+    in a LATER scan's candidate batch, even though this batch alone never
+    exceeds the cap on its own."""
+    cands = [_budget_cand(ats.TRIGGER_SITUATION_ESCALATION, "critical", title="se-new")]
+    deferred = ats.apply_daily_page_budget(
+        cands,
+        already_paged_today=0,
+        budget=5,
+        per_kind_cap=3,
+        already_paged_today_by_kind={ats.TRIGGER_SITUATION_ESCALATION: 3},
+    )
+    assert deferred == 1
+    assert cands[0].data["budget_deferred"] is True
+
+
+def test_kind_cap_default_does_not_disturb_prior_behavior_below_the_cap():
+    """Fewer candidates of one kind than the default cap (3): every existing
+    assertion in this file that never passed per_kind_cap explicitly still
+    holds — the default only bites when a SINGLE kind would otherwise take
+    more than 3 of the day's slots."""
+    cands = [
+        _budget_cand(ats.TRIGGER_BAND, "high", title=f"band{i}") for i in range(2)
+    ]
+    deferred = ats.apply_daily_page_budget(cands, already_paged_today=0, budget=5)
+    assert deferred == 0
+    assert all(c.data["budget_deferred"] is False for c in cands)
+
+
+def test_budget_per_kind_cap_env_default_and_override(monkeypatch):
+    monkeypatch.delenv(ats._BUDGET_PER_KIND_CAP_ENV, raising=False)
+    assert ats._budget_per_kind_cap_from_env() == ats.DEFAULT_BUDGET_PER_KIND_CAP == 3
+    monkeypatch.setenv(ats._BUDGET_PER_KIND_CAP_ENV, "1")
+    assert ats._budget_per_kind_cap_from_env() == 1
+    monkeypatch.setenv(ats._BUDGET_PER_KIND_CAP_ENV, "not-a-number")
+    assert ats._budget_per_kind_cap_from_env() == ats.DEFAULT_BUDGET_PER_KIND_CAP
+
+
+def test_daily_page_budget_env_default_and_override(monkeypatch):
+    monkeypatch.delenv(ats._DAILY_PAGE_BUDGET_ENV, raising=False)
+    assert ats._daily_page_budget_from_env() == ats.DEFAULT_DAILY_PAGE_BUDGET
+    monkeypatch.setenv(ats._DAILY_PAGE_BUDGET_ENV, "12")
+    assert ats._daily_page_budget_from_env() == 12
+    # Garbage falls back to the default rather than raising.
+    monkeypatch.setenv(ats._DAILY_PAGE_BUDGET_ENV, "not-a-number")
+    assert ats._daily_page_budget_from_env() == ats.DEFAULT_DAILY_PAGE_BUDGET
+
+
+def test_bool_env_tolerant_parsing(monkeypatch):
+    monkeypatch.delenv("LEGBA_TEST_BOOL_ENV_PROBE", raising=False)
+    assert ats._bool_env("LEGBA_TEST_BOOL_ENV_PROBE", False) is False
+    assert ats._bool_env("LEGBA_TEST_BOOL_ENV_PROBE", True) is True
+    for val in ("1", "true", "True", "yes", "on"):
+        monkeypatch.setenv("LEGBA_TEST_BOOL_ENV_PROBE", val)
+        assert ats._bool_env("LEGBA_TEST_BOOL_ENV_PROBE", False) is True
+    for val in ("0", "false", "no", "off", "garbage"):
+        monkeypatch.setenv("LEGBA_TEST_BOOL_ENV_PROBE", val)
+        assert ats._bool_env("LEGBA_TEST_BOOL_ENV_PROBE", True) is False
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +533,17 @@ async def _run(pool: Any, dispatcher: Any | None = None, **opts: Any):
         "sub_handler": "alert_trigger_scan",
         "analyst_id": "alert_trigger_scan",
         "run_id": str(uuid4()),
+        # D2 90-day wager (2026-08-29) — the CODE default for both is
+        # different (kill list OFF, budget 5; see
+        # test_handle_production_defaults_kill_list_off_and_budget_five for
+        # a pin on the REAL default with no options override at all). This
+        # test HARNESS default keeps every pre-D2 test exercising
+        # contention_flip/geo_convergence firing mechanics and multi-alert
+        # scans passing unmodified; the D2-specific tests below override
+        # these explicitly to exercise the real defaults.
+        "contention_flip_enabled": True,
+        "geo_convergence_enabled": True,
+        "daily_page_budget": 10_000,
         **opts,
     }
     result = await ats.handle([], options, deps)
@@ -235,8 +573,18 @@ def _row_data(row: Any) -> dict[str, Any]:
 
 
 async def _insert_scorecard(
-    conn: Any, desk: str, bands: dict[str, str], basis: dict[str, list] | None = None
+    conn: Any,
+    desk: str,
+    bands: dict[str, str],
+    basis: dict[str, list] | None = None,
+    *,
+    semantics: tuple[str | None, str | None] | None = None,
 ) -> UUID:
+    """``semantics`` (H3-GUARD) is ``(banding_semantics, damping_semantics)``;
+    omitted (the default) reproduces a PRE-H3 card exactly — no
+    ``banding_semantics`` / ``damping_semantics`` keys at all, matching every
+    existing caller of this fixture and today's behavior byte-for-byte.
+    """
     row_id = uuid4()
     dims = {
         dim: {
@@ -247,6 +595,9 @@ async def _insert_scorecard(
         }
         for dim, band in bands.items()
     }
+    bands_block: dict[str, Any] = {"target_id": desk, "dimensions": dims}
+    if semantics is not None:
+        bands_block["banding_semantics"], bands_block["damping_semantics"] = semantics
     # Mirror the LIVE column shape: the data COLUMN carries the full payload
     # dump, so the producer's payload `data` (with `bands`) is NESTED.
     data = {
@@ -254,7 +605,7 @@ async def _insert_scorecard(
         "tags": ["deterministic", "scorecard"],
         "data": {
             "sub_handler": "scorecard_producer",
-            "bands": {"target_id": desk, "dimensions": dims},
+            "bands": bands_block,
         },
     }
     await conn.execute(
@@ -284,10 +635,13 @@ async def _insert_finding(
     target: str | None = "country_g20_us",
     confidence: float = 0.9,
     sev_tag: str | None = "high",
+    delta_tag: str | None = None,
     derived: list[UUID] | None = None,
 ) -> UUID:
     fid = uuid4()
     tags = [f"severity:{sev_tag}"] if sev_tag else []
+    if delta_tag:
+        tags.append(f"severity_delta:{delta_tag}")
     await conn.execute(
         "INSERT INTO analyst_outputs "
         "  (id, kind, title, body, confidence, severity, data, target_id, "
@@ -478,6 +832,135 @@ async def test_band_improvement_fires_medium(pg_pool, clean_slate):
 
 
 # ---------------------------------------------------------------------------
+# H3-GUARD — semantics-mismatch classification (band_crossing). The H3
+# banding train (damper retired + basis alignment) legitimately moves bands
+# fleet-wide on its first post-deploy sweep, and every one of those moves
+# straddles a banding_semantics/damping_semantics stamp change — this must
+# read as `semantics-migration`/`low`, never deterioration/evidence-gained.
+# ---------------------------------------------------------------------------
+
+
+async def test_semantics_mismatch_classifies_as_migration_not_deterioration(
+    pg_pool, clean_slate
+):
+    """A synthetic prior/new card pair with DIFFERING stamps (the real H3
+    shape: the prior card predates `damping_semantics` entirely, the new one
+    carries both) must classify as `semantics-migration`/`low` — never
+    `deterioration`/`high` — even though the band moved straight up the
+    ladder (watch -> critical, which would ordinarily be the loudest possible
+    alert)."""
+    desk = f"desk_h3_{uuid4().hex[:8]}"
+    async with pg_pool.acquire() as conn:
+        # PRE-H3 card: no semantics stamps at all.
+        await _insert_scorecard(conn, desk, {"escalation": "watch"})
+    await _run(pg_pool)  # seed
+
+    async with pg_pool.acquire() as conn:
+        # POST-H3 card: both stamps present. Band moves watch -> critical —
+        # a real-looking deterioration if the guard were absent.
+        await _insert_scorecard(
+            conn, desk, {"escalation": "critical"},
+            semantics=("standing", "off"),
+        )
+    dispatcher = _FakeDispatcher()
+    r2 = await _run(pg_pool, dispatcher)
+    assert r2.finding.data["fired"] == 1
+    async with pg_pool.acquire() as conn:
+        rows = await _alert_rows(conn)
+    assert len(rows) == 1
+    row = rows[0]
+    data = _row_data(row)
+    assert data["trigger_class"] == ats.TRIGGER_BAND
+    assert data["direction"] == "semantics-migration"
+    assert row["severity"] == "low"
+    assert "escalation" in str(data["transitions"])
+    assert data["transitions"] == [
+        {"dimension": "escalation", "from_band": "watch", "to_band": "critical"}
+    ]
+    assert "re-derived under new semantics" in row["title"]
+    # The outward payload carries the same informational severity.
+    assert len(dispatcher.payloads) == 1
+    assert dispatcher.payloads[0].severity == "low"
+
+    # Never refires (the watermark advanced, now carrying the new stamps).
+    r3 = await _run(pg_pool)
+    assert r3.finding.data["fired"] == 0
+
+
+async def test_semantics_mismatch_folds_multi_dimension_moves_into_one_alert(
+    pg_pool, clean_slate
+):
+    """H3's real shape: ALL FOUR-ish dimensions on a desk move at once on the
+    first post-deploy sweep (every dimension shares the same card-level
+    stamps). This must fold into AT MOST ONE informational alert per desk —
+    never one per dimension."""
+    desk = f"desk_h3fold_{uuid4().hex[:8]}"
+    dims = ["escalation", "energy_security", "military_posture"]
+    async with pg_pool.acquire() as conn:
+        await _insert_scorecard(conn, desk, {d: "watch" for d in dims})
+    await _run(pg_pool)  # seed
+
+    async with pg_pool.acquire() as conn:
+        await _insert_scorecard(
+            conn, desk, {d: "elevated" for d in dims},
+            semantics=("standing", "off"),
+        )
+    r2 = await _run(pg_pool)
+    assert r2.finding.data["fired"] == 1  # ONE alert, not three
+    async with pg_pool.acquire() as conn:
+        rows = await _alert_rows(conn)
+    assert len(rows) == 1
+    data = _row_data(rows[0])
+    assert data["direction"] == "semantics-migration"
+    assert rows[0]["severity"] == "low"
+    assert {t["dimension"] for t in data["transitions"]} == set(dims)
+
+
+async def test_identical_semantics_stamps_are_byte_identical_to_no_stamps(
+    pg_pool, clean_slate
+):
+    """THE NO-OP PROOF: once both cards carry IDENTICAL semantics stamps,
+    behavior is byte-identical to today (no stamps at all) — same direction,
+    same severity, same title shape. Two desks, two scenarios, compared
+    field-for-field."""
+    desk_stamped = f"desk_h3id_{uuid4().hex[:8]}"
+    desk_unstamped = f"desk_h3un_{uuid4().hex[:8]}"
+
+    async with pg_pool.acquire() as conn:
+        await _insert_scorecard(
+            conn, desk_stamped, {"escalation": "watch"},
+            semantics=("standing", "off"),
+        )
+        await _insert_scorecard(conn, desk_unstamped, {"escalation": "watch"})
+    await _run(pg_pool)  # seed both
+
+    async with pg_pool.acquire() as conn:
+        # BOTH cards carry the SAME stamps this time (no migration boundary).
+        await _insert_scorecard(
+            conn, desk_stamped, {"escalation": "high"},
+            semantics=("standing", "off"),
+        )
+        # The unstamped desk never carries any stamps — today's behavior.
+        await _insert_scorecard(conn, desk_unstamped, {"escalation": "high"})
+    await _run(pg_pool)
+
+    async with pg_pool.acquire() as conn:
+        rows = await _alert_rows(conn)
+    by_desk = {r["target_id"]: r for r in rows}
+    stamped, unstamped = by_desk[desk_stamped], by_desk[desk_unstamped]
+    stamped_data, unstamped_data = _row_data(stamped), _row_data(unstamped)
+
+    assert stamped["severity"] == unstamped["severity"] == "high"
+    assert stamped_data["direction"] == unstamped_data["direction"] == "deterioration"
+    assert stamped_data["from_band"] == unstamped_data["from_band"] == "watch"
+    assert stamped_data["to_band"] == unstamped_data["to_band"] == "high"
+    # Titles are identical modulo the desk name — same template either way.
+    assert stamped["title"].replace(desk_stamped, "DESK") == (
+        unstamped["title"].replace(desk_unstamped, "DESK")
+    )
+
+
+# ---------------------------------------------------------------------------
 # DB — trigger 2: new verified high-severity finding
 # ---------------------------------------------------------------------------
 
@@ -566,6 +1049,228 @@ async def test_late_verify_still_fires_within_window(pg_pool, clean_slate):
         await _insert_faith_critique(conn, fid, 0.75)
     r = await _run(pg_pool)
     assert r.finding.data["fired"] == 1
+
+
+# ---------------------------------------------------------------------------
+# DB — FRAME-3 steady-state suppression guard (2026-08-29)
+# ---------------------------------------------------------------------------
+
+
+async def _find_alert_by_finding_id(conn: Any, finding_id: UUID) -> Any:
+    rows = _my_finding_alerts(await _alert_rows(conn), {str(finding_id)})
+    assert len(rows) == 1, f"expected exactly one alert row for {finding_id}"
+    return rows[0]
+
+
+def _my_finding_alerts(rows: list[Any], finding_ids: set[str]) -> list[Any]:
+    return [r for r in rows if _row_data(r).get("finding_id") in finding_ids]
+
+
+async def _set_desk_state_watermark(
+    conn: Any, desk: str, *, severity: str, hours_ago: float
+) -> None:
+    """Back-date a desk's FRAME-3 steady-state watermark (TRIGGER_FINDING_STATE)
+    to simulate an elapsed cooldown without sleeping in a test."""
+    paged_at = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat()
+    await conn.execute(
+        "INSERT INTO alert_trigger_watermarks "
+        "  (trigger_class, watermark_key, state, fired_at) "
+        "VALUES ($1, $2, $3::jsonb, now()) "
+        "ON CONFLICT (trigger_class, watermark_key) DO UPDATE "
+        "  SET state = EXCLUDED.state, updated_at = now(), fired_at = now()",
+        ats.TRIGGER_FINDING_STATE,
+        desk,
+        json.dumps({"severity": severity, "paged_at": paged_at}),
+    )
+
+
+async def test_steady_state_guard_suppresses_second_unchanged_page(
+    pg_pool, clean_slate
+):
+    """The Niger example from the 2026-08-29 sweep: a second 'nothing changed'
+    verified_finding on a desk whose severity state already paged recently is
+    suppressed — but the row still lands, tagged, never fanned out."""
+    await _run(pg_pool)  # seed all classes
+
+    dispatcher = _FakeDispatcher()
+    async with pg_pool.acquire() as conn:
+        f1 = await _insert_finding(
+            conn, target="country_watch_ne", sev_tag="high", confidence=0.9
+        )
+        await _insert_faith_critique(conn, f1, 0.80)
+    r1 = await _run(pg_pool, dispatcher)
+    assert r1.finding.data["fired"] == 1
+    assert r1.finding.data["guard_suppressed"] == 0
+
+    async with pg_pool.acquire() as conn:
+        row1 = await _find_alert_by_finding_id(conn, f1)
+    assert _row_data(row1)["guard_suppressed"] is False
+    assert len([p for p in dispatcher.payloads if p.alert_row_id == str(row1["id"])]) == 1
+
+    # "Niger maintains high alert posture, no new shift observed" — same
+    # severity band, an explicit steady tag, well within the cooldown.
+    async with pg_pool.acquire() as conn:
+        f2 = await _insert_finding(
+            conn, target="country_watch_ne", sev_tag="high", confidence=0.9,
+            delta_tag="steady",
+        )
+        await _insert_faith_critique(conn, f2, 0.80)
+    dispatcher2 = _FakeDispatcher()
+    r2 = await _run(pg_pool, dispatcher2)
+    assert r2.finding.data["fired"] == 0, "the suppressed candidate must not fire"
+    assert r2.finding.data["guard_suppressed"] == 1
+
+    async with pg_pool.acquire() as conn:
+        row2 = await _find_alert_by_finding_id(conn, f2)
+        tags_row = await conn.fetchrow(
+            "SELECT data FROM analyst_outputs WHERE id = $1", row2["id"]
+        )
+    data2 = _row_data(row2)
+    assert data2["guard_suppressed"] is True
+    assert data2["guard_suppression_reason"] == "steady_state_within_cooldown"
+    assert data2["severity_delta_tag"] == "steady"
+    full = (
+        json.loads(tags_row["data"])
+        if isinstance(tags_row["data"], str)
+        else dict(tags_row["data"])
+    )
+    assert "suppressed:true" in full["tags"]
+    # SUPPRESS != DROP: the row is durable even though it never paged.
+    assert dispatcher2.payloads == []
+
+    # No refire of f2 on a third scan — the per-finding watermark still holds.
+    r3 = await _run(pg_pool)
+    assert r3.finding.data["fired"] == 0
+    assert r3.finding.data["guard_suppressed"] == 0
+    async with pg_pool.acquire() as conn:
+        assert len(_my_finding_alerts(await _alert_rows(conn), {str(f2)})) == 1
+
+
+async def test_steady_state_guard_delta_tag_rose_still_pages(pg_pool, clean_slate):
+    """The other live example: a first-time escalation must always page — the
+    model's OWN rose/fell/new tag vetoes suppression even at an unchanged
+    band and inside the cooldown."""
+    await _run(pg_pool)
+
+    async with pg_pool.acquire() as conn:
+        f1 = await _insert_finding(
+            conn, target="country_g20_sa", sev_tag="high", confidence=0.9
+        )
+        await _insert_faith_critique(conn, f1, 0.80)
+    r1 = await _run(pg_pool)
+    assert r1.finding.data["fired"] == 1
+
+    async with pg_pool.acquire() as conn:
+        f2 = await _insert_finding(
+            conn, target="country_g20_sa", sev_tag="high", confidence=0.9,
+            delta_tag="rose",
+        )
+        await _insert_faith_critique(conn, f2, 0.80)
+    r2 = await _run(pg_pool)
+    assert r2.finding.data["fired"] == 1, "rose vetoes suppression"
+    assert r2.finding.data["guard_suppressed"] == 0
+    async with pg_pool.acquire() as conn:
+        row2 = await _find_alert_by_finding_id(conn, f2)
+    assert _row_data(row2)["guard_suppression_reason"] == "delta_tag_rose"
+
+
+async def test_steady_state_guard_band_change_always_pages(pg_pool, clean_slate):
+    await _run(pg_pool)
+    async with pg_pool.acquire() as conn:
+        f1 = await _insert_finding(
+            conn, target="country_g20_us", sev_tag="high", confidence=0.9
+        )
+        await _insert_faith_critique(conn, f1, 0.80)
+    await _run(pg_pool)
+
+    async with pg_pool.acquire() as conn:
+        f2 = await _insert_finding(
+            conn, target="country_g20_us", sev_tag="critical", confidence=0.9,
+            delta_tag="steady",
+        )
+        await _insert_faith_critique(conn, f2, 0.80)
+    r2 = await _run(pg_pool)
+    assert r2.finding.data["fired"] == 1
+    assert r2.finding.data["guard_suppressed"] == 0
+    async with pg_pool.acquire() as conn:
+        row2 = await _find_alert_by_finding_id(conn, f2)
+    assert _row_data(row2)["guard_suppression_reason"] == "band_changed"
+
+
+async def test_steady_state_guard_cooldown_elapsed_pages_as_heartbeat(
+    pg_pool, clean_slate
+):
+    await _run(pg_pool)
+    async with pg_pool.acquire() as conn:
+        f1 = await _insert_finding(
+            conn, target="country_g20_ir", sev_tag="high", confidence=0.9
+        )
+        await _insert_faith_critique(conn, f1, 0.80)
+    await _run(pg_pool)
+
+    # Back-date the desk's own steady-state watermark past the cooldown.
+    async with pg_pool.acquire() as conn:
+        await _set_desk_state_watermark(
+            conn, "country_g20_ir", severity="high", hours_ago=25
+        )
+        f2 = await _insert_finding(
+            conn, target="country_g20_ir", sev_tag="high", confidence=0.9,
+            delta_tag="steady",
+        )
+        await _insert_faith_critique(conn, f2, 0.80)
+    r2 = await _run(pg_pool)  # default cooldown is 24h
+    assert r2.finding.data["fired"] == 1, "an elapsed cooldown pages as a heartbeat"
+    assert r2.finding.data["guard_suppressed"] == 0
+    async with pg_pool.acquire() as conn:
+        row2 = await _find_alert_by_finding_id(conn, f2)
+    assert _row_data(row2)["guard_suppression_reason"] == "cooldown_elapsed"
+
+
+async def test_steady_state_guard_cooldown_hours_option_is_honored(
+    pg_pool, clean_slate
+):
+    """steady_cooldown_hours=0 — even an immediate repeat pages; proves the
+    knob reaches the handler with no deploy, S-1's precedent."""
+    await _run(pg_pool, steady_cooldown_hours=0)
+    async with pg_pool.acquire() as conn:
+        f1 = await _insert_finding(
+            conn, target="country_watch_iq", sev_tag="high", confidence=0.9
+        )
+        await _insert_faith_critique(conn, f1, 0.80)
+    await _run(pg_pool, steady_cooldown_hours=0)
+
+    async with pg_pool.acquire() as conn:
+        f2 = await _insert_finding(
+            conn, target="country_watch_iq", sev_tag="high", confidence=0.9,
+            delta_tag="steady",
+        )
+        await _insert_faith_critique(conn, f2, 0.80)
+    r2 = await _run(pg_pool, steady_cooldown_hours=0)
+    assert r2.finding.data["fired"] == 1
+    assert r2.finding.data["guard_suppressed"] == 0
+
+
+async def test_steady_state_guard_can_be_disabled_via_option(pg_pool, clean_slate):
+    await _run(pg_pool, suppress_steady_state=False)
+    async with pg_pool.acquire() as conn:
+        f1 = await _insert_finding(
+            conn, target="country_watch_ye", sev_tag="high", confidence=0.9
+        )
+        await _insert_faith_critique(conn, f1, 0.80)
+    await _run(pg_pool, suppress_steady_state=False)
+
+    async with pg_pool.acquire() as conn:
+        f2 = await _insert_finding(
+            conn, target="country_watch_ye", sev_tag="high", confidence=0.9,
+            delta_tag="steady",
+        )
+        await _insert_faith_critique(conn, f2, 0.80)
+    r2 = await _run(pg_pool, suppress_steady_state=False)
+    assert r2.finding.data["fired"] == 1
+    assert r2.finding.data["guard_suppressed"] == 0
+    async with pg_pool.acquire() as conn:
+        row2 = await _find_alert_by_finding_id(conn, f2)
+    assert _row_data(row2)["guard_suppression_reason"] == "suppression_disabled"
 
 
 # ---------------------------------------------------------------------------
@@ -1803,3 +2508,252 @@ async def test_production_deficit_unverified_posture_is_honest(
     assert "engine telemetry" in payloads[0].verify_state
     assert payloads[0].target_id is None
     assert payloads[0].channel_name == ats.CHANNEL_NAME
+
+
+# ---------------------------------------------------------------------------
+# DB — D2, the 90-day product wager (2026-08-29): daily page budget
+# ---------------------------------------------------------------------------
+
+
+async def test_daily_page_budget_caps_fleet_wide_pages_and_marks_the_rest(
+    pg_pool, clean_slate
+):
+    """Five real band-crossing candidates on one desk, budget=2 — every row
+    still WRITES (SUPPRESS/DEFER never means DROP), only 2 actually page."""
+    desk = await _seed_five_deteriorations(pg_pool)
+    dispatcher = _FakeDispatcher()
+    r = await _run(pg_pool, dispatcher, per_desk_cap=20, daily_page_budget=2)
+    assert r.finding.data["fired"] == 5
+    assert r.finding.data["budget_deferred"] == 3
+    assert len(dispatcher.payloads) == 2, "only the budget's slots actually page"
+
+    async with pg_pool.acquire() as conn:
+        rows = await _alert_rows(conn)
+    my_rows = [row for row in rows if row["target_id"] == desk]
+    assert len(my_rows) == 5
+    deferred = [row for row in my_rows if _row_data(row)["budget_deferred"] is True]
+    paged = [row for row in my_rows if _row_data(row)["budget_deferred"] is False]
+    assert len(deferred) == 3
+    assert len(paged) == 2
+
+    async with pg_pool.acquire() as conn:
+        tag_rows = await conn.fetch(
+            "SELECT data FROM analyst_outputs WHERE id = ANY($1::uuid[])",
+            [row["id"] for row in deferred],
+        )
+    for tr in tag_rows:
+        full = (
+            json.loads(tr["data"])
+            if isinstance(tr["data"], str)
+            else dict(tr["data"])
+        )
+        assert "budget_deferred:true" in full["tags"]
+
+
+async def test_daily_page_budget_persists_already_paged_across_scans(
+    pg_pool, clean_slate
+):
+    """``already_paged_today`` is read LIVE from the alert ledger every scan,
+    not held in memory — a second scan the same UTC day still respects what
+    an earlier scan already spent."""
+    await _seed_five_deteriorations(pg_pool)
+    r1 = await _run(pg_pool, per_desk_cap=20, daily_page_budget=3)
+    assert r1.finding.data["already_paged_today"] == 0
+    assert r1.finding.data["budget_deferred"] == 2
+
+    desk2 = f"desk_x1_{uuid4().hex[:8]}"
+    async with pg_pool.acquire() as conn:
+        await _insert_scorecard(conn, desk2, {"escalation": "watch"})
+    await _run(pg_pool, per_desk_cap=20, daily_page_budget=3)  # seed desk2's class
+    async with pg_pool.acquire() as conn:
+        await _insert_scorecard(conn, desk2, {"escalation": "high"})
+    r2 = await _run(pg_pool, per_desk_cap=20, daily_page_budget=3)
+    assert r2.finding.data["already_paged_today"] == 3, (
+        "the first scan's 3 real pages are still on the ledger"
+    )
+    assert r2.finding.data["budget_deferred"] == 1  # the one new candidate
+
+
+async def test_daily_page_budget_env_var_reaches_the_handler(pg_pool, clean_slate, monkeypatch):
+    """No ``daily_page_budget`` option at all — falls back to the env var."""
+    monkeypatch.setenv(ats._DAILY_PAGE_BUDGET_ENV, "1")
+    await _seed_five_deteriorations(pg_pool)
+    deps = _Deps(pg_pool, _FakeDispatcher())
+    options = {
+        "sub_handler": "alert_trigger_scan",
+        "analyst_id": "alert_trigger_scan",
+        "run_id": str(uuid4()),
+        "per_desk_cap": 20,
+        # Kill list stays ON here — this test is only about the budget knob.
+        "contention_flip_enabled": True,
+        "geo_convergence_enabled": True,
+    }
+    r = await ats.handle([], options, deps)
+    assert r.finding.data["daily_page_budget"] == 1
+    assert r.finding.data["budget_deferred"] == 4
+
+
+async def test_kind_cap_is_day_cumulative_across_scans_db(pg_pool, clean_slate):
+    """The DB-level proof that the kind cap is a DAY total, not a per-scan
+    total: 5 band_crossing candidates in one scan hit the default cap of 3
+    (2 deferred); a SECOND scan later that day, for a DIFFERENT desk, offers
+    only ONE new band_crossing candidate — nowhere near 3 on its own — but it
+    is still deferred, because band_crossing already spent its 3 slots in
+    the FIRST scan (``already_paged_today_by_kind``, read live from the
+    ledger, not held in memory across scans)."""
+    await _seed_five_deteriorations(pg_pool)
+    r1 = await _run(
+        pg_pool, per_desk_cap=20, daily_page_budget=10, budget_per_kind_cap=3
+    )
+    assert r1.finding.data["fired"] == 5
+    assert r1.finding.data["budget_deferred"] == 2, "the kind cap bites first"
+
+    desk2 = f"desk_x1_{uuid4().hex[:8]}"
+    async with pg_pool.acquire() as conn:
+        await _insert_scorecard(conn, desk2, {"escalation": "watch"})
+    await _run(
+        pg_pool, per_desk_cap=20, daily_page_budget=10, budget_per_kind_cap=3
+    )  # seed desk2's class
+    async with pg_pool.acquire() as conn:
+        await _insert_scorecard(conn, desk2, {"escalation": "high"})
+    r2 = await _run(
+        pg_pool, per_desk_cap=20, daily_page_budget=10, budget_per_kind_cap=3
+    )
+    assert r2.finding.data["fired"] == 1
+    assert r2.finding.data["budget_deferred"] == 1, (
+        "band_crossing already spent its per-kind cap earlier TODAY, even "
+        "though this scan's own batch never approached the cap by itself"
+    )
+    assert r2.finding.data["already_paged_today_by_kind"].get(ats.TRIGGER_BAND) == 3
+
+
+# ---------------------------------------------------------------------------
+# DB — D2, the 90-day product wager (2026-08-29): kill list
+# ---------------------------------------------------------------------------
+
+
+async def test_contention_flip_killed_by_default_writes_no_row_but_counts(
+    pg_pool, clean_slate
+):
+    fact_a = uuid4()
+    async with pg_pool.acquire() as conn:
+        cid = await _insert_contention(conn, subject=f"subj_{uuid4().hex[:8]}")
+        await _insert_contention_value(conn, cid, [fact_a], "value-a")
+        tied = await _insert_finding(
+            conn, sev_tag=None, confidence=0.9, derived=[fact_a]
+        )
+        await _insert_faith_critique(conn, tied, 0.85)
+    await _run(pg_pool)  # seed — the existing contention fires nothing regardless
+
+    async with pg_pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE fact_contention SET status = 'surfaced', "
+            "surfaced_value = 'value-a', surfaced_fact_id = $2, "
+            "updated_at = now() WHERE id = $1",
+            cid,
+            fact_a,
+        )
+    # Explicit OFF — the real production default; overrides the test
+    # harness's convenience ON.
+    r = await _run(pg_pool, contention_flip_enabled=False)
+    assert r.finding.data["fired"] == 0
+    counts = r.finding.data["counts_by_class"][ats.TRIGGER_CONTENTION]
+    assert counts["killed"] is True
+    assert counts["killed_would_have_fired"] == 1
+    assert counts["candidates"] == 0
+    async with pg_pool.acquire() as conn:
+        rows = await _alert_rows(conn)
+    assert [
+        row for row in rows
+        if _row_data(row).get("trigger_class") == ats.TRIGGER_CONTENTION
+    ] == []
+
+    # No backlog on resurrection — the watermark already advanced while
+    # killed, so the SAME transition does not replay as a fresh candidate.
+    r2 = await _run(pg_pool, contention_flip_enabled=True)
+    assert r2.finding.data["fired"] == 0
+    counts2 = r2.finding.data["counts_by_class"][ats.TRIGGER_CONTENTION]
+    assert counts2["killed"] is False
+    assert counts2["candidates"] == 0
+
+
+async def test_contention_flip_kill_switch_env_var(pg_pool, clean_slate, monkeypatch):
+    monkeypatch.setenv(ats._CONTENTION_FLIP_ENABLED_ENV, "true")
+    fact_a = uuid4()
+    async with pg_pool.acquire() as conn:
+        cid = await _insert_contention(conn, subject=f"subj_{uuid4().hex[:8]}")
+        await _insert_contention_value(conn, cid, [fact_a], "value-a")
+        tied = await _insert_finding(
+            conn, sev_tag=None, confidence=0.9, derived=[fact_a]
+        )
+        await _insert_faith_critique(conn, tied, 0.85)
+    deps = _Deps(pg_pool, _FakeDispatcher())
+    seed_options = {
+        "sub_handler": "alert_trigger_scan",
+        "analyst_id": "alert_trigger_scan",
+        "run_id": str(uuid4()),
+    }
+    await ats.handle([], seed_options, deps)  # seed, no options override
+
+    async with pg_pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE fact_contention SET status = 'surfaced', "
+            "surfaced_value = 'value-a', surfaced_fact_id = $2, "
+            "updated_at = now() WHERE id = $1",
+            cid,
+            fact_a,
+        )
+    r = await ats.handle(
+        [], {**seed_options, "run_id": str(uuid4())}, deps
+    )
+    assert r.finding.data["fired"] == 1, "the env var alone re-enables the class"
+
+
+async def test_geo_convergence_killed_by_default_writes_no_row_but_counts(
+    pg_pool, geo_clean_slate
+):
+    async with pg_pool.acquire() as conn:
+        await _seed_three_geo_family_sources(conn)
+        await _insert_geo_signal(conn, "geo6test.quake", geo_tags=[_GEO_CC_FORMATION])
+        await _insert_geo_signal(conn, "geo6test.news", geo_tags=[_GEO_CC_FORMATION])
+    await _run(pg_pool)  # seeds (below the 3-family bar)
+
+    async with pg_pool.acquire() as conn:
+        await _insert_geo_signal(conn, "geo6test.tg", geo_tags=[_GEO_CC_FORMATION])
+    r = await _run(pg_pool, geo_convergence_enabled=False)
+    assert r.finding.data["fired"] == 0
+    counts = r.finding.data["counts_by_class"][ats.TRIGGER_GEO_CONVERGENCE]
+    assert counts["killed"] is True
+    assert counts["killed_would_have_fired"] == 1
+    async with pg_pool.acquire() as conn:
+        assert _geo_rows(await _alert_rows(conn)) == []
+
+    # No backlog on resurrection.
+    r2 = await _run(pg_pool, geo_convergence_enabled=True)
+    assert r2.finding.data["fired"] == 0
+    counts2 = r2.finding.data["counts_by_class"][ats.TRIGGER_GEO_CONVERGENCE]
+    assert counts2["killed"] is False
+    assert counts2["candidates"] == 0
+
+
+async def test_handle_production_defaults_kill_list_off_and_budget_five(
+    pg_pool, clean_slate, monkeypatch
+):
+    """Pins the REAL production default with NO test-harness convenience
+    overrides at all: contention_flip and geo_convergence off, budget 5."""
+    monkeypatch.delenv(ats._CONTENTION_FLIP_ENABLED_ENV, raising=False)
+    monkeypatch.delenv(ats._GEO_CONVERGENCE_ENABLED_ENV, raising=False)
+    monkeypatch.delenv(ats._DAILY_PAGE_BUDGET_ENV, raising=False)
+    deps = _Deps(pg_pool, _FakeDispatcher())
+    options = {
+        "sub_handler": "alert_trigger_scan",
+        "analyst_id": "alert_trigger_scan",
+        "run_id": str(uuid4()),
+    }
+    r = await ats.handle([], options, deps)
+    assert r.finding.data["daily_page_budget"] == ats.DEFAULT_DAILY_PAGE_BUDGET == 5
+    assert r.finding.data["counts_by_class"][ats.TRIGGER_CONTENTION]["killed"] is True
+    assert (
+        r.finding.data["counts_by_class"][ats.TRIGGER_GEO_CONVERGENCE]["killed"]
+        is True
+    )

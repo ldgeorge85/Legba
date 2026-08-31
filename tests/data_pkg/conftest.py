@@ -263,3 +263,67 @@ async def migrated_pg(test_pg_config: PostgresConfig) -> PostgresConfig:
     applied = await apply_primary_migrations(test_pg_config)
     assert applied, "expected at least one migration to apply"
     return test_pg_config
+
+
+# ---------------------------------------------------------------------------
+# clean_tables — centralized, opt-in truncation primitive.
+# ---------------------------------------------------------------------------
+#
+# Root-caused by the 2026-08-29 shuffle-pollution-class train
+# (planning/CAMPAIGN_2026-08-29/CODE_STATUS.md §4 / LOG_FORENSICS.md finding
+# 3): 134 of ~398 tests/data_pkg/ files depend on `migrated_pg`, which is
+# session-scoped by necessity (re-applying all migrations per-file/per-test
+# is a measured 130x/1929x runtime multiplier — not viable). Only 14 of those
+# 134 had ANY cleanup fixture, each a bespoke, file-local `clean_slate`
+# reimplementing the same "DELETE my rows before I run" shape. This is that
+# shape, centralized, so the other 120 have a one-line opt-in instead of
+# hand-rolling scoped DELETEs — and so a future file doesn't silently join
+# the 120.
+#
+# TRUNCATE, not a per-file scoped DELETE: instant regardless of row count
+# (no WHERE-clause bookkeeping needed), and safe here specifically because
+# every named table is opt-in per-test — a test only requests truncation of
+# a table it EXCLUSIVELY owns for the duration of its own assertions, the
+# same contract the existing bespoke `clean_slate` fixtures already assume.
+# Runs at SETUP (matches the established idiom: every existing `clean_slate`
+# fixture in this directory cleans BEFORE `yield`, not after — the NEXT
+# test's own setup-time clean is what protects it, not this test's
+# teardown). A test that also needs a teardown-time reset (e.g. restoring a
+# migration-seeded config row rather than emptying a table) still needs its
+# own bespoke fixture — this primitive is for the "the table is scratch
+# space I fully own" shape, which is the common case.
+@pytest_asyncio.fixture
+def clean_tables(migrated_pg: PostgresConfig):
+    """Factory fixture — call as ``await clean_tables("table_a", "table_b")``
+    (typically from inside a file-local wrapping fixture, mirroring the
+    existing ``clean_slate`` idiom) to TRUNCATE the named tables right
+    before a test runs. Opens its own short-lived connection rather than
+    depending on any file's differently-scoped ``pg_pool`` fixture, so it
+    works the same way regardless of how (or whether) a file defines one.
+
+    Tolerates a table that doesn't exist YET: at least one real target
+    (``actor_state``) lives outside the migration set entirely — it's
+    created on-demand by ``ActorStateStore.ensure_schema()`` the first time
+    ANY test in the session calls it, not by a migration — so a
+    ``clean_tables("actor_state")`` that runs as the very first
+    actor_state-touching fixture in a session (e.g. this file's tests run
+    standalone, or first in a shuffle) would hit a table that doesn't exist
+    yet. ``UndefinedTableError`` there means "already clean" (nothing to
+    truncate), not a real failure — any OTHER missing-relation error still
+    raises normally.
+    """
+
+    async def _clean(*names: str) -> None:
+        if not names:
+            return
+        conn = await asyncpg.connect(migrated_pg.dsn)
+        try:
+            quoted = ", ".join(f'"{n}"' for n in names)
+            try:
+                await conn.execute(f"TRUNCATE TABLE {quoted}")
+            except asyncpg.exceptions.UndefinedTableError:
+                pass
+        finally:
+            await conn.close()
+
+    return _clean

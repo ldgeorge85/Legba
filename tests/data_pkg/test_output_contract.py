@@ -31,6 +31,7 @@ from legba.data.analysts.output_contract import (
     extract_json_object,
     is_unusable_output,
     repair_confidence_word_token,
+    salvage_json_envelope,
     strip_tool_plan_preamble,
 )
 
@@ -398,3 +399,127 @@ def test_confidence_word_token_cells_land_the_intended_confidence_and_indicators
         expected = _coerce_indicators(well_formed["indicators"])
         assert expected, f"{label}: test fixture setup is broken"
         assert indicators == expected, label
+
+
+# ---------------------------------------------------------------------------
+# The JSON-ENVELOPE LEAK (2026-08-29) — salvage_json_envelope
+#
+# Live defect: the world composition of 2026-08-29 12:00Z
+# (823ff9dd-89b9-47f9-9c7e-8c9cc631e31d) published its JSON WRAPPER as the body.
+# The model emitted an unrequested sixth key, `body_additional_sections`, and
+# emitted it MALFORMED — `"## Tension": "…": "…"`, two string values for one
+# key — so json.loads raised and the fail-safe branch stored the raw envelope.
+# The `title` and `body` string literals were COMPLETE two lines above the
+# break. These pin the rule: unwrap when unambiguous, raise otherwise, and
+# never publish the wrapper.
+# ---------------------------------------------------------------------------
+
+#: The live captures, byte-exact out of ``analyst_outputs``.
+_ENVELOPE_LEAK_FIXTURES = Path(__file__).parent / "fixtures" / "json_envelope_leak"
+
+
+def test_salvage_unwraps_the_live_world_composition_envelope() -> None:
+    """The exact 823ff9dd raw bytes unwrap to the model's markdown body and its
+    real headline — NOT to the JSON wrapper that actually shipped."""
+    raw = (_ENVELOPE_LEAK_FIXTURES / "world_assessor_823ff9dd__leaked.txt").read_text(
+        encoding="utf-8"
+    )
+    # Fixture integrity: this MUST still be the shape that broke, or the test
+    # is vacuous.
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(raw)
+    assert "body_additional_sections" in raw
+
+    salvaged = salvage_json_envelope(raw)
+
+    expected = (
+        _ENVELOPE_LEAK_FIXTURES / "world_assessor_823ff9dd__unwrapped.md"
+    ).read_text(encoding="utf-8")
+    assert salvaged["body"] == expected
+    assert salvaged["title"] == (
+        "Russia mobilization heightens European escalation risk amid global hotspots"
+    )
+    # The whole point: no JSON scaffolding survives into the body.
+    assert not salvaged["body"].lstrip().startswith("{")
+    assert '"body":' not in salvaged["body"]
+    assert "\\n" not in salvaged["body"]
+    # The markers the faithfulness judge segments on are intact — the shipped
+    # blob scored 2 checkable claims against the healthy run's 13.
+    assert salvaged["body"].count("[[ref:") >= 5
+
+
+def test_salvage_accepts_literal_newlines_inside_the_body_string() -> None:
+    """The SECOND malformation shape in the live census (8 of the 10 composition
+    envelopes): a body written across REAL newlines instead of ``\\n`` escapes.
+    ``json.loads`` rejects the envelope for it; a raw newline inside a string
+    span means a newline and nothing else, so the unwrap stays unambiguous."""
+    raw = (
+        '{\n  "title": "T",\n  "body": "line one\nline two [[ref:1]]",\n'
+        '  "confidence": 0.6\n}'
+    )
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(raw)
+
+    salvaged = salvage_json_envelope(raw)
+
+    assert salvaged["body"] == "line one\nline two [[ref:1]]"
+    assert salvaged["title"] == "T"
+
+
+def test_salvage_reads_the_envelopes_own_body_key_not_one_inside_a_value() -> None:
+    """Depth-1 and quote-aware: a ``"body":`` sequence sitting INSIDE another
+    member's string value is never mistaken for the envelope's own key — the
+    difference between an unambiguous unwrap and a regex guess."""
+    raw = (
+        '{\n  "title": "the model quoted \\"body\\": \\"decoy\\" at us",\n'
+        '  "body": "the real markdown [[ref:1]]",\n  "tags": [oops]\n}'
+    )
+    assert salvage_json_envelope(raw)["body"] == "the real markdown [[ref:1]]"
+
+
+@pytest.mark.parametrize(
+    "raw,label",
+    [
+        ('{\n  "title": "World read",\n  "body": "*As of 29 August 2026; composed'
+         ' from 6 region', "truncated mid-body string"),
+        ('{\n  "title": "T",\n  "body": "complete markdown",\n  "tags": ["a',
+         "object never closes"),
+        ('{\n  "action": "search_corpus",\n  "query": "Trump Hormuz",\n  "size": 5\n}',
+         "tool-call JSON, no body key"),
+        ('{\n  "title": "T",\n  "body": {"nested": "not a string"}\n}',
+         "body is not a string"),
+        ('{\n  "title": "T",\n  "body": "bad \\escape here"\n}',
+         "body escapes do not decode"),
+        ('{\n  "title": "T",\n  "body": "   "\n}', "body decodes to nothing"),
+    ],
+    ids=lambda v: v if isinstance(v, str) and " " in v and "{" not in v else "",
+)
+def test_salvage_fails_loud_on_anything_ambiguous(raw: str, label: str) -> None:
+    """JSON-shaped but not unambiguously recoverable = RAISE. There is no third
+    outcome, and in particular publishing the wrapper is not one."""
+    with pytest.raises(OutputContractError):
+        salvage_json_envelope(raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "**BLUF:** Myanmar's repression continues [[ref:1]].",
+        "",
+        "   ",
+        "Here is my read.\n\n## The picture\nThings happened [[ref:2]].",
+    ],
+)
+def test_salvage_leaves_prose_entirely_alone(raw: str) -> None:
+    """A completion that is not JSON-shaped returns ``{}`` — the caller's own
+    degrade path keeps it byte-for-byte, so D27's plain-markdown finding still
+    lands and no prose completion can be turned into a failure by this fix."""
+    assert salvage_json_envelope(raw) == {}
+
+
+def test_salvage_is_a_noop_on_well_formed_json_callers_never_reach_it() -> None:
+    """Belt and braces: even handed a PARSEABLE envelope (which no caller does —
+    ``json.loads`` takes that path first), the unwrap returns that same body
+    rather than inventing a different one."""
+    raw = json.dumps({"title": "T", "body": "b [[ref:1]]", "confidence": 0.7})
+    assert salvage_json_envelope(raw) == {"title": "T", "body": "b [[ref:1]]"}

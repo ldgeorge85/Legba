@@ -20,6 +20,7 @@ import { formatDistanceToNow } from 'date-fns'
 import { apiGet } from '@/lib/api'
 import { selectRow } from '@/state/selection'
 import { UnitEvalBadge } from '@/components/inspector/UnitEvalBadge'
+import { SEVERITY_COLOR } from '@/v4/world/types'
 
 /** The bounded units + their display labels, in headline order. Kept in ONE place
  *  (also mirrored by the eval scorecard's dimension order). Render is dynamic —
@@ -47,14 +48,20 @@ interface FindingsResponse {
   data: UnitFindingRow[]
 }
 
-/** Severity → hex (v4 ramp; unit severities include elevated/moderate). */
+/**
+ * Severity → hex. CHANNEL A, the one warm ramp (v4/world/types.ts), with the
+ * two extra rungs the unit severities use mapped onto it: `elevated` sits
+ * between high and medium, `moderate` IS medium. Re-keyed off the neon v4 ramp
+ * for the reason the holistic design gives (§5.4 #1): `low` was pure neon
+ * green, so the calmest unit on the page was its brightest pixel.
+ */
 const SEVERITY_HEX: Record<string, string> = {
-  critical: '#ff5555',
-  high: '#ff9955',
-  elevated: '#ffbb55',
-  moderate: '#ffdd55',
-  medium: '#ffdd55',
-  low: '#55ff55',
+  critical: SEVERITY_COLOR.critical,
+  high: SEVERITY_COLOR.high,
+  elevated: '#cf8324', // the interpolated rung between high and medium
+  moderate: SEVERITY_COLOR.medium,
+  medium: SEVERITY_COLOR.medium,
+  low: SEVERITY_COLOR.low,
 }
 
 export function CountryUnitsAssessment({ targetId }: { targetId: string }) {

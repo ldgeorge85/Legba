@@ -43,19 +43,38 @@ PG_CONTAINER="${PG_CONTAINER:-legba-postgres-1}"
 PG_USER="${PG_USER:-legba}"; PG_DB="${PG_DB:-legba}"
 MAX_LLM_AGE_SECS="${MAX_LLM_AGE_SECS:-5400}"   # 90 min: units tick ~30min; 3 misses = real
 NTFY_URL="${NTFY_URL:-http://127.0.0.1:8093/legba-alerts}"
-COOLDOWN_STAMP="/tmp/legba-llm-heartbeat.cooldown"
+COOLDOWN_STAMP="${COOLDOWN_STAMP:-/tmp/legba-llm-heartbeat.cooldown}"
 COOLDOWN_SECS="${COOLDOWN_SECS:-3600}"
 LOG="${LOG:-/var/log/legba-watchdog.log}"
 
 # --- completion-probe knobs -------------------------------------------------
-APP_CONTAINER="${APP_CONTAINER:-legba-legba-registry-1}"
+# MUST be a container whose image actually carries the full `legba` package
+# (the probe imports build_llm_handler_from_stack_component, which transitively
+# pulls in legba.data.analysts -> evidence_archiver -> sources/rss.py ->
+# feedparser). legba-legba-registry-1 (Dockerfile.registry) is deliberately
+# the LIGHTER control-plane image and does NOT carry feedparser/trafilatura/
+# aiobotocore — those ship only in Dockerfile.runtime (comment there: "sources
+# ... ARE shipped here"). Fixed 2026-08-29: this defaulted to the registry
+# container from introduction (2026-08-02, commit 22277b43) through 27 days
+# of 100%-broken ticks (ModuleNotFoundError: feedparser on every exec,
+# misreported as "container unreachable?" — see planning postmortem). The
+# runtime container is also the semantically right target: it is the actual
+# actor host that fans out analyst inference in production (docker-compose.yml
+# comment: "actor host — analyst inference fan-out"), and host_search_canary.sh
+# already docker-execs the sibling search-liveness probe into this same
+# container by default (RUNTIME_CONTAINER) without ever hitting this bug.
+APP_CONTAINER="${APP_CONTAINER:-legba-legba-runtime-dapr-1}"
 # The stack component to probe. The probe reads its model_name / api_endpoint /
 # credential from the registry row, so this is the only identifier here — the
 # model name itself is never written down in this file.
 PROBE_COMPONENT="${PROBE_COMPONENT:-llm.primary.openai_compat}"
 PROBE_ENABLED="${PROBE_ENABLED:-1}"
 SHORT_TIMEOUT="${SHORT_TIMEOUT:-120}"          # a 1-token reply; 120s is generous
-SHORT_COOLDOWN_STAMP="/tmp/legba-llm-completion.cooldown"
+# SHORT_COOLDOWN_STAMP/LONGCTX_COOLDOWN_STAMP/TICK_COUNTER below are also now
+# env-overridable (matching every other knob in this script, and COOLDOWN_STAMP
+# above) so a test harness can point them at a scratch dir instead of mutating
+# the real cron's /tmp state (shared cooldown + tick-counter files).
+SHORT_COOLDOWN_STAMP="${SHORT_COOLDOWN_STAMP:-/tmp/legba-llm-completion.cooldown}"
 # Long-context: its own generous timeout (a 24k-char prompt on a loaded 120B
 # can take minutes) and its own cadence — every Nth tick, so at */10 cron the
 # default 6 means hourly.
@@ -63,8 +82,8 @@ LONGCTX_ENABLED="${LONGCTX_ENABLED:-1}"
 LONGCTX_TIMEOUT="${LONGCTX_TIMEOUT:-600}"
 LONGCTX_CHARS="${LONGCTX_CHARS:-24000}"
 LONGCTX_EVERY_N="${LONGCTX_EVERY_N:-6}"
-LONGCTX_COOLDOWN_STAMP="/tmp/legba-llm-longctx.cooldown"
-TICK_COUNTER="/tmp/legba-llm-heartbeat.tick"
+LONGCTX_COOLDOWN_STAMP="${LONGCTX_COOLDOWN_STAMP:-/tmp/legba-llm-longctx.cooldown}"
+TICK_COUNTER="${TICK_COUNTER:-/tmp/legba-llm-heartbeat.tick}"
 
 log() { echo "$(date -u +%FT%TZ) [llm-heartbeat] $*" >> "$LOG"; }
 
@@ -121,17 +140,33 @@ check_silence() {
 # ---------------------------------------------------------------------------
 # 2+3) COMPLETION / LONG-CONTEXT — a REAL generation through the live component.
 #
-# run_probe <mode> <timeout> — echoes the probe's one-line verdict, returns the
-# probe's exit status. Everything the probe needs comes from the container's
-# own env; the only inputs are the mode, the timeout and the component id.
+# run_probe <mode> <timeout> — echoes the probe's one-line verdict (always
+# non-empty: either an OK/FAIL line the python side printed, or a bash-side
+# classified FAIL when it didn't). Everything the probe needs comes from the
+# container's own env; the only inputs are the mode, the timeout and the
+# component id.
+#
+# §31.1 postmortem (2026-08-29): an EMPTY verdict here used to be reported as
+# "container unreachable?" unconditionally — which was WRONG every single
+# time it fired for 27 days: the container (legba-legba-registry-1, the
+# wrong target at the time) was `Up ... (healthy)` throughout; the probe
+# script itself was crashing on a ModuleNotFoundError raised OUTSIDE its own
+# try/except (an import at the top of main(), before the handler was even
+# entered), so nothing matching `^(OK|FAIL) ` ever reached stdout. Two fixes:
+#   1. (below, python side) the ENTIRE probe body — imports included — now
+#      runs inside the try/except, so an import failure prints a classified
+#      FAIL line instead of vanishing.
+#   2. (here, bash side) if a verdict is STILL empty despite that, don't
+#      guess — check the container's actual running state before blaming it.
 # ---------------------------------------------------------------------------
 run_probe() {
-  docker exec -i \
+  local mode="$1" timeout="$2" out verdict running
+  out="$(docker exec -i \
     -e "PROBE_COMPONENT=$PROBE_COMPONENT" \
-    -e "PROBE_MODE=$1" \
-    -e "PROBE_TIMEOUT=$2" \
+    -e "PROBE_MODE=$mode" \
+    -e "PROBE_TIMEOUT=$timeout" \
     -e "PROBE_LONG_CHARS=$LONGCTX_CHARS" \
-    "$APP_CONTAINER" python3 - <<'PY' 2>&1 | grep -E '^(OK|FAIL) ' | tail -1
+    "$APP_CONTAINER" python3 - <<'PY' 2>&1
 import asyncio
 import os
 import sys
@@ -166,24 +201,38 @@ def _long_prompt() -> str:
 
 
 async def main() -> int:
-    from legba.data.config import PostgresConfig
-    from legba.data.postgres import PostgresStore
-    from legba.data.registry.credentials import CredentialVault
-    from legba.runtime.analyst_deps_builder import (
-        build_llm_handler_from_stack_component,
-    )
-    from legba.runtime.registry_client import RegistryHTTPClient
-
-    store = PostgresStore(PostgresConfig.from_env())
-    await store.connect()
-    vault = CredentialVault(store)
-
-    async def _resolve(secret_id: str) -> bytes:
-        return await vault.resolve(secret_id)
-
-    registry = RegistryHTTPClient()
+    # §31.1 postmortem (2026-08-29): these imports (and the store/vault/
+    # registry setup below) USED TO sit outside this try/except. A missing
+    # transitive dependency (feedparser, pulled in by
+    # analyst_deps_builder -> legba.data.analysts -> evidence_archiver ->
+    # sources/rss.py) raised ModuleNotFoundError right here, BEFORE the
+    # handler existed — an exception the old code had no way to catch, so it
+    # propagated out of main() entirely and printed nothing matching
+    # `^(OK|FAIL) `. The shell side then reported "container unreachable?"
+    # for 27 days on a container that was healthy the whole time. Everything
+    # that can fail — imports included — now lives inside the try, so ANY
+    # failure prints a classified FAIL line instead of vanishing.
+    store = None
+    registry = None
     handler = None
     try:
+        from legba.data.config import PostgresConfig
+        from legba.data.postgres import PostgresStore
+        from legba.data.registry.credentials import CredentialVault
+        from legba.runtime.analyst_deps_builder import (
+            build_llm_handler_from_stack_component,
+        )
+        from legba.runtime.registry_client import RegistryHTTPClient
+
+        store = PostgresStore(PostgresConfig.from_env())
+        await store.connect()
+        vault = CredentialVault(store)
+
+        async def _resolve(secret_id: str) -> bytes:
+            return await vault.resolve(secret_id)
+
+        registry = RegistryHTTPClient()
+
         # The whole point: endpoint + model name + credential come from the
         # LIVE stack component, so the probe tracks a component edit instead
         # of testing a target nobody serves any more.
@@ -240,6 +289,14 @@ async def main() -> int:
     except asyncio.TimeoutError:
         print(f"FAIL mode={MODE} reason=timeout after {TIMEOUT}s")
         return 1
+    except (ImportError, ModuleNotFoundError) as exc:
+        # A dependency the PROBE needs is missing from THIS container's
+        # image — e.g. the 2026-08-02..29 feedparser defect. This is a
+        # broken probe, not evidence the LLM plane (or the container) is
+        # down; label it distinctly so the shell side (and a human reading
+        # the log) never conflates the two again.
+        print(f"FAIL mode={MODE} reason=probe_broken:{type(exc).__name__}: {str(exc)[:300]}")
+        return 1
     except Exception as exc:                      # noqa: BLE001 - probe reports all
         print(f"FAIL mode={MODE} reason={type(exc).__name__}: {str(exc)[:300]}")
         return 1
@@ -249,18 +306,38 @@ async def main() -> int:
                 await handler.on_deactivate(None)
             except Exception:                     # noqa: BLE001 - best-effort
                 pass
-        try:
-            await registry.aclose()
-        except Exception:                         # noqa: BLE001
-            pass
-        try:
-            await store.close()
-        except Exception:                         # noqa: BLE001
-            pass
+        if registry is not None:
+            try:
+                await registry.aclose()
+            except Exception:                     # noqa: BLE001
+                pass
+        if store is not None:
+            try:
+                await store.close()
+            except Exception:                     # noqa: BLE001
+                pass
 
 
 sys.exit(asyncio.run(main()))
 PY
+  )"
+  verdict="$(printf '%s\n' "$out" | grep -E '^(OK|FAIL) ' | tail -1)"
+  if [ -z "$verdict" ]; then
+    # The python side now catches everything it can (imports included — see
+    # the big comment in main() above), so an empty verdict here means the
+    # PROBE crashed somewhere even that couldn't catch (wrong interpreter,
+    # heredoc/syntax error, killed mid-run) — or docker exec itself never
+    # got a process running. Check the container's OWN state before
+    # assigning blame, instead of assuming "unreachable" the way the old
+    # code did.
+    running="$(docker inspect -f '{{.State.Running}}' "$APP_CONTAINER" 2>/dev/null)"
+    if [ "$running" = "true" ]; then
+      verdict="FAIL mode=$mode reason=probe_broken (docker exec into ${APP_CONTAINER} ran but produced no OK/FAIL output; container itself is Running=true, so this is a probe bug, not a reachability problem) raw=${out:0:200}"
+    else
+      verdict="FAIL mode=$mode reason=container_unreachable (${APP_CONTAINER} Running=${running:-<docker inspect failed>})"
+    fi
+  fi
+  printf '%s\n' "$verdict"
 }
 
 check_completion() {
@@ -269,7 +346,9 @@ check_completion() {
   case "$verdict" in
     OK\ *) log "probe.completion $verdict"; rm -f "$SHORT_COOLDOWN_STAMP"; return 0;;
   esac
-  [ -z "$verdict" ] && verdict="FAIL mode=short reason=no_probe_output (container ${APP_CONTAINER} unreachable?)"
+  # run_probe always returns a non-empty, already-classified verdict now
+  # (probe_broken vs container_unreachable vs a real FAIL reason) — no
+  # fallback needed here.
   log "FIRE completion probe failed: $verdict"
   cooled_down "$SHORT_COOLDOWN_STAMP" && return 0
   page 5 "Legba: LLM completion DEAD" "rotating_light,skull" \
@@ -293,7 +372,9 @@ check_longctx() {
   case "$verdict" in
     OK\ *) log "probe.longctx $verdict"; rm -f "$LONGCTX_COOLDOWN_STAMP"; return 0;;
   esac
-  [ -z "$verdict" ] && verdict="FAIL mode=long reason=no_probe_output (container ${APP_CONTAINER} unreachable?)"
+  # run_probe always returns a non-empty, already-classified verdict now
+  # (probe_broken vs container_unreachable vs a real FAIL reason) — no
+  # fallback needed here.
   log "FIRE long-context probe failed: $verdict"
   cooled_down "$LONGCTX_COOLDOWN_STAMP" && return 0
   page 4 "Legba: LLM long-context DEGRADED" "warning" \

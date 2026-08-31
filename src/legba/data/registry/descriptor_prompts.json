@@ -8,8 +8,8 @@
       "source": "analyst_corpus_researcher.yaml"
     },
     "cross_doc_corroborator": {
-      "chars": 8477,
-      "sha256": "d1921384a63c286675abacf44bf7b4b0217fd7081f3653257638eeb8ffcb1eaa",
+      "chars": 18281,
+      "sha256": "2b725bf2c36f95e8df3d0a825e7ea1adbd7772da4e21c5310a8c17a041bffd17",
       "source": "analyst_cross_doc_corroborator.yaml"
     },
     "disruption_status": {
@@ -408,6 +408,10 @@
     },
     "analyst:source_track_record": {
       "source": "analyst_source_track_record.yaml",
+      "state": "draft"
+    },
+    "analyst:standing_auditor": {
+      "source": "analyst_standing_auditor.yaml",
       "state": "draft"
     },
     "analyst:structural_balance": {

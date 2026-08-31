@@ -27,11 +27,15 @@ import remarkGfm from 'remark-gfm'
 import { AlertTriangle } from 'lucide-react'
 import { MD_COMPONENTS } from '@/lib/markdownComponents'
 import { selectRow } from '@/state/selection'
+import { emitRead } from '@/lib/readTelemetry'
 import { VerdictBadge } from '@/components/VerdictBadge'
 import {
+  citationAnchorId,
+  citationDrill,
+  citationKindLabel,
   citationLabel,
   citationsByMarker,
-  evidenceAnchorId,
+  isGroundingCitation,
   normalizeCitationMarkers,
   tokenizeProse,
   type Citation,
@@ -73,14 +77,20 @@ export interface CitedProseProps {
  *  drive the shared selection (open the record in the Inspector). */
 function defaultCiteClick(c: Citation): void {
   const anchor =
-    typeof document !== 'undefined' ? document.getElementById(evidenceAnchorId(c.refId)) : null
+    typeof document !== 'undefined' ? document.getElementById(citationAnchorId(c)) : null
   if (anchor) {
     anchor.scrollIntoView({ behavior: 'smooth', block: 'center' })
     anchor.setAttribute('data-flash', 'true')
     window.setTimeout(() => anchor.removeAttribute('data-flash'), 1200)
     return
   }
-  selectRow(c.refKind, c.refId, c.title ?? undefined, { origin: 'cited-prose' })
+  // A citation with no drill target (the four synthetic grounding blocks)
+  // selects NOTHING rather than driving the shared selection at an empty id.
+  // `prior_read` drills to the FINDING its `ref_id` names — it used to fall
+  // through to `refKind: 'signal'` and open a signal that cannot exist.
+  const drill = citationDrill(c)
+  if (!drill) return
+  selectRow(drill.kind, drill.id, c.title ?? undefined, { origin: 'cited-prose' })
 }
 
 /**
@@ -167,8 +177,12 @@ function CitationCard({ c, verdict }: { c: Citation; verdict: ClaimVerdict }) {
         <span className="rounded bg-surf-2 px-1 font-mono text-[10px] text-accent-info">
           {citationLabel(c.marker)}
         </span>
+        {/* Kind-labeled for EVERY kind. This read `refKind === 'finding' ?
+            'sub-claim' : 'signal'`, so all five desk grounding blocks were
+            captioned "signal" — the prior read on top of a dead signal
+            drill, and the other four never reached this card at all. */}
         <span className="text-[10px] uppercase tracking-wide text-ink-3">
-          {c.refKind === 'finding' ? 'sub-claim' : 'signal'}
+          {citationKindLabel(c)}
         </span>
       </span>
       {c.title && (
@@ -220,10 +234,27 @@ function CitationChip({
     <span className="group/cite relative inline-block align-baseline">
       <button
         type="button"
-        onClick={onClick}
-        title={c.title ?? c.source ?? `evidence ${c.marker}`}
+        onClick={() => {
+          // READ TELEMETRY (D2e) — the citation drill, counted HERE rather than
+          // in `defaultCiteClick`, because the Inspector and the report pass
+          // their own `onCiteClick` (scroll-to-evidence) and would otherwise be
+          // invisible. TOUR.md §3 calls the means to distrust a read "the
+          // product's actual differentiator"; the premise review measured them
+          // exercised zero times. This is the counter for that claim, and it
+          // has to sit on the button every drill goes through.
+          emitRead('citation_drill', { subjectKind: c.refKind, subjectId: c.refId })
+          onClick()
+        }}
+        title={`${citationKindLabel(c)} — ${c.title ?? c.source ?? `evidence ${c.marker}`}`}
         data-testid="citation-chip"
         data-marker={c.marker}
+        // The chip states its kind and whether it drills. A desk grounding
+        // block is a RESOLVED citation whose evidence lives in this row's own
+        // citation record; it used to render as the amber "Unresolved
+        // citation" chip over evidence the verify plane scored SUPPORTED.
+        data-cite-kind={c.refKind}
+        data-grounding={isGroundingCitation(c) ? 'true' : undefined}
+        data-drills={citationDrill(c) ? 'true' : 'false'}
         className="mx-0.5 inline-flex items-center rounded bg-surf-3 px-1 align-super text-[10px] font-medium leading-none text-accent-info hover:bg-surf-1 hover:underline"
       >
         {citationLabel(c.marker)}

@@ -218,6 +218,13 @@ _EXPECTED_FAIL_CLASSES = {
     # slice checking and the judge hard-failed it anyway. The routing decision
     # is binding: one claim cannot have two authorities.
     "judge_contradicted_route_excluded": "soft_fail",
+    # V-J1 (2026-08-28) — the claim disclosed BOTH poles and marked one weak
+    # ("a weakly-supported report indicates no new evidence ... which conflicts
+    # with the VERIFIED finding of an advancing procurement pact") and the
+    # refutation is that same rejected side. Soft, and its own class: V-I5 is
+    # about what the ROUTER decided, this is about what the SENTENCE says, and
+    # it fires on claims carrying no scope qualifier at all.
+    "judge_contradicted_hedged_conflict": "soft_fail",
     # V-G5 (2026-08-03) — a claim with NO citation marker resting on a
     # historical/structural BASELINE about the world. The judge is instructed to
     # pass markerless prose as synthesis, so this class rode through as SUPPORTED
@@ -234,6 +241,30 @@ _EXPECTED_FAIL_CLASSES = {
     # to pass can start failing here. An EARNED one never reaches this table:
     # it is ungraded, no span and no ledger row.
     "judge_nonpropositional_unearned": "soft_fail",
+    # H2 (2026-08-27) — COMPOSITION-LAYER INTEGRITY: the composition graded
+    # against the desk reads it CITES. A collection-scoped desk negative
+    # republished as a world fact is the same overclaim family W31 lives in, and
+    # disjoint from it (W31 skips cited spans, this arm requires the citation).
+    "absence_scope_laundered": "soft_fail",
+    # H1 — a fact-asserting claim whose resolved citations are ALL the situation
+    # register, asserting currency/corroboration about the world: the register
+    # can only echo what desks wrote into it, so it corroborates nothing. Soft:
+    # inert on any finding not citing the register. (Pinned late — the H1 train
+    # updated the module table but missed this pin; caught by the drift guard.)
+    "register_self_corroboration": "soft_fail",
+    # The one HARD class in the brick, and it is the house definition verbatim —
+    # a claim its own cited source contradicts — with the aggravator that the
+    # composition NAMED that source as its authority ("the military-posture read
+    # CONFIRMS ... INCREASING" over a head whose verdict is "remains UNCHANGED").
+    # Earned the V-D way: both poles named verbatim in the detail, or nothing.
+    "attribution_direction_conflict": "hard_fail",
+    # A named desk cited for the PRESENCE of what its read records as absent.
+    # Soft: the term-overlap binding is a heuristic, and every readout this pass
+    # has produced says a false HARD is the expensive error.
+    "attribution_asserts_desk_negative": "soft_fail",
+    # A coinage QUOTED as a named desk's own words that appears nowhere in that
+    # desk's cited read. Soft — provenance, not a fabricated world fact.
+    "attribution_ungrounded_quote": "soft_fail",
 }
 
 

@@ -1482,3 +1482,42 @@ export async function fetchJudgeStats(
   const qs = params.toString()
   return apiGet<JudgeStatsResponse>(`/v3/system/judge-stats${qs ? `?${qs}` : ''}`)
 }
+
+// ---------------------------------------------------------------------------
+// Read telemetry rollup (D2e) — the oracle wager's scoreboard.
+// ---------------------------------------------------------------------------
+
+/** One (day, kind) cell of the read rollup. */
+export interface ReadRollupDay {
+  day: string
+  event_kind: string
+  events: number
+  sessions: number
+}
+
+/** The wager's headline scalars, over the same window as the cells. */
+export interface ReadRollupTotals {
+  reads_today: number
+  reads_this_week: number
+  brief_reads_today: number
+  brief_reads_this_week: number
+  /** Days in the window on which the Morning Read was opened AT ALL. */
+  brief_read_days: number
+  /** Days in the window on which anything at all was read. */
+  active_days: number
+  sessions_this_week: number
+  window_days: number
+}
+
+export interface ReadRollupResponse {
+  since: string
+  totals: ReadRollupTotals
+  days: ReadRollupDay[]
+}
+
+export async function fetchReadRollup(
+  opts: { days?: number } = {},
+): Promise<ReadRollupResponse> {
+  const qs = opts.days != null ? `?days=${encodeURIComponent(String(opts.days))}` : ''
+  return apiGet<ReadRollupResponse>(`/read-events/rollup${qs}`)
+}

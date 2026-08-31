@@ -530,9 +530,36 @@ async def _seed_situation(conn: asyncpg.Connection, *, target_id: str, intensity
     return row.id
 
 
+@pytest_asyncio.fixture
+async def _clean_open_question_backlog(pg_pool):
+    """Scoped, NOT the ``clean_tables`` primitive: ``hypotheses`` is shared
+    by ~a dozen other ``tests/data_pkg/`` files under OTHER ``status``
+    values (e.g. ``test_collection_requirements.py``'s own ``clean_slate``
+    deletes ``status = 'source_request'`` rows) — this file does not own the
+    whole table, only its own ``status = 'open_question'`` slice, so a
+    blanket TRUNCATE would be collateral damage rather than a fix.
+
+    Root cause (2026-08-22 nightly, shuffled seed 805452371):
+    ``resolve_open_questions(limit=8)`` ranks ALL ``open_question`` rows in
+    the session-shared DB and truncates to the requested limit in Python.
+    ``test_resolve_open_questions_sql_computes_live_reach_and_salience``
+    seeds one question (``q_d``) DESIGNED to rank last among its OWN four
+    candidates — a correct claim only when those four are the ONLY
+    candidates. Any ``open_question`` row a sibling test (in this file or
+    another) left behind outranks a deliberately-starved ``q_d`` and can
+    evict it from the top-8 window entirely — observed as
+    ``KeyError`` on ``by_id[q_d]``, not a value mismatch, so no assertion
+    rewrite can recover the claim; the candidate pool itself must start
+    clean."""
+    async with pg_pool.acquire() as conn:
+        await conn.execute("DELETE FROM hypotheses WHERE status = 'open_question'")
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_resolve_open_questions_sql_computes_live_reach_and_salience(pg_pool):
+async def test_resolve_open_questions_sql_computes_live_reach_and_salience(
+    pg_pool, _clean_open_question_backlog,
+):
     async with pg_pool.acquire() as conn:
         # Q_A: below_floor, traces FORWARD to a LIVE consumer -> live_reach=1.
         q_a = await _seed_question(conn, thesis="below-floor with live reach",

@@ -30,8 +30,54 @@
  * Pure, DOM-free: the card component composes these helpers.
  */
 
-/** The record kind a citation drills into. */
-export type CitationRefKind = 'finding' | 'signal' | 'situation_register'
+/**
+ * The five DESK GROUNDING block kinds (backend
+ * `provenance.kinds.GROUNDING_REF_KINDS`). A grounding citation's ordinal
+ * indexes a block the desk was SHOWN — its own prior read, its trailing
+ * window ledger, the open-situation register, the desk baseline, the standing
+ * open questions — not a slice row. Four of the five are synthetic and carry
+ * NO `ref_id` by design (minting one so a drill link resolves would be a
+ * fabricated anchor); only `prior_read` has a real `analyst_outputs` id, and
+ * that id is a FINDING, never a signal.
+ */
+export type GroundingKind =
+  | 'prior_read'
+  | 'window_ledger'
+  | 'situation_register'
+  | 'desk_baseline'
+  | 'open_questions'
+
+const GROUNDING_KINDS: ReadonlySet<string> = new Set<GroundingKind>([
+  'prior_read',
+  'window_ledger',
+  'situation_register',
+  'desk_baseline',
+  'open_questions',
+])
+
+/** The structural mark `unit_grounding` stamps on every grounding citation. */
+export const MARKER_CLASS_GROUNDING = 'desk_grounding'
+
+/** Human labels for the chip / hover card. Kind-labeled, never "Unresolved". */
+const GROUNDING_LABEL: Record<GroundingKind, string> = {
+  prior_read: 'prior read',
+  window_ledger: 'window ledger',
+  situation_register: 'situation register',
+  desk_baseline: 'desk baseline',
+  open_questions: 'open questions',
+}
+
+/** Fallback titles for a grounding block whose stored entry carries none. */
+const GROUNDING_TITLE: Record<GroundingKind, string> = {
+  prior_read: "Prior read (this unit's previous verified read)",
+  window_ledger: "Window ledger (this unit's trailing 14-day record)",
+  situation_register: 'Open-situation register',
+  desk_baseline: 'Desk baseline',
+  open_questions: 'Standing open questions',
+}
+
+/** The record kind a citation drills into, or the grounding block it names. */
+export type CitationRefKind = 'finding' | 'signal' | GroundingKind
 
 /** One citation: a marker that maps to the record it cites. */
 export interface Citation {
@@ -64,6 +110,23 @@ export interface Citation {
   effectiveConfidence?: number
   /** The cited sub-claim's underlying lineage/signal ids (composition-only). */
   derivedFrom?: string[]
+  /**
+   * The producer's structural mark — `'desk_grounding'` when this ordinal
+   * indexes a DESK GROUNDING block. Present only on rows written on or after
+   * the `2026-08-30/1` stamp; ABSENT (undefined) on every earlier row and on
+   * every signal / sub-claim ref, so it is read as "grounding when present",
+   * never as a field every citation must supply. `refKind` remains the
+   * fallback discriminator for the pre-stamp population — see
+   * {@link isGroundingCitation}.
+   */
+  markerClass?: string
+  /**
+   * The SET this ordinal is a position in, as the producer spelled it
+   * (`'data.citations'` for a grounding block). Carried through rather than
+   * inferred, because inferring it is exactly the step that produced the
+   * falsified 08-27 "53.6% unresolved citations" red.
+   */
+  resolvesAgainst?: string
   /**
    * @deprecated Back-compat alias for `refId`, kept so existing signal-only
    * consumers (e.g. the evidence EntityGraph) compile unchanged. Prefer
@@ -115,19 +178,39 @@ export function extractCitations(body: Record<string, unknown> | null | undefine
     const marker = normalizeMarker(o['marker'])
     const refId = str(o['ref_id']) ?? str(o['signal_id']) ?? str(o['signalId'])
     const rawKind = str(o['ref_kind'])
-    // The continuity SITUATION REGISTER is a real citation with NO single drill
-    // target by design (minting one would be a fabricated anchor) — render it
-    // as a labeled, non-drilling chip instead of skipping it as unresolved.
-    if (rawKind === 'situation_register') {
+    const markerClass = str(o['marker_class'])
+    // A DESK GROUNDING block. All five are real citations the verify plane
+    // scores as SUPPORTED evidence; four carry no `ref_id` at all, so the
+    // `!refId` skip below used to drop them and the reading kit rendered an
+    // amber "Unresolved citation" chip OVER evidence the grader accepted —
+    // and typed `prior_read` (which does have an id) as a SIGNAL, drilling to
+    // a signal row that cannot exist. Keyed on the producer's `marker_class`
+    // first, falling back to the registered kind vocabulary for rows written
+    // before that mark existed.
+    if (markerClass === MARKER_CLASS_GROUNDING || (rawKind && GROUNDING_KINDS.has(rawKind))) {
       if (!marker) continue
+      // A row marked `desk_grounding` whose `ref_kind` is not in the registry
+      // (a sixth kind this bundle predates) is carried VERBATIM rather than
+      // guessed into one of the five. Defaulting it to `prior_read` would be
+      // the worst possible guess — that is the one grounding kind that drills,
+      // so an unknown block would render a link to whatever id it happened to
+      // carry. Unknown → no drill, and the kind string is its own label.
+      const kind = (rawKind || MARKER_CLASS_GROUNDING) as GroundingKind
+      // Only the prior read has a drill target, and it is an analyst_outputs
+      // row — a FINDING. The other four keep an empty id so no surface can
+      // mint a link out of them.
+      const groundingId = kind === 'prior_read' ? (refId ?? '') : ''
       const cite: Citation = {
         marker,
-        refId: '',
-        refKind: 'situation_register',
-        signalId: '',
-        title: str(o['title']) ?? 'Open-situation register',
+        refId: groundingId,
+        refKind: kind,
+        signalId: '', // never a signal — the deprecated alias stays empty
+        title: str(o['title']) ?? GROUNDING_TITLE[kind] ?? 'Desk grounding block',
         source: undefined,
       }
+      if (markerClass) cite.markerClass = markerClass
+      const target = str(o['resolves_against'])
+      if (target) cite.resolvesAgainst = target
       const passage = str(o['evidence_text'])
       if (passage) cite.evidenceText = passage
       out.push(cite)
@@ -172,6 +255,43 @@ export function citationLabel(marker: string): string {
   return m ? `[${m[1]}]` : marker
 }
 
+/** True iff this citation names a DESK GROUNDING block rather than a slice
+ *  row or a sub-claim. Reads the producer's `markerClass` when the row carries
+ *  it, else the registered kind vocabulary (pre-stamp rows). */
+export function isGroundingCitation(c: Citation): boolean {
+  return c.markerClass === MARKER_CLASS_GROUNDING || GROUNDING_KINDS.has(c.refKind)
+}
+
+/**
+ * The honest kind label for a chip / hover card / evidence row. Every kind
+ * gets one, so no citation is ever rendered as "Unresolved" when the record
+ * plainly says what it is.
+ */
+export function citationKindLabel(c: Citation): string {
+  if (c.refKind === 'finding') return 'sub-claim'
+  if (c.refKind === 'signal') return 'signal'
+  return GROUNDING_LABEL[c.refKind as GroundingKind] ?? c.refKind
+}
+
+/**
+ * Where a chip click should drill, or `null` when the citation has NO drill
+ * target and a link would be a dead end.
+ *
+ * The `prior_read` block's `ref_id` is an `analyst_outputs` row — a FINDING.
+ * Typing it as a signal (which the pre-2026-08-30 fallback did, because the
+ * `ref_kind` was unrecognized) produced a chip labelled "signal" that drilled
+ * to a signal id that has never existed. The other four grounding kinds are
+ * synthetic and resolve against the finding's own citation record, so they
+ * drill nowhere and are rendered as labeled non-links.
+ */
+export function citationDrill(c: Citation): { kind: 'finding' | 'signal'; id: string } | null {
+  if (!c.refId) return null
+  if (c.refKind === 'prior_read') return { kind: 'finding', id: c.refId }
+  if (c.refKind === 'finding') return { kind: 'finding', id: c.refId }
+  if (c.refKind === 'signal') return { kind: 'signal', id: c.refId }
+  return null
+}
+
 /** Marker → Citation lookup (last write wins on a duplicate marker). */
 export function citationsByMarker(citations: Citation[]): Map<string, Citation> {
   const m = new Map<string, Citation>()
@@ -183,6 +303,17 @@ export function citationsByMarker(citations: Citation[]): Map<string, Citation> 
  *  it. Namespaced to avoid collisions with other ids on the page. */
 export function evidenceAnchorId(refId: string): string {
   return `evidence-${refId}`
+}
+
+/**
+ * The evidence-row anchor for a citation, id-less kinds included. Four of the
+ * five grounding blocks carry no `refId` at all, so keying the anchor on the
+ * id alone collapsed them onto one `evidence-` element (and every chip
+ * scrolled to whichever rendered first). The marker is unique within a
+ * finding, so it is the honest fallback — no id is invented.
+ */
+export function citationAnchorId(c: Citation): string {
+  return c.refId ? evidenceAnchorId(c.refId) : `evidence-marker-${c.marker}`
 }
 
 /** One token of cited prose: a run of plain text, or a marker that resolves to

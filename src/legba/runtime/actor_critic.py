@@ -451,11 +451,32 @@ async def verify_inline_target_finding(
         except (TypeError, ValueError):
             finding_confidence = None
 
+    # D4b: the finding's OWN confidence again — for the FLOOR-ESCALATION
+    # predicate ONLY, on EVERY kind. Deliberately a second variable rather than
+    # widening the one above: ``finding_confidence`` is the T7 hedge-laundering
+    # input that the unit path must keep at None (passing it would switch T7 on
+    # for every unit finding in the fleet), while the composition floor folds
+    # ``LEAST(confidence, overall_score)`` for units too — so a unit whose own
+    # confidence is already under the floor must NOT spend a judge call it
+    # cannot be rescued by. ``getattr`` with a default: the journal path's
+    # payload need not carry the field, and a missing confidence must degrade
+    # to "unknown, do not veto the escalation", never to an AttributeError in
+    # the run path.
+    try:
+        floor_confidence: float | None = float(
+            getattr(finding_payload, "confidence", None)  # type: ignore[arg-type]
+        )
+    except (TypeError, ValueError):
+        floor_confidence = None
+
     from ..data.provenance._core import AnalystContext
+    from ..data.provenance.judge_floor_escalation import (
+        resolve_escalation_floor,
+        verify_with_floor_escalation,
+    )
     from ..data.provenance.verify import (
         JudgeSamplingPolicy,
         build_faithfulness_critique_payload,
-        verify_finding_faithfulness,
     )
     from ..data.provenance.writes import write_critique
 
@@ -492,7 +513,18 @@ async def verify_inline_target_finding(
             judge_sampling = None
 
     try:
-        report = await verify_finding_faithfulness(
+        outcome = await verify_with_floor_escalation(
+            # D4b — FLOOR-TRIGGERED JUDGING. The composition floor may only
+            # exclude a finding on JUDGED evidence: an UNSAMPLED verdict that
+            # would land under the floor is sent to the judge BEFORE the floor
+            # gets to drop it (measured 59/day; ~1,263 findings in 14 days were
+            # floored out of every composition substantially by a UUID hash).
+            # ``None`` when no sampling gate is configured — no gate, no coin
+            # flip, nothing to defend against, and the pass is byte-identical.
+            escalation_floor=(
+                resolve_escalation_floor() if judge_sampling is not None else None
+            ),
+            floor_confidence=floor_confidence,
             body=body,
             citations=citations,
             judge_llm=deps.verify_judge,
@@ -529,6 +561,7 @@ async def verify_inline_target_finding(
             "actor_critic.verify.failed finding_id=%s err=%s", finding_id, exc,
         )
         return None
+    report = outcome.report
 
     # JOURNAL judge-down honesty (j6 review #2, the "cheaper sibling" hole): a
     # journal's deterministic floor is RESOLVE-based, and a token-sprayed entry
@@ -572,6 +605,17 @@ async def verify_inline_target_finding(
         judge_model=judge_model,
         judge_llm_ref=judge_llm_ref,
         judge_route=judge_route,
+        # D4b — the SELECTION provenance. ``judge_trigger`` is the ARM
+        # SEPARATOR: an escalated row reads judge_status='llm' but is NOT a
+        # member of the sampled population (escalation conditions on the
+        # score), so every arm comparison filters
+        # ``COALESCE(judge_trigger,'sampled')='sampled'``. The pre-escalation
+        # pair keeps the unsampled arm's distribution reconstructable — without
+        # it this fix would truncate that arm at the floor and destroy the very
+        # measurement (A-3) that motivated it.
+        judge_trigger=outcome.trigger,
+        pre_escalation_overall_score=outcome.pre_escalation_overall_score,
+        pre_escalation_judge_status=outcome.pre_escalation_judge_status,
     )
 
     # The verify pass IS the critic here — stamp the analyst_ctx with this
@@ -619,7 +663,11 @@ async def verify_inline_target_finding(
     ):
         await _stamp_journal_contradicted_flag(conn, finding_id)
 
-    return report.as_dict()
+    # D4b: the TRACE envelope says the same thing the critique row says — the
+    # report object itself has no notion of why it was judged (the selection
+    # decision belongs to the seam, exactly like judge_llm_ref/judge_route), so
+    # the trigger is folded on here rather than smuggled onto the report.
+    return {**report.as_dict(), "judge_trigger": outcome.trigger}
 
 
 async def verify_structural_claims_finding(

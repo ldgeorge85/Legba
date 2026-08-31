@@ -308,10 +308,19 @@ def test_unit_cadence_is_the_free_staggered_slot():
 
 
 def test_unit_grounding_on_scoped_and_rag_off():
+    """REGISTER-1g (2026-08-29) — `situations` LEFT this set, deliberately.
+
+    This unit is `kind: inline_target`, so `actor_substrate_slice` already hands
+    it the desk's OPEN SITUATION REGISTER as a citable [N] block carrying the H1
+    render repair (evidence age, NEVER/STALE labels, the self-corroboration
+    rule). The `situations` SOURCE produced a SECOND, UNGUARDED copy of the same
+    frames in the same context window. The register still reaches this desk — by
+    the kind, not by the descriptor — so this is a dedupe, not a loss.
+    """
     g = _raw(_UNIT_FILE)["grounding"]
     assert g["enabled"] is True
     assert g["scope"] == ["target_geo", "slice_entities"]
-    assert set(g["sources"]) == {"substrate", "situations", "graph_structure"}
+    assert set(g["sources"]) == {"substrate", "graph_structure"}
     # RAG stays rolled back platform-wide (#176) — no vector:* source.
     assert not any(str(s).startswith("vector:") for s in g["sources"])
 

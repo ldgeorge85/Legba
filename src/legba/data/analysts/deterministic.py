@@ -103,6 +103,7 @@ from .deterministic_handlers import (
     signal_summarizer,
     signals_retention,
     source_track_record,
+    standing_auditor,
     structural_balance,
     unit_correctness_scorer,
 )
@@ -244,6 +245,15 @@ OUTPUT_KIND_BY_SUB_HANDLER: dict[str, object] = {
     # Signed-edge triadic balance over the reified-Nexus graph — its result is
     # a structural-balance summary already captured in the trace.
     "structural_balance": TRACE_ONLY,
+    # standing_auditor (D5) — the REAL product is side-written: one kind=critique
+    # row per audited claim plus a kind=alert row per contradicted high-severity
+    # claim, both through write_analyst_output with their OWN kinds (unaffected
+    # by this map, exactly like scorecard_producer's per-country side-writes).
+    # The returned summary is a per-run RECEIPT, fully audited in analyst_traces
+    # and mirrored into the durable heartbeat row, so emitting it AGAIN as a
+    # kind=finding would put an audit receipt into the finding stream the audit
+    # is supposed to be grading.
+    "standing_auditor": TRACE_ONLY,
     # L-203 migrated maintenance modules — pure substrate maintenance, no
     # analytical finding: GC of orphaned entities, canonical entity merges,
     # temporal fact-decay stamps, nexus-decay stamps.
@@ -373,6 +383,14 @@ SUB_HANDLERS: dict[str, Any] = {
     # P3-T6 composition lineage-integrity sweep — per-floor derived_from BFS
     # (validate_lineage) over the world/country composition roots. Refuses loud.
     "composition_lineage_sweep": composition_lineage_sweep.handle,
+    # D5 STANDING EXTERNAL AUDIT — the only organ in the fleet whose truthmaker
+    # is OUTSIDE the substrate. Daily, it samples the world read + a date-seeded
+    # rotation of desk heads, lifts 1-2 checkable world-claims from each, checks
+    # them via the web_access PACK TOOL, and writes a SUPPORTED /
+    # CONTRADICTED / NOT_FOUND critique per claim (its own pipeline stamp, never
+    # the faithfulness one) plus a heartbeat row that makes the auditor itself
+    # watchable.
+    "standing_auditor": standing_auditor.handle,
     # L-203 migrated maintenance modules
     "adversarial_signals": adversarial_signals.handle,
     "entity_gc": entity_gc.handle,

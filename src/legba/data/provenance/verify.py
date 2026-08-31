@@ -123,11 +123,13 @@ from .absence_slice import (  # noqa: F401 — re-exported verify surface
     _slice_scope_countries,
     absence_scope_qualifier,
     denied_enumeration,
+    hedged_conflict_disclosure,
     load_absence_slice_rows,
     load_absence_slice_titles,
     quote_misses_the_denied_scope,
     row_restates_the_negative,
 )
+from . import composition_integrity  # H2 — the composition-integrity brick (§6)
 # K-1 (2026-08-05) — the QUOTE RULES are the judge subsystem's fourth brick, and
 # the extraction seam the module-size gate named by name ("prompt registry +
 # ``_run_judge`` + the quote/severity rules"). Every deterministic test for
@@ -139,6 +141,7 @@ from .absence_slice import (  # noqa: F401 — re-exported verify surface
 from .judge_quote_rules import (  # noqa: F401 — re-exported verify surface
     _CARVE_OUT_QUOTE_MIN_SHARED_TERMS,
     _CLAIM_CITES_PRIOR_READ_RE,
+    _JUDGE_CONTRADICTED_HEDGED,
     _JUDGE_CONTRADICTED_MACHINE_ROW,
     _JUDGE_CONTRADICTED_OFF_SCOPE,
     _JUDGE_CONTRADICTED_ROUTE_EXCLUDED,
@@ -150,6 +153,7 @@ from .judge_quote_rules import (  # noqa: F401 — re-exported verify surface
     _JUDGE_QUOTE_RULE,
     _PRIOR_READ_MARKER,
     _JUDGE_QUOTE_CONFIRMS,
+    _VERDICT_CONTRADICTED_HEDGED,
     _VERDICT_CONTRADICTED_MACHINE_ROW,
     _VERDICT_CONTRADICTED_OFF_SCOPE,
     _VERDICT_CONTRADICTED_UNQUOTED,
@@ -182,6 +186,25 @@ from .judge_absence_rubric import (  # noqa: F401 — re-exported verify surface
     _JUDGE_NONPROP_UNEARNED,
     _VERDICT_NONPROP_UNEARNED,
     nonproposition_is_earned,
+)
+# V-I (2026-08-27) — JUDGE VERDICT PARSING, the judge subsystem's next brick:
+# the JSON-object extractor and the raw-verdict -> reason/detail mapping the
+# module-size gate's own note named ("prompt registry + ``_run_judge`` + the
+# quote/severity rules" is taken; this is the parsing half left beside it).
+# ``_is_uncited_world_baseline`` (V-G5) rides along as the smallest adjacent
+# self-contained helper. Imported ONE WAY and RE-EXPORTED, so
+# ``verify._extract_json_objects``, ``verify._JudgeVerdictError``,
+# ``verify._judge_reason``, ``verify._judge_detail`` and
+# ``verify._is_uncited_world_baseline`` resolve exactly as before; the
+# severity DECISION (the fail-class table and ``_DEMOTION_COUNTERS``) and the
+# markerless-uncited FOLD (report/ledger types this module owns) stay here.
+from .judge_verdict_parsing import (  # noqa: F401 — re-exported verify surface
+    _JUDGE_QUOTE_DETAIL_CHARS,
+    _JudgeVerdictError,
+    _extract_json_objects,
+    _is_uncited_world_baseline,
+    _judge_detail,
+    _judge_reason,
 )
 # V-G7 (2026-08-03) — the STRUCTURAL-CLAIMS verify profile is the SECOND,
 # deterministic critique path (see the sibling module's header for why it is a
@@ -1045,6 +1068,13 @@ _FAIL_CLASS_BY_REASON: dict[str, str] = {
     # overclaim family: the clause claims verification status its evidence
     # does not carry. COUNTED on the deterministic floor (not advisory).
     _UNHEDGED_PERIPHERY: FAIL_CLASS_SOFT,
+    # H1 (2026-08-27) — a world claim whose ONLY support is the open-situation
+    # REGISTER, stated as currency or corroboration ("the register confirms the
+    # strike remains the active driver"). The register is the product's own
+    # bookkeeping; a clause resting on it alone claims a verification status its
+    # evidence cannot carry. Same overclaim family as _UNHEDGED_PERIPHERY —
+    # SOFT, because nothing is fabricated and nothing is contradicted.
+    "register_self_corroboration": FAIL_CLASS_SOFT,
     # two cited sub-claims share underlying lineage — evidence overclaim (advisory)
     "double_counted": FAIL_CLASS_SOFT,
     # S3-T1 — a 'triggered' structured indicator with no citation — uncited claim
@@ -1110,6 +1140,14 @@ _FAIL_CLASS_BY_REASON: dict[str, str] = {
     # authorities. Soft: the routing decision is the platform's answer to what
     # KIND of claim this is, and the hard class is not available for it.
     "judge_contradicted_route_excluded": FAIL_CLASS_SOFT,
+    # V-J1 (2026-08-28) — the claim NAMED both poles and marked one WEAK ("a
+    # weakly-supported report indicates no new evidence ... which conflicts with
+    # the VERIFIED finding of an advancing procurement pact"), and the refutation
+    # is that same disclosed weak side. Hard-failing a sentence for not believing
+    # what it said it does not believe punishes the honest hedge. Soft, and its
+    # own class: V-I5 is about what KIND of read the ROUTER said this is; this is
+    # about what the SENTENCE says.
+    "judge_contradicted_hedged_conflict": FAIL_CLASS_SOFT,
     # V-G5 (2026-08-03) — a claim with NO citation marker resting on a
     # HISTORICAL / STRUCTURAL BASELINE about the world ("Argentina's historical
     # propensity for coups", "the base rate for the United States"). The judge is
@@ -1143,6 +1181,7 @@ _FAIL_CLASS_BY_REASON: dict[str, str] = {
     # here and nowhere else. An EARNED one reaches no table at all — it is
     # ungraded, never a span and never a ledger row.
     _JUDGE_NONPROP_UNEARNED: FAIL_CLASS_SOFT,
+    **composition_integrity.FAIL_CLASSES,  # H2 — see that module's banner
 }
 
 
@@ -1914,6 +1953,229 @@ def _correlated_components(
     return list(comps.values())
 
 
+# ---------------------------------------------------------------------------
+# LRF (2026-08-29) — THE LENGTH-RESPONSE FLATTENING. An exemption belongs to the
+# CLAUSE that earns it, never to the SPAN that happens to contain it.
+#
+# THE MEASURED DEFECT (planning/CAMPAIGN_2026-08-29/PREMISE_GRADING_LOOP.md,
+# A-5b + Decision 6B): the gate score peaks at exactly four checkable claims and
+# declines monotonically thereafter, so a desk that says MORE checkable things
+# scores WORSE — while the external rounds independently measure the product
+# under-hedging 42 to 1 with zero over-reads in two rounds. Those are the same
+# fact from two ends: the metric pays the product to say less.
+#
+# WHERE THE PAYMENT IS MADE. Two rungs of this ladder grant a WHOLE-SPAN
+# exemption on the strength of a PREFIX or a SUBSTRING and never read what else
+# the span asserts. Census over 4,000 live bodies / 35,951 segmented spans
+# (only 40.9% of which reach the denominator at all):
+#
+#   * ``_SYNTHESIS_PREFIXES``      5,026 spans (14.0%) — every clause OPENING
+#     "BLUF"/"Assessed:"/"Consequently"/… leaves the denominator whole, e.g.
+#     *"**BLUF:** Canada is wielding high-severity retaliatory tariffs on U.S.
+#     imports, covering hundreds of product categories with duties up to 50 %
+#     effective 8 September 2026."* — five checkable particulars, uncited,
+#     uncounted. This is the shape of R2's worst adjudicated defect (the AR
+#     register-loop BLUF, first sentence of the read, wrong about the world).
+#   * ``_is_absence_claim``        3,308 spans (9.2%) — a SUBSTRING test, so a
+#     positive assertion carrying an absence subclause anywhere is exempt, e.g.
+#     *"The latest reports continue to highlight government praise of wartime
+#     management and the absence of any reported elite purges …"* — the main
+#     assertion is positive, checkable, uncited, and uncounted.
+#
+# THE CORRECTION IS THE Q-1 ONE, ONE LAYER OUT. ``is_labeled_scaffold`` already
+# fixed exactly this failure for the labelled-scaffold rung — *"the exemption
+# keyed on the LABEL and never once looked at what followed it"* — by reading
+# the remainder. The same rule now applies to the two rungs above: a span is
+# exempt as synthesis or as absence only when EVERY clause of it earns that
+# exemption. A clause that earns nothing is a claim, and claims are counted.
+#
+# STRICTLY ADDITIVE, BY CONSTRUCTION. This makes two ``return False`` rungs
+# CONDITIONAL and adds no new exemption anywhere, so no span that reaches the
+# denominator today can leave it. Measured: 14,717 -> 16,694 counted spans
+# (+1,977, +13.4%), 0 removals. That one-directional property is what lets the
+# lineage state the expected shift without hedging.
+#
+# WHAT IS DELIBERATELY NOT TOUCHED (review 6B calls these defensible, and the
+# census agrees — they are TRUE non-claims, not laundered ones): headings
+# (23.6%), the as-of coordinate line (10.5%), forward-looking watch bullets,
+# ``[no citation]``-marked spans, the short label:value scaffold. Also NOT
+# touched: what ``no_citation`` MEANS, and the judge's markerless licence — the
+# standard conflict is a separate decision (review 1C/D3), and this train would
+# corrupt it by moving two things at once.
+# ---------------------------------------------------------------------------
+
+#: A break strong enough that what FOLLOWS it is an independent assertion rather
+#: than a continuation of the clause before. Deliberately narrow: a semicolon, a
+#: spaced dash, and the genuine CONTRAST conjunctions. ``, so`` / ``, and`` are
+#: absent on purpose — a consequence clause ("…, so the posture is unchanged")
+#: is a reading OF the clause before it and inherits that clause's exemption.
+_CLAUSE_BREAK_RE = re.compile(
+    r"(?:\s*;\s*)"
+    r"|(?:\s+[—–]\s+)"
+    r"|(?:,\s+(?:but|while|whereas|although|though)\s+)",
+    re.IGNORECASE,
+)
+
+#: A clause OPENING with one of these is subordinate to the clause before it —
+#: a consequence, a restatement, or a participial tail — so it cannot by itself
+#: defeat that clause's exemption ("No new deployments were reported; thus the
+#: posture is unchanged").
+_DEPENDENT_CLAUSE_OPENER_RE = re.compile(
+    r"^(?:so|thus|hence|therefore|thereby|which|that|and|yet|however|"
+    r"keeping|leaving|indicating|confirming|reflecting|suggesting|signalling|"
+    r"signaling|implying|meaning|consistent|in\s+line|as\s+recorded|as\s+noted)\b",
+    re.IGNORECASE,
+)
+
+
+#: How far into a clause an absence idiom may sit and still be the clause's MAIN
+#: assertion. A scope frame or a connective legitimately precedes it ("However,
+#: the absence of …", "In the current window no new …"); a whole predicate does
+#: not ("The latest reports continue to highlight government praise of wartime
+#: management AND the absence of …", where the idiom lands at word 13). Measured
+#: against the live census: 6 separates the two populations cleanly.
+_ABSENCE_LEAD_WORDS = 6
+
+
+def _absence_governs(low: str) -> bool:
+    """Is this clause's MAIN assertion the negative, or does it merely CARRY one?
+
+    ``_is_absence_claim`` is a SUBSTRING test over the whole span — deliberately
+    so, because the V3 route, V-B and ``composition_integrity`` all want to know
+    whether an absence idiom is present ANYWHERE. The FLOOR's exemption needs the
+    stronger question, and asking the weaker one is what let a positive assertion
+    with an absence subclause leave the denominator entirely. Positional, in the
+    same spirit as W1(e)'s continuity test and W31's strong-opener anchor: the
+    bare ``No``/``None`` opener governs by definition, and a marker idiom governs
+    when it opens the clause rather than trailing a predicate.
+    """
+    if not _is_absence_claim(low):
+        return False
+    # ``_first_absence_marker_pos`` is the SHARED locator V-B already uses, so
+    # the position this reads can never drift from the position that module
+    # reasons about. It also answers ``0`` for the bare opener, which is the
+    # governing case by definition.
+    first = _first_absence_marker_pos(low)
+    if first < 0:
+        # The shared grammar matched but the locator found nothing to place —
+        # keep today's exemption (never less exempt than the shipped tree).
+        return True
+    return len(low[:first].split()) <= _ABSENCE_LEAD_WORDS
+
+
+#: Calendar month names — the cheapest unambiguous DATE anchor.
+_MONTH_NAMES = (
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december",
+)
+
+#: Citation markers, stripped before the quantity test so ``[12]`` is not a
+#: number and ``[[ref:3]]`` is not a date.
+_LRF_MARKER_STRIP_RE = re.compile(r"\[\[ref:\d+\]\]|\[\d+(?:\s*[-–]\s*\d+)?\]")
+
+#: The run's own WINDOW boilerplate ("in the last 72 hours", "this 24-hour
+#: slice"). Every finding carries it, it is a coordinate of the pass rather than
+#: a fact about the world, and counting it as a quantity would make the test fire
+#: on every derived read that mentions its own window.
+_WINDOW_QUANTITY_RE = re.compile(
+    r"\b\d+\s*[-–]?\s*(?:hours?|hrs?|days?|weeks?|months?|years?|minutes?)\b",
+    re.IGNORECASE,
+)
+
+
+def _carries_specific_fact(clause: str) -> bool:
+    """Does this clause assert a SPECIFIC fact — an event, number, name or place?
+
+    The wording is not incidental: it is the live judge lead's own standard for
+    what a markerless claim must prove ("mark it SUPPORTED unless it asserts a
+    SPECIFIC fact (an event, number, name, or place) that is absent from …"). The
+    floor cannot tell an analyst's derived read from a fact wearing a signpost by
+    reading its grammar, and inventing a lexicon for that would be exactly the
+    fitted-to-one-adjudicated-row pathology the 08-29 review names. So the
+    exemption is defeated by the SAME test the judge is already told to apply,
+    and by nothing else:
+
+      * a DATE (a month name), or
+      * a QUANTITY that is not the run's own window boilerplate, or
+      * a NAMED entity — a capitalised token past the clause's first word, an
+        opening POSSESSIVE ("Argentina's ongoing maritime pilots' strike …",
+        R2's worst adjudicated defect), an acronym, or an opening capital
+        followed by another ("Supreme Leader …", "Lop Nur airbase").
+
+    Deliberately NOT a name: a lone capital in the clause's first position
+    followed by lower case. "Italy is currently under elevated pressure" and
+    "Escalation risk remains moderate" are derived reads whose only capital is
+    the sentence's own first letter, and Q-1 pinned that they must not become
+    ``no_citation`` defects. That pin survives this train intact.
+    """
+    text = _LRF_MARKER_STRIP_RE.sub(" ", clause).strip()
+    if not text:
+        return False
+    low = text.lower()
+    if any(m in low for m in _MONTH_NAMES):
+        return True
+    if re.search(r"\d", _WINDOW_QUANTITY_RE.sub(" ", text)):
+        return True
+    toks = text.split()
+    for i, tok in enumerate(toks):
+        core = tok.strip("([{\"'“”‘’,;:.!?)]}—–-")
+        if len(core) < 2 or not core[:1].isupper():
+            continue
+        if i:
+            return True
+        # Position 0: a capital is ambiguous with ordinary sentence casing, so it
+        # must EARN its reading as a name.
+        if core.endswith(("'s", "’s")) or core.isupper():
+            return True
+        nxt = toks[1].strip("([{\"'“”‘’,;:.!?)]}—–-") if len(toks) > 1 else ""
+        if nxt[:1].isupper():
+            return True
+    return False
+
+
+def _strip_synthesis_opener(low: str) -> str:
+    """``low`` with a leading ``_SYNTHESIS_PREFIXES`` opener removed.
+
+    Returned UNCHANGED when the clause opens with none of them, so the caller
+    needs no second test. The trailing punctuation a signpost carries
+    (``BLUF:``, ``Net,``, ``Assessment —``) is stripped with it.
+    """
+    for pref in _SYNTHESIS_PREFIXES:
+        if low.startswith(pref):
+            return low[len(pref):].lstrip(" :,-–—")
+    return low
+
+
+def _asserts_beyond_exemption(span: str) -> bool:
+    """Does any CLAUSE of ``span`` earn neither the synthesis nor the absence
+    exemption — i.e. does the span assert something past its signpost?
+
+    ``True`` ⇒ the span carries a first-order claim and belongs in the
+    denominator whatever its opener says. ``False`` ⇒ every clause is a derived
+    read or a negative, and the span keeps the exemption it has today.
+    """
+    flat = re.sub(r"[*_`]+", "", span).strip()
+    for i, raw in enumerate(c for c in _CLAUSE_BREAK_RE.split(flat) if c and c.strip()):
+        clause = raw.strip()
+        low = clause.lower()
+        if i and _DEPENDENT_CLAUSE_OPENER_RE.match(low):
+            continue
+        cut = len(low) - len(_strip_synthesis_opener(low))
+        clause, low = clause[cut:], low[cut:]
+        if not low or _DEPENDENT_CLAUSE_OPENER_RE.match(low):
+            continue
+        # The same two-word-run bar the ladder below applies to a whole span: a
+        # clause thinner than that is punctuation, not an assertion.
+        if len(re.findall(r"[A-Za-z]{2,}", low)) < 2:
+            continue
+        if _absence_governs(low):
+            continue
+        if not _carries_specific_fact(clause):
+            continue
+        return True
+    return False
+
+
 def _is_fact_asserting(claim: str) -> bool:
     """Heuristic: is this span a CHECKABLE factual assertion?
 
@@ -1979,16 +2241,29 @@ def _is_fact_asserting(claim: str) -> bool:
             return False
     # (#1) A BLUF / Assessment / synthesis OPENER is the analyst's derived read
     # over the cited evidence, not a new first-order citable fact.
-    for pref in _SYNTHESIS_PREFIXES:
-        if low.startswith(pref):
-            return False
+    #
+    # LRF: …provided that is ALL it is. The opener exempts the clause it opens,
+    # never the sentence it introduces — a signpost in front of a checkable fact
+    # is a signpost, and the fact behind it is counted (see the banner above).
+    if low.startswith(_SYNTHESIS_PREFIXES) and not _asserts_beyond_exemption(stripped):
+        return False
     # Q-1: the LABELED spelling of the same thing. ``**Severity:** elevated — no
     # nationwide blackout has been reported`` and ``Assessed: elevated — no
     # nationwide blackout has been reported`` are one sentence in two costumes;
     # before this the first was floor-exempt only by accident (the blanket
     # scaffold rule) and would have become an uncited FACT the moment that rule
     # started reading prose. FLOOR-ONLY — the judge grades it either way.
-    if is_assessment_scaffold(s):
+    #
+    # LRF: the THIRD costume of the same defect, and the one the census could not
+    # see because the two rungs above it catch most of the traffic first. Q-1
+    # corrected ``is_labeled_scaffold`` to read the remainder and left its sibling
+    # ``is_assessment_scaffold`` keyed on the LABEL alone — so ``**BLUF:** Canada
+    # is wielding retaliatory tariffs … with duties up to 50 % effective 8
+    # September 2026.`` was exempt for wearing a recognised signpost. Same earn
+    # test, same reason. The ROUTE (``_claim_kind``) still keys on the label: a
+    # labelled derived read is still a ``synthesis``-kind span for the branch
+    # telemetry even when its remainder returns it to the floor's denominator.
+    if is_assessment_scaffold(s) and not _asserts_beyond_exemption(stripped):
         return False
     # (#1) An ABSENCE / negative finding cannot cite a signal that does not exist
     # — flagging it no_citation crushed honest low-risk reads. A clause OPENING
@@ -1997,7 +2272,14 @@ def _is_fact_asserting(claim: str) -> bool:
     # positive "No fewer/less than" idioms. V3: this test is factored into
     # ``_is_absence_claim`` so the floor exemption and the classifier's ``absence``
     # route share ONE definition and cannot drift apart.
-    if _is_absence_claim(low):
+    #
+    # LRF: the shared GRAMMAR is untouched — ``_is_absence_claim`` still decides
+    # what an absence IS, so ``_claim_kind`` still routes this span to the absence
+    # rubric and V-B/composition_integrity are byte-identical. What changed is the
+    # SCOPE of the exemption it grants here: a substring test cannot excuse a
+    # sentence whose main assertion is positive ("… continue to highlight
+    # government praise … and the absence of any reported elite purges").
+    if _is_absence_claim(low) and not _asserts_beyond_exemption(stripped):
         return False
     # Require at least a few word characters so a stray "—" / "..." isn't a claim.
     if len(re.findall(r"[A-Za-z]{2,}", stripped)) < 2:
@@ -2639,6 +2921,127 @@ def _is_strong_absence_assertion(low: str) -> bool:
     return bool(_ABSENCE_VERDICT_TAIL_RE.search(low))
 
 
+# ---------------------------------------------------------------------------
+# H1 — SELF-CORROBORATION FROM THE REGISTER (CORRECTNESS-R2 M-1 / rec. 1)
+# ---------------------------------------------------------------------------
+#
+# THE DEFECT, verbatim from the round's worst read. The AR escalation head:
+# "The open-situation register records a high intensity (59.1) and recent
+# activity, indicating concrete operational impact rather than mere rhetoric" —
+# confidence 0.90, citing ordinals past its own slice count, i.e. the register
+# grounding block. The AR composition's BLUF: "the register CONFIRMS the strike
+# remains the active driver with high intensity". The strike had ended three
+# weeks earlier; the register's intensity was the sum of the desks' own "no
+# material change" bookkeeping.
+#
+# The register is ``[[ref:N]]``-citable — deliberately, because an UNCITED prior
+# leaking into cited analysis is this platform's named failure mode. But being
+# citable is exactly what exempts it from the standing "no claim may rest on
+# orientation alone" clause, and that exemption is the bug. This guard closes it
+# from the verify side: a world claim whose ONLY support is the register, stated
+# in the language of currency or corroboration, is not supported by anything.
+#
+# SOFT, and the class is earned rather than assumed. The clause is not
+# fabricating a citation (the register block is real and the model was shown it)
+# and its cited source does not contradict it — it claims a VERIFICATION STATUS
+# its evidence cannot carry, which is the ``_UNHEDGED_PERIPHERY`` /
+# ``hedge_laundering`` overclaim family. The render-side rule
+# (``window_ledger.REGISTER_SELF_CORROBORATION_RULE``) is the primary fix; this
+# is the backstop that measures whether it took.
+#
+# CONSERVATIVE ON BOTH LEGS, because a false positive here demotes a legitimate
+# continuity sentence:
+#   * the claim's resolved markers must ALL be register ordinals — one basis or
+#     ledger citation alongside and the clause has real evidence, so it passes;
+#   * and it must assert CURRENCY ("remains", "ongoing", "continues") or
+#     CORROBORATION ("confirms", "corroborates"). A clause that merely reports
+#     what the register holds ("the register lists three open frames") asserts
+#     nothing about the world and is never flagged.
+
+_REGISTER_SELF_CORROBORATION = "register_self_corroboration"
+
+#: ``ref_kind`` the register citation carries
+#: (``window_ledger.SITUATION_REGISTER_REF_KIND``). Duplicated as a literal
+#: rather than imported: ``verify`` sits UNDER ``data.analysts`` in the import
+#: graph, and the analysts package imports verify. A drift-guard test asserts the
+#: two strings are equal.
+_REGISTER_REF_KIND = "situation_register"
+
+#: CORROBORATION language — the product vouching for the world with its own
+#: bookkeeping. These are the verbs that turn an orienting index into evidence.
+_REGISTER_CORROBORATION_RE = re.compile(
+    r"\b(?:confirm(?:s|ed|ing)?|corroborat(?:es|ed|ing|ion)"
+    r"|substantiat(?:es|ed|ing)|validat(?:es|ed|ing)|verif(?:ies|ied|ying)"
+    r"|bears?\s+out|attests?\s+to|demonstrat(?:es|ed|ing))\b"
+)
+
+#: CURRENCY language — asserting that the underlying event is still happening.
+#: The exact shapes the AR read used ("remains the active driver", "the strike
+#: continues", "ongoing"), plus the near neighbours.
+_REGISTER_CURRENCY_RE = re.compile(
+    r"\b(?:remains?|remaining|continu(?:es|ing)|ongoing|still\s+\w+"
+    r"|persist(?:s|ing)|sustain(?:s|ing|ed)|active\s+driver"
+    r"|currently\s+(?:active|underway|ongoing)|underway"
+    r"|shows?\s+no\s+sign\s+of\s+(?:easing|abating))\b"
+)
+
+
+def register_self_corroboration_spans(
+    body: str, citations: Any
+) -> list[UnsupportedSpan]:
+    """FLAG world claims resting ONLY on the open-situation register (H1).
+
+    One soft :data:`_REGISTER_SELF_CORROBORATION` span per hit, text = the RAW
+    segmented claim (the #116c judge-path dedup matches on it, so a claim the
+    judge already graded stays the judge's).
+
+    INERT unless the finding actually cites the register: with no
+    ``ref_kind='situation_register'`` citation in the list this returns ``[]``
+    without segmenting the body, so every finding in the fleet that never sees a
+    register block is byte-identical to its pre-H1 verdict.
+
+    Never raises — a malformed citation list yields no spans, never an exception
+    inside the verify path.
+    """
+    if not body:
+        return []
+    try:
+        register_ords = {
+            n
+            for n, kind in _build_ordinal_map(
+                citations, lambda entry, _n: entry.get("ref_kind")
+            ).items()
+            if kind == _REGISTER_REF_KIND
+        }
+    except Exception:  # noqa: BLE001 — a guard never breaks the verify path
+        return []
+    if not register_ords:
+        return []
+    spans: list[UnsupportedSpan] = []
+    for claim in _segment_claims(body):
+        if not _is_fact_asserting(claim):
+            continue
+        markers = _markers_in_claim(claim, subclaim=True) or _markers_in_claim(
+            claim, subclaim=False
+        )
+        # ALL resolved markers must be the register. A clause with one real
+        # evidence citation beside it is grounded in that citation.
+        if not markers or not all(n in register_ords for n in markers):
+            continue
+        low = claim.lower()
+        if _REGISTER_CORROBORATION_RE.search(low) or _REGISTER_CURRENCY_RE.search(
+            low
+        ):
+            spans.append(
+                UnsupportedSpan(
+                    text=claim,
+                    reason=_REGISTER_SELF_CORROBORATION,
+                    markers=list(markers),
+                )
+            )
+    return spans
+
+
 def unscoped_absence_spans(body: str) -> list[UnsupportedSpan]:
     """FLAG world-scoped absence claims that carry no collection scoping (W31).
 
@@ -3040,410 +3443,45 @@ def _fold_indicators(
     )
 
 
-# ---------------------------------------------------------------------------
-# M13 / M15 (2026-07-06) — write/verify-time world-knowledge + target guards
-# ---------------------------------------------------------------------------
-#
-# The faithfulness judge grades CITATION-support, not world-knowledge, so two
-# defect classes both the citation floor AND the judge miss:
-#
-#   M13 STALE-CUTOFF LEADER — an assessor back-fills a current officeholder from a
-#     pre-cutoff training prior ("renewed cooperation via FORMER President Trump"
-#     while the cited signals establish Trump as the SITTING president).
-#   M15 CROSS-TARGET LEAK — a per-country UNIT finding whose named subject-country
-#     is the WRONG one (a Turkey desk head titled/bodied entirely "Romania").
-#
-# Both are cheap LEXICAL backstops that FLAG (add an unsupported span → demote
-# effective_confidence via the min(confidence, faithfulness) gate), NEVER delete.
-# Kept LOCAL + stdlib-only so verify.py stays slim-image-safe (no runtime import);
-# the curated maps deliberately MIRROR their runtime counterparts (the
-# legba.runtime.grounding current-officeholder anchor / finding_is_off_target
-# gazetteer) — minimal by design (US president only; a small country-token set).
-
-_STALE_LEADER_REASON = "stale_leader"
-_CROSS_TARGET_REASON = "cross_target_leak"
-
-# Curated CURRENT officeholders (US president ONLY — the one clear live stale-
-# cutoff error; extend only for a NEW confirmed live error). Two stale shapes:
-#   * a "former/ex/past ... <current holder>" reference — calling the SITTING
-#     holder "former" is always a temporal error;
-#   * a predecessor asserted as the CURRENT / sitting holder.
-# The qualifier→title separator is ``[-\s]+`` so the HYPHENATED "ex-President
-# Trump" matches (``ex`` + ``-`` + ``President``) as well as the spaced forms
-# ("former President Trump" / "past President Trump").
-_STALE_TRUMP_FORMER_RE = re.compile(
-    r"\b(?:former|ex|past|previous)[-\s]+(?:u\.?\s?s\.?\s+)?presidents?\s+"
-    r"(?:donald\s+(?:j\.?\s+)?)?trump\b"
-    r"|\btrump\b\s*,?\s+(?:the\s+)?(?:former|ex|past|previous)[-\s]+"
-    r"(?:u\.?\s?s\.?\s+)?president\b",
-    re.IGNORECASE,
+# 2026-08-29 ([N+1] transparency train) — the WORLD-KNOWLEDGE + TARGET GUARDS
+# (M13 stale leader / E-1 facts-reconciled officeholder / M15 cross-target leak)
+# moved to ``world_knowledge_guards.py``, the extraction this train was owed: the
+# file stood at 5,891 lines against its 5,900 DO-NOT-RAISE ceiling. The family
+# carried its own section banner and its own test file, and its members only ever
+# talked to each other. Imported ONE WAY and RE-EXPORTED, so
+# ``verify.stale_leader_spans`` / ``verify.extract_officeholder_claims`` /
+# ``verify._STALE_LEADER_REASON`` resolve exactly as before; the FOLDS below stay
+# here, beside the report + ledger types this module owns.
+from .world_knowledge_guards import (  # noqa: F401 — re-exported verify surface
+    _CROSS_TARGET_REASON,
+    _CURRENT_OFFICEHOLDER_SQL,
+    _LEADER_OF_PREDICATE,
+    _OFFICEHOLDER_ACRONYMS,
+    _OFFICEHOLDER_COUNTRY_FIRST_RE,
+    _OFFICEHOLDER_COUNTRY_GROUPS,
+    _OFFICEHOLDER_FAMILY_PREDICATES,
+    _OFFICEHOLDER_NAME_RE,
+    _OFFICEHOLDER_ROLE_FIRST_RE,
+    _OFFICEHOLDER_ROLE_PREDICATES,
+    _OFFICEHOLDER_ROLE_RE,
+    _OFFICEHOLDER_SKIP_QUALIFIER_RE,
+    _PERSON_NAME_NOISE,
+    _STALE_LEADER_PATTERNS,
+    _STALE_LEADER_REASON,
+    _STALE_LEADER_VS_FACTS_REASON,
+    _STALE_TRUMP_FORMER_RE,
+    _STALE_VS_FACTS_MAX_CLAIMS,
+    _STALE_VS_FACTS_MAX_SPANS,
+    _STALE_WRONG_POTUS_RE,
+    OfficeholderClaim,
+    _country_aliases_for,
+    _officeholder_country_alternation,
+    _person_name_tokens,
+    cross_target_leak_span,
+    extract_officeholder_claims,
+    stale_leader_spans,
+    stale_leader_vs_facts_spans,
 )
-# A predecessor asserted AS THE CURRENT holder — ONLY explicit current-frame
-# shapes. The bare "now/today within N chars" proximity is DELIBERATELY dropped:
-# it false-flagged "President Biden, NOW a private citizen" (which correctly says
-# Biden is out of office). Two accepted shapes: an explicit "current/sitting/
-# incumbent (US) president … Biden", or "President Biden {remains in office | is
-# the current/sitting president}".
-_STALE_WRONG_POTUS_RE = re.compile(
-    r"\b(?:current|sitting|incumbent)\s+(?:u\.?\s?s\.?\s+)?president[^.\n;]{0,32}"
-    r"\b(?:joe\s+)?biden\b"
-    r"|\bpresident\s+(?:joe\s+)?biden\b[^.\n;]{0,24}"
-    r"\b(?:remains?\s+in\s+office|is\s+(?:the\s+)?(?:current|sitting|incumbent)(?:\s+president)?)\b",
-    re.IGNORECASE,
-)
-_STALE_LEADER_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (_STALE_TRUMP_FORMER_RE,
-     "the current US president is Donald Trump, not a 'former' one"),
-    (_STALE_WRONG_POTUS_RE,
-     "the current US president is Donald Trump, not Biden"),
-)
-
-
-def stale_leader_spans(text: str) -> list[UnsupportedSpan]:
-    """FLAG stale-cutoff current-leader errors in ``text`` (M13).
-
-    Curated + US-only + conservative — at most one span per pattern. Never raises.
-    """
-    if not text:
-        return []
-    spans: list[UnsupportedSpan] = []
-    for regex, label in _STALE_LEADER_PATTERNS:
-        m = regex.search(text)
-        if m:
-            frag = text[max(0, m.start() - 12): m.end() + 12].strip()
-            spans.append(
-                UnsupportedSpan(
-                    text=f"stale current-leader reference — {label} (…{frag}…)"[:400],
-                    reason=_STALE_LEADER_REASON,
-                )
-            )
-    return spans
-
-
-# ---------------------------------------------------------------------------
-# E-1 (2026-07-27 sweep rec #2) — the FACTS-RECONCILED officeholder guard.
-#
-# The M13 heuristic above works off a curated regex pair (model-internal world
-# knowledge, US-only). This guard is its data-backed sibling: when a finding
-# names a person in an officeholder ROLE for a country ("DRC Prime Minister
-# <name>", "President <name> of Venezuela"), probe the CURRENT officeholder
-# facts (predicate in the head-of-state / head-of-government / leader-of
-# family, superseded_by IS NULL AND valid_until IS NULL) and FLAG a mismatch.
-#
-# HONESTY CONSTRAINTS (load-bearing):
-#   * the seed facts can THEMSELVES be stale (known live: the DRC PM row is
-#     wrong upstream) — a mismatch DEMOTES/flags via the existing unsupported-
-#     span path, NEVER auto-corrects either side;
-#   * the reason is ``stale_leader_vs_facts`` (distinct from the heuristic's
-#     ``stale_leader``) so calibration can score the two evidence bases apart;
-#   * fail-OPEN everywhere: no current fact row for the claimed office → no
-#     flag; a claimed person matching ANY current family officeholder (role
-#     confusion, co-office) → no flag; a facts read failure → degrade, no flag.
-# ---------------------------------------------------------------------------
-
-_STALE_LEADER_VS_FACTS_REASON = "stale_leader_vs_facts"
-
-# Country alias groups: every surface form the extractor recognizes AND every
-# candidate ``facts.subject`` spelling probed (lower()-compared). One tuple per
-# country so a match on any surface probes all its spellings. Conservative +
-# minimal by design (the seeded-world scope), like the M13/M15 maps above.
-_OFFICEHOLDER_COUNTRY_GROUPS: tuple[tuple[str, ...], ...] = (
-    ("united states", "united states of america", "america", "usa"),
-    ("united kingdom", "great britain", "britain"),
-    ("russia", "russian federation"),
-    ("china", "people's republic of china"),
-    ("india",), ("france",), ("germany",), ("italy",), ("japan",),
-    ("canada",), ("mexico",), ("brazil",), ("argentina",), ("australia",),
-    ("turkey", "turkiye"), ("iran",), ("israel",), ("ukraine",),
-    ("saudi arabia",), ("south korea",), ("north korea",), ("south africa",),
-    ("indonesia",), ("pakistan",), ("venezuela",), ("slovenia",),
-    ("somalia",), ("sudan",), ("egypt",), ("nigeria",), ("poland",),
-    ("spain",), ("netherlands",),
-    ("democratic republic of the congo", "dr congo", "drc", "congo-kinshasa"),
-)
-# Uppercase-only acronym surfaces (NEVER matched case-insensitively — "us" /
-# "it" / "in" are ordinary English words) → their alias group.
-_OFFICEHOLDER_ACRONYMS: dict[str, tuple[str, ...]] = {
-    "US": _OFFICEHOLDER_COUNTRY_GROUPS[0],
-    "U.S.": _OFFICEHOLDER_COUNTRY_GROUPS[0],
-    "USA": _OFFICEHOLDER_COUNTRY_GROUPS[0],
-    "UK": _OFFICEHOLDER_COUNTRY_GROUPS[1],
-    "DRC": _OFFICEHOLDER_COUNTRY_GROUPS[-1],
-}
-
-# Role surface → the facts predicates whose CURRENT row is the reconciliation
-# BASIS (canonical lowercase-spaced forms — vocabulary.PREDICATE_CANONICAL).
-# "president" maps to BOTH office predicates: seeds store an executive
-# president under 'head of government' where a separate head of state exists
-# (e.g. Iran), and under 'head of state' elsewhere.
-_OFFICEHOLDER_ROLE_PREDICATES: dict[str, tuple[str, ...]] = {
-    "president": ("head of state", "head of government"),
-    "prime minister": ("head of government",),
-    "chancellor": ("head of government",),
-    "premier": ("head of government",),
-}
-_OFFICEHOLDER_FAMILY_PREDICATES: tuple[str, ...] = (
-    "head of state", "head of government",
-)
-_LEADER_OF_PREDICATE = "leader of"
-
-# A qualifier immediately before the match that makes the phrase NOT a
-# current-officeholder claim ("former President X" is correct prose about a
-# predecessor; "Vice President X" is a different office).
-_OFFICEHOLDER_SKIP_QUALIFIER_RE = re.compile(
-    r"(?:former|ex|past|previous|then|outgoing|incoming|late|deputy|vice|"
-    r"acting|interim)[-\s]+$",
-    re.IGNORECASE,
-)
-
-
-def _officeholder_country_alternation() -> str:
-    """The country alternation for the extractor regexes: case-insensitive full
-    names (longest-first so 'united states of america' beats 'united states')
-    plus the uppercase-only acronym branch."""
-    names = sorted(
-        {n for grp in _OFFICEHOLDER_COUNTRY_GROUPS for n in grp},
-        key=len, reverse=True,
-    )
-    ci = "|".join(re.escape(n) for n in names)
-    acro = "|".join(re.escape(a) for a in _OFFICEHOLDER_ACRONYMS)
-    return f"(?:(?i:{ci})|(?:{acro}))"
-
-
-_OFFICEHOLDER_NAME_RE = r"[A-Z][\w'’.\-]+(?:\s+[A-Z][\w'’.\-]+){0,3}"
-_OFFICEHOLDER_ROLE_RE = r"(?i:prime\s+minister|president|chancellor|premier)"
-_COUNTRY_ALT = _officeholder_country_alternation()
-
-# "<Country>['s] [current|sitting|incumbent|new] <Role> <Name>"
-_OFFICEHOLDER_COUNTRY_FIRST_RE = re.compile(
-    rf"\b(?P<country>{_COUNTRY_ALT})(?:['’]s)?\s+"
-    rf"(?:(?i:current|sitting|incumbent|new)\s+)?"
-    rf"(?P<role>{_OFFICEHOLDER_ROLE_RE})\s+"
-    rf"(?P<name>{_OFFICEHOLDER_NAME_RE})"
-)
-# "<Role> <Name> of [the] <Country>"
-_OFFICEHOLDER_ROLE_FIRST_RE = re.compile(
-    rf"\b(?P<role>{_OFFICEHOLDER_ROLE_RE})\s+"
-    rf"(?P<name>{_OFFICEHOLDER_NAME_RE})\s+of\s+(?:(?i:the)\s+)?"
-    rf"(?P<country>{_COUNTRY_ALT})(?![a-z0-9])"
-)
-
-
-@dataclass
-class OfficeholderClaim:
-    """One extracted "<person> holds <role> for <country>" claim."""
-
-    role: str                       # normalized role key (lowercase, spaced)
-    person: str                     # the claimed officeholder, as written
-    country_surface: str            # the country as written in the prose
-    country_aliases: tuple[str, ...]  # candidate facts.subject spellings (lower)
-
-
-def _country_aliases_for(surface: str) -> tuple[str, ...]:
-    if surface in _OFFICEHOLDER_ACRONYMS:
-        return _OFFICEHOLDER_ACRONYMS[surface]
-    s = surface.casefold()
-    for grp in _OFFICEHOLDER_COUNTRY_GROUPS:
-        if s in grp:
-            return grp
-    return (s,)
-
-
-def extract_officeholder_claims(text: str) -> list[OfficeholderClaim]:
-    """PURE lexical extraction of current-officeholder claims (no DB, no LLM).
-
-    Conservative: only the two explicit shapes; a preceding former/ex/vice/…
-    qualifier disqualifies the match (correct prose about a predecessor or a
-    different office must never enter the probe). De-duplicated on
-    (role, country, person). Never raises."""
-    if not text:
-        return []
-    out: list[OfficeholderClaim] = []
-    seen: set[tuple[str, str, str]] = set()
-    for regex in (_OFFICEHOLDER_COUNTRY_FIRST_RE, _OFFICEHOLDER_ROLE_FIRST_RE):
-        for m in regex.finditer(text):
-            window = text[max(0, m.start() - 24):m.start()]
-            if _OFFICEHOLDER_SKIP_QUALIFIER_RE.search(window):
-                continue
-            role = re.sub(r"\s+", " ", m.group("role")).strip().casefold()
-            if role not in _OFFICEHOLDER_ROLE_PREDICATES:
-                continue  # defensive — the alternation and the map must agree
-            surface = m.group("country").strip()
-            person = m.group("name").strip()
-            aliases = _country_aliases_for(surface)
-            key = (role, aliases[0], person.casefold())
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(OfficeholderClaim(
-                role=role,
-                person=person,
-                country_surface=surface,
-                country_aliases=aliases,
-            ))
-    return out
-
-
-#: Honorifics / particles that carry no identity and must never be the ONLY
-#: token two names share ("President Lee" vs "President Kim").
-_PERSON_NAME_NOISE: frozenset[str] = frozenset(
-    {
-        "mr", "mrs", "ms", "dr", "sir", "the", "his", "her", "their",
-        "president", "prime", "minister", "chancellor", "premier", "excellency",
-        "hon", "rt", "van", "von", "der", "den", "del", "della", "bin", "ibn",
-        "abu", "al", "el", "de", "da", "dos", "das", "jr", "sr",
-    }
-)
-
-
-def _person_name_tokens(name: str) -> set[str]:
-    """Diacritic-folded, casefolded name tokens (len ≥ 3) for tolerant person
-    matching — 'Janša' matches 'Jansa', 'Donald J. Trump' matches 'Trump'.
-
-    W4 (2026-08-02): POSSESSIVES are stripped, so "Trump's" matches
-    "Donald Trump" — the live ``stale_leader_vs_facts`` false positive was
-    exactly that, a genuine officeholder reference in the genitive scoring as a
-    stale-leader mismatch because ``'`` is a word character to the splitter.
-    Honorifics and name particles are dropped for the same reason a shared
-    "president" must not make two different people match.
-    """
-    norm = unicodedata.normalize("NFKD", name or "")
-    norm = "".join(ch for ch in norm if not unicodedata.combining(ch))
-    out: set[str] = set()
-    for raw in re.split(r"[^\w'’\-]+", norm.casefold()):
-        # Genitive forms: "trump's" / "trump’s" / a plural-possessive "harris'".
-        token = re.sub(r"['’]s\b", "", raw).strip("'’-")
-        if len(token) >= 3 and token not in _PERSON_NAME_NOISE:
-            out.add(token)
-    return out
-
-
-_CURRENT_OFFICEHOLDER_SQL = """
-    SELECT lower(predicate) AS predicate, subject, value
-      FROM facts
-     WHERE superseded_by IS NULL
-       AND valid_until IS NULL
-       AND (
-             (lower(subject) = ANY($1::text[])
-              AND lower(predicate) = ANY($2::text[]))
-          OR (lower(predicate) = $3 AND lower(value) = ANY($1::text[]))
-           )
-"""
-
-#: At most this many facts-reconciled spans per finding (bounded, skimmable).
-_STALE_VS_FACTS_MAX_SPANS = 4
-#: At most this many extracted claims probed per finding (bounds the queries).
-_STALE_VS_FACTS_MAX_CLAIMS = 8
-
-
-async def stale_leader_vs_facts_spans(
-    conn: Any, text: str,
-) -> list[UnsupportedSpan]:
-    """FLAG officeholder claims that contradict the CURRENT facts-table row.
-
-    For each extracted claim, reads the country's OPEN officeholder facts
-    (country-subject 'head of state'/'head of government' rows + person-subject
-    'leader of' rows; ``superseded_by IS NULL AND valid_until IS NULL``) and
-    emits a ``stale_leader_vs_facts`` span when the claimed office has a
-    current fact naming someone else AND the claimed person matches NO current
-    family officeholder. Fail-open + degrade-not-drop throughout; never raises.
-    """
-    try:
-        claims = extract_officeholder_claims(text)
-    except Exception as exc:  # pragma: no cover — pure path, defensive only
-        logger.warning("verify.stale_leader_vs_facts.extract_failed err=%s", exc)
-        return []
-    spans: list[UnsupportedSpan] = []
-    for claim in claims[:_STALE_VS_FACTS_MAX_CLAIMS]:
-        try:
-            rows = await conn.fetch(
-                _CURRENT_OFFICEHOLDER_SQL,
-                list(claim.country_aliases),
-                list(_OFFICEHOLDER_FAMILY_PREDICATES),
-                _LEADER_OF_PREDICATE,
-            )
-        except Exception as exc:  # degrade-not-drop — facts read must not block
-            logger.warning(
-                "verify.stale_leader_vs_facts.read_failed country=%s err=%s",
-                claim.country_surface, exc,
-            )
-            return spans
-        role_preds = set(_OFFICEHOLDER_ROLE_PREDICATES[claim.role])
-        basis = sorted({
-            str(r["value"]) for r in rows
-            if r["predicate"] in role_preds and r["value"]
-        })
-        if not basis:
-            continue  # no CURRENT fact for the claimed office — fail-open
-        holders = [
-            str(r["value"]) for r in rows
-            if r["predicate"] in _OFFICEHOLDER_FAMILY_PREDICATES and r["value"]
-        ] + [
-            str(r["subject"]) for r in rows
-            if r["predicate"] == _LEADER_OF_PREDICATE and r["subject"]
-        ]
-        claimed_tokens = _person_name_tokens(claim.person)
-        if not claimed_tokens:
-            continue
-        if any(claimed_tokens & _person_name_tokens(h) for h in holders):
-            continue  # matches a current family officeholder — consistent
-        spans.append(UnsupportedSpan(
-            text=(
-                f"officeholder mismatch vs facts — the finding names "
-                f"{claim.person!r} as {claim.role} of {claim.country_surface}, "
-                f"but the current open officeholder fact(s) name "
-                f"{', '.join(basis[:3])}. Flag-only: the seed facts can "
-                f"themselves be stale — never auto-corrected"
-            )[:400],
-            reason=_STALE_LEADER_VS_FACTS_REASON,
-        ))
-        if len(spans) >= _STALE_VS_FACTS_MAX_SPANS:
-            break
-    return spans
-
-
-def cross_target_leak_span(
-    *, title: str, body: str, target_id: str | None,
-) -> UnsupportedSpan | None:
-    """FLAG a per-country finding whose named subject-country contradicts its desk
-    (M15): it names a DIFFERENT country and NEVER its own target geo.
-
-    Conservative fail-OPEN (mirrors :func:`grounding.finding_is_off_target`): a
-    finding that mentions its own country anywhere, or that names no country at
-    all, is NOT flagged. Non-country / unmapped desks are never flagged."""
-    slug = _country_desk_slug(target_id)
-    if slug is None:
-        return None
-    # Build the own-mention set from ONLY the country NAME tokens — NEVER the bare
-    # ISO-2 slug. A slug such as 'in' (India), 'it' (Italy), 'us' (US), 'id'
-    # (Indonesia) is a common English word that _mentions_country would match in
-    # normal prose, firing the on-target early-return on EVERY finding and silently
-    # disabling the guard for those desks. Fail-OPEN when the desk has no country-
-    # NAME mapping (an unmapped slug): we cannot tell its own country → never flag.
-    own = {n.casefold() for n in _TARGET_SLUG_TO_COUNTRY.get(slug, ())}
-    if not own:
-        return None
-    haystack_lc = f"{title}\n{body}".casefold()
-    # V-I2 (2026-08-05): three surfaces, not one. The name, its DEMONYM (a US
-    # desk writing "American outlets" names its own country), and the
-    # CASE-SENSITIVE abbreviations a casefolded set cannot hold — bare "US" is
-    # the pronoun "us" once you lower it. 08-04 rec #4, and 100% of the 08-05
-    # `cross_target_leak` class was a finding that said "US" six times.
-    if _mentions_own_country(slug, own, title, body):
-        return None  # on-target — mentions its own geo somewhere
-    others = {c for c in _COUNTRY_TOKENS if c not in own}
-    # SYMMETRY: the other-country arm reads demonyms too, so the tolerance
-    # cannot skew the on-target / off-target decision in one direction only.
-    named = sorted(c for c in others if _names_country(c, haystack_lc))
-    if not named:
-        return None  # names no country at all — generic/thin, not off-target
-    return UnsupportedSpan(
-        text=(
-            f"cross-target leak — desk target '{target_id}' but the finding names "
-            f"only other countries ({', '.join(named[:5])}) and never its own"
-        )[:400],
-        reason=_CROSS_TARGET_REASON,
-    )
 
 
 def _fold_world_knowledge_guards(
@@ -4214,54 +4252,6 @@ _COEXISTING_FLAG_COUNTERS: dict[str, str] = {
     _UNCITED_WORLD_KNOWLEDGE: "absence_slice_premise_flagged",
 }
 
-#: A HISTORICAL / STRUCTURAL BASELINE about the world — the load-bearing premise
-#: shape. Narrow idioms only; every one of these asserts a fact about how things
-#: have been, which no row in a 24-hour signal slice reports.
-_WORLD_BASELINE_RE = re.compile(
-    r"\bhistorical(?:ly)?\b"
-    r"|\blong[-\s]standing\b|\blongstanding\b"
-    r"|\btraditionally\b"
-    r"|\bchronic(?:ally)?\b"
-    r"|\bpropensity\b"
-    r"|\btrack\s+record\b"
-    r"|\bhistory\s+of\b|\bhas\s+a\s+history\b"
-    r"|\bwell[-\s]documented\b"
-    r"|\bknown\s+for\b"
-    r"|\bendemic\b|\bperennial\b"
-    r"|\bpast\s+pattern"
-    r"|\bbase\s+rate\b"
-    r"|\breference\s+class\b",
-    re.IGNORECASE,
-)
-
-#: The baseline is about the EVIDENCE SET, not the world — the absence
-#: machinery's territory, and no world claim at all.
-_EVIDENCE_REFERENT_RE = re.compile(
-    r"\b(?:from|in|within|across|among)\s+(?:the\s+)?"
-    r"(?:current\s+|available\s+|collected\s+|reviewed\s+|examined\s+)?"
-    r"(?:evidence|signals?|reporting|corpus|documents?|sources?|record\s+set)\b",
-    re.IGNORECASE,
-)
-
-
-def _is_uncited_world_baseline(claim: str) -> bool:
-    """V-G5 — does this markerless claim rest on an UNCITED world baseline?
-
-    Marker-agnostic by design: the caller supplies only claims that carry no
-    citation marker at all, which is where the judge's "no marker ⇒ synthesis"
-    licence applies and where the truthmaker therefore cannot be checked.
-    """
-    core = re.sub(r"[*_`]+", "", claim.strip().lstrip("#-*> ").strip())
-    if not _WORLD_BASELINE_RE.search(core):
-        return False
-    # NOTE the exemption is deliberately NOT ``_has_collection_scope``. That
-    # lexicon answers a DIFFERENT question — how the claim's NEGATIVE is scoped —
-    # and it is generous by design (it matches bare "window"). A claim can be
-    # perfectly scoped to the collection window and still open with a world
-    # baseline the analyst supplied from memory, which is the shape under test.
-    # Only a baseline that names the EVIDENCE SET as its referent is exempt.
-    return not _EVIDENCE_REFERENT_RE.search(core)
-
 
 def _fold_markerless_uncited(
     report: FaithfulnessReport, *, body: str, citations: Any
@@ -4307,74 +4297,6 @@ def _fold_markerless_uncited(
     return _apply_claim_overrides(report, overrides)
 
 
-class _JudgeVerdictError(RuntimeError):
-    """The judge returned a structurally-invalid verdict set — a verdict count
-    that does not match the graded claims. Raised so :func:`_maybe_llm_judge`
-    fails to the deterministic floor labelled ``judge_error`` (#116d), rather than
-    silently zip-truncating to a partial pass that hides ungraded claims."""
-
-
-def _extract_json_objects(text: str) -> list[dict[str, Any]]:
-    """Every balanced top-level ``{...}`` block in ``text`` that parses as a JSON
-    dict, in order (#116d).
-
-    Fence- and prose-tolerant: a ```` ```json ```` (or bare ```` ``` ````) fence is
-    unwrapped first, and leading reasoning prose / trailing text around the object
-    are ignored — a reasoning-class judge may emit thinking before the strict-JSON
-    verdicts. Returns ``[]`` when nothing parses. The caller picks the object that
-    actually carries ``verdicts`` (so a stray brace in prose can't shadow it).
-    """
-    if not text:
-        return []
-    candidate = text.strip()
-    fence = re.search(r"```(?:json)?\s*\n?(.*?)```", candidate, re.DOTALL | re.IGNORECASE)
-    if fence:
-        candidate = fence.group(1).strip()
-    objs: list[dict[str, Any]] = []
-    i, n = 0, len(candidate)
-    while i < n:
-        if candidate[i] != "{":
-            i += 1
-            continue
-        depth = 0
-        in_str = False
-        escaped = False
-        end: int | None = None
-        j = i
-        while j < n:
-            ch = candidate[j]
-            if in_str:
-                if escaped:
-                    escaped = False
-                elif ch == "\\":
-                    escaped = True
-                elif ch == '"':
-                    in_str = False
-            elif ch == '"':
-                in_str = True
-            elif ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    end = j + 1
-                    break
-            j += 1
-        if end is None:
-            break  # unbalanced tail — nothing complete left to extract
-        try:
-            obj = json.loads(candidate[i:end])
-            if isinstance(obj, dict):
-                objs.append(obj)
-        except (json.JSONDecodeError, ValueError):
-            pass
-        i = end
-    return objs
-
-
-#: How much of an earned evidence quote is persisted onto the verdict.
-_JUDGE_QUOTE_DETAIL_CHARS = 300
-
 #: verdict -> the counter its hard→soft demotion bumps. THE table: the counter a
 #: panel reads and the reason the ledger carries are decided in one place, so the
 #: V-G8 fidelity rule holds by construction (a pooled counter that answers a
@@ -4386,95 +4308,13 @@ _DEMOTION_COUNTERS: dict[str, str] = {
     _VERDICT_CONTRADICTED_OFF_SCOPE: "hardfail_demoted_off_denied_scope",
     _VERDICT_QUOTE_CONFIRMS: "hardfail_demoted_quote_confirms",
     _VERDICT_CONTRADICTED_MACHINE_ROW: "hardfail_demoted_machine_row",
+    _VERDICT_CONTRADICTED_HEDGED: "hardfail_demoted_hedged_conflict",
     _VERDICT_ROUTE_EXCLUDED: "hardfail_demoted_route_excluded",
     # RUST-3 — not a hard->soft demotion but the same mechanism and the same
     # table: a verdict the severity chain WITHDREW because it was not earned,
     # with the counter a panel reads it by. Named for what was withdrawn.
     _VERDICT_NONPROP_UNEARNED: "nonprop_withdrawn_carries_particular",
 }
-
-
-def _judge_reason(verdict: str) -> str:
-    """The span/ledger REASON for one judge verdict — the ONE mapping.
-
-    Shared by ``unsupported_spans`` and ``claim_verdicts`` so the two can never
-    disagree about a claim's class again (W2: the ledger arm used to collapse
-    both demotion labels back to ``judge_unsupported``).
-
-    RUST-3: an EARNED ``not_a_proposition`` never reaches this function — it is
-    filtered out of the graded population upstream, so there is no reason to map
-    and no failure to name. Only the WITHDRAWN form has a reason.
-    """
-    if verdict == _VERDICT_NONPROP_UNEARNED:
-        return _JUDGE_NONPROP_UNEARNED
-    if verdict == "contradicted":
-        return "judge_contradicted"
-    if verdict == _VERDICT_CONTRADICTED_UNQUOTED:
-        return _JUDGE_CONTRADICTED_UNQUOTED
-    if verdict == _VERDICT_CONTRADICTED_UNREFUTED:
-        return _JUDGE_CONTRADICTED_UNREFUTED
-    if verdict == _VERDICT_PRIOR_READ_CONFLICT:
-        return _JUDGE_PRIOR_READ_CONFLICT
-    if verdict == _VERDICT_CONTRADICTED_OFF_SCOPE:
-        return _JUDGE_CONTRADICTED_OFF_SCOPE
-    if verdict == _VERDICT_QUOTE_CONFIRMS:
-        return _JUDGE_QUOTE_CONFIRMS
-    if verdict == _VERDICT_CONTRADICTED_MACHINE_ROW:
-        return _JUDGE_CONTRADICTED_MACHINE_ROW
-    if verdict == _VERDICT_ROUTE_EXCLUDED:
-        return _JUDGE_CONTRADICTED_ROUTE_EXCLUDED
-    return "judge_unsupported"
-
-
-def _judge_detail(verdict: str, quote: str) -> str | None:
-    """The persisted WHY for a judge verdict — the earned evidence quote (W2).
-
-    A hard fail that cannot show its refutation is a hard fail nobody can audit:
-    the quote was computed, used for the severity decision, and thrown away.
-    ``None`` for every verdict that carries no earned quote, so the ledger row is
-    byte-identical for them.
-    """
-    if not quote:
-        return None
-    span = re.sub(r"\s+", " ", str(quote)).strip()[:_JUDGE_QUOTE_DETAIL_CHARS]
-    if verdict == _VERDICT_CONTRADICTED_UNREFUTED:
-        return (
-            "the judge's evidence span RESOLVES the claim's subject without "
-            f"refuting it, so the hard class was not earned: {span!r}"
-        )
-    if verdict == _VERDICT_PRIOR_READ_CONFLICT:
-        return (
-            "this read CONFLICTS with an analyst finding the claim does not cite "
-            "(typically this desk's own prior read) rather than with source "
-            f"reporting — an update, not a misstatement of evidence: {span!r}"
-        )
-    if verdict == _VERDICT_CONTRADICTED_OFF_SCOPE:
-        return (
-            "the claim ENUMERATED what it denies and the judge's evidence span "
-            "names none of those things in full, so it evidences something the "
-            f"claim never denied: {span!r}"
-        )
-    if verdict == _VERDICT_QUOTE_CONFIRMS:
-        return (
-            "the judge's evidence span states the claim's OWN numbers back to "
-            "it under numeral/unit normalization ('16' for 'sixteen'), every "
-            "pinned clock/date endpoint matching and no prose direction "
-            f"opposing — it CONFIRMS and cannot be what refutes it: {span!r}"
-        )
-    if verdict == _VERDICT_CONTRADICTED_MACHINE_ROW:
-        return (
-            "the judge's evidence span resolves ONLY inside a GDELT/CAMEO "
-            "machine-coded event record — a machine's reading of an article, "
-            "not the article's own words, and the class the V-B route already "
-            f"excludes: {span!r}"
-        )
-    if verdict == _VERDICT_ROUTE_EXCLUDED:
-        return (
-            "the V-B router had already routed this claim OUT of slice checking "
-            "as a continuity / volume / trajectory read; one claim cannot have "
-            f"two authorities, so the hard class was not available: {span!r}"
-        )
-    return f"contradicted by a verbatim evidence span: {span!r}"
 
 
 async def _maybe_llm_judge(
@@ -4641,7 +4481,7 @@ async def _maybe_llm_judge(
                 UnsupportedSpan(
                     text=claim_text,
                     reason=reason,
-                    detail=_judge_detail(verdict, quote),
+                    detail=_judge_detail(verdict, quote, claim_text),
                 )
             )
     if ungraded_nonpropositional:
@@ -4716,7 +4556,7 @@ async def _maybe_llm_judge(
                     claim_text,
                     _judge_reason(verdict),
                     list(markers),
-                    detail=_judge_detail(verdict, quote),
+                    detail=_judge_detail(verdict, quote, claim_text),
                 )
             )
     carried_ledger = [
@@ -5005,6 +4845,7 @@ async def _run_judge(
             + _JUDGE_QUOTE_RULE
             + _JUDGE_QUALIFIER_RULE
             + "\n\n"
+            + composition_integrity.RUBRIC  # H2 §2 — the four cross-layer shapes
             + tier_rubric
             # RUST-1: ensure_ascii=False — what the judge SEES is what
             # quote_corpus SCORES (the default escaped every non-ASCII char,
@@ -5141,14 +4982,16 @@ async def _run_judge(
         this claim itself cited (V-G1); REFUTES rather than merely resolves the
         claim (W2); does not land on a clause the claim already exempts (V-G3);
         names something the claim actually denied (V-H4); does not state the
-        claim's OWN numbers back to it (V-I1); and lands on a claim the V-B
-        router has not already taken off the slice route (V-I5).
+        claim's OWN numbers back to it (V-I1); does not come from a pole the
+        claim itself DISCLOSED and marked weak (V-J1); and lands on a claim the
+        V-B router has not already taken off the slice route (V-I5).
 
         ORDERING is a contract, not an accident: every rule about what the
         EVIDENCE IS runs before every rule about what the QUOTE SAYS, which runs
-        before the one rule about what the CLAIM IS — so the most specific
+        before the two rules about what the CLAIM IS — and V-J1 precedes V-I5
+        within that pair, being the more specific of them. So the most specific
         available diagnosis wins the label, and a panel reading the counters can
-        tell the eight demotion mechanisms apart.
+        tell the nine demotion mechanisms apart.
 
         The earned quote rides back out so the caller can PERSIST it: a hard
         fail nobody can audit is a hard fail nobody can trust, and that holds
@@ -5223,6 +5066,17 @@ async def _run_judge(
             # hard-fail path), and last for the same reason: the older, more
             # specific diagnoses keep their labels.
             return _VERDICT_QUOTE_CONFIRMS, str(quote)
+        if hedged_conflict_disclosure(claim) is not None:
+            # V-J1: the claim already NAMED this pole and marked it weak. Runs
+            # beside V-I5 because both are about the CLAIM rather than the
+            # quote, and BEFORE it because it is the more specific of the two
+            # (and reaches claims V-I5's scope-qualifier gate never sees).
+            logger.info(
+                "verify.judge.hedged_conflict claim=%r — the sentence discloses "
+                "and downweights this pole, so it is not refuted by it",
+                claim[:120],
+            )
+            return _VERDICT_CONTRADICTED_HEDGED, str(quote)
         routed = claim_is_routed_out(claim)
         if routed is not None:
             # V-I5: the V-B router already took this claim off the slice route as
@@ -5808,6 +5662,14 @@ async def verify_finding_faithfulness(
     # keeps the judge authoritative over prose it graded (the V3 absence rubric
     # already covers unscoped absence there).
     floor = _fold_guard_spans(floor, unscoped_absence_spans(body))
+    # H1: the register self-corroboration backstop. INERT unless this finding
+    # actually cites the open-situation register, so the overwhelming majority
+    # of the fleet's verdicts are untouched. Folded here, beside W31, for the
+    # same reason: before the judge, span text = the raw claim, so the #116c
+    # dedup leaves the judge authoritative over prose it graded.
+    floor = _fold_guard_spans(
+        floor, register_self_corroboration_spans(body, citations)
+    )
     if facts_conn is not None:
         # E-1: the facts-reconciled officeholder guard (never raises — degrade-
         # not-drop lives inside stale_leader_vs_facts_spans).
@@ -5863,6 +5725,9 @@ async def verify_finding_faithfulness(
     # once the prose exists. No-op without an eval block: every unit finding and
     # every pre-R2 composition is byte-identical.
     report = fold_input_checks(report, eval_block=eval_block, body=body)
+    # H2: the composition graded against THE DESK READS IT CITES. Composition-only.
+    report = composition_integrity.fold(
+        report, body=body, citations=citations, target_id=target_id)
     # V-I6: the round-4 pass-side CAVEATS, as counters. Two classes sit inside
     # the supported denominator without being propositions about the world — the
     # `triggered indicator:` scaffold rows (97 in the frozen population, all

@@ -62,6 +62,7 @@ from legba.data.sources.gdelt_files import (
     EVENTS_EXPORT_COLUMNS,
     GDELTFilesConfig,
     GDELTFilesSourceHandler,
+    _correct_sqldate_year_offset,
     extract_export_timestamp,
     parse_events_csv,
     parse_lastupdate,
@@ -451,6 +452,142 @@ def test_row_to_signal_content_hash_differs_for_different_event_id() -> None:
     sig1 = row_to_signal(_make_row(GLOBALEVENTID="1"), ctx=ctx, export_url=_EXPORT_URL)
     sig2 = row_to_signal(_make_row(GLOBALEVENTID="2"), ctx=ctx, export_url=_EXPORT_URL)
     assert sig1.content_hash != sig2.content_hash
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-29 DQ sweep §3 — the SQLDATE year-off-by-one correction
+#
+# GDELT's own upstream events export sometimes carries SQLDATE with the year
+# wrong by exactly one, month-day intact, while DATEADDED (a separate field
+# on the SAME row) carries the correct year — confirmed upstream (not our
+# parse) by inspecting the untouched raw payload on live data; this handler
+# applies zero transformation to SQLDATE before this fix. The guard is
+# deliberately narrow: only the exact deterministic signature (matching
+# month-day, year off by exactly one, corrected date not in the future)
+# corrects; everything else — including genuinely old events and the
+# separate ~30-day month-lag band the same sweep found — passes through
+# unchanged.
+# ---------------------------------------------------------------------------
+
+
+def test_sqldate_year_offset_corrects_the_deterministic_signature() -> None:
+    # The exact live shape: SQLDATE one year behind DATEADDED, same month-day.
+    assert _correct_sqldate_year_offset("20250829", "20260829180000") == (
+        "20260829",
+        True,
+    )
+
+
+def test_sqldate_year_offset_leaves_matching_year_untouched() -> None:
+    # The overwhelmingly common case — SQLDATE and DATEADDED already agree.
+    assert _correct_sqldate_year_offset("20260721", "20260721143000") == (
+        "20260721",
+        False,
+    )
+
+
+def test_sqldate_year_offset_leaves_month_lag_band_untouched() -> None:
+    # The OTHER (different-shaped) staleness class the sweep found: month
+    # decremented, not year — must NOT be swept up by this guard.
+    assert _correct_sqldate_year_offset("20260728", "20260827180000") == (
+        "20260728",
+        False,
+    )
+
+
+def test_sqldate_year_offset_leaves_genuinely_old_events_untouched() -> None:
+    # The 14/161 rows the sweep found genuinely years-old (no month-day
+    # match at all) — the guard must not touch real historical events.
+    assert _correct_sqldate_year_offset("20160101", "20260829180000") == (
+        "20160101",
+        False,
+    )
+
+
+def test_sqldate_year_offset_leaves_multi_year_gap_untouched() -> None:
+    # Signature requires the gap be EXACTLY one year, not "any gap".
+    assert _correct_sqldate_year_offset("20240829", "20260829180000") == (
+        "20240829",
+        False,
+    )
+
+
+def test_sqldate_year_offset_requires_dateadded_evidence() -> None:
+    # No DATEADDED on the row → nothing to anchor the correction to; fail
+    # safe rather than guess.
+    assert _correct_sqldate_year_offset("20250829", None) == ("20250829", False)
+    assert _correct_sqldate_year_offset("20250829", "") == ("20250829", False)
+    assert _correct_sqldate_year_offset("20250829", "notadate") == (
+        "20250829",
+        False,
+    )
+
+
+def test_sqldate_year_offset_handles_missing_or_malformed_sqldate() -> None:
+    assert _correct_sqldate_year_offset(None, "20260829180000") == (None, False)
+    assert _correct_sqldate_year_offset("", "20260829180000") == ("", False)
+    assert _correct_sqldate_year_offset("notadate", "20260829180000") == (
+        "notadate",
+        False,
+    )
+
+
+def test_sqldate_year_offset_never_raises_on_leap_day_mismatch() -> None:
+    # Feb 29 in a leap year, DATEADDED's year a non-leap year — a naive
+    # ``.replace(year=...)`` would raise; must fail safe instead.
+    assert _correct_sqldate_year_offset("20280229", "20290228180000") == (
+        "20280229",
+        False,
+    )
+
+
+def test_sqldate_year_offset_rejects_a_future_corrected_date() -> None:
+    # Guard 4: the corrected date must not land in the future relative to
+    # wall-clock now (well beyond the future-skew tolerance).
+    now = datetime(2026, 8, 29, tzinfo=timezone.utc)
+    assert _correct_sqldate_year_offset(
+        "20250901", "20260901000000", now=now
+    ) == ("20250901", False)
+
+
+def test_sqldate_year_offset_allows_a_near_future_corrected_date() -> None:
+    # Inside the future-skew tolerance (mirrors rss.py's 26h clamp) — a
+    # correction landing a few hours "ahead" of the exact test anchor
+    # (e.g. a different timezone slice of the same UTC day) is still
+    # accepted rather than needlessly rejected.
+    now = datetime(2026, 8, 29, tzinfo=timezone.utc)
+    assert _correct_sqldate_year_offset(
+        "20250830", "20260830000000", now=now
+    ) == ("20260830", True)
+
+
+def test_row_to_signal_corrects_deterministic_year_offset() -> None:
+    ctx = _make_ctx()
+    row = _make_row(SQLDATE="20250721", DATEADDED="20260721143000")
+    sig = row_to_signal(row, ctx=ctx, export_url=_EXPORT_URL)
+    # The field the render layer and every staleness read actually consume.
+    assert sig.payload["published_at"] == "20260721"
+    # The untouched original stays available for audit in TWO places.
+    assert sig.raw_provenance["sql_date"] == "20250721"
+    assert sig.payload["raw_body"]["SQLDATE"] == "20250721"
+    # The provenance marker records that the correction fired.
+    assert sig.raw_provenance["sqldate_year_corrected"] is True
+    assert sig.raw_provenance["published_at"] == "2026-07-21T00:00:00+00:00"
+
+
+def test_row_to_signal_leaves_normal_sqldate_untouched() -> None:
+    ctx = _make_ctx()
+    sig = row_to_signal(_make_row(), ctx=ctx, export_url=_EXPORT_URL)
+    assert sig.payload["published_at"] == "20260721"
+    assert sig.raw_provenance["sqldate_year_corrected"] is False
+
+
+def test_row_to_signal_leaves_genuinely_old_event_untouched() -> None:
+    ctx = _make_ctx()
+    row = _make_row(SQLDATE="20160101", DATEADDED="20260721143000")
+    sig = row_to_signal(row, ctx=ctx, export_url=_EXPORT_URL)
+    assert sig.payload["published_at"] == "20160101"
+    assert sig.raw_provenance["sqldate_year_corrected"] is False
 
 
 # ---------------------------------------------------------------------------

@@ -1037,6 +1037,15 @@ def _analyst_ids_for_target(
        is how ``country_assessor`` (has_tag("g20")) coalesces over all 19 G20
        country targets without enumerating them.
 
+    A per-target analyst whose ``subscription.targets.data_types`` excludes
+    ``"signal"`` (a FINDING-consuming composition — ``country_composition``,
+    ``region_composition``) is matched here but registers NO coalescing
+    trigger (H4): its content comes from ``other_analysts`` heads resolved at
+    run time, never from the raw-signal feed the trigger machinery watches, so
+    reacting to that feed only wakes it on data it does not read — and, via
+    the shared per-(analyst, target) cooldown, can suppress its own correctly-
+    ordered scheduled tick. See the inline comment below for the measured race.
+
     Best-effort, fail-soft per analyst: a bad/uncompilable selector is logged
     and skipped, never sinking the whole wiring pass.
     """
@@ -1079,6 +1088,43 @@ def _analyst_ids_for_target(
             # just the listed ones. A union subscription is cadence-driven by
             # construction (`AnalystActor._cadence_targets` returns None → one
             # global run); it registers no signal-coalescing trigger.
+            continue
+        # H4 — THE SCHEDULING RACE. A per-target COMPOSITION (country_composition,
+        # region_composition: `subscription.targets.data_types == ["finding"]`)
+        # reads its OWN unit analysts' HEADS via `other_analysts` at run time — it
+        # never consumes a raw SIGNAL. But the bindings a coalescing trigger
+        # registration matches against (`sub.bindings`, built above from the
+        # TARGET's `sources:` list) are exactly the target's raw wire feed, the
+        # SAME feed every unit analyst on that target also watches. Wiring a
+        # composition into that feed anyway meant it woke reactively the instant
+        # ~2 (`min_llm_batch`) unrelated wire signals landed — often hours before
+        # that day's later-slotted units (military_posture 05/17, escalation
+        # 07/19, economic_coercion 09/21, narrative 10/22) had run — and consumed
+        # whatever heads existed at that moment under FRAME-1's 336h admissibility
+        # horizon, which can mean yesterday's head for a unit that simply hadn't
+        # fired yet. Worse, the reactive fire stamps the SAME per-(analyst,
+        # target) cooldown (`cadence.cooldown_seconds`) the composition's OWN
+        # deliberately-late scheduled tick relies on ("30 11,23 * * *" — placed
+        # AFTER all seven units' AM/PM slots per the descriptor's cadence
+        # comment) — so the early reactive fire's cooldown window then SUPPRESSES
+        # that properly-ordered scheduled tick as `worker_suppressed`, and the
+        # composition never gets a second chance at the fresh cycle. Measured:
+        # 30/31 country targets showed desk heads landing AFTER their own
+        # composition had already frozen (PROOF_ROUND_2026-08-25/VERDICT_DRAFT.md).
+        # A finding-only composition has no legitimate signal-driven wake at all
+        # — its content is entirely `other_analysts` heads, resolved fresh at
+        # RUN time regardless of trigger reason — so the fix is to never register
+        # it onto the raw-signal coalescing path in the first place: it runs
+        # ONLY on its own scheduled cadence, which is the one tick the descriptor
+        # author placed with unit-completion ordering in mind.
+        data_types = sub_targets.get("data_types") or []
+        if data_types and "signal" not in data_types:
+            logger.info(
+                "source_first.wire.trigger_skip_finding_only analyst=%s "
+                "data_types=%s (finding-consuming composition — cadence-only, "
+                "no raw-signal coalescing trigger)",
+                analyst_id, data_types,
+            )
             continue
         pred = sub_targets.get("predicate")
         if not pred:

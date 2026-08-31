@@ -50,8 +50,10 @@ The three roles are:
    its own `llm.primary.openai_compat` — self-hostable, no second endpoint
    required, with the known limitation that a model verifying prose from the
    same model shares its blind spots), while the **reference deployment
-   repoints every judge call cross-family** at a hosted Gemma judge
-   (`llm.judge.cerebras_gemma4_31b.openai_compat`, Cerebras). The generated
+   repoints every judge call cross-family** at a hosted Nemotron judge
+   (`llm.judge.openrouter_nemotron120b.openai_compat`, `nemotron-120b` via
+   OpenRouter — the effective route since 2026-08-15; the earlier
+   Gemma-on-Cerebras route remains registered as an alternate). The generated
    [RELEASE_STATE.md](RELEASE_STATE.md) reports both layers — descriptor
    default and effective route — so neither can stand in for the other. The
    deterministic citation-presence floor and the signed provenance chain
@@ -218,7 +220,8 @@ Shared base behavior:
 |--------------|----------|-------|------|
 | `llm.primary.openai_compat` | `https://llm.example.internal` | `gpt-oss-120b` | core analyst plane (units + compositions + every scheduled analyst) |
 | `llm.anthropic.opus_4_7` | `https://api.anthropic.com` | `claude-opus-4-8` | consult / deep-consult plane only |
-| `llm.judge.cerebras_gemma4_31b.openai_compat` | `https://api.cerebras.ai` | `gemma-4-31b` | the reference deployment's **effective faithfulness judge** (cross-family, hosted; selected via `LEGBA_JUDGE_STACK_REF` — §3) |
+| `llm.judge.openrouter_nemotron120b.openai_compat` | `https://openrouter.ai/api` | `nemotron-120b` | the reference deployment's **effective faithfulness judge** since 2026-08-15 (cross-family, hosted; selected via `LEGBA_JUDGE_STACK_REF` — §3) |
+| `llm.judge.cerebras_gemma4_31b.openai_compat` | `https://api.cerebras.ai` | `gemma-4-31b` | registered alternate judge route (the effective judge 2026-07 → 2026-08-15) |
 | `llm.judge.nemotron3_super.openai_compat` / `llm.judge.nemotron3_ultra.openai_compat` | `https://openrouter.ai/api` | `nemotron-3-super` / `-ultra` (free routes) | registered alternate judge routes, **not** in the effective route (free-route latency blocks the emit path — the rolled-back first in-line trial) |
 | `llm.verify.slm_8b` | self-hosted 8B host (Caddy Basic Auth) | 8B model (Llama-3.1-8B, "legba-slm") | **not the verify judge** — it now serves `claim_watch`'s post-match **bearing gate** (a yes/no "does this signal bear on this thesis?" filter) and remains the candidate for a future self-hosted cross-family judge |
 
@@ -232,7 +235,7 @@ Shared base behavior:
 > component. As of 2026-07-01 the units + compositions declare
 > `method.llm.verify: raw: llm.primary.openai_compat` (the same-model
 > descriptor default; the reference deployment's effective judge is the
-> env-repointed Cerebras route — §3). The 8B is not idle: `claim_watch`
+> env-repointed OpenRouter Nemotron route — §3). The 8B is not idle: `claim_watch`
 > resolves it through the registry stack component + CredentialVault as the
 > **bearing gate** (measured as a strong negative filter, never fail-closed).
 > If the judge route is absent or the flag is off, the verify pass falls back
@@ -328,10 +331,11 @@ The pass has two layers:
    model verifying prose from the same model shares its blind spots, which the
    deterministic floor and the signed provenance chain backstop). The
    **reference deployment sets the env rung** to the hosted cross-family judge
-   (`llm.judge.cerebras_gemma4_31b.openai_compat` — Gemma on Cerebras; chosen
-   after a free-route trial showed judge latency blocking the emit path, and
-   validated against gold labels rather than against the same-model judge's
-   scores). Every critique stamps the model that judged it (`judge_llm_ref`)
+   (`llm.judge.openrouter_nemotron120b.openai_compat` — `nemotron-120b` on
+   OpenRouter's paid route, effective since 2026-08-15; before that Gemma on
+   Cerebras. Both chosen after a free-route trial showed judge latency
+   blocking the emit path, and validated against gold labels rather than
+   against the same-model judge's scores). Every critique stamps the model that judged it (`judge_llm_ref`)
    and a `judge_pipeline_version` (the deterministic + prompt rule-set
    revision, `2026-08-10/1` today), so verdict populations from different
    judges or rule-sets are never pooled. It is a normal
@@ -634,7 +638,8 @@ vault ids, endpoints are config fields.
 |-----------------|--------|----------------|
 | `llm.primary.openai_compat` | `legba/stack/llm_provider/1.0.0` | Self-hosted gpt-oss-120b LLM — core analyst plane (vLLM, OpenAI-compatible) |
 | `llm.anthropic.opus_4_7` | `legba/stack/llm_provider/1.0.0` | Anthropic Claude `claude-opus-4-8` (hosted; consult/deep plane only) |
-| `llm.judge.cerebras_gemma4_31b.openai_compat` | `legba/stack/llm_provider/1.0.0` | Hosted Gemma judge (Cerebras) — the reference deployment's effective faithfulness judge (§3) |
+| `llm.judge.openrouter_nemotron120b.openai_compat` | `legba/stack/llm_provider/1.0.0` | Hosted Nemotron judge (OpenRouter, `nemotron-120b`) — the reference deployment's effective faithfulness judge since 2026-08-15 (§3) |
+| `llm.judge.cerebras_gemma4_31b.openai_compat` | `legba/stack/llm_provider/1.0.0` | Hosted Gemma judge (Cerebras) — registered alternate; the effective judge 2026-07 → 2026-08-15 |
 | `llm.verify.slm_8b` | `legba/stack/llm_provider/1.0.0` | Self-hosted 8B model (Llama-3.1-8B, "legba-slm"; HTTP Basic via Caddy) — **not** the verify judge; serves `claim_watch`'s bearing gate |
 | `embed.primary.openai_compat` | `legba/stack/embedding/1.0.0` | `bge-m3` embeddings (vLLM `/v1/embeddings`, 1024-dim) |
 | `nlp.local.legba_models` | `legba/stack/nlp_service/1.0.0` | `legba-models` translate / classify / extract / summarize |

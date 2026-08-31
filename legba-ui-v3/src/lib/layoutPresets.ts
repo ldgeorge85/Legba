@@ -18,7 +18,7 @@
 
 import type { DockviewApi, SerializedDockview } from 'dockview-react'
 import type { PanelKind } from '@/types'
-import { PANEL_REGISTRY } from '@/panel-registry/registry'
+import { resolveKind, rewriteSerializedLayout } from '@/panel-registry/aliases'
 
 /** Relative placement for a non-anchor preset panel. */
 export type PresetDirection = 'right' | 'left' | 'above' | 'below' | 'within'
@@ -180,60 +180,21 @@ export const LAYOUT_PRESETS: LayoutPreset[] = [
 ]
 
 /**
- * The COLD-BOOT default grid (S7-T2 mission control + U-4's "what changed"
- * fix, COHERENCE_WAVES_PLAN_2026-07-28 §U-4).
+ * THE COLD-BOOT SEED MOVED (UI_HOLISTIC_DESIGN_2026-08-24 §3.1).
  *
- * NOT a member of `LAYOUT_PRESETS` — it isn't user-selectable from the preset
- * picker/⌘K, it's what `App.tsx`'s boot effect seeds automatically on first
- * ready (before this list existed, that effect had its own hardcoded
- * addSingleton calls; this constant is the same sequence, pulled out here so
- * it's colocated with and tested the same way the named presets are —
- * `layoutPresets.test.ts` asserts every kind is real, every position
- * references an earlier panel, etc.).
+ * `DEFAULT_BOOT_LAYOUT` — the S7-T2 mission-control grid plus U-4's movers
+ * band — is superseded by the MORNING READ workspace (`lib/workspaces.ts`),
+ * which the shell seeds on first ready. The stance model made "the layout you
+ * land in" a property of a named workspace rather than a constant beside the
+ * preset list, and the Wall (whose own quadrant IS movers-since-last-visit)
+ * replaced the standalone `system.wall_movers` tile the old grid mounted
+ * beside its own parent.
  *
- * A hostile UX review found this grid answered "what's happening now" (KPI
- * strip, live feed, world map, world assessment, timeline) but never "what
- * moved while I was away" — the Wall's own movers-since-last-visit quadrant
- * already existed and worked, just reachable only via the opt-in "wall"
- * preset above or a sidebar row. `system.wall_movers` is a standalone mount
- * of JUST that quadrant (see `panels/system/WallMovers.tsx`) inserted as a
- * full-width slim band between the KPI strip and the feed/map/report row —
- * NOT the whole 2×2 Wall: the Wall's other three quadrants (world-at-a-glance
- * band grid, newest verified, health corner) already have close analogues in
- * the Map, the Feed, and the KPI strip that sit on this same screen, so
- * mounting the whole Wall here would duplicate content and, at 1920×1080
- * with the map/feed/report columns already filling the screen, force a
- * cramped extra split. This is the less-invasive of the two shapes U-4
- * considered (the other being "boot IS the Wall preset", which would drop
- * the feed/map/report/timeline from the first screenful entirely).
+ * Everything below this line — the named presets, and the single-slot
+ * Save/Restore the sidebar's Layouts menu drives — is UNCHANGED and still
+ * live. Workspaces are additive: they own `legba_ws`, this owns
+ * `legba_layout_custom`, and neither writes the other's key.
  */
-export const DEFAULT_BOOT_LAYOUT: PresetPlacement[] = [
-  { kind: 'v4.kpi' },
-  {
-    kind: 'system.wall_movers',
-    position: { referencePanel: 'v4.kpi', direction: 'below' },
-  },
-  {
-    kind: 'system.findings',
-    position: { referencePanel: 'system.wall_movers', direction: 'below' },
-  },
-  {
-    kind: 'v4.map',
-    position: { referencePanel: 'system.findings', direction: 'right' },
-  },
-  {
-    kind: 'v4.assessment',
-    position: { referencePanel: 'v4.map', direction: 'right' },
-  },
-  {
-    kind: 'system.inspector',
-    position: { referencePanel: 'v4.assessment', direction: 'within' },
-  },
-  {
-    kind: 'system.timeline',
-    position: { referencePanel: 'system.findings', direction: 'below' },
-  },
-]
 
 /** Lookup by id; undefined for an unknown id. */
 export function findPreset(id: string): LayoutPreset | undefined {
@@ -258,9 +219,11 @@ export type SingletonOpener = (
 export function applyPreset(api: DockviewApi, preset: LayoutPreset, open: SingletonOpener): void {
   api.clear()
   for (const placement of preset.panels) {
-    // Skip kinds not in the registry defensively — a preset must never
-    // crash the shell if a kind is later renamed/removed.
-    if (!PANEL_REGISTRY[placement.kind]) continue
+    // Skip kinds that resolve to nothing, defensively — a preset must never
+    // crash the shell if a kind is later renamed/removed. A RETIRED kind still
+    // resolves (through the alias table), so a preset written before a merge
+    // train keeps opening the survivor.
+    if (!resolveKind(placement.kind)) continue
     open(placement.kind, placement.position)
   }
 }
@@ -283,13 +246,24 @@ export function saveCustomLayout(api: DockviewApi, mode: string): void {
   }
 }
 
-/** Restore the saved layout for `mode`; returns true if one was applied. */
+/**
+ * Restore the saved layout for `mode`; returns true if one was applied.
+ *
+ * The saved blob may predate a retirement, so it goes through the alias
+ * pre-pass first (design §4.4 call site 3 / §6.2): stale ids resolve onto their
+ * survivor, duplicates collapse onto one tile, unresolvable ids are dropped
+ * before Dockview — which would throw on an unknown component — ever sees
+ * them. A layout that holds nothing renderable returns false rather than
+ * replacing the operator's live dock with an empty one.
+ */
 export function loadCustomLayout(api: DockviewApi, mode: string): boolean {
   try {
     const all = readCustomStore()
     const data = all[mode]
     if (!data) return false
-    api.fromJSON(data)
+    const rewrite = rewriteSerializedLayout(data)
+    if (rewrite.empty) return false
+    api.fromJSON(rewrite.layout)
     return true
   } catch {
     return false

@@ -335,14 +335,24 @@ class _SubjectCollector:
 async def test_register_webhook_persists_row_and_returns_active(
     webhook_registry: ConversionWebhookRegistry,
 ):
+    # NOT legba/target/1.0.0 -> 2.0.0 on purpose: that pair is the CANONICAL
+    # v1->v2 webhook `_ensure_v1_to_v2_webhook` registers (tolerantly) for
+    # the DescriptorRegistry integration tests below (register_raw /
+    # get_typed auto-upgrade), and the test DB is per-session, not per-test
+    # (see test_list_webhooks_filters above). Under a shuffled order where
+    # one of those runs first, register_webhook here would hit "active
+    # conversion webhook already exists" instead of exercising a fresh
+    # registration — a real 08-27 shuffled failure, root-caused and fixed
+    # here by giving this test its own private version range, same as every
+    # other integration test in this file.
     w = ConversionWebhook(
-        from_uri="legba/target/1.0.0",
-        to_uri="legba/target/2.0.0",
+        from_uri="legba/target/6.0.0",
+        to_uri="legba/target/7.0.0",
         impl="legba.data.conversions.target_v1_to_v2:convert",
     )
     row = await webhook_registry.register_webhook(w, actor="lewis@local")
-    assert row.from_uri == "legba/target/1.0.0"
-    assert row.to_uri == "legba/target/2.0.0"
+    assert row.from_uri == "legba/target/6.0.0"
+    assert row.to_uri == "legba/target/7.0.0"
     assert row.is_active is True
     assert row.family == "legba/target"
 

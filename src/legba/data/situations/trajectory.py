@@ -47,7 +47,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Sequence
 from uuid import UUID
 
@@ -362,6 +362,144 @@ async def read_current_states(
     return {str(r["situation_id"]): str(r["state_to"]) for r in rows}
 
 
+# ---------------------------------------------------------------------------
+# THE CORROBORATION CLOCK (H1 — the register forgetting curve)
+# ---------------------------------------------------------------------------
+#
+# THE DEFECT this read exists to close (CORRECTNESS-R2, M-1 / ATTRIBUTION §1).
+# ``situations.intensity_score`` and ``situations.status`` are both derived by
+# ``situation_clustering`` from the ``produced_at`` of the frame's MEMBER
+# FINDINGS — every desk read that clustered into the frame, including the
+# absence reads a desk emits whenever it looks and sees nothing. Seven country
+# desks write into one country frame several times a day, so every member is
+# minutes old, every half-life weight is ~1.0, and the intensity saturates near
+# 60 while ``last_event_at`` is always today. The decay curve was real and never
+# got to run: the pipeline refreshed its own inputs faster than the half-life.
+#
+# The consequence, verified in the live DB at the round's T0: the AR frame stood
+# at ``intensity 60.09``, ``event_count 396``, ``last_event_at 2026-08-25``,
+# ``status active`` — on a maritime pilots' strike that had ENDED on 5 August.
+# The desks wrote "no material change" into the frame, the frame reported that
+# back as high intensity and recent activity, and the escalation desk cited the
+# register as its decisive evidence that the strike was live.
+#
+# THE FIX is to give the frame a SECOND clock that only the world can wind.
+# A ``situation_events`` row that is not an ``unchanged_checkpoint`` cannot exist
+# without cited evidence (:class:`TrajectoryEvent` refuses it, and so does
+# ``situation_events_delta_requires_evidence``), and its ``occurred_at`` is by
+# construction the ``produced_at`` of the newest item it cited — EVIDENCE time.
+# So the newest SIGNIFICANT delta's ``occurred_at`` is exactly "the last time the
+# world moved this frame", and the COUNT of significant deltas is exactly "how
+# many independent times it has been corroborated". Those two numbers are what
+# :mod:`situation_clustering` decays against.
+#
+# NOTHING IS INVENTED FOR A FRAME THE LEDGER HAS NEVER SPOKEN ABOUT. Such a
+# frame is ABSENT from the mapping — the same honesty contract
+# :func:`read_current_states` keeps — and the caller leaves its behaviour
+# untouched rather than decaying a frame on a clock that has never been wound.
+
+_CORROBORATION_SQL = """
+    SELECT situation_id,
+           MAX(occurred_at) AS last_corroborated_at,
+           COUNT(*)         AS corroboration_count
+      FROM situation_events
+     WHERE situation_id = ANY($1::uuid[])
+       AND delta <> 'unchanged_checkpoint'
+     GROUP BY situation_id
+"""
+
+
+@dataclass(frozen=True)
+class Corroboration:
+    """What the ledger knows about a frame's LAST CONTACT WITH THE WORLD.
+
+    ``last_corroborated_at`` — the ``occurred_at`` of the newest SIGNIFICANT
+    delta, i.e. the ``produced_at`` of the newest finding that actually moved the
+    frame. Never a checkpoint's timestamp: a checkpoint asserts nothing, so it
+    cannot date anything.
+
+    ``count`` — how many significant deltas the frame has, ever. This is the
+    frame's EVIDENCE DENSITY: a frame the world has moved nine separate times has
+    a stronger claim to persist through a quiet week than one built on a single
+    article, and :mod:`situation_clustering` keys its half-life on exactly that.
+    """
+
+    last_corroborated_at: datetime
+    count: int
+
+
+def evidence_anchor(
+    corroboration: Corroboration | None, opened_at: datetime | None,
+) -> tuple[datetime | None, bool]:
+    """``(anchor, corroborated)`` — WHICH CLOCK dates this frame's last contact
+    with the world.
+
+    THE ONE DEFINITION, and it has two consumers by design.
+    :mod:`~legba.data.analysts.deterministic_handlers.situation_clustering`
+    decays intensity and demotes ``situations.status`` against it (H1); the
+    :mod:`~legba.data.analysts.situation_tracker` decides DORMANCY against it
+    (#64). Those two asked the same question through two different clocks until
+    #64 — the register on the evidence clock, the tracker on the MEMBER clock —
+    and the tracker's answer was structurally unreachable as a result. One
+    predicate, two consumers, no drift: the same shape the
+    ``is_non_event_situation_name`` repair took.
+
+    * A frame the ledger HAS moved anchors on its newest SIGNIFICANT delta —
+      evidence time, by construction (a non-checkpoint row cannot exist without
+      cited evidence), and unwindable by the pipeline's own cadence.
+    * A frame the ledger has NEVER moved anchors on its OPENING, and is reported
+      ``corroborated=False`` so a caller can render the distinction (the register
+      prints NEVER-CORROBORATED rather than dating a corroboration that never
+      happened). It still DECAYS: no recorded corroboration is not a weaker claim
+      to currency than a stale one. Decay on what is known; label what is known.
+    * Neither — a frame with no ledger row and no opening — yields
+      ``(None, False)``. The caller must treat that as "no clock", never as
+      "fresh": both consumers leave such a frame alone rather than guess.
+    """
+    if corroboration is not None:
+        anchor = corroboration.last_corroborated_at
+        if isinstance(anchor, datetime):
+            return (
+                anchor if anchor.tzinfo else anchor.replace(tzinfo=timezone.utc),
+                True,
+            )
+    if isinstance(opened_at, datetime):
+        return (
+            opened_at if opened_at.tzinfo else opened_at.replace(tzinfo=timezone.utc),
+            False,
+        )
+    return (None, False)
+
+
+async def read_corroboration(
+    conn: Any, situation_ids: Iterable[Any],
+) -> dict[str, Corroboration]:
+    """``{situation_id -> }`` :class:`Corroboration` for the ids given.
+
+    ONE grouped query for the whole batch (the ``read_trajectories`` reason: the
+    caller asks for every open frame on a 20-minute cadence, and a per-situation
+    fan-out is how a cheap derivation becomes a latency regression).
+
+    A situation with NO significant deltas — never adjudicated, or adjudicated
+    and never moved — is ABSENT from the mapping. That is not the same as
+    ``count=0``: "the world has never moved this frame" and "we have never
+    looked" are different facts and the caller must be able to tell them apart.
+    """
+    ids = _coerce_uuids(situation_ids)
+    if not ids:
+        return {}
+    rows = await conn.fetch(_CORROBORATION_SQL, ids)
+    out: dict[str, Corroboration] = {}
+    for r in rows:
+        when = r["last_corroborated_at"]
+        if not isinstance(when, datetime):
+            continue
+        out[str(r["situation_id"])] = Corroboration(
+            last_corroborated_at=when, count=int(r["corroboration_count"] or 0),
+        )
+    return out
+
+
 _TRAJECTORY_SQL = """
     SELECT id, situation_id, occurred_at, delta, state_from, state_to, why,
            derived_from, source_output_id, created_at
@@ -466,6 +604,20 @@ async def read_trajectories(
     the one delta the ledger writes without evidence), so showing an old one
     cannot mislead the way an old escalation could.
 
+    REGISTER-1c (2026-08-29) — THE EXEMPTION ABOVE IS TRUE OF THE DELTA, NOT OF
+    THE ROW, and this reader is why the distinction had to be made downstream.
+    The row it returns also carries ``why``: free model prose, written under a
+    prompt whose own instruction is "situations mostly continue". 34% of the
+    fleet's 1,095 checkpoint rows carry currency language and 53 carry
+    CORROBORATION language, so an UNWINDOWED checkpoint's prose could — and did,
+    24 days after the strike ended — tell a desk that an event "continues".
+    The reader still returns ``why`` (the ``/v3`` trajectory API and the ledger
+    drill both want it, and it is a real ledger field), but
+    ``window_ledger._render_situation_register_lines`` no longer PRINTS it for a
+    checkpoint. The unwindowed-checkpoint decision above survives intact because
+    what now renders — the date and the delta name — is exactly the fact the
+    quoted rationale claims for it.
+
     ORDER IS THE PRODUCT HERE. Movement first, quiet last — a caller renders the
     list as it arrives, and the whole defect this repairs was a render that put
     the day's checkpoint chatter where the movement should have been.
@@ -556,10 +708,13 @@ __all__ = [
     "STATE_ESCALATING",
     "STATE_WATCHING",
     "TRAJECTORY_STATES",
+    "Corroboration",
     "TrajectoryEvent",
     "TrajectoryTransitionError",
     "delta_requires_evidence",
+    "evidence_anchor",
     "next_state",
+    "read_corroboration",
     "read_current_states",
     "read_trajectories",
     "read_trajectory",

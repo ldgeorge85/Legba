@@ -106,8 +106,9 @@ Output ``data`` keys:
 Per-unit record:
     unit                        str
     faithfulness                float | None   (mean faithfulness critique score)
-    faithfulness_population     {judge_pipeline_version, n_scored,
-                                 excluded_other_pipeline, prior_populations}
+    faithfulness_population     {judge_pipeline_version, judge_pipeline_versions,
+                                 pooling, n_scored, excluded_other_pipeline,
+                                 prior_populations}
     correctness_operator        float | None   (PRIMARY axis; None = no verdicts)
     n_operator_labels           int   (verdicts incl. unresolvable)
     n_operator_scored           int   (verdicts that entered the mean)
@@ -135,6 +136,10 @@ from typing import Any, Mapping
 from uuid import UUID
 
 from ... import correctness_axis
+from ...provenance.judge_pipeline_version import (
+    METRIC_FAITHFULNESS_SCORE,
+    poolable_stamps,
+)
 from ...provenance.models import FindingPayload
 from ...provenance.verify import JUDGE_PIPELINE_VERSION
 from ....runtime.analyst_method import AnalystMethodResult
@@ -407,6 +412,26 @@ _LABELS_SQL = """
 # `judge_pipeline_version` stamp was built for exactly this and had no reader.
 # The row's `data` column is the whole CritiquePayload dump, so the stamp sits
 # one level down at `data.data.verification`.
+#
+# 2026-08-29 — LINEAGE-AWARE POOLING, and it applies HERE for the same reason it
+# applies to band calibration and by the identical argument: the number this
+# module reports IS mean `faithfulness_score`, so `faithfulness_score` is
+# exactly the metric family `STAMP_EXPECTED_SHIFTS` characterises. Where the
+# lineage AFFIRMATIVELY declares that a boundary cannot move the score — a pure
+# hard->soft demotion train, in 2026-08-20/1's own words "the demotion train
+# never moves the score, only the severity label" — a mean across it is not a
+# mean across two instruments, and excluding it buys no honesty and costs real
+# n. The campaign readout measured what the strict filter cost here: 573 of
+# 26,949 faithfulness critiques usable, per-unit n ~19-32
+# (CAMPAIGN_2026-08-29/PREMISE_GRADING_LOOP.md A-7).
+#
+# The filter is therefore the POOL, not the single head stamp, computed by the
+# same `poolable_stamps` this module's sibling uses so the two readouts can
+# never disagree about where the boundary is. Two properties are deliberately
+# preserved: a pool of one is byte-identical to the old behaviour (which is what
+# it is at the current head — 2026-08-29/1 pools with nothing), and the
+# exclusion counter and the prior-population rollup read the SAME pool as the
+# headline, so "excluded" continues to mean exactly "not in the population above".
 _FAITHFULNESS_SQL = """
     SELECT confidence
     FROM analyst_outputs
@@ -414,10 +439,13 @@ _FAITHFULNESS_SQL = """
       AND analyst_id = $1
       AND title LIKE 'Faithfulness verify%'
       AND produced_at > NOW() - make_interval(days => $2)
-      AND data->'data'->'verification'->>'judge_pipeline_version' = $3
+      AND data->'data'->'verification'->>'judge_pipeline_version' = ANY($3::text[])
 """
 
-# What the pipeline filter left out — reported, never silently dropped.
+# What the pipeline filter left out — reported, never silently dropped. The
+# COALESCE keeps a NULL (pre-stamp) row counted as excluded rather than
+# vanishing into SQL three-valued logic, exactly as before; only the comparison
+# widened from one stamp to the pool.
 _FAITHFULNESS_EXCLUDED_SQL = """
     SELECT count(*)::int AS n
     FROM analyst_outputs
@@ -425,9 +453,9 @@ _FAITHFULNESS_EXCLUDED_SQL = """
       AND analyst_id = $1
       AND title LIKE 'Faithfulness verify%'
       AND produced_at > NOW() - make_interval(days => $2)
-      AND COALESCE(
+      AND NOT (COALESCE(
             data->'data'->'verification'->>'judge_pipeline_version', ''
-          ) <> $3
+          ) = ANY($3::text[]))
 """
 
 # M-2 — the PRIOR populations, ANNOTATED rather than mixed. The current-stamp
@@ -445,9 +473,9 @@ _FAITHFULNESS_PRIORS_SQL = """
       AND analyst_id = $1
       AND title LIKE 'Faithfulness verify%'
       AND produced_at > NOW() - make_interval(days => $2)
-      AND COALESCE(
+      AND NOT (COALESCE(
             data->'data'->'verification'->>'judge_pipeline_version', ''
-          ) <> $3
+          ) = ANY($3::text[]))
     GROUP BY 1
     ORDER BY n_scored DESC
 """
@@ -458,10 +486,18 @@ _FAITHFULNESS_PRIORS_SQL = """
 # implementation of the weights exists.
 _OPERATOR_LABELS_SQL = correctness_axis.UNIT_LABELS_SQL
 
+#: THE metric family this mean IS. Pooling is licensed for this family and no
+#: other (see `_FAITHFULNESS_SQL`'s 2026-08-29 note).
+CALIBRATED_METRIC_FAMILY = METRIC_FAITHFULNESS_SCORE
+
 _POPULATION_NOTE = (
-    "Faithfulness means cover ONE judge pipeline. Priors are reported beside "
-    "the headline with their own n and NEVER averaged into it — a mean across "
-    "a judge swap describes a population that never existed."
+    "Faithfulness means cover ONE judge population — the lineage-declared POOL "
+    "for the faithfulness_score family (judge_pipeline_versions below). Stamps "
+    "join it only across boundaries their own lineage entry declares cannot "
+    "move this family; any declared shift is a hard stop and an unregistered "
+    "stamp pools with nothing. Priors are reported beside the headline with "
+    "their own n and NEVER averaged into it — a mean across a judge swap "
+    "describes a population that never existed."
 )
 
 
@@ -516,18 +552,27 @@ async def _pull_unit(
         })
     n_labeled = len(label_rows)
 
-    faith_rows = await conn.fetch(
-        _FAITHFULNESS_SQL, unit, lookback_days, JUDGE_PIPELINE_VERSION
-    )
+    # ONE pool, computed once and handed to all three reads, so the headline,
+    # the exclusion counter and the priors can never partition differently.
+    pool = list(poolable_stamps(JUDGE_PIPELINE_VERSION, CALIBRATED_METRIC_FAMILY))
+    faith_rows = await conn.fetch(_FAITHFULNESS_SQL, unit, lookback_days, pool)
     faithfulness = _mean([row["confidence"] for row in faith_rows])
     excluded_row = await conn.fetchrow(
-        _FAITHFULNESS_EXCLUDED_SQL, unit, lookback_days, JUDGE_PIPELINE_VERSION
+        _FAITHFULNESS_EXCLUDED_SQL, unit, lookback_days, pool
     )
-    prior_rows = await conn.fetch(
-        _FAITHFULNESS_PRIORS_SQL, unit, lookback_days, JUDGE_PIPELINE_VERSION
-    )
+    prior_rows = await conn.fetch(_FAITHFULNESS_PRIORS_SQL, unit, lookback_days, pool)
     faithfulness_population = {
+        # The head stamp — what a critique graded right now carries.
         "judge_pipeline_version": JUDGE_PIPELINE_VERSION,
+        # The population actually averaged. A single-element list means the head
+        # pooled with nothing; it must stay visible as that, never as a pool.
+        "judge_pipeline_versions": pool,
+        "pooling": {
+            "metric_family": CALIBRATED_METRIC_FAMILY,
+            "stamps": pool,
+            "stamp_count": len(pool),
+            "widened_by": len(pool) - 1,
+        },
         "n_scored": len(faith_rows),
         "excluded_other_pipeline": (
             int(excluded_row["n"]) if excluded_row else 0
@@ -714,8 +759,22 @@ async def handle(
         n_findings = 0
         n_labeled = 0
         faithfulness: float | None = None
+        # The failed-pull shape must carry the SAME keys as the measured one, or
+        # a reader has to special-case an outage. It names the pipeline (and now
+        # the pool it WOULD have read) with n_scored=0 — never an implied
+        # measured zero.
+        _failed_pull_pool = list(
+            poolable_stamps(JUDGE_PIPELINE_VERSION, CALIBRATED_METRIC_FAMILY)
+        )
         faithfulness_population: dict[str, Any] = {
             "judge_pipeline_version": JUDGE_PIPELINE_VERSION,
+            "judge_pipeline_versions": _failed_pull_pool,
+            "pooling": {
+                "metric_family": CALIBRATED_METRIC_FAMILY,
+                "stamps": _failed_pull_pool,
+                "stamp_count": len(_failed_pull_pool),
+                "widened_by": len(_failed_pull_pool) - 1,
+            },
             "n_scored": 0,
             "excluded_other_pipeline": 0,
             "prior_populations": [],

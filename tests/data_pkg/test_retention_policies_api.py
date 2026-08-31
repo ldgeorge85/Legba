@@ -36,24 +36,47 @@ async def pg_pool(migrated_pg: PostgresConfig):
     await pool.close()
 
 
+_RESET_SEED_SQL = (
+    "UPDATE retention_policies SET ttl_days = 0, keep_classes = "
+    "  CASE policy_name "
+    "    WHEN 'signals_retention' THEN ARRAY['retain_always', 'evidence_hold']::text[] "
+    "    ELSE '{}'::text[] "
+    "  END, "
+    "  batch_size = 5000, enabled = TRUE, "
+    "  description = description "
+    "WHERE policy_name IN ('signals_retention', 'analyst_traces_retention')"
+)
+
+
 @pytest_asyncio.fixture
 async def clean_slate(pg_pool):
+    """Reset to the migration's own seed rather than deleting the rows — the
+    two rows are the migration's ON CONFLICT DO NOTHING seed, not test-owned
+    fixtures; restore their shipped defaults around any test that mutates
+    them.
+
+    RESETS BOTH SIDES. The original version only reset BEFORE (`yield` had
+    no teardown after it) — every PATCH test here mutates the SAME two rows
+    the whole session-shared ``migrated_pg`` DB serves to every other
+    ``tests/data_pkg/`` file. Under file order this was invisible (the last
+    PATCH test in THIS file always ran before any other file's read of the
+    row); under a shuffle that isn't guaranteed. This is the confirmed root
+    cause of the 2026-08-23 nightly's ``test_retention_policies.py::
+    test_migration_0109_table_and_seed_rows`` shuffled failure (`ttl_days`
+    left at 90, `enabled` left at FALSE by
+    ``test_patch_updates_ttl_days_and_enabled`` — no reset ran after it) AND
+    (confirmed live, same polluter) the 2026-08-17
+    ``test_analyst_traces_retention.py`` failures (a leftover
+    `enabled=FALSE` on the `analyst_traces_retention` row makes the sweep a
+    silent, correctly-behaving no-op — `traces_purged` reads 0 even though
+    the test's own aged rows are genuinely present)."""
     async with pg_pool.acquire() as conn:
-        # Reset to the migration's own seed rather than deleting them — the
-        # two rows are the migration's ON CONFLICT DO NOTHING seed, not
-        # test-owned fixtures; restore their shipped defaults after any test
-        # mutates them.
-        await conn.execute(
-            "UPDATE retention_policies SET ttl_days = 0, keep_classes = "
-            "  CASE policy_name "
-            "    WHEN 'signals_retention' THEN ARRAY['retain_always', 'evidence_hold']::text[] "
-            "    ELSE '{}'::text[] "
-            "  END, "
-            "  batch_size = 5000, enabled = TRUE, "
-            "  description = description "
-            "WHERE policy_name IN ('signals_retention', 'analyst_traces_retention')"
-        )
-    yield
+        await conn.execute(_RESET_SEED_SQL)
+    try:
+        yield
+    finally:
+        async with pg_pool.acquire() as conn:
+            await conn.execute(_RESET_SEED_SQL)
 
 
 class _Reg:

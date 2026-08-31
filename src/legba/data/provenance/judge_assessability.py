@@ -533,6 +533,9 @@ def build_faithfulness_critique_payload(
     judge_model: str = "",
     judge_llm_ref: str = "",
     judge_route: str = "",
+    judge_trigger: str | None = None,
+    pre_escalation_overall_score: float | None = None,
+    pre_escalation_judge_status: str | None = None,
 ) -> dict[str, Any]:
     """Build the ``CritiquePayload``-shaped dict for the faithfulness verdict.
 
@@ -573,6 +576,26 @@ def build_faithfulness_critique_payload(
         verdict LEDGER (supported + hard_fail + soft_fail rows) with an honest
         ``claim_verdicts_truncated`` flag; each ``unsupported_spans`` entry
         additionally carries its ``fail_class`` (via ``UnsupportedSpan.as_dict``).
+
+    D4b (additive, provenance only — scores/floors/gates untouched): the
+    SELECTION provenance, supplied by the caller exactly as ``judge_llm_ref`` /
+    ``judge_route`` are.
+
+      * ``judge_trigger`` — WHY the judge decision came out the way it did:
+        ``'sampled'`` (the ordinary J2 policy: hash gate, always-list, or no
+        gate) or ``'floor_escalation'`` (``judge_floor_escalation`` — the judge
+        ran ONLY because the composition floor was about to exclude an
+        UNJUDGED finding). THE ARM SEPARATOR: escalation conditions on the
+        SCORE, so an escalated row is judge_status='llm' and is NOT a member
+        of the sampled population — every arm comparison must filter
+        ``COALESCE(judge_trigger, 'sampled') = 'sampled'`` (pre-D4b rows carry
+        NULL and ARE sampled-arm, which is what the COALESCE says).
+        ``None`` ⇒ the key carries NULL (every pre-D4b caller and test is
+        byte-identical).
+      * ``pre_escalation_overall_score`` / ``pre_escalation_judge_status`` —
+        ESCALATED ROWS ONLY: the published verdict the unsampled arm WOULD
+        have carried. Without them, escalation would truncate the unsampled
+        arm at the floor and destroy the A-3 measurement that motivated it.
     """
     score = report.faithfulness_score
     ceiling = report.confidence_ceiling
@@ -715,6 +738,12 @@ def build_faithfulness_critique_payload(
                 "unsupported_spans": [s.as_dict() for s in report.unsupported_spans],
                 "judge_status": report.judge_status,
                 "judge_unavailable_reason": report.judge_unavailable_reason,
+                # D4b — the SELECTION provenance (see the docstring). The arm
+                # separator, plus the verdict the unsampled arm would have
+                # published when this row was escalated.
+                "judge_trigger": judge_trigger,
+                "pre_escalation_overall_score": pre_escalation_overall_score,
+                "pre_escalation_judge_status": pre_escalation_judge_status,
                 # V3 per-branch telemetry (additive; {} when the judge did not run
                 # or the M14 whole-finding survey rubric graded the entire list).
                 "branch_scores": branch_scores,

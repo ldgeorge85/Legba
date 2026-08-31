@@ -53,7 +53,7 @@ method:
   # judge_sample_always list here overrides that default (an explicit []
   # clears it).
   options:
-    judge_sample_rate: 0.10
+    judge_sample_rate: 1.0
   prompt_module: "legba.runtime.analyst_method:_DEFAULT_SYSTEM"
   llm:
     primary:
@@ -141,17 +141,32 @@ cadence:
 # the target country's geo + the named entities in its signal slice — e.g. the
 # country's CURRENT head of state + bloc memberships — so a stale-cutoff model
 # can't assume a prior officeholder. Token-capped at max_facts.
+# REGISTER-1g (2026-08-29) — NO `situations` SOURCE, AND THAT IS THE FIX.
+# This unit is `kind: inline_target`, so `actor_substrate_slice` ALREADY hands it
+# the desk's OPEN SITUATION REGISTER as a citable [N] block
+# (`unit_grounding._render_situations`) on every run with a target. Declaring
+# `situations` here added a SECOND copy of the same frames, drawn by a second
+# query, rendered by a second renderer, in the same context window — and the
+# copy this line produced was the UNGUARDED one: `build_situations_block` prints
+# name/status/intensity/`last activity Nd ago` with NO `last_corroborated_at`, NO
+# `evidence_age`, NO STALE-NO-NEW-EVIDENCE label and NO
+# REGISTER_SELF_CORROBORATION_RULE. So the desk read the register's intensity
+# with none of H1's render repairs attached, which is the exact M-1 shape H1 was
+# built to close, ten prompts wide.
+# The unit_grounding block strictly dominates it (same table, same open
+# predicate, same target scope, same intensity ordering, plus the evidence clock
+# and the rule), so this is a DEDUPE, not a loss: one guarded copy remains.
 grounding:
   enabled: true
   scope: [target_geo, slice_entities]
-  # substrate = the ground-truth facts/nexuses block; situations = the SEPARATE
-  # "ASSESSED SITUATIONS" block — the country's own ongoing clustered frames
-  # (category = this target id), analysis-derived, never grounded as fact.
+  # substrate = the ground-truth facts/nexuses block. The country's own open
+  # frames arrive on the unit_grounding OPEN SITUATION REGISTER block instead
+  # (REGISTER-1g above), not from a `situations` source here.
   # graph_structure = the SEPARATE "ASSESSED STRUCTURE" block — the knowledge
   # graph's interesting structures (tense actors / brokers / proxy chains) from
   # the structural_balance + graph_mining metrics; analysis-derived, fenced off
   # from ground truth. The consume-side of "use the graph in analysis".
-  sources: [substrate, situations, graph_structure]
+  sources: [substrate, graph_structure]
   max_facts: 30
 
 # Agency grants — the seed packs from P-11 (NOT tools_whitelist).

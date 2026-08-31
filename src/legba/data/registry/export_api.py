@@ -9,10 +9,17 @@ title?}``) and returns ONE document:
 
   * **finding** items (any ``analyst_outputs`` row — unit findings, meta/
     composition reports) carry: title, analyst, target, produced_at, the cited
-    body with its ``[N]`` markers left intact, the citation list resolved LIVE
-    to signal titles + canonical_urls (falling back to the stored citation
-    title/source when the signal row is gone — resolution state is stated,
-    never faked), the verify state (``faithfulness=<score>`` with hard/soft
+    body with its ``[N]`` markers left intact, EVERY citation the row records
+    — each declaring its ``citation_kind`` and the ``resolves_against`` set
+    its ordinal indexes — with signal refs resolved LIVE to titles +
+    canonical_urls (falling back to the stored citation title/source when the
+    signal row is gone — resolution state is stated, never faked) and
+    composition sub-claim refs + the five DESK GROUNDING block kinds carried
+    through as structured entries rather than dropped (none carries a
+    ``signal_id``; filtering on one used to strip them all, which made an
+    exported composition report look uncited and printed an actively false
+    "no resolved citations" line — see ``_citation_class``),
+    the verify state (``faithfulness=<score>`` with hard/soft
     fail-flag counts when spans exist, or an explicit ``unverified — <reason>``
     — the structural verify-exemption included), confidence + the
     verify-folded ``effective_confidence`` (min(confidence, critic score) —
@@ -63,7 +70,7 @@ from pydantic import BaseModel
 
 from ..alerts.sinks import receipt_link, unverified_state, verify_state_from_score
 from ..archive import sha256_from_object_ref
-from ..provenance.kinds import verify_exempt_reason
+from ..provenance.kinds import GROUNDING_REF_KINDS, verify_exempt_reason
 from ..provenance.verify import fail_class_for_reason
 from .api import RegistryAPIDeps, require_bearer
 from .journal_api import (
@@ -213,18 +220,130 @@ _FINDING_SQL = """
 """
 
 
-def _stored_citations(data: Any) -> list[dict[str, Any]]:
-    """The finding's persisted ``data['citations']`` entries (P0-T1 shape:
-    ``{"marker": "[N]", "signal_id": ..., "title"?, "source"?}``), defensively
-    filtered to dict entries that carry a signal_id."""
+#: Marker class for a citation whose ordinal indexes a DESK GROUNDING block
+#: rather than a slice row — the discriminator ``unit_grounding`` stamps.
+_MARKER_CLASS_GROUNDING = "desk_grounding"
+
+#: The three resolution targets an exported citation can name. These are the
+#: SETS an ordinal is a position in, spelled as data so a reader of the
+#: document never has to run a shape heuristic over ``signal_id`` / ``ref_id``
+#: to learn what a marker points at.
+_RESOLVES_SIGNALS = "signals"
+_RESOLVES_OUTPUTS = "analyst_outputs"
+_RESOLVES_IN_ROW = "data.citations"
+
+
+def _citation_class(entry: dict[str, Any]) -> tuple[str, str, str | None] | None:
+    """Classify one stored citation → ``(citation_kind, resolves_against,
+    marker_class)``, or ``None`` when the entry is genuinely unclassifiable.
+
+    THE DEFECT THIS EXISTS TO CLOSE (2026-08-30): the previous reader kept only
+    entries with a truthy ``signal_id``. Three shapes coexist in
+    ``data['citations']`` and only ONE of them carries that key:
+
+      * a UNIT SIGNAL ref — ``signal_id`` = a ``signals`` uuid;
+      * a COMPOSITION SUB-CLAIM ref — ``ref_id`` = an ``analyst_outputs`` uuid
+        under ``ref_kind='finding'``, NO ``signal_id``
+        (``meta_findings_synthesizer``);
+      * a DESK GROUNDING block — one of
+        :data:`~legba.data.provenance.kinds.GROUNDING_REF_KINDS`, carrying
+        ``marker_class='desk_grounding'`` and its own ``resolves_against``,
+        with a ``ref_id`` only for the prior read (the other four are synthetic
+        and deliberately carry NO id — ``unit_grounding.citation_for_block``).
+
+    So the filter silently stripped every citation off a composition report and
+    every grounding block off a unit read, and a finding whose citations were
+    ALL of those printed the actively false "no resolved citations recorded on
+    this row". The verify plane has scored these as SUPPORTED evidence since
+    2026-07-31; the export was contradicting its own grader.
+
+    Classification keys on ``marker_class`` / ``resolves_against`` FIRST — the
+    structural marks the producer writes — and falls back to the canonical
+    ``GROUNDING_REF_KINDS`` registry for rows written before those marks
+    existed. It is deliberately NOT a ``signal_id``-presence heuristic, because
+    that heuristic IS the bug.
+    """
+    if entry.get("signal_id"):
+        return ("signal", _RESOLVES_SIGNALS, None)
+    marker_class = entry.get("marker_class")
+    ref_kind = entry.get("ref_kind")
+    if marker_class == _MARKER_CLASS_GROUNDING or ref_kind in GROUNDING_REF_KINDS:
+        kind = str(ref_kind or entry.get("grounding") or _MARKER_CLASS_GROUNDING)
+        target = entry.get("resolves_against")
+        return (
+            kind,
+            str(target) if isinstance(target, str) and target else _RESOLVES_IN_ROW,
+            # PASSED THROUGH, never re-derived. A pre-stamp row carries no
+            # mark, and stamping one into the export would claim the producer
+            # wrote something it did not. `citation_kind` already tells the
+            # reader this is a grounding block; `marker_class` answers the
+            # different question of whether the ROW says so itself.
+            str(marker_class) if isinstance(marker_class, str) and marker_class else None,
+        )
+    if ref_kind == "finding" and entry.get("ref_id"):
+        # The composition sub-claim convention — the ordinal indexes another
+        # analyst_outputs row, captured with its own evidence_text at write
+        # time (verify._uses_subclaim_convention keys on this same token).
+        return ("finding", _RESOLVES_OUTPUTS, None)
+    return None
+
+
+def _citation_list(data: Any) -> list[Any]:
+    """The raw citation array out of an ``analyst_outputs.data`` column.
+
+    THE NESTING, and why reading it wrong was silent: the column holds the
+    WHOLE payload dump (``provenance.writes`` line ~810:
+    ``payload.model_dump(mode='json')``), and ``FindingPayload`` itself has a
+    field named ``data``. So a citation list written as ``finding.data
+    ['citations']`` (``inline_target``) lands at
+    ``analyst_outputs.data->'data'->'citations'`` — DOUBLE-nested. This
+    module's own ``_FINDING_SQL`` already unwraps that extra level for the
+    critique block (``cr.data->'data'->'verification'``); the citation reader
+    did not, so it looked for ``data->'citations'``, found nothing on every
+    real row, and every exported finding printed "no resolved citations
+    recorded on this row" regardless of how many it carried. The test suite
+    could not see it because its fixture inserted the FLAT shape by hand.
+
+    Nested level FIRST (the live shape), flat as the fallback — the same
+    defensive order the v3 UI's ``citationsModel.extractCitations`` uses, so a
+    hand-composed or forward-shaped payload still reads.
+    """
     payload = _load_jsonb(data) or {}
-    raw = payload.get("citations") if isinstance(payload, dict) else None
-    out: list[dict[str, Any]] = []
-    if isinstance(raw, list):
-        for entry in raw:
-            if isinstance(entry, dict) and entry.get("signal_id"):
-                out.append(entry)
-    return out
+    if not isinstance(payload, dict):
+        return []
+    inner = payload.get("data")
+    nested = inner.get("citations") if isinstance(inner, dict) else None
+    if isinstance(nested, list):
+        return nested
+    flat = payload.get("citations")
+    return flat if isinstance(flat, list) else []
+
+
+def _stored_citations(data: Any) -> list[dict[str, Any]]:
+    """The finding's persisted citation entries — EVERY citation kind, not
+    just the signal refs, read at the level they are actually written to.
+
+    Three entry shapes coexist (see :func:`_citation_class`); an entry that
+    matches none of them carries no resolvable target at all and is dropped,
+    because exporting it would be a marker pointing at nothing.
+    """
+    return [
+        entry
+        for entry in _citation_list(data)
+        if isinstance(entry, dict) and _citation_class(entry) is not None
+    ]
+
+
+def _cited_signal_ids(entries: list[dict[str, Any]]) -> list[str]:
+    """The ``signals`` ids among a citation list — the only kind that needs a
+    live substrate round-trip. Grounding blocks resolve against the row's own
+    citation record and sub-claim refs against ``analyst_outputs``; neither is
+    a signal, and treating them as one is what stripped them before."""
+    return [
+        str(e["signal_id"])
+        for e in entries
+        if (_citation_class(e) or ("", "", None))[0] == "signal"
+    ]
 
 
 async def _resolve_citation_signals(
@@ -328,6 +447,73 @@ def _iso(value: Any) -> str | None:
     return str(value) if value is not None else None
 
 
+def _citation_export_entry(
+    entry: dict[str, Any], signal_index: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """One citation's export dict — the SAME key set for every kind, so the
+    document is self-describing.
+
+    ``citation_kind`` + ``resolves_against`` are the two keys a reader needs:
+    the first says WHAT was cited (``signal`` / ``finding`` / one of the five
+    grounding kinds), the second names the SET the ordinal indexes.
+    ``marker_class`` passes the producer's structural mark through when the row
+    carries it (``desk_grounding``), and is ``None`` on a signal or sub-claim
+    ref and on grounding rows written before the mark existed — absence is not
+    re-derived, it is reported.
+
+    ``resolved``/``resolution_source`` stay honest per kind:
+
+      * ``signal`` — re-resolved LIVE against ``signals``. Found →
+        ``resolution_source='live'`` and the live title/url win over the stored copy;
+        pruned → ``resolution_source='stored'``, ``resolved=False``, stored fields
+        shown. Unchanged from the pre-2026-08-30 behaviour, byte for byte.
+      * ``finding`` / grounding — ``resolution_source='in_row'``: the cited passage
+        was captured into this row's own citation record at write time, so it
+        is available to the reader of this document without a round-trip.
+        These are NOT re-resolved (and never were), so claiming ``'live'``
+        would be a fabrication and claiming ``'stored'``-with-``resolved=False``
+        would read as "the target is gone" — which is not what was checked.
+    """
+    classified = _citation_class(entry)
+    # _stored_citations only admits classifiable entries, so this is total.
+    kind, resolves_against, marker_class = classified or (
+        "signal", _RESOLVES_SIGNALS, None,
+    )
+    out: dict[str, Any] = {
+        "marker": str(entry.get("marker") or ""),
+        "citation_kind": kind,
+        "resolves_against": resolves_against,
+        "marker_class": marker_class,
+        "signal_id": None,
+        "ref_id": None,
+        "title": entry.get("title"),
+        "canonical_url": entry.get("source"),
+        "resolved": True,
+        "resolution_source": "in_row",
+        "archived": False,
+        "archive_sha256": None,
+    }
+    if kind != "signal":
+        ref_id = entry.get("ref_id")
+        out["ref_id"] = str(ref_id) if ref_id else None
+        return out
+    sid = str(entry["signal_id"])
+    live = signal_index.get(sid)
+    out["signal_id"] = sid
+    # Live signal title/url first (full fidelity); stored citation fields as
+    # the fallback for a pruned signal — and `resolved` states which one the
+    # reader is looking at.
+    out["title"] = (live or {}).get("title") or entry.get("title")
+    out["canonical_url"] = (live or {}).get("canonical_url") or entry.get("source")
+    out["resolved"] = live is not None
+    out["resolution_source"] = "live" if live is not None else "stored"
+    # P2-1: evidence-archive surface (False/None when un-archived or the
+    # signal no longer resolves — never fabricated).
+    out["archived"] = bool((live or {}).get("archived"))
+    out["archive_sha256"] = (live or {}).get("archive_sha256")
+    return out
+
+
 def _finding_export_item(
     row: Any, signal_index: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
@@ -352,27 +538,10 @@ def _finding_export_item(
         else confidence
     )
 
-    citations: list[dict[str, Any]] = []
-    for entry in _stored_citations(row["data"]):
-        sid = str(entry["signal_id"])
-        live = signal_index.get(sid)
-        citations.append(
-            {
-                "marker": str(entry.get("marker") or ""),
-                "signal_id": sid,
-                # Live signal title/url first (full fidelity); stored citation
-                # fields as the fallback for a pruned signal — and `resolved`
-                # states which one the reader is looking at.
-                "title": (live or {}).get("title") or entry.get("title"),
-                "canonical_url": (live or {}).get("canonical_url")
-                or entry.get("source"),
-                "resolved": live is not None,
-                # P2-1: evidence-archive surface (False/None when un-archived
-                # or the signal no longer resolves — never fabricated).
-                "archived": bool((live or {}).get("archived")),
-                "archive_sha256": (live or {}).get("archive_sha256"),
-            }
-        )
+    citations = [
+        _citation_export_entry(entry, signal_index)
+        for entry in _stored_citations(row["data"])
+    ]
 
     verify_state, fail_flags = _finding_verify(verification, row["analyst_id"])
     path, url = receipt_link(str(row["id"]), row_kind="finding")
@@ -548,23 +717,58 @@ def _md_finding_section(n: int, item: dict[str, Any]) -> list[str]:
         lines.append("### Citations")
         lines.append("")
         for c in citations:
-            title = c.get("title") or "(untitled signal)"
-            url = c.get("canonical_url")
-            entry = f"- {c['marker']} {title}"
-            if url:
-                entry += f" — {url}"
-            if c.get("archive_sha256"):
-                # P2-1: our archived copy of the original bytes exists — the
-                # receipt chain terminates in a verifiable hash, not the URL.
-                entry += f" — evidence preserved, sha256:{c['archive_sha256']}"
-            if not c.get("resolved"):
-                entry += " *(signal no longer in substrate; stored citation shown)*"
-            lines.append(entry)
+            lines.append(_md_citation_line(c))
         lines.append("")
     else:
-        lines.append("*(no resolved citations recorded on this row)*")
+        lines.append("*(no citations recorded on this row)*")
         lines.append("")
     return lines
+
+
+def _md_citation_line(c: dict[str, Any]) -> str:
+    """One ``### Citations`` bullet, per citation kind.
+
+    A SIGNAL ref renders exactly as it always has (title — url — archive hash —
+    the pruned-signal note), so an existing reader of an exported pack sees no
+    change. The kinds that used to be STRIPPED render with their kind and the
+    set they resolve against stated in the line, because "[6]" with no target
+    named is the illegibility this repair exists to close — and the reader has
+    no citation record to join against, unlike the UI.
+
+    ``citation_kind`` absent → signal, so a document composed before
+    2026-08-30 renders unchanged through this function.
+    """
+    kind = str(c.get("citation_kind") or "signal")
+    marker = c.get("marker") or ""
+    if kind == "signal":
+        entry = f"- {marker} {c.get('title') or '(untitled signal)'}"
+        url = c.get("canonical_url")
+        if url:
+            entry += f" — {url}"
+        if c.get("archive_sha256"):
+            # P2-1: our archived copy of the original bytes exists — the
+            # receipt chain terminates in a verifiable hash, not the URL.
+            entry += f" — evidence preserved, sha256:{c['archive_sha256']}"
+        if not c.get("resolved"):
+            entry += " *(signal no longer in substrate; stored citation shown)*"
+        return entry
+    target = c.get("resolves_against") or _RESOLVES_IN_ROW
+    if kind == "finding":
+        label = c.get("title") or "(untitled sub-claim finding)"
+        ref = c.get("ref_id")
+        note = "sub-claim finding" + (f" {ref}" if ref else "")
+        return f"- {marker} {label} — *{note}; resolves against {target}*"
+    # A desk grounding block. `kind` is the registered ref_kind
+    # (prior_read / window_ledger / situation_register / desk_baseline /
+    # open_questions); the four synthetic ones carry NO id by design, so no
+    # drill target is named for them rather than one being minted.
+    pretty = kind.replace("_", " ")
+    label = c.get("title") or pretty
+    note = f"desk grounding · {pretty}"
+    ref = c.get("ref_id")
+    if ref:
+        note += f" {ref}"
+    return f"- {marker} {label} — *{note}; resolves against {target}*"
 
 
 def _md_journal_section(n: int, item: dict[str, Any]) -> list[str]:
@@ -687,9 +891,9 @@ def build_export_router(deps: RegistryAPIDeps) -> APIRouter:
                 # One batched signal resolution over the WHOLE basket's
                 # citation set (no per-finding round-trips).
                 all_signal_ids = [
-                    str(e["signal_id"])
+                    sid
                     for r in rows
-                    for e in _stored_citations(r["data"])
+                    for sid in _cited_signal_ids(_stored_citations(r["data"]))
                 ]
                 signal_index = await _resolve_citation_signals(
                     conn, all_signal_ids

@@ -293,7 +293,39 @@ async def test_llm_matrix_scorer_falls_back_on_unparsable_output():
 
 
 @pytest_asyncio.fixture
-async def pg_pool(migrated_pg: PostgresConfig):
+async def pg_pool(migrated_pg: PostgresConfig, clean_tables):
+    """The live pool, over a situations/hypotheses pair this file OWNS.
+
+    WHY THE TRUNCATE (2026-08-30 release-gate train). ``run_method`` picks its
+    focal topics with ``_read_focal_topics``:
+
+        SELECT ... FROM situations
+         WHERE last_event_at > NOW() - make_interval(days => 14)
+         ORDER BY intensity_score DESC, last_event_at DESC
+         LIMIT <max_topics>
+
+    — a BOUNDED, GLOBALLY-RANKED window, which is correct production behavior
+    (ACH sweeps the most intense live situations, it does not sweep the world).
+    Every test below seeds one situation at intensity 5.0-8.0 and then asserts
+    on the hypotheses written FOR THAT situation, which silently assumes the
+    seeded row lands inside the window. It does not have to: any sibling file
+    that leaves >= ``max_topics`` recent, higher-intensity situations in the
+    session-shared DB EVICTS this file's row from the ranking, ACH never visits
+    the topic, and the read-back finds 0 rows while ``hypotheses_written`` is
+    happily >= 2 (for other people's topics). ``test_migration_0188_mega_frame_
+    split.py`` seeds at intensity 59.34 with ``last_event_at = now()`` and does
+    exactly this — proven by running the two files in that order.
+
+    This is the ``test_corpus_research_backlog`` shape from the 2026-08-29
+    shuffle train, not the "assert emptiness" shape: no assertion rewrite can
+    recover a row the ranking dropped, so the candidate pool itself has to
+    start clean. ``situations`` is scratch space this file fully owns for the
+    duration of its own assertions (the ``clean_tables`` contract);
+    ``hypotheses`` + ``situation_events`` come along because both carry a FK to
+    ``situations`` and Postgres refuses to TRUNCATE a referenced table unless
+    every referencing table is truncated in the same statement.
+    """
+    await clean_tables("situations", "hypotheses", "situation_events")
     pool = await asyncpg.create_pool(migrated_pg.dsn, min_size=1, max_size=4)
     yield pool
     await pool.close()

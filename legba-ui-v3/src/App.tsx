@@ -33,20 +33,39 @@ import { DockviewPanelApiProvider } from '@/components/DockviewPanelApiContext'
 import { useRegistry } from '@/panel-registry/useRegistry'
 import { PANEL_REGISTRY } from '@/panel-registry/registry'
 import { extractScope, instanceId, resolvePanel } from '@/panel-registry/loader'
+import { resolveKind } from '@/panel-registry/aliases'
 import type { PanelKind, PanelRegistration } from '@/types'
 import { currentMode, getToken } from '@/auth/jwt'
 import {
   applyPreset,
-  DEFAULT_BOOT_LAYOUT,
   findPreset,
   hasCustomLayout,
   loadCustomLayout,
   saveCustomLayout,
 } from '@/lib/layoutPresets'
+import {
+  findWorkspace,
+  isWorkspaceId,
+  LANDING_WORKSPACE,
+  loadWorkspaceLayout,
+  migrateLegacyLayout,
+  resetWorkspaceLayout,
+  saveWorkspaceLayout,
+  seedWorkspace,
+  WORKSPACES,
+  type WorkspaceDef,
+  type WorkspaceId,
+} from '@/lib/workspaces'
+import { WorkspaceBar } from '@/components/WorkspaceBar'
 import { applyInvestigateLayout, applyInvestigateAnalystLayout } from '@/lib/investigateLayout'
 import { toggleDebugMode } from '@/lib/debugMode'
 import { useSelection, type SelectionKind } from '@/state/selection'
-import { useShareState } from '@/lib/shareState'
+import {
+  emitRead,
+  installReadTelemetryLifecycle,
+  setTelemetryWorkspace,
+} from '@/lib/readTelemetry'
+import { readWorkspaceHash, useShareState, writeWorkspaceHash } from '@/lib/shareState'
 import type { PaletteRecord } from '@/components/usePaletteRecords'
 
 /**
@@ -60,10 +79,46 @@ import type { PaletteRecord } from '@/components/usePaletteRecords'
 function LegbaPanelComponent(props: IDockviewPanelProps<LegbaPanelParams>) {
   const params = props.params
   const registration = params?.registration
+
+  // READ TELEMETRY (D2e) — THE panel-open chokepoint.
+  //
+  // Every opener in this file (`onOpenPanel` from the sidebar/palette,
+  // `addSingleton` from workspace seeding and layout presets, `addBound` from
+  // the investigate rails) and every restored saved layout mounts through
+  // `component: 'default'`, which is this function. Dockview instantiates it
+  // exactly once per `addPanel` — `dockviewMountLifecycle.probe.test.tsx`
+  // pins that a tab switch does NOT remount — so one effect here counts every
+  // panel open in the app and nothing else. Instrumenting the three openers
+  // instead would have missed the restored-layout path entirely, which is
+  // most of a normal morning.
+  //
+  // Computed before any early return so the hook order stays unconditional.
+  const openedKind = registration
+    ? (registration.layout_slot ?? registration.panel_id)
+    : params?.singletonKind
+      ? (resolveKind(params.singletonKind)?.kind ?? params.singletonKind)
+      : null
+  useEffect(() => {
+    if (!openedKind) return
+    emitRead('panel_open', { subjectKind: 'panel', subjectId: openedKind })
+    // The operator-pull surface the premise review measured decaying
+    // 64→53→18 gets its own kind, so "did giving them a worthy read revive
+    // asking questions of it?" is answerable without a subject-string filter.
+    if (openedKind === 'system.consult') emitRead('consult_open')
+    // `lineage_walk` is NOT emitted here: opening the Provenance survivor is
+    // not the same act as entering one of its walk surfaces, and the panel
+    // owns that distinction. See panels/merged/Provenance.tsx.
+  }, [openedKind])
+
   if (!registration) {
     // Singleton panel — no binding; render a synthetic registration.
     if (params?.singletonKind) {
-      const kind = params.singletonKind
+      // A saved layout / deep-link may name a RETIRED kind: resolve it onto
+      // its survivor and remember the tab that IS the retired surface
+      // (panel-registry/aliases.ts, design §4.4 call site 2).
+      const alias = resolveKind(params.singletonKind)
+      const kind = alias?.kind ?? params.singletonKind
+      const tab = params.tab ?? alias?.tab
       const entry = PANEL_REGISTRY[kind]
       if (!entry) {
         return (
@@ -95,7 +150,12 @@ function LegbaPanelComponent(props: IDockviewPanelProps<LegbaPanelParams>) {
           <PanelErrorBoundary label={synthetic.id}>
             <PanelTierProvider tier={entry.definition.tier ?? 'live'}>
               <Suspense fallback={<PanelLoading />}>
-                <Component registration={synthetic} scope={{}} mode={params.mode} />
+                <Component
+                  registration={synthetic}
+                  scope={{}}
+                  mode={params.mode}
+                  initialTab={tab}
+                />
               </Suspense>
             </PanelTierProvider>
           </PanelErrorBoundary>
@@ -121,7 +181,12 @@ function LegbaPanelComponent(props: IDockviewPanelProps<LegbaPanelParams>) {
       <PanelErrorBoundary label={registration.id}>
         <PanelTierProvider tier={resolved.definition.tier ?? 'live'}>
           <Suspense fallback={<PanelLoading />}>
-            <Component registration={registration} scope={scope} mode={params!.mode} />
+            <Component
+              registration={registration}
+              scope={scope}
+              mode={params!.mode}
+              initialTab={params?.tab ?? resolved.tab}
+            />
           </Suspense>
         </PanelTierProvider>
       </PanelErrorBoundary>
@@ -141,9 +206,18 @@ interface LegbaPanelParams {
   registration: PanelRegistration | null
   singletonKind?: PanelKind
   mode: ReturnType<typeof currentMode>
+  /** Tab a tabbed survivor opens on (set when a retired kind was aliased here). */
+  tab?: string
 }
 
-const COMPONENTS = { default: LegbaPanelComponent }
+/**
+ * The Dockview component map. EXPORTED for the read-telemetry runtime test
+ * (`lib/readTelemetryRuntime.test.tsx`), which mounts a real `DockviewReact`
+ * with THIS object rather than a stand-in — so if the panel-open chokepoint
+ * ever stops being `LegbaPanelComponent`, the test follows the change instead
+ * of quietly passing against a copy. Same reason `ANCHOR_KINDS` is exported.
+ */
+export const COMPONENTS = { default: LegbaPanelComponent }
 
 /**
  * Anchor-panel tab (item 5): renders the title WITHOUT a close button, so a
@@ -187,10 +261,27 @@ export function App() {
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [savedLayout, setSavedLayout] = useState(() => hasCustomLayout(mode))
+  // The active stance (design §2). A shared link can carry it (`#ws=`), so the
+  // initial value is read from the hash and falls back to the landing.
+  const [workspace, setWorkspace] = useState<WorkspaceId>(() => {
+    const fromHash = readWorkspaceHash()
+    return fromHash && isWorkspaceId(fromHash) ? fromHash : LANDING_WORKSPACE
+  })
   const seededRef = useRef(false)
+  // The stance whose layout the dock currently holds — read by the unload
+  // autosave and the switcher without re-binding either to React state.
+  const workspaceRef = useRef<WorkspaceId>(workspace)
+  workspaceRef.current = workspace
 
   // Shareable state — the selection ⇄ URL hash (addressability without a router).
   useShareState()
+
+  // READ TELEMETRY (D2e) — the drain hooks. Queued events flush on a timer;
+  // this makes sure the LAST batch of a morning is not the one that gets lost,
+  // via `sendBeacon` on hide/pagehide/unload. Installed once, torn down with
+  // the app. Everything inside fails silent by construction — see
+  // lib/readTelemetry.ts rule 1.
+  useEffect(() => installReadTelemetryLifecycle(), [])
 
   const onDockReady = useCallback((ev: DockviewReadyEvent) => {
     setDockApi(ev.api)
@@ -215,64 +306,151 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  // Seed the dockview with the MISSION-CONTROL default layout on first ready
-  // (S7-T2 task 3 — the headline of the reform). First screenful = glance state
-  // + what changed + the product, per the original UI plus U-4's boot fix
-  // (COHERENCE_WAVES_PLAN_2026-07-28 §U-4 — a hostile UX review found cold
-  // boot answered "what's happening now" but never "what moved while I was
-  // away", even though that surface (the Wall's movers quadrant) already
-  // existed, just opt-in-only):
+  // Enter a workspace (UI_HOLISTIC_DESIGN_2026-08-24 §2 — the stance model).
+  //
+  // A workspace REMEMBERS ITSELF: if this stance has a stored layout for the
+  // active mode we restore that (the operator's own arrangement), otherwise we
+  // seed the curated default and pin its proportions. Nothing here clears
+  // another stance's slot — the caller saves the outgoing layout first (see
+  // `onSwitchWorkspace`), which is what makes a workspace an object you return
+  // to rather than the reset the old `applyPreset` performed.
+  const enterWorkspace = useCallback(
+    (ws: WorkspaceId) => {
+      if (!dockApi) return
+      const def = findWorkspace(ws)
+      if (!def) return
+      seededRef.current = true
+
+      // READ TELEMETRY (D2e) — the stance chokepoint. Boot, Alt+N, the
+      // workspace bar, the `#ws=` deep-link and Alt+Shift+R all land here, so
+      // one emit covers every way a stance can come up.
+      //
+      // The workspace is pushed into the telemetry module FIRST, so every
+      // panel_open the seed walk is about to fire is tagged with the stance it
+      // belongs to rather than the one being left.
+      setTelemetryWorkspace(ws)
+      emitRead('workspace_open', { workspace: ws })
+      // THE HEADLINE METRIC. `brief_read` is emitted exactly here — the
+      // Morning Read landing mounting — because that is the product the
+      // oracle wager is about. "On how many of the last 90 days did the
+      // operator open the morning read at all?" is the number that decides
+      // Option 1 vs the pre-committed Option 2 fallback, and this is the only
+      // line in the app that answers it.
+      if (ws === LANDING_WORKSPACE) emitRead('brief_read', { workspace: ws })
+
+      if (loadWorkspaceLayout(dockApi, ws, mode)) return
+      dockApi.clear()
+      seedWorkspace(def, (kind, position) => addSingleton(dockApi, kind, mode, position))
+      // Default-active tabs (e.g. the World Assessment in front of the
+      // Inspector on Morning Read) and the stance's pinned proportions —
+      // the boot-only extras a generic seed walk doesn't know about.
+      for (const kind of def.active ?? []) dockApi.getPanel(kind)?.api.setActive()
+      sizeWorkspace(dockApi, def)
+    },
+    [dockApi, mode],
+  )
+
+  // THE LANDING (design §3.1) — first open is the Morning Read workspace,
+  // seeded, in one paint: never a blank dock, never the panel tree, never a
+  // tour. It answers "what happened, what moved, what does it mean?" —
   //
   //   +-------------------------------------------------------------------+
-  //   |  KPI STRIP  (signals / findings / situations / sources + deltas)  |
+  //   |  AT A GLANCE (signals / findings / situations / sources + deltas)  |
   //   +-------------------------------------------------------------------+
-  //   |  MOVERS SINCE LAST VISIT (band changes / reversals / situations)  |
-  //   +------------------+--------------------------+---------------------+
-  //   |  LIVE FEED       |   WORLD MAP              |  WORLD ASSESSMENT   |
-  //   |  (anchor)        |   (real size)           |  (the REPORT)       |
-  //   +------------------+                          |  + Inspector (tab)  |
-  //   |  TIMELINE lanes  |                          |                     |
-  //   +------------------+--------------------------+---------------------+
+  //   |  THE WALL — world at a glance · MOVERS SINCE LAST VISIT ·          |
+  //   |             newest verified · health corner                       |
+  //   +--------------------------------+----------------------------------+
+  //   |  LIVE FEED                     |  WORLD ASSESSMENT | Alerts | Insp |
+  //   |  (verified-first, facets)      +----------------------------------+
+  //   |                                |  WORLD MAP                       |
+  //   +--------------------------------+----------------------------------+
   //
-  // KPI is the full-width top strip; the movers band is a full-width slim
-  // strip beneath it — the ONE tile U-4 adds, not the whole 2×2 Wall (the
-  // Wall's other three quadrants — world-at-a-glance band grid, newest
-  // verified, health corner — already have close analogues in the Map, the
-  // Feed, and the KPI strip on this same screen, so mounting the whole Wall
-  // here would duplicate content and crowd 1920×1080; see WallMovers.tsx and
-  // `lib/layoutPresets.ts`'s `DEFAULT_BOOT_LAYOUT` for the full rationale).
-  // The feed anchors the left with the global Timeline lanes beneath it; the
-  // world map takes the center at real size; the verified World Assessment
-  // report is a first-class right panel (the now-unhidden v4.assessment)
-  // with the Inspector tabbed behind it. Everything is brushed by the one
-  // shared selection store. Sizes are pinned after seeding.
-  //
-  // The exact kind/position sequence lives in `DEFAULT_BOOT_LAYOUT`
-  // (layoutPresets.ts) so it's colocated + unit-tested the same way the
-  // named presets are; this effect just seeds it (via the SAME `addSingleton`
-  // the sidebar/palette use) and then adds boot-only extras (active tabs,
-  // pinned sizes) that a generic preset apply doesn't know about.
+  // This supersedes the S7-T2 mission-control boot grid. The one substantive
+  // change to what mounts: the Wall replaces the standalone
+  // `system.wall_movers` tile, because movers-since-last-visit is the Wall's
+  // OWN quadrant and the old grid mounted it a second time beside its parent
+  // (design §1.2) — U-4's "cold boot must answer what changed" acceptance is
+  // kept, by the panel that owns the answer. The exact placement sequence
+  // lives in `lib/workspaces.ts` so it is colocated with, and unit-tested the
+  // same way as, the other five stances.
   useEffect(() => {
     if (!dockApi || seededRef.current) return
-    seededRef.current = true
-    if (mode !== 'personal' && mode !== 'cis') return
-
-    for (const placement of DEFAULT_BOOT_LAYOUT) {
-      addSingleton(dockApi, placement.kind, mode, placement.position)
+    if (mode !== 'personal' && mode !== 'cis') {
+      seededRef.current = true
+      return
     }
-    const kpi = dockApi.getPanel('v4.kpi')
-    const movers = dockApi.getPanel('system.wall_movers')
-    const feed = dockApi.getPanel('system.findings')
-    const report = dockApi.getPanel('v4.assessment')
-    const timeline = dockApi.getPanel('system.timeline')
+    // A pre-workspace saved layout becomes Morning Read's slot on the very
+    // first boot after this train (design §6.2 rule 1) — copied, never moved,
+    // so the sidebar's Save/Restore keeps its own slot untouched.
+    migrateLegacyLayout(mode)
+    enterWorkspace(workspaceRef.current)
+  }, [dockApi, mode, enterWorkspace])
 
-    // The report is the default-active tab on the right rail (not the Inspector),
-    // and the feed is the default-active tab on the left (not the timeline).
-    report?.api.setActive()
-    feed?.api.setActive()
+  // SWITCHING NEVER DESTROYS (design §2.5). The outgoing stance is serialized
+  // into its own slot on the way out, so coming back returns the arrangement
+  // you left — the single behavioural bug that made `LAYOUT_PRESETS` unusable
+  // as workspaces was `applyPreset`'s `api.clear()` on the way IN.
+  const onSwitchWorkspace = useCallback(
+    (next: WorkspaceId) => {
+      if (!dockApi || next === workspaceRef.current) return
+      saveWorkspaceLayout(dockApi, workspaceRef.current, mode)
+      workspaceRef.current = next
+      setWorkspace(next)
+      writeWorkspaceHash(next)
+      enterWorkspace(next)
+    },
+    [dockApi, mode, enterWorkspace],
+  )
 
-    // Pin the mission-control proportions (Dockview defaults to ~50/50 splits).
-    sizeMissionControl(dockApi, { kpi, movers, report, timeline })
+  // Discard this stance's saved layout and re-seed its curated default —
+  // the design's "Reset this workspace" (Alt+Shift+R). Scoped to ONE stance:
+  // every other slot, and the sidebar's Save/Restore layout, are untouched.
+  const onResetWorkspace = useCallback(() => {
+    if (!dockApi) return
+    resetWorkspaceLayout(workspaceRef.current, mode)
+    enterWorkspace(workspaceRef.current)
+  }, [dockApi, mode, enterWorkspace])
+
+  // Alt+1…6 switch, Alt+` cycles, Alt+Shift+R resets (design §3.2 / §7 Q3 —
+  // Ctrl+digit collides with browser tab switching on Windows/Linux and ⌘digit
+  // on macOS; Alt+digit is free in both and preventDefault-able).
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!e.altKey || e.ctrlKey || e.metaKey) return
+      if (e.shiftKey) {
+        if (e.key === 'R' || e.key === 'r') {
+          e.preventDefault()
+          onResetWorkspace()
+        }
+        return
+      }
+      if (e.key === '`') {
+        e.preventDefault()
+        const i = WORKSPACES.findIndex((w) => w.id === workspaceRef.current)
+        onSwitchWorkspace(WORKSPACES[(i + 1) % WORKSPACES.length].id)
+        return
+      }
+      const digit = Number(e.key)
+      if (!Number.isInteger(digit)) return
+      const target = WORKSPACES.find((w) => w.index === digit)
+      if (!target) return
+      e.preventDefault()
+      onSwitchWorkspace(target.id)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onSwitchWorkspace, onResetWorkspace])
+
+  // A stance that only persisted on SWITCH would lose a reload's worth of
+  // arranging, so the live layout is also serialized on unload. Reset is the
+  // escape hatch when an arrangement goes wrong.
+  useEffect(() => {
+    if (!dockApi) return
+    function persist() {
+      if (dockApi) saveWorkspaceLayout(dockApi, workspaceRef.current, mode)
+    }
+    window.addEventListener('beforeunload', persist)
+    return () => window.removeEventListener('beforeunload', persist)
   }, [dockApi, mode])
 
   useEffect(() => {
@@ -280,8 +458,14 @@ export function App() {
   }, [isLoading, registrations])
 
   const onOpenPanel = useCallback(
-    (kind: PanelKind, registration: PanelRegistration | null) => {
+    (requestedKind: PanelKind, registration: PanelRegistration | null) => {
       if (!dockApi) return
+      // Retired kinds resolve onto their survivor + tab before anything is
+      // opened, so a ⌘K deep-link or an event bridge minted before a merge
+      // train still lands on a real surface (design §4.4 call site 2).
+      const alias = resolveKind(requestedKind)
+      const kind = alias?.kind ?? requestedKind
+      if (!PANEL_REGISTRY[kind]) return
       const scope = registration ? extractScope(registration) : {}
       const id = registration ? instanceId(kind, scope) : kind
       const existing = dockApi.getPanel(id)
@@ -301,6 +485,7 @@ export function App() {
           registration,
           singletonKind: registration ? undefined : kind,
           mode,
+          tab: alias?.tab,
         } satisfies LegbaPanelParams,
       })
     },
@@ -432,13 +617,22 @@ export function App() {
           onRestoreLayout={onRestoreLayout}
           canRestoreLayout={savedLayout}
         />
-        <main className="flex-1 min-w-0">
-          <DockviewReact
-            components={COMPONENTS}
-            tabComponents={TAB_COMPONENTS}
-            onReady={onDockReady}
-            className="dockview-theme-abyss h-full"
+        {/* The workspace column: the stance bar over the dock. The sidebar to
+            its left is unchanged — the bar is additive chrome, not a re-shell. */}
+        <main className="flex-1 min-w-0 flex flex-col">
+          <WorkspaceBar
+            active={workspace}
+            onSwitch={onSwitchWorkspace}
+            onReset={onResetWorkspace}
           />
+          <div className="min-h-0 flex-1">
+            <DockviewReact
+              components={COMPONENTS}
+              tabComponents={TAB_COMPONENTS}
+              onReady={onDockReady}
+              className="dockview-theme-abyss h-full"
+            />
+          </div>
         </main>
       </div>
       <StatusBar
@@ -457,6 +651,7 @@ export function App() {
         onOpenBound={onOpenBoundRecord}
         onSelectRecord={onSelectRecord}
         onApplyPreset={onApplyPreset}
+        onSwitchWorkspace={onSwitchWorkspace}
         onInvestigateTarget={onInvestigateTarget}
         onInvestigateAnalyst={onInvestigateAnalyst}
       />
@@ -466,10 +661,15 @@ export function App() {
 
 function addSingleton(
   api: DockviewApi,
-  kind: PanelKind,
+  requestedKind: PanelKind,
   mode: ReturnType<typeof currentMode>,
   position?: { referencePanel: PanelKind; direction: 'right' | 'left' | 'above' | 'below' | 'within' },
 ) {
+  // Same alias resolution as `onOpenPanel` — the sidebar, ⌘K, workspace seeds
+  // and layout presets all reach a panel through one of these two openers, so
+  // resolving in both is resolving everywhere.
+  const alias = resolveKind(requestedKind)
+  const kind = alias?.kind ?? requestedKind
   const def = PANEL_REGISTRY[kind]?.definition
   if (!def) return undefined
   if (def.modes.length > 0 && !def.modes.includes(mode)) return undefined
@@ -485,7 +685,12 @@ function addSingleton(
     title: def.defaultTitle,
     // Anchor singletons (Live Feed / Inspector) get the close-button-less tab.
     ...(ANCHOR_KINDS.has(kind) ? { tabComponent: 'anchor' } : {}),
-    params: { registration: null, singletonKind: kind, mode } satisfies LegbaPanelParams,
+    params: {
+      registration: null,
+      singletonKind: kind,
+      mode,
+      tab: alias?.tab,
+    } satisfies LegbaPanelParams,
     // When position is supplied, Dockview splits the workspace relative
     // to the reference panel; otherwise the new panel joins the active
     // group as a tab.  The boot seed uses positions to materialise a
@@ -502,36 +707,31 @@ function addSingleton(
 }
 
 /**
- * Pin the mission-control boot proportions (S7-T2; movers band added U-4).
- * Dockview splits ~50/50 by default; this nudges the groups to the wall's
- * weights: a thin full-width KPI strip on top (~100px), the U-4 movers band
- * as a slim full-width strip beneath it (~190px — enough for 3-4 rows before
- * its own internal scroll takes over), the World Assessment report rail at
- * ~30% width on the right, and the global Timeline lanes as a ~160px
- * bottom-left strip, leaving the world map the dominant center surface and
- * the feed a healthy top-left.
+ * Pin a workspace's proportions after its seed (the successor of S7-T2's
+ * hardcoded `sizeMissionControl`). Dockview splits ~50/50 by default, so a
+ * stance's drawn weights — a thin glance strip, a ~300px Wall band, a ~34%
+ * report rail — have to be re-applied once, one frame after seeding.
  *
- * Sizing is best-effort: a failed resize must never break boot.
+ * The hints are data on the workspace definition (`lib/workspaces.ts`), not
+ * arithmetic in the shell, so a stance's shape is reviewable in one place.
+ * Sizing is best-effort: a failed resize must never break the landing.
  */
-function sizeMissionControl(
-  api: DockviewApi,
-  panels: {
-    kpi?: ReturnType<DockviewApi['addPanel']>
-    movers?: ReturnType<DockviewApi['addPanel']>
-    report?: ReturnType<DockviewApi['addPanel']>
-    timeline?: ReturnType<DockviewApi['addPanel']>
-  },
-) {
+function sizeWorkspace(api: DockviewApi, def: WorkspaceDef) {
+  if (!def.sizes || def.sizes.length === 0) return
   // Defer one frame so Dockview has laid out the groups before we resize.
   requestAnimationFrame(() => {
     const width = api.width || 1280
-    try {
-      panels.kpi?.api.setSize({ height: 100 })
-      panels.movers?.api.setSize({ height: 190 })
-      panels.report?.api.setSize({ width: Math.round(width * 0.3) })
-      panels.timeline?.api.setSize({ height: 160 })
-    } catch {
-      // setSize is best-effort; a failed resize must never break boot.
+    for (const hint of def.sizes ?? []) {
+      const panel = api.getPanel(hint.kind)
+      if (!panel) continue
+      try {
+        if (hint.height != null) panel.api.setSize({ height: hint.height })
+        if (hint.widthFraction != null) {
+          panel.api.setSize({ width: Math.round(width * hint.widthFraction) })
+        }
+      } catch {
+        // setSize is best-effort; a failed resize must never break the seed.
+      }
     }
   })
 }

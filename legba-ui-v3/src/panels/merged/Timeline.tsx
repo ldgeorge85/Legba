@@ -22,7 +22,7 @@
  */
 import { useState } from 'react'
 import type { PanelProps } from '@/types'
-import { PanelTabStrip, type PanelTabDef } from '@/components/PanelTabs'
+import { initialTab, PanelTabStrip, type PanelTabDef } from '@/components/PanelTabs'
 import { PanelEmbedProvider } from '@/components/PanelEmbedContext'
 import EventLanesTimeline from '@/panels/v4/TimelinePanel'
 import ValidityTimeline from '@/panels/system/Timeline'
@@ -35,7 +35,8 @@ const TABS: readonly PanelTabDef[] = [
 ]
 
 export default function TimelineMerged(props: PanelProps) {
-  const [mode, setMode] = useState<Mode>('events')
+  // `v4.timeline` retired onto this panel's "events" mode (aliases.ts).
+  const [mode, setMode] = useState<Mode>(() => initialTab(props.initialTab, TABS, 'events') as Mode)
   return (
     <div className="flex h-full w-full flex-col bg-surf-2">
       <div className="flex items-center gap-2 border-b border-line bg-surf-3 px-density py-1.5">

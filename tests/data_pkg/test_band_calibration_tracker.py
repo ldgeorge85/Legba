@@ -257,19 +257,46 @@ async def clean_slate(pg_pool):
     logs nothing and the hand-built claims are the whole population). Foreign
     scorecard rows then seed through run 1's backlog exactly like production
     bringup — counted in the receipt, never in this file's row-set asserts.
+
+    CLEANS AT BOTH ENDS, unlike every other ``clean_slate`` in this directory
+    (2026-08-30 release-gate train). The usual setup-only idiom is safe because
+    a leftover row is only ever a hazard to a test whose OWN setup can clean
+    it. This file's leftovers are different in kind: ``_scorecard_stream_head``
+    stamps every card it writes at ``greatest(now(), max(produced_at)) + 1-2
+    min``, i.e. deliberately IN THE FUTURE, and the stamp COMPOUNDS — each test
+    re-reads the head it just pushed forward, so a run of this file can leave
+    ``desk_bc_*`` scorecard heads dated many minutes ahead of wall-clock.
+    Whichever of these tests happens to run LAST in a shuffled session leaves
+    its pair behind, and ``/api/v1/v3/since`` reads a band change for any desk
+    whose head postdates the caller's cursor — so
+    ``test_v3_since_api.py::test_since_empty_state`` (cursor = now, asserts a
+    genuinely empty envelope) gets handed this file's watch→high pair as two
+    live ``band_changes`` items. Observed in the 2026-08-30 release gate,
+    reproduced by running
+    ``test_identical_semantics_stamps_log_the_same_claim_as_no_stamps`` then
+    ``test_since_empty_state``. A teardown-side reset is the fix the
+    ``test_retention_policies_api`` teardown-gap set the precedent for: no
+    future-dated card outlives the test that wrote it.
     """
-    async with pg_pool.acquire() as conn:
-        await conn.execute("TRUNCATE band_calibration_claims")
-        await conn.execute("TRUNCATE band_calibration_scan_state")
-        await conn.execute(
-            "DELETE FROM analyst_outputs "
-            "WHERE kind = 'scorecard' AND target_id LIKE 'desk\\_bc\\_%'"
-        )
-        await conn.execute(
-            "DELETE FROM analyst_outputs "
-            "WHERE analyst_id = 'band_calibration_tracker'"
-        )
-    yield
+
+    async def _reset() -> None:
+        async with pg_pool.acquire() as conn:
+            await conn.execute("TRUNCATE band_calibration_claims")
+            await conn.execute("TRUNCATE band_calibration_scan_state")
+            await conn.execute(
+                "DELETE FROM analyst_outputs "
+                "WHERE kind = 'scorecard' AND target_id LIKE 'desk\\_bc\\_%'"
+            )
+            await conn.execute(
+                "DELETE FROM analyst_outputs "
+                "WHERE analyst_id = 'band_calibration_tracker'"
+            )
+
+    await _reset()
+    try:
+        yield
+    finally:
+        await _reset()
 
 
 async def _scorecard_stream_head(conn: Any) -> datetime:
@@ -326,6 +353,7 @@ async def _insert_scorecard(
     bands: dict[str, str],
     *,
     produced_at: datetime | None = None,
+    semantics: tuple[str | None, str | None] | None = None,
 ):
     """One kind='scorecard' row in the LIVE column shape (payload `data` with
     `bands` NESTED under the data column — the scorecard_producer dump).
@@ -346,6 +374,10 @@ async def _insert_scorecard(
     exercises; it only stops the leftovers from being radioactive. Every
     chain in this file inserts oldest-first, so the supersession direction
     matches the produced_at order.
+
+    ``semantics`` (H3-GUARD) is ``(banding_semantics, damping_semantics)``;
+    omitted (the default) reproduces a PRE-H3 card exactly — no stamp keys at
+    all, matching every existing caller of this fixture byte-for-byte.
     """
     row_id = uuid4()
     await conn.execute(
@@ -363,12 +395,15 @@ async def _insert_scorecard(
         }
         for dim, band in bands.items()
     }
+    bands_block: dict[str, Any] = {"target_id": desk, "dimensions": dims}
+    if semantics is not None:
+        bands_block["banding_semantics"], bands_block["damping_semantics"] = semantics
     data = {
         "kind_marker": "scorecard",
         "tags": ["deterministic", "scorecard"],
         "data": {
             "sub_handler": "scorecard_producer",
-            "bands": {"target_id": desk, "dimensions": dims},
+            "bands": bands_block,
         },
     }
     await conn.execute(
@@ -402,16 +437,19 @@ async def _insert_claim(
     # defaults to the CURRENT stamp (what the tracker itself would write).
     # Pass an explicit value (or None) to build a cross-population fixture.
     judge_pipeline_version: str | None = bct.JUDGE_PIPELINE_VERSION,
+    # H3-GUARD — the semantics-migration exclusion flag (migration 0187).
+    semantics_migration: bool = False,
 ):
     claim_id = uuid4()
     await conn.execute(
         "INSERT INTO band_calibration_claims "
         "  (id, desk, dimension, from_band, to_band, direction, transition_at, "
         "   scorecard_row_id, resolution_spec, horizon_14_at, horizon_28_at, "
-        "   outcome_14, resolved_by_14, judge_pipeline_version) "
+        "   outcome_14, resolved_by_14, judge_pipeline_version, "
+        "   semantics_migration) "
         "VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8, $9, "
         "        $7::timestamptz + interval '14 days', "
-        "        $7::timestamptz + interval '28 days', $10, $11, $12)",
+        "        $7::timestamptz + interval '28 days', $10, $11, $12, $13)",
         claim_id,
         desk,
         dimension,
@@ -424,6 +462,7 @@ async def _insert_claim(
         outcome_14,
         resolved_by_14,
         judge_pipeline_version,
+        semantics_migration,
     )
     return claim_id
 
@@ -520,6 +559,140 @@ async def test_non_directional_transitions_are_skipped(pg_pool, clean_slate):
     assert _bc(r)["skipped_non_directional"] >= 1
     async with pg_pool.acquire() as conn:
         assert await _claims_for(conn, desk) == []
+
+
+# ---------------------------------------------------------------------------
+# H3-GUARD — semantics-mismatch classification, through the REAL scan path
+# (`_scan_and_log_claims` via `handle()`). The H3 banding train legitimately
+# moves bands fleet-wide on its first post-deploy sweep, and every one of
+# those moves straddles a banding_semantics/damping_semantics stamp change —
+# this must log as `direction='semantics-migration'` /
+# `semantics_migration=True`, never a deterioration/improvement claim.
+# ---------------------------------------------------------------------------
+
+
+async def test_semantics_mismatch_logs_migration_claim_not_deterioration(
+    pg_pool, clean_slate
+):
+    """A synthetic prior/new card pair with DIFFERING stamps (the real H3
+    shape: the prior card predates `damping_semantics` entirely) logs the
+    transition as a semantics-migration claim — never `deterioration` —
+    even though the band moved straight up the ladder."""
+    desk = f"desk_bc_{uuid4().hex[:8]}"
+    async with pg_pool.acquire() as conn:
+        head = await _scorecard_stream_head(conn)
+        # PRE-H3 card: no semantics stamps at all.
+        await _insert_scorecard(
+            conn, desk, {"escalation": "watch"},
+            produced_at=head + timedelta(minutes=1),
+        )
+    r1 = await _run(pg_pool)
+    assert _bc(r1)["scanned_scorecard_rows"] >= 1
+    async with pg_pool.acquire() as conn:
+        # POST-H3 card: both stamps present. Band moves watch -> critical.
+        row_b = await _insert_scorecard(
+            conn, desk, {"escalation": "critical"},
+            produced_at=head + timedelta(minutes=2),
+            semantics=("standing", "off"),
+        )
+
+    r2 = await _run(pg_pool)
+    bc2 = _bc(r2)
+    assert bc2["logged_this_run"] == 1
+    assert bc2["logged_semantics_migration_this_run"] == 1
+    # NOT folded into the non-directional skip counter either — it is a
+    # recorded, flagged claim, not a dropped coverage event.
+    async with pg_pool.acquire() as conn:
+        claims = await _claims_for(conn, desk)
+    assert len(claims) == 1
+    c = claims[0]
+    assert c["direction"] == "semantics-migration"
+    assert c["semantics_migration"] is True
+    assert c["from_band"] == "watch" and c["to_band"] == "critical"
+    assert str(c["scorecard_row_id"]) == str(row_b)
+
+
+async def test_semantics_migration_claims_excluded_from_calibration_scoring(
+    pg_pool, clean_slate
+):
+    """THE HARD PART: a semantics_migration=True claim is EXCLUDED from
+    calibration scoring for real — not a cosmetic flag nobody reads. Pin the
+    scan cursor at the stream head (nothing new to log) and hand-build the
+    population directly: one ordinary deterioration claim and one
+    semantics-migration claim. The aggregate must count exactly the first,
+    and report the second's exclusion by name."""
+    desk = f"desk_bc_{uuid4().hex[:8]}"
+    async with pg_pool.acquire() as conn:
+        await _pin_watermark_to_head(conn)
+        now = datetime.now(timezone.utc)
+        await _insert_claim(
+            conn, desk=desk, dimension="escalation",
+            from_band="watch", to_band="high", direction="deterioration",
+            transition_at=now, outcome_14="held",
+        )
+        await _insert_claim(
+            conn, desk=desk, dimension="energy_security",
+            from_band="watch", to_band="critical",
+            direction="semantics-migration",
+            transition_at=now, outcome_14="held",
+            semantics_migration=True,
+        )
+
+    r = await _run(pg_pool)
+    bc = _bc(r)
+    # Only the ordinary deterioration claim is scored.
+    assert bc["claims_total"] == 1
+    assert bc["by_dimension"].get("energy_security") is None
+    assert set(bc["by_direction"]) == {"deterioration"}
+    assert bc["horizons"]["14d"]["confirmed"] == 1
+    # The exclusion is REPORTED, not silently dropped.
+    pop = bc["population"]
+    assert pop["excluded_semantics_migration"] == 1
+    assert "excluded_semantics_migration=1" in r.finding.body
+
+
+async def test_identical_semantics_stamps_log_the_same_claim_as_no_stamps(
+    pg_pool, clean_slate
+):
+    """THE NO-OP PROOF: once both cards carry IDENTICAL semantics stamps,
+    logging is byte-identical to today (no stamps at all) — same direction,
+    same from/to bands. Two desks, two scenarios, compared field-for-field."""
+    desk_stamped = f"desk_bc_id_{uuid4().hex[:8]}"
+    desk_unstamped = f"desk_bc_un_{uuid4().hex[:8]}"
+    async with pg_pool.acquire() as conn:
+        head = await _scorecard_stream_head(conn)
+        await _insert_scorecard(
+            conn, desk_stamped, {"escalation": "watch"},
+            produced_at=head + timedelta(minutes=1),
+            semantics=("standing", "off"),
+        )
+        await _insert_scorecard(
+            conn, desk_unstamped, {"escalation": "watch"},
+            produced_at=head + timedelta(minutes=1),
+        )
+    await _run(pg_pool)  # seed (nothing to transition from yet)
+
+    async with pg_pool.acquire() as conn:
+        await _insert_scorecard(
+            conn, desk_stamped, {"escalation": "high"},
+            produced_at=head + timedelta(minutes=2),
+            semantics=("standing", "off"),
+        )
+        await _insert_scorecard(
+            conn, desk_unstamped, {"escalation": "high"},
+            produced_at=head + timedelta(minutes=2),
+        )
+    await _run(pg_pool)
+
+    async with pg_pool.acquire() as conn:
+        stamped = await _claims_for(conn, desk_stamped)
+        unstamped = await _claims_for(conn, desk_unstamped)
+    assert len(stamped) == len(unstamped) == 1
+    assert stamped[0]["direction"] == unstamped[0]["direction"] == "deterioration"
+    assert stamped[0]["semantics_migration"] is False
+    assert unstamped[0]["semantics_migration"] is False
+    assert stamped[0]["from_band"] == unstamped[0]["from_band"] == "watch"
+    assert stamped[0]["to_band"] == unstamped[0]["to_band"] == "high"
 
 
 # ---------------------------------------------------------------------------
@@ -862,3 +1035,208 @@ def test_prior_populations_are_folded_identically_and_never_merged():
 
 def test_no_prior_populations_is_an_empty_list_not_a_fabricated_block():
     assert bct.summarize_prior_populations([], lookback_days=14) == []
+
+
+# ---------------------------------------------------------------------------
+# LINEAGE-AWARE STAMP POOLING (2026-08-29)
+#
+# The split key was right and its cadence was fatal: ~2.3-day stamp lifetime
+# against a 14-day shortest horizon means a claim can never be both
+# current-stamped AND resolved, so `n_scored` was 0 on every run for 25 days
+# (CAMPAIGN_2026-08-29 A-7). The reader now pools consecutive stamps whose
+# lineage declares no `faithfulness_score` shift across their boundary — and
+# says exactly which ones, so a widened population can never read as a narrow
+# one (or vice versa).
+# ---------------------------------------------------------------------------
+
+
+def test_the_calibrated_family_is_the_score_not_the_severity_split():
+    """A band is a verdict about faithfulness-gated findings, so what has to be
+    comparable is the SCORE. Pooling on the severity split would let a stamp
+    that re-graded every claim in join this population."""
+    from legba.data.provenance.judge_pipeline_version import METRIC_FAITHFULNESS_SCORE
+
+    assert bct.CALIBRATED_METRIC_FAMILY == METRIC_FAITHFULNESS_SCORE
+
+
+def test_the_aggregate_sql_partitions_on_a_STAMP_SET_not_one_stamp():
+    """All three population queries take the pool as an array. A scalar `= $n`
+    surviving anywhere means that query silently reverted to single-stamp
+    filtering while the other two pooled — the readout would then report a
+    boundary it did not use."""
+    for sql in (
+        bct._AGG_SQL,
+        bct._AGG_EXCLUDED_SQL,
+        bct._AGG_PRIORS_SQL,
+    ):
+        assert "= ANY(" in sql and "::text[]" in sql, sql
+
+
+@pytest.mark.asyncio
+async def test_pooled_stamps_enter_the_headline_and_are_disclosed(
+    pg_pool, clean_slate, monkeypatch
+):
+    """THE FIX, end to end: a claim under a NEIGHBOURING stamp whose boundary
+    declares no score shift is counted in the headline rate, and the readout
+    names the whole pooled SET rather than the head stamp alone.
+
+    The live head pools with nothing (that is the real-lineage finding), so the
+    pool is stubbed here to exercise the widened path the moment a
+    score-neutral train ships.
+    """
+    neighbour = "2026-08-28/9"
+    monkeypatch.setattr(
+        bct, "poolable_stamps", lambda *_a, **_k: (neighbour, bct.JUDGE_PIPELINE_VERSION)
+    )
+
+    desk = f"desk_bc_{uuid4().hex[:8]}"
+    t0 = datetime.now(timezone.utc) - timedelta(days=20)
+    async with pg_pool.acquire() as conn:
+        await _pin_watermark_to_head(conn)
+        # Head stamp: one confirmed.
+        await _insert_claim(
+            conn, desk=desk, dimension="escalation", from_band="watch",
+            to_band="elevated", direction="deterioration", transition_at=t0,
+            outcome_14="held", resolved_by_14=bct.RESOLVED_BY,
+        )
+        # POOLED neighbour: one confirmed, one reverted. Without pooling these
+        # are excluded and the headline is n=1; with it the rate is real.
+        for dim, outcome in (("military_posture", "held"), ("energy_security", "reverted")):
+            await _insert_claim(
+                conn, desk=desk, dimension=dim, from_band="watch",
+                to_band="elevated", direction="deterioration", transition_at=t0,
+                outcome_14=outcome, resolved_by_14=bct.RESOLVED_BY,
+                judge_pipeline_version=neighbour,
+            )
+        # OUTSIDE the pool — a declared-moves boundary is still a hard stop.
+        await _insert_claim(
+            conn, desk=desk, dimension="internal_stability", from_band="watch",
+            to_band="elevated", direction="deterioration", transition_at=t0,
+            outcome_14="held", resolved_by_14=bct.RESOLVED_BY,
+            judge_pipeline_version="2026-07-31/1",
+        )
+
+    r = await _run(pg_pool)
+    bc = _bc(r)
+
+    # All THREE pooled claims are the population; the fourth is not.
+    assert bc["claims_total"] == 3
+    h14 = bc["horizons"]["14d"]
+    assert h14["confirmed"] == 2 and h14["reverted"] == 1
+    assert h14["persistence_rate"] == pytest.approx(2 / 3)
+
+    pop = bc["population"]
+    # The SET is reported, the head stamp is still named, and the hard stop is
+    # counted as excluded rather than quietly dropped.
+    assert pop["judge_pipeline_versions"] == [neighbour, bct.JUDGE_PIPELINE_VERSION]
+    assert pop["judge_pipeline_version"] == bct.JUDGE_PIPELINE_VERSION
+    assert pop["pooling"]["stamp_count"] == 2
+    assert pop["pooling"]["widened_by"] == 1
+    assert pop["pooling"]["metric_family"] == bct.CALIBRATED_METRIC_FAMILY
+    assert pop["excluded_other_pipeline"] == 1
+
+    # The excluded stamp comes back as its OWN population, never merged in.
+    priors = {p["judge_pipeline_version"]: p for p in pop["prior_populations"]}
+    assert set(priors) == {"2026-07-31/1"}
+
+    # ...and the pooled set reaches the human-readable body.
+    body = r.finding.body
+    assert "pooled_judge_pipeline_versions=" in body
+    assert neighbour in body and "widened_by=1" in body
+    assert "any declared shift is a hard stop" in body
+
+
+@pytest.mark.asyncio
+async def test_real_head_pool_is_disclosed_exactly(pg_pool, clean_slate):
+    """NEVER SILENTLY WIDEN — and disclose the widening that IS real. Since
+    2026-08-30/1 (the lineage's first all-none entry) the REAL head pools one
+    step with LRF, so the readout must name both stamps and count the widening
+    as exactly one."""
+    desk = f"desk_bc_{uuid4().hex[:8]}"
+    t0 = datetime.now(timezone.utc) - timedelta(days=20)
+    async with pg_pool.acquire() as conn:
+        await _pin_watermark_to_head(conn)
+        await _insert_claim(
+            conn, desk=desk, dimension="escalation", from_band="watch",
+            to_band="elevated", direction="deterioration", transition_at=t0,
+            outcome_14="held", resolved_by_14=bct.RESOLVED_BY,
+        )
+
+    r = await _run(pg_pool)
+    pop = _bc(r)["population"]
+
+    assert pop["judge_pipeline_versions"] == [
+        "2026-08-29/1", bct.JUDGE_PIPELINE_VERSION,
+    ]
+    assert pop["pooling"]["widened_by"] == 1
+    assert pop["pooling"]["stamp_count"] == 2
+    assert "NO widening" not in r.finding.body
+
+
+@pytest.mark.asyncio
+async def test_no_widening_is_disclosed_as_no_widening(
+    pg_pool, clean_slate, monkeypatch
+):
+    """Never silently imply a widening that did not happen: when the head
+    pools with nothing (a singleton pool — the pre-08-30 shape, forced here so
+    the rendering stays covered whatever the live lineage does), the readout
+    says so in terms."""
+    monkeypatch.setattr(
+        bct, "poolable_stamps", lambda *_a, **_k: (bct.JUDGE_PIPELINE_VERSION,)
+    )
+    desk = f"desk_bc_{uuid4().hex[:8]}"
+    t0 = datetime.now(timezone.utc) - timedelta(days=20)
+    async with pg_pool.acquire() as conn:
+        await _pin_watermark_to_head(conn)
+        await _insert_claim(
+            conn, desk=desk, dimension="escalation", from_band="watch",
+            to_band="elevated", direction="deterioration", transition_at=t0,
+            outcome_14="held", resolved_by_14=bct.RESOLVED_BY,
+        )
+
+    r = await _run(pg_pool)
+    pop = _bc(r)["population"]
+
+    assert pop["judge_pipeline_versions"] == [bct.JUDGE_PIPELINE_VERSION]
+    assert pop["pooling"]["widened_by"] == 0
+    assert pop["pooling"]["stamp_count"] == 1
+    assert "NO widening" in r.finding.body
+
+
+@pytest.mark.asyncio
+async def test_pooling_never_rescues_an_empty_population_silently(
+    pg_pool, clean_slate, monkeypatch
+):
+    """The failure this fix must NOT introduce. When pooling still yields
+    nothing scorable, the rates stay honest ``None`` over a real zero — no
+    borrowed denominator, no fabricated 0.0/1.0 — and the readout reports it
+    exactly as it did before pooling existed."""
+    neighbour = "2026-08-28/9"
+    monkeypatch.setattr(
+        bct, "poolable_stamps", lambda *_a, **_k: (neighbour, bct.JUDGE_PIPELINE_VERSION)
+    )
+
+    desk = f"desk_bc_{uuid4().hex[:8]}"
+    t0 = datetime.now(timezone.utc) - timedelta(days=20)
+    async with pg_pool.acquire() as conn:
+        await _pin_watermark_to_head(conn)
+        # Everything in the window is OUTSIDE the pool: pooling widened the
+        # filter and rescued nothing, which is a real answer.
+        await _insert_claim(
+            conn, desk=desk, dimension="escalation", from_band="watch",
+            to_band="elevated", direction="deterioration", transition_at=t0,
+            outcome_14="held", resolved_by_14=bct.RESOLVED_BY,
+            judge_pipeline_version="2026-07-31/1",
+        )
+
+    r = await _run(pg_pool)
+    bc = _bc(r)
+
+    assert bc["claims_total"] == 0
+    h14 = bc["horizons"]["14d"]
+    assert h14["scored"] == 0
+    assert h14["persistence_rate"] is None and h14["reversal_rate"] is None
+    # The pool is still disclosed, and so is what it failed to reach.
+    assert bc["population"]["pooling"]["stamp_count"] == 2
+    assert bc["population"]["excluded_other_pipeline"] == 1
+    assert "n_scored=0" in r.finding.body

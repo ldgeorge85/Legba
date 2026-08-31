@@ -270,8 +270,93 @@ KNOWN_SHARED_STATE=(
   #     The test now retires the world-baseline family's rows AND ledger
   #     rows before its first run, so it is a genuine first seeding in any
   #     order.
-  'tests/data_pkg/test_conversion_webhooks\.py::test_register_webhook_persists_row_and_returns_active'
-  'tests/data_pkg/test_postgres_pool_search_path\.py::test_actor_state_table_reachable_from_every_acquire'
+  #
+  # RETIRED 2026-08-25 — on the operator's read of the 08-23 and 08-24 runs:
+  # both printed "allowlist entry matched nothing (retire it?)" two nights
+  # running. Re-verified this session, both directly (ordered, isolated) and
+  # inside a full `tests/` ORDERED pass alongside every sibling that could
+  # plausibly leak into them — no failure either way. No polluter mechanism
+  # is named here because none was found to name; this is the
+  # quiet-streak-plus-direct-reproduction basis the 2026-08-15 rule amendment
+  # asks to be stated explicitly rather than silently reused, not a
+  # rooted-cause fix like the entries above it. If either refires, the right
+  # response is the same as always — root it, fix it, and only then drop it
+  # from this list.
+  #   * tests/data_pkg/test_conversion_webhooks.py::
+  #     test_register_webhook_persists_row_and_returns_active
+  #     STATUS unchanged as of 2026-08-29 — not observed to refire since
+  #     retirement, and out of scope for the shuffle-pollution-class train
+  #     below (not investigated this pass).
+  #
+  # test_postgres_pool_search_path.py::
+  # test_actor_state_table_reachable_from_every_acquire — REFIRED 2026-08-29
+  # (seed 455838173), four days after the entry above retired it on a quiet
+  # streak, EXACTLY as that entry's own comment warned it might
+  # ("if it refires, root it, fix it, and only then drop it"). This time
+  # rooted, not re-retired on a streak:
+  #   POLLUTER: tests/data_pkg/test_runtime_telemetry_api.py's
+  #   _insert_actor_state helper (3 call sites) INSERTs directly into the
+  #   session-shared actor_state table and nothing there ever cleaned up.
+  #   The victim's own assertions (`unqualified count == 0`,
+  #   `qualified count == 0`) were incidental scaffolding that assumed a
+  #   pristine table — the test's REAL contract (per its own docstring) is
+  #   search_path reachability/consistency across acquires, not emptiness.
+  #   REPRO (pre-fix):
+  #     bash scripts/run_tests_in_container.sh \
+  #       tests/data_pkg/test_runtime_telemetry_api.py \
+  #       tests/data_pkg/test_postgres_pool_search_path.py -p no:randomly
+  #     -> assert 3 == 0 (test_actor_state_table_reachable_from_every_acquire).
+  #   FIX (both sides, per this file's own doctrine of fixing the polluter
+  #   AND scoping the victim's real claim):
+  #     (1) test_postgres_pool_search_path.py's assertion now checks that the
+  #         unqualified and public.-qualified reads resolve to the SAME count
+  #         on every acquire — true regardless of how many rows exist, and
+  #         still fully discriminating for the original 2026-05-21 bug shape
+  #         (verified live: reverting both ActorStateStore.SCHEMA's explicit
+  #         `public.` qualification AND PostgresStore._setup_connection's
+  #         per-acquire search_path re-apply reproduces UndefinedTableError
+  #         against the rewritten test; reverting only the fix under test
+  #         restores a clean pass — see
+  #         planning/CAMPAIGN_2026-08-29/SHUFFLE_FIX_REPORT.md).
+  #     (2) test_runtime_telemetry_api.py now truncates actor_state at setup
+  #         (autouse `_clean_actor_state`, via the new centralized
+  #         `clean_tables` primitive in tests/data_pkg/conftest.py) so it
+  #         stops being a source of this class of pollution for whatever
+  #         else reads that table next.
+  #   Per this file's own rule (a retired-then-refired entry must not
+  #   silently return to this list on another quiet streak): NOT re-added
+  #   here — rooted and fixed, same disposition as the 2026-08-16/08-10
+  #   entries above.
+  #
+  # Also root-caused and fixed in the SAME 2026-08-29 train (none of these
+  # were ever added as a live entry here, per the "an addition means fix it,
+  # not list it" rule — documented here only because their nightly history
+  # is otherwise easy to mistake for a NEW, still-open shuffle flake):
+  #   * test_retention_policies_api.py's `clean_slate` fixture only reset the
+  #     shared `retention_policies` seed rows at test SETUP, never at
+  #     teardown — the confirmed polluter behind BOTH the 2026-08-17
+  #     test_analyst_traces_retention.py failures (`enabled=FALSE` leftover
+  #     from test_patch_updates_ttl_days_and_enabled makes the sweep a
+  #     silent, correctly-behaving no-op) and the 2026-08-23
+  #     test_retention_policies.py::test_migration_0109_table_and_seed_rows
+  #     failure (`assert 90 == 0`, the same test's leftover ttl_days). Fixed
+  #     by wrapping the reset in try/finally so it also runs at teardown.
+  #   * test_evidence_archiver.py's five 2026-08-23 failures
+  #     (`data["examined"] == N`): evidence_archiver's candidate SQL has no
+  #     tenant/source scoping by design (a global "every verified-cited,
+  #     unarchived signal" scan), so ANY of ~20 other files that insert a
+  #     signal + a 'Faithfulness verify' critique without cleanup can inflate
+  #     the count. Fixed by draining the pre-existing backlog to quiescence
+  #     (bounded by evidence_archiver's own `_DEFAULT_MAX_ATTEMPTS`) before
+  #     each test's own insert, rather than relaxing the assertions.
+  #   * test_corpus_research_backlog.py's 2026-08-22 failure (KeyError
+  #     evicting the deliberately-lowest-priority seeded question from a
+  #     `resolve_open_questions(limit=8)` call): fixed with a scoped
+  #     `DELETE FROM hypotheses WHERE status = 'open_question'` before the
+  #     one vulnerable test (NOT the centralized `clean_tables` TRUNCATE
+  #     primitive — `hypotheses` is shared by ~a dozen other files under
+  #     other `status` values, so a blanket truncate would be collateral
+  #     damage rather than a fix).
 )
 
 # ---------------------------------------------------------------------------

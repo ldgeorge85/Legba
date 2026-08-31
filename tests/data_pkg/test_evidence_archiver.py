@@ -512,6 +512,38 @@ async def _signal(conn, sid):
     )
 
 
+async def _drain_backlog(pool) -> None:
+    """Exhaust any PRE-EXISTING archiver candidate backlog before a test
+    inserts its own signal(s).
+
+    ``_SELECT_CANDIDATES_SQL`` (evidence_archiver.py) has no tenant/source
+    scoping — by design, it is a global "every verified-cited, unarchived
+    signal in the substrate" scan. ``clean_slate`` only retires THIS file's
+    own ``test_p2_1_*``-prefixed rows, so it cannot remove a candidate a
+    sibling file (any of the 20+ other files that insert a signal + a
+    'Faithfulness verify' critique without cleanup) left behind on the
+    session-shared ``migrated_pg`` DB. The 2026-08-23 shuffled nightly hit
+    exactly this: five tests asserting ``data["examined"] == N`` failed with
+    an off-by-however-many-strays-were-left count.
+
+    A read-only baseline COUNT (an earlier version of this fix) only
+    immunized the ``examined`` line — a stray candidate is still a REAL
+    candidate, so ``_run()`` still fetches/archives/fails it, corrupting
+    ``archived`` / ``fetch_failed`` / ``skipped_*`` too (confirmed with a
+    synthetic cross-file polluter during this fix's own proof pass — see
+    planning/CAMPAIGN_2026-08-29/SHUFFLE_FIX_REPORT.md). DRAINING instead:
+    call ``_run()`` up to :data:`ea._DEFAULT_MAX_ATTEMPTS` times BEFORE the
+    test's own insert. Bounded, not backlog-size-dependent: every candidate
+    reaches a TERMINAL state (archived, a permanent ``skipped_*``, or a
+    failure that exhausts its ``attempts`` budget) within that many runs by
+    the archiver's own contract, so after the loop the candidate pool holds
+    ONLY whatever this test inserts next — restoring the original exact-count
+    assertions' full precision rather than merely a delta on one field.
+    """
+    for _ in range(ea._DEFAULT_MAX_ATTEMPTS):
+        await _run(pool)
+
+
 @pytest.fixture
 def archive_env(tmp_path, monkeypatch):
     """Archive root → tmp; the LOCAL fixture host allowlisted through the SSRF
@@ -529,6 +561,7 @@ def archive_env(tmp_path, monkeypatch):
 async def test_archives_cited_verified_only(
     pg_pool, clean_slate, http_fixture, archive_env,
 ):
+    await _drain_backlog(pg_pool)
     async with pg_pool.acquire() as conn:
         cited = await _insert_signal(conn, f"{http_fixture}/article")
         uncited = await _insert_signal(conn, f"{http_fixture}/article")
@@ -700,6 +733,7 @@ async def test_wall_pattern_inside_long_article_not_rejected(
 async def test_license_gate_skips_recorded_never_silent(
     pg_pool, clean_slate, http_fixture, archive_env,
 ):
+    await _drain_backlog(pg_pool)
     async with pg_pool.acquire() as conn:
         walled = await _insert_signal(
             conn, f"{http_fixture}/article",
@@ -733,6 +767,7 @@ async def test_license_gate_skips_recorded_never_silent(
 async def test_egress_guard_blocks_private_target_terminally(
     pg_pool, clean_slate, archive_env,
 ):
+    await _drain_backlog(pg_pool)
     async with pg_pool.acquire() as conn:
         # TEST-NET-1 — non-public, refused by the guard BEFORE any connect.
         private = await _insert_signal(conn, "http://192.0.2.1/secret")
@@ -757,6 +792,7 @@ async def test_egress_guard_blocks_private_target_terminally(
 async def test_size_cap_skips_and_records(
     pg_pool, clean_slate, http_fixture, archive_env,
 ):
+    await _drain_backlog(pg_pool)
     async with pg_pool.acquire() as conn:
         big = await _insert_signal(conn, f"{http_fixture}/big")
         await _insert_finding(conn, [big], verified=True)
@@ -776,6 +812,14 @@ async def test_size_cap_skips_and_records(
 async def test_failed_fetch_attempt_capped(
     pg_pool, clean_slate, http_fixture, archive_env,
 ):
+    # Not one of the 5 tests the 2026-08-23 nightly actually caught (pytest
+    # stops at a test's FIRST failed assert, and none of the other 5 got
+    # far enough to prove whether THEIR later assertions were also
+    # order-fragile) — but this test's own `fetch_failed == 1` is the exact
+    # same shape, confirmed independently vulnerable during this fix's
+    # synthetic cross-file-polluter proof pass. Drained for the same reason
+    # as its siblings below.
+    await _drain_backlog(pg_pool)
     async with pg_pool.acquire() as conn:
         gone = await _insert_signal(conn, f"{http_fixture}/nope")
         await _insert_finding(conn, [gone], verified=True)
@@ -797,6 +841,7 @@ async def test_failed_fetch_attempt_capped(
 async def test_cas_dedup_and_media_leg(
     pg_pool, clean_slate, http_fixture, archive_env,
 ):
+    await _drain_backlog(pg_pool)
     async with pg_pool.acquire() as conn:
         one = await _insert_signal(
             conn, f"{http_fixture}/article",

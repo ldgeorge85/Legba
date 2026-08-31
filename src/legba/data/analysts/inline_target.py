@@ -135,6 +135,7 @@ from ._llm_budget import (
     estimate_tokens,
     input_token_budget,
 )
+from ..provenance.citation_markers import _PRIOR_READ_REF_RE
 from ..provenance.consumption import CONSUMPTION_CONTEXT_QUESTION
 from ..provenance.kinds import OutputKind
 from ..provenance.models import FindingPayload
@@ -147,6 +148,14 @@ from .consult_on_demand import (
     _extract_json,
     _refs_from_tool_result,
 )
+# K-2b post-persist conversion, extracted 2026-08-30 to its own sibling and
+# RE-EXPORTED here: the caller is ``runtime.dapr_actors`` (frozen) and
+# ``test_open_question_faucet.py`` both import these names from this module.
+from .open_question_conversion import (  # noqa: F401 — re-export, see §K-2b
+    OPEN_QUESTION_MARKER_KEY,
+    _citation_signal_map,
+    convert_open_questions,
+)
 # V-N1 OUTPUT CONTRACT — "what the model returned is a finding", enforced at the
 # ONE point raw text becomes a row. Extracted to a leaf module rather than grown
 # here: this file is against its size ceiling, and the contract is pure and
@@ -156,6 +165,7 @@ from .output_contract import (
     is_unusable_output,
     parse_finding_envelope,
     repair_confidence_word_token,
+    salvage_json_envelope,
     strip_tool_plan_preamble,
 )
 # QW1-B DESK GROUNDING — the composition CONTINUITY idiom one floor down. The
@@ -548,6 +558,18 @@ def _orient(
     Dropping here also returns the row's token budget to the pack loop, so the
     space a citable-nothing would have burned goes to a row with real content.
 
+    COLLAPSE (wire pairs): same-story rows — one syndicated dispatch running
+    under several mastheads, identical headline, same day — are folded to ONE
+    numbered signal carrying a ``carried_by=`` annotation
+    (:mod:`legba.data.analysts.wire_pair_collapse`). It sits HERE, beside the
+    dead-row drop, for the same reason and with the same safety argument: this
+    is the last point before ``N`` is assigned, so the render, the citation
+    index and ``derived_from`` all see the one post-collapse list and the ``[N]``
+    space stays contiguous. Before the pack, so the tokens a duplicate would
+    have burned buy a distinct story instead. The absorbed siblings' ids are
+    folded back into ``derived_from`` below — the desk DID read them, and the
+    collapse is a rendering decision, never a provenance one.
+
     Pack: admit recency-ordered signals until the estimated INPUT-token budget
     (:func:`_input_token_budget`) is reached, capped by the
     ``_MAX_INPUT_SIGNALS`` backstop. The first signal is always admitted, so a
@@ -580,6 +602,8 @@ def _orient(
             continue
         live.append(row)
 
+    live, wire_copies_collapsed = collapse_wire_pairs(live)
+
     budget = _input_token_budget()
     trimmed: list[Mapping[str, Any]] = []
     used = 0
@@ -599,12 +623,21 @@ def _orient(
 
     derived_from: list[UUID] = []
     for row in trimmed:
-        raw_id = row.get("id")
-        if raw_id is None:
-            continue
-        if isinstance(raw_id, UUID):
-            derived_from.append(raw_id)
-        else:
+        # A collapsed wire survivor also carries the ids of the copies it
+        # absorbed. Those signals WERE read by this desk — their mastheads are
+        # named in the rendered ``carried_by`` line — so they keep their
+        # provenance edge even though they no longer hold an ordinal of their
+        # own. The collapse is a rendering decision, never a lineage one.
+        marker = row.get(WIRE_COLLAPSE_ROW_KEY)
+        raw_ids = [row.get("id")]
+        if isinstance(marker, Mapping):
+            raw_ids.extend(marker.get("absorbed_ids") or [])
+        for raw_id in raw_ids:
+            if raw_id is None:
+                continue
+            if isinstance(raw_id, UUID):
+                derived_from.append(raw_id)
+                continue
             try:
                 derived_from.append(UUID(str(raw_id)))
             except (ValueError, AttributeError):
@@ -615,6 +648,7 @@ def _orient(
     if stats is not None:
         stats.update(_slice_render_stats(trimmed))
         stats["dropped_dead_rows"] = dropped_dead
+        stats["wire_copies_collapsed"] = wire_copies_collapsed
 
     logger.debug(
         "inline_target.orient target_id=%s in=%d dead=%d kept=%d est_tokens=%d "
@@ -624,58 +658,6 @@ def _orient(
         0 if focus is None else len(focus.terms) + len(focus.classes),
     )
     return trimmed, derived_from
-
-
-def _slice_render_stats(sliced: list[Mapping[str, Any]]) -> dict[str, int]:
-    """Per-clean receipt for the rows that actually reached the prompt.
-
-    One counter per QW1-A render clean, so an operator reading an
-    ``analyst_traces`` ORIENT step can see what the renderer did to this slice
-    instead of inferring it from prompt bytes:
-
-      ``gdelt_prosed``          CAMEO records rendered as one prose line
-                                instead of a stringified 61-column dict.
-      ``untranslated_marked``   non-Latin bodies replaced by the honest
-                                ``[body untranslated: <lang>]`` marker.
-      ``full_body_rows``        rows rendering a SUBSTANTIVE body (distilled /
-                                translated / message / archived / raw) — the
-                                content the teaser used to crowd out.
-      ``teaser_rows``           rows still on the thin summary/description tail.
-      ``empty_body_rows``       rows kept for their headline alone (a real
-                                title with no body is evidence, not a dead row).
-      ``structures_collapsed``  duplicate graph-structure pseudo-signals folded
-                                away by the slice reader (see
-                                ``actor_substrate_slice._collapse_structure_items``).
-
-    ``dropped_dead_rows`` is stamped by :func:`_orient` itself — it counts rows
-    that never made it into ``sliced``.
-    """
-    counts: dict[str, int] = {
-        "gdelt_prosed": 0,
-        "untranslated_marked": 0,
-        "full_body_rows": 0,
-        "teaser_rows": 0,
-        "empty_body_rows": 0,
-        "structures_collapsed": 0,
-    }
-    for row in sliced:
-        kind = _signal_body(row).kind
-        if kind == "gdelt_prose":
-            counts["gdelt_prosed"] += 1
-        elif kind == "untranslated":
-            counts["untranslated_marked"] += 1
-        elif kind == "empty":
-            counts["empty_body_rows"] += 1
-        if kind in _FULL_BODY_KINDS:
-            counts["full_body_rows"] += 1
-        elif kind == "teaser":
-            counts["teaser_rows"] += 1
-        data = row.get("data")
-        if isinstance(data, Mapping):
-            collapsed = data.get("duplicates_collapsed")
-            if isinstance(collapsed, int) and collapsed > 0:
-                counts["structures_collapsed"] += collapsed
-    return counts
 
 
 # ---------------------------------------------------------------------------
@@ -1049,6 +1031,13 @@ def _is_dead_row(row: Mapping[str, Any]) -> bool:
     return _signal_body(row).kind in _UNUSABLE_BODY_KINDS
 
 
+# Wire-pair collapse (task #57) — one syndicated story, one numbered signal.
+# Applied inside ``_orient``, before the pack and before ``N`` is assigned.
+from .wire_pair_collapse import (  # noqa: F401
+    WIRE_COLLAPSE_ROW_KEY,
+    collapse_wire_pairs,
+)
+
 # Slice rendering extracted to slice_render.py at the regrowth-gate seam
 # (2026-08-05). Re-exported: callers and tests import from here unchanged.
 from .slice_render import (  # noqa: F401
@@ -1058,6 +1047,7 @@ from .slice_render import (  # noqa: F401
     _render_signal,
     _render_user_prompt,
     _row_is_cameo_coded,
+    _slice_render_stats,
 )
 
 
@@ -1202,6 +1192,9 @@ def _normalize_citation_markers(text: str) -> str:
     text = _VARIANT_REF_CITATION_RE.sub(lambda m: f"[[ref:{m.group(1)}]]", text)
     text = _COMPOUND_REF_CITATION_RE.sub(lambda m: _expand_ref_list(m.group(1)), text)
     text = _PAREN_REF_CITATION_RE.sub(lambda m: _expand_ref_list(m.group(1)), text)
+    # The PRIOR-READ REFERENCE — IMPORTED, not mirrored (rationale, and the
+    # falsified number that did NOT motivate it, in ``citation_markers``).
+    text = _PRIOR_READ_REF_RE.sub(lambda m: f"[{m.group(1)}]", text)
     return _VARIANT_ANNOTATION_RE.sub(
         lambda m: _canonical_annotation(m.group(1)) or m.group(0), text
     )
@@ -1927,6 +1920,26 @@ def _unstructured_finding(
     salvaged = _salvage_envelope_body(body)
     if salvaged is not None:
         body = salvaged
+    else:
+        # #77 — ``_salvage_envelope_body`` is lenient ONLY for an envelope
+        # that HAS a ``body`` key (a truncated stream cut off mid-body still
+        # gets its partial markdown back). When it returns ``None`` for text
+        # that IS JSON-shaped, there was no ``body`` key anywhere in it — most
+        # often a bare TOOL-CALL object (``{"action": "search_corpus",
+        # "query": ...}``) the GATHER-trained model emitted into the answer
+        # channel instead of its finding contract, cut short before
+        # ``json.loads``/``parse_finding_envelope`` could recover it earlier
+        # in ``_coerce_finding``. The ``is_unusable_output`` scaffold check
+        # below CANNOT catch this shape on its own: a tool call's ARGUMENT
+        # VALUES are real words ("search_corpus", a live search query), so
+        # the line-by-line "is this bare punctuation" scan reads the object
+        # as content and lets it through. Same doctrine as the composition
+        # path (``output_contract.salvage_json_envelope``): a completion that
+        # opens with ``{`` and does not decode to a usable envelope RAISES
+        # rather than publishes. Prose that never was JSON-shaped in the
+        # first place is untouched — the primitive returns ``{}`` for it, and
+        # the D27 plain-markdown path below runs exactly as it always has.
+        salvage_json_envelope(body)
     if is_unusable_output(body):
         raise OutputContractError(
             "model output carries no readable finding content "
@@ -3707,145 +3720,16 @@ async def run_method(
 
 
 # ---------------------------------------------------------------------------
-# K-2b — post-persist open-question conversion (payload → hypotheses rows)
+# K-2b — post-persist open-question conversion (RE-EXPORT)
 # ---------------------------------------------------------------------------
 #
-# The unit is a single-shot JSON emitter (no tool loop), so its unresolved
-# questions arrive as the OPTIONAL ``data.open_questions`` payload block
-# (validated by ``schemas.analyst.validate_open_questions``). The actor run
-# path calls this AFTER the finding row lands (``dapr_actors`` — the same conn)
-# to turn each entry into the SAME first-class, queryable object the
-# ``open_question`` agency tool writes: a ``hypotheses`` row with
-# ``status='open_question'``, lineage to the resolved citation signals + the
-# producing finding, the unit + target stamped via the run's AnalystContext.
+# EXTRACTED 2026-08-30 to ``open_question_conversion.py`` (see that module's
+# docstring for the contract and the seam rationale). It is post-persist work —
+# it runs after ``run_method`` has returned, on the actor's connection — so it
+# was never part of the analyst pass this module exists to be.
 #
-# Contract:
-#   * DEGRADE-NOT-BREAK — no failure in here may fail the run; the caller
-#     wraps the call, and each entry is additionally isolated so one bad entry
-#     never sinks its siblings.
-#   * IDEMPOTENT per (finding, question-text) — a durable marker object in the
-#     persisted ``diagnostic_evidence`` jsonb (the hypotheses table has no
-#     ``data`` column; ``writes._insert_hypothesis`` drops payload extras), the
-#     same ``open_question_origin`` marker key the K-2a harvest uses, deduped
-#     by jsonb containment.
-
-#: The shared marker key — one containment-queryable vocabulary for every
-#: harvested/converted open-question row (K-2a uses origin='harvest').
-OPEN_QUESTION_MARKER_KEY = "open_question_origin"
-
-
-def _citation_signal_map(finding_data: Mapping[str, Any]) -> dict[int, UUID]:
-    """``{N -> signal UUID}`` from the finding's persisted ``data.citations``."""
-    out: dict[int, UUID] = {}
-    citations = finding_data.get("citations")
-    if not isinstance(citations, list):
-        return out
-    for c in citations:
-        if not isinstance(c, Mapping):
-            continue
-        marker = str(c.get("marker") or "")
-        m = re.fullmatch(r"\[(\d+)\]", marker)
-        if not m:
-            continue
-        try:
-            out[int(m.group(1))] = UUID(str(c.get("signal_id")))
-        except (TypeError, ValueError):
-            continue
-    return out
-
-
-async def convert_open_questions(
-    conn: Any,
-    *,
-    finding_data: Mapping[str, Any] | None,
-    finding_id: UUID,
-    analyst_ctx: Any,
-) -> int:
-    """Convert a persisted finding's ``data.open_questions`` into hypotheses rows.
-
-    Returns how many rows were written (0 when the block is absent/empty, every
-    entry already exists, or every entry degraded). Never raises on malformed
-    payload data; an unexpected substrate error propagates to the caller's
-    degrade guard (the actor wraps this call in try/except).
-    """
-    import hashlib
-
-    from ..provenance.models import HypothesisPayload
-    from ..provenance.writes import write_hypothesis
-
-    if not isinstance(finding_data, Mapping):
-        return 0
-    entries = finding_data.get("open_questions")
-    if not isinstance(entries, list) or not entries:
-        return 0
-    signal_by_ref = _citation_signal_map(finding_data)
-
-    written = 0
-    for entry in entries[:MAX_OPEN_QUESTIONS]:
-        try:
-            if not isinstance(entry, Mapping):
-                continue
-            question = str(entry.get("question") or "").strip()
-            if not question:
-                continue
-            qhash = hashlib.sha256(question.lower().encode("utf-8")).hexdigest()[:16]
-            source_id = f"{finding_id}:{qhash}"
-            probe = json.dumps([{
-                "marker": OPEN_QUESTION_MARKER_KEY,
-                "origin": "unit_payload",
-                "source_id": source_id,
-            }])
-            exists = await conn.fetchval(
-                "SELECT 1 FROM hypotheses "
-                "WHERE status = 'open_question' "
-                "AND diagnostic_evidence @> $1::jsonb LIMIT 1",
-                probe,
-            )
-            if exists is not None:
-                continue
-            # Lineage: the producing finding + every citation signal the
-            # question's refs resolve to (an unresolvable ref degrades to
-            # finding-only lineage — counted nowhere, fabricated never).
-            derived: list[UUID] = [finding_id]
-            refs_raw = entry.get("refs")
-            refs: list[int] = []
-            if isinstance(refs_raw, (list, tuple)):
-                for r in refs_raw:
-                    try:
-                        refs.append(int(r))
-                    except (TypeError, ValueError):
-                        continue
-            for n in refs:
-                sid = signal_by_ref.get(n)
-                if sid is not None and sid not in derived:
-                    derived.append(sid)
-            payload = HypothesisPayload(
-                thesis=question[:4096],
-                status="open_question",
-                diagnostic_evidence=[{
-                    "marker": OPEN_QUESTION_MARKER_KEY,
-                    "origin": "unit_payload",
-                    "source_id": source_id,
-                    "finding_id": str(finding_id),
-                    "question_sha256": qhash,
-                    "refs": refs[:32],
-                }],
-            )
-            row, _dlq = await write_hypothesis(
-                conn,
-                analyst_ctx=analyst_ctx,
-                payload=payload,
-                derived_from=derived,
-            )
-            if row is not None:
-                written += 1
-        except Exception as exc:  # noqa: BLE001 — one bad entry never sinks siblings
-            logger.warning(
-                "inline_target.open_question.convert_entry_failed finding=%s "
-                "err=%s", finding_id, exc,
-            )
-            continue
-    return written
+# Re-exported here because the caller is ``runtime.dapr_actors`` (frozen) and
+# the existing test file both import these names from this module.
 
 
 # ---------------------------------------------------------------------------

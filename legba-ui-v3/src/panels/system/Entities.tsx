@@ -25,7 +25,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { PanelChrome } from '@/components/PanelChrome'
 import { PanelEmbedProvider } from '@/components/PanelEmbedContext'
-import { PanelTabStrip, type PanelTabDef } from '@/components/PanelTabs'
+import { initialTab, PanelTabStrip, type PanelTabDef } from '@/components/PanelTabs'
 import { apiGet } from '@/lib/api'
 import { resolveCountry } from '@/lib/countryGeo'
 import type { PanelProps } from '@/types'
@@ -108,8 +108,12 @@ function openEntityGraph(name: string) {
   useSelection.getState().select({ kind: 'entity', id: name, label: name, origin: 'entities' })
 }
 
-export default function EntitiesPanel({ registration, scope, mode }: PanelProps) {
-  const [tab, setTab] = useState<EntitiesTab>('list')
+export default function EntitiesPanel({ registration, scope, mode, initialTab: tabParam }: PanelProps) {
+  // system.entity_graph / system.notable_structure retired onto the graph /
+  // structure tabs (panel-registry/aliases.ts).
+  const [tab, setTab] = useState<EntitiesTab>(
+    () => initialTab(tabParam, ENTITIES_TABS, 'list') as EntitiesTab,
+  )
   const [q, setQ] = useState('')
   const [cls, setCls] = useState<string | null>(null)
   const [open, setOpen] = useState<string | null>(null)

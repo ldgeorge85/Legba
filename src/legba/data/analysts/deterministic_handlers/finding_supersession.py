@@ -31,11 +31,16 @@ A deterministic grouping key per finding, in priority order:
      producing analyst already bound the finding to a situation. This is the
      strong path (e.g. ``situation_detection`` / P-10 situation-scoped analysts).
   2. **Derived** — a normalized signature from the finding's entity/event/topic
-     content: ``sig:<topic>|<sorted entity tokens>``. ``topic`` falls back
-     through ``data.category`` → ``data.topic`` → the analyst's sub_handler. The
-     entity tokens come from ``data.key_entities`` / ``data.entities`` /
-     ``data.actors`` / ``data.locations`` (lowercased, deduped, sorted) so two
-     findings about the same actors+topic collide regardless of phrasing/order.
+     content plus its producing DIMENSION:
+     ``sig:<topic>|<sorted entity tokens>#dim:<analyst_id>``. ``topic`` falls
+     back through ``data.category`` → ``data.topic`` → the analyst's
+     sub_handler. The entity tokens come from ``data.key_entities`` /
+     ``data.entities`` / ``data.actors`` / ``data.locations`` (lowercased,
+     deduped, sorted) so two findings about the same actors+topic collide
+     regardless of phrasing/order. The ``#dim:`` tail is the #64 mega-frame
+     repair — see the block comment above ``_SIGNATURE_DIMENSION_MARKER`` for
+     the defect (one country-absorbing frame per desk) and why the dimension is
+     the one partition available without new producer machinery.
 
 A finding with no derivable signature (no explicit id, no entities, no topic
 beyond a bare summary) is **not** clustered — supersession only applies to
@@ -199,6 +204,165 @@ def _topic(data: Mapping[str, Any], fallback: str | None) -> str:
 _SITUATION_SIGNATURE_ENTITY_K = 0
 
 
+# ---------------------------------------------------------------------------
+# THE MEGA-FRAME REPAIR (#64) — the signature carries its DIMENSION
+# ---------------------------------------------------------------------------
+#
+# THE DEFECT, from the FRAME program's §1.4 diagnosis (rows read read-only
+# 2026-08-20) and unchanged since: with ``_SITUATION_SIGNATURE_ENTITY_K = 0`` the
+# derived key is ``sig:<topic>``, and :func:`_topic` resolves a unit finding's
+# topic to its ``category``, which for a country unit IS the target id. So EVERY
+# unit finding on a desk — all seven dimensions, several reads a day each —
+# clustered into ONE situation named ``sig:country_g20_ar``. The DB confirmed it
+# fleet-wide: exactly one open frame per desk across all 33 desks
+# (``sig:country_g20_ar`` 377 events, ``sig:country_g20_us`` 436,
+# ``sig:country_watch_cd`` 367). At the H1 census the AR frame carried 364
+# members of which 42 were the maritime-pilots story. The M23 war and the AR
+# property-bill fight were never frames; they were undifferentiated members of a
+# desk-blob, and a register whose unit of identity is "a country" cannot answer
+# "what is happening in this country" with anything but one row.
+#
+# THE FIX, and what it deliberately is NOT. It is NOT story-grained clustering —
+# that needs an event-typed producer signal or embeddings, was costed and
+# deferred by the FRAME program (§1.4, "new machinery"), and is still deferred.
+# It is the ONE partition the substrate already carries for free: the producing
+# analyst. A desk's dimensions are separate ANALYSTS asking separate bounded
+# questions, and ``_cluster`` has always known they are different — its cluster
+# key is ``(signature, analyst_id)`` precisely so "a country's leadership read is
+# not made stale by its narrative read". The SIGNATURE did not know it, so
+# supersession scoped per dimension while MATERIALIZATION did not: ``situations``
+# is keyed ``(situation_signature, analyst_id)`` where that analyst_id is the
+# CLUSTERING handler's, one value fleet-wide. Seven dimensions, one row.
+#
+# Putting the dimension IN the signature makes the two layers agree. Supersession
+# is unchanged by construction (a key that already discriminated on analyst_id
+# now discriminates on a signature that encodes it — the same partition), while
+# materialization gains the split it never had.
+#
+# WHY THE DIMENSION AND NOT A CLOSED EVENT VOCABULARY — the choice, and its
+# bounded half. The 2026-08-29 register premise review proposes the fuller key
+# ``sig:<topic>|<desk>|<event_key>``, where ``event_key`` is drawn from a CLOSED
+# per-desk vocabulary declared in the action pack. That is the right end state
+# and this is deliberately its DESK half, for three reasons that are about what
+# can be migrated rather than about what is desirable:
+#
+#   1. THE EVENT KEY CANNOT BE MIGRATED. No finding in the substrate carries one.
+#      A migration can only split stored frames by a property their members
+#      already have, and the producing analyst is the only such property. The
+#      event key is forward-only work that begins whenever the packs ship; the
+#      desk split is the part that can re-home 13,539 existing members today.
+#   2. THE EVENT KEY IS A PROMPT-AND-PACK CHANGE (nine action packs, a schema
+#      field, and a validator that must REJECT an out-of-vocabulary key — without
+#      that rejection it is precisely the K=full failure again). That is a change
+#      to what the desks are asked, and it wants the operator's eyes on the
+#      vocabulary before it is built.
+#   3. THE TWO COMPOSE WITHOUT A SECOND MIGRATION. The grammar below reserves
+#      ``#evt:`` as a further suffix and the parsers already read past it, so
+#      adding the event key later re-keys nothing that this migration re-keyed:
+#      a frame's topic and dimension survive the addition unchanged.
+#
+# AND WHY THIS DOES NOT LAND BACK AT K=full (1 situation from 11.5k findings).
+# That failure had one cause: the key was a hash of a MODEL-GENERATED set whose
+# membership churned every cycle, so two reads of the same event never collided.
+# ``analyst_id`` is the opposite kind of value — a registered descriptor identity
+# stamped by the runtime, drawn from a vocabulary that is closed by the registry
+# and cannot churn between two runs of the same unit. The split factor is
+# therefore known in advance and bounded by the analyst set (~8 on a country
+# desk), not by content. That is the same property the review demands of the
+# event vocabulary — "fixed by the action pack, not regenerated by the model each
+# cycle" — obtained here for free because the registry already fixes it.
+#
+# THE MARKER IS DELIBERATELY UNMISTAKABLE. ``|`` already separates the (currently
+# unused) entity tail, and a topic is free text lifted from a producer's
+# ``category``/``topic``/``event_type`` field or, failing that, from an entity
+# token — so no single punctuation character can be assumed absent from it.
+# ``#dim:`` is a three-token marker, the dimension itself is sanitized so it can
+# never contain one, and :func:`signature_dimension` splits on the LAST
+# occurrence. A signature therefore round-trips: topic and dimension both come
+# back out, which is what lets ``situation_clustering`` keep resolving
+# ``target_id`` from the topic exactly as before.
+_SIGNATURE_DIMENSION_MARKER = "#dim:"
+
+#: RESERVED — the story-grained suffix (``#evt:<event_key>``) the closed per-desk
+#: vocabulary would append. Nothing writes it yet; the parsers below read past it
+#: so that when something does, every key this migration wrote keeps parsing to
+#: the same topic and the same dimension. It is a grammar slot, not a stub: no
+#: code path claims the feature exists.
+_SIGNATURE_EVENT_MARKER = "#evt:"
+
+#: The dimension token for a finding whose producer cannot be identified. Real
+#: and reachable: ``analyst_id`` is nullable on ``analyst_outputs``, and the
+#: migration must re-home members whose producing row no longer exists. Such
+#: findings get their OWN frame rather than being folded into a dimension they
+#: may not belong to — an unattributed read is a fact about our bookkeeping, not
+#: evidence about somebody else's dimension.
+UNATTRIBUTED_DIMENSION = "_unattributed"
+
+#: Cap on the dimension token. Analyst ids are short slugs; the cap is a bound on
+#: what an unvalidated producer field can do to an indexed text key.
+_DIMENSION_MAX_CHARS = 64
+
+
+def dimension_token(analyst_id: Any) -> str:
+    """The signature-safe dimension token for a producing ``analyst_id``.
+
+    Lowercased, whitespace-stripped, ``#`` and ``|`` folded to ``_`` (so the
+    token can never counterfeit either signature separator), capped.
+    Empty/absent yields :data:`UNATTRIBUTED_DIMENSION`.
+
+    THIS FUNCTION HAS A SQL TWIN. Migration 0188 computes the same token in
+    Postgres to re-key the fleet's stored rows, and a token the two spell
+    differently is a DUPLICATE FRAME under the unique index — the one drift that
+    would silently undo the whole repair. The twin is asserted row-for-row by
+    ``test_dimension_token_python_and_sql_agree``; keep the two edits together.
+    """
+    token = str(analyst_id or "").strip().lower().replace("#", "_").replace("|", "_")
+    return token[:_DIMENSION_MAX_CHARS] if token else UNATTRIBUTED_DIMENSION
+
+
+def signature_dimension(sig: Any) -> str | None:
+    """The dimension a signature carries, or ``None`` if it carries none.
+
+    ``None`` means "pre-#64 key" (or an explicit ``sit:`` key, which is scoped by
+    its own producer already and is never dimensioned). A reserved ``#evt:``
+    suffix is read past, so a future story-grained key still reports the
+    dimension this one wrote.
+    """
+    text = str(sig or "")
+    if not text.startswith("sig:") or _SIGNATURE_DIMENSION_MARKER not in text:
+        return None
+    tail = text.rsplit(_SIGNATURE_DIMENSION_MARKER, 1)[1]
+    return tail.split(_SIGNATURE_EVENT_MARKER, 1)[0] or None
+
+
+def strip_dimension(sig: Any) -> str:
+    """``sig`` with any dimension suffix removed — the pre-#64 topic key.
+
+    What ``situation_clustering`` recovers ``category`` (and therefore
+    ``target_id``) from, and what the migration re-keys FROM.
+    """
+    text = str(sig or "")
+    if not text.startswith("sig:") or _SIGNATURE_DIMENSION_MARKER not in text:
+        return text
+    return text.rsplit(_SIGNATURE_DIMENSION_MARKER, 1)[0]
+
+
+def with_dimension(sig: Any, analyst_id: Any) -> str:
+    """``sig`` keyed to the dimension that produced it — idempotent.
+
+    Only DERIVED (``sig:``) keys are dimensioned. An explicit ``sit:`` key is
+    handed to the clusterer by its producer (the composition heads), already
+    carries that producer in its own text, and is returned untouched. A signature
+    that already carries a dimension is returned untouched too, so this is safe
+    to apply to a row of unknown vintage — which is exactly how the live path
+    uses it while the fleet is half-migrated.
+    """
+    text = str(sig or "")
+    if not text.startswith("sig:") or _SIGNATURE_DIMENSION_MARKER in text:
+        return text
+    return f"{text}{_SIGNATURE_DIMENSION_MARKER}{dimension_token(analyst_id)}"
+
+
 def _explicit_signature(data: Mapping[str, Any]) -> str | None:
     """Explicit ``situation_signature`` / ``situation_id``, or ``None``.
 
@@ -224,14 +388,24 @@ def derive_signature(
     data: Mapping[str, Any],
     *,
     sub_handler_fallback: str | None = None,
+    analyst_id: Any = None,
 ) -> str | None:
     """Deterministic situation signature for a finding, or ``None``.
 
     Priority:
       1. Explicit ``situation_id`` / ``situation_signature`` (top-level OR the
          nested payload ``data`` sub-dict — see :func:`_explicit_signature`).
-      2. Derived ``sig:<topic>[|<top-K entity tokens>]`` — only when there is at
-         least one entity token (so a bare summary finding never clusters).
+      2. Derived ``sig:<topic>[|<top-K entity tokens>]#dim:<dimension>`` — only
+         when there is at least one entity token (so a bare summary finding never
+         clusters). ``dimension`` is the producing analyst (see
+         :func:`with_dimension` and the mega-frame block comment above); it is
+         what stops all seven of a desk's dimensions from collapsing into one
+         country-absorbing frame.
+
+    ``analyst_id`` is the PRODUCER of this finding, not the clusterer. Omitted
+    (the pure-payload callers) the signature is keyed to
+    :data:`UNATTRIBUTED_DIMENSION`, which is honest: a finding whose producer we
+    were not told is not evidence about any particular dimension.
 
     ``None`` means "do not cluster this finding".
     """
@@ -251,8 +425,8 @@ def derive_signature(
         topic = tokens[0]
     if _SITUATION_SIGNATURE_ENTITY_K > 0:
         key_tokens = tokens[:_SITUATION_SIGNATURE_ENTITY_K]
-        return f"sig:{topic}|{','.join(key_tokens)}"
-    return f"sig:{topic}"
+        return with_dimension(f"sig:{topic}|{','.join(key_tokens)}", analyst_id)
+    return with_dimension(f"sig:{topic}", analyst_id)
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +449,8 @@ def _cluster(
     # sharing a target-level signature (e.g. the 4 bounded units all stamped
     # `sig:country_g20_us`) are DIFFERENT dimensions and must NOT supersede each
     # other — a country's leadership read is not made stale by its narrative read.
-    # (For the single-analyst-per-signature monolith this is a no-op.)
+    # Since #64 the SIGNATURE encodes that same dimension, so the composite key is
+    # unchanged in behaviour and this stays a no-op for supersession semantics.
     groups: dict[tuple[str, Any], list[dict[str, Any]]] = defaultdict(list)
     for f in findings:
         # DQ P6 defense-in-depth (also covers the synthetic deps=None path where
@@ -284,9 +459,20 @@ def _cluster(
         if str(f.get("analyst_id") or "") in _COMPOSITION_ANALYST_IDS:
             continue
         sig = f.get("situation_signature")
-        if not sig:
+        if sig:
+            # #64 — NORMALIZE A STORED KEY OF UNKNOWN VINTAGE. A finding stamped
+            # before the re-key carries the topic-only signature in its COLUMN,
+            # and this branch takes the column verbatim, so without this hop the
+            # mega-frame would go on being fed by its own back-catalogue until
+            # migration 0188 had run. Doing it here means the repair holds from
+            # the moment the code deploys and the migration is a consistency
+            # pass over stored rows, not a correctness prerequisite racing it.
+            sig = with_dimension(sig, f.get("analyst_id"))
+        else:
             sig = derive_signature(
-                _parse_data(f.get("data")), sub_handler_fallback=sub_handler_fallback,
+                _parse_data(f.get("data")),
+                sub_handler_fallback=sub_handler_fallback,
+                analyst_id=f.get("analyst_id"),
             )
         if not sig:
             continue
@@ -880,4 +1066,13 @@ async def handle(
     )
 
 
-__all__ = ["handle", "derive_signature", "SUB_HANDLER_NAME"]
+__all__ = [
+    "handle",
+    "derive_signature",
+    "dimension_token",
+    "signature_dimension",
+    "strip_dimension",
+    "with_dimension",
+    "SUB_HANDLER_NAME",
+    "UNATTRIBUTED_DIMENSION",
+]

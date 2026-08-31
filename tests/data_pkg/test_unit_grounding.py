@@ -445,6 +445,52 @@ def test_prior_read_citation_carries_its_real_finding_id_and_nothing_it_stripped
     assert "signal_id" not in citation
 
 
+def test_every_grounding_citation_declares_what_its_ordinal_indexes():
+    """2026-08-29 (task #62) — the row states its own marker class.
+
+    ``ref_kind`` always carried the answer, but only to a reader who knows
+    ``provenance.kinds.GROUNDING_REF_KINDS``. The 2026-08-27 DQ sweep did not:
+    it resolved markers against ``analyst_traces.input_row_refs`` (a ``uuid[]``
+    of consumed substrate rows, which by construction cannot hold a grounding
+    block) and published a 53.6% citation RED that sweep v2 falsified — 0 of
+    6,556 markers genuinely unresolved.
+
+    Pinned on EVERY block kind, not just the prior read, because a discriminator
+    that covers four of five kinds is the shape of the bug it exists to prevent
+    (the v3 UI's ``citationsModel`` special-cases exactly one kind today, and
+    renders the other four wrong).
+    """
+    for row, ordinal in (
+        (_prior_row(), 121),
+        (_situations_row(), 122),
+        (_baseline_row(), 123),
+        (_questions_row(), 124),
+    ):
+        citation = ug.citation_for_block(row, ordinal)
+        assert citation is not None
+        assert citation["marker_class"] == "desk_grounding"
+        assert citation["resolves_against"] == "data.citations"
+        # The ordinal is a position in data['citations'], NEVER in the slice.
+        assert citation["ordinal"] == ordinal
+        assert "signal_id" not in citation
+
+
+def test_prior_read_block_names_the_licensed_prose_spelling():
+    """The render half of the same train: the desk is TOLD the long form, and
+    the form it is told is the one both marker parsers accept — generated from
+    the single definition rather than spelled twice."""
+    from legba.data.provenance.citation_markers import (
+        _normalize_verify_markers,
+        prior_read_ref,
+    )
+
+    lines = ug._render_prior_read(_prior_row(), 121)
+    rendered = "\n".join(lines)
+    assert prior_read_ref(121) in rendered
+    # ...and saying it that way resolves to exactly the bare marker it replaces.
+    assert _normalize_verify_markers(prior_read_ref(121)) == "[121]"
+
+
 def test_prior_read_with_no_resolvable_id_is_never_cited():
     """Never claim a prior read we cannot point at."""
     assert ug.citation_for_block(_prior_row(id=None), 5) is None
@@ -1235,3 +1281,138 @@ async def test_an_empty_signal_slice_still_noops_even_with_grounding_rows():
     assert result.finding.tags and "empty_slice" in result.finding.tags
     assert llm.user_prompt == "", "no LLM call may be made"
     assert result.derived_from == []
+
+
+# ---------------------------------------------------------------------------
+# REGISTER-1g — ONE register per prompt, and it is the GUARDED one
+# ---------------------------------------------------------------------------
+
+_DESCRIPTOR_DIR = Path(__file__).resolve().parents[2] / "descriptors"
+
+_ACTOR_SLICE_SRC = (
+    Path(__file__).resolve().parents[2]
+    / "src" / "legba" / "runtime" / "actor_substrate_slice.py"
+).read_text()
+
+
+def _descriptor_bodies() -> list[tuple[str, dict]]:
+    import yaml
+
+    out: list[tuple[str, dict]] = []
+    for path in sorted(_DESCRIPTOR_DIR.glob("analyst_*.yaml")):
+        body = yaml.safe_load(path.read_text()) or {}
+        out.append((path.name, body))
+    return out
+
+
+def _grounding_sources(body: dict) -> list[str]:
+    return list(((body.get("grounding") or {}).get("sources")) or [])
+
+
+def test_no_inline_target_desk_declares_the_situations_grounding_source():
+    """REGISTER-1g. Ten desks were shown the open-situation register TWICE in one
+    context window, by two queries through two renderers — and the second copy,
+    the one this source produced, was the UNGUARDED one.
+
+    An ``inline_target`` run with a target ALREADY receives the register as a
+    citable ``[N]`` block from ``unit_grounding`` (the kind gate below), and that
+    block carries H1's whole render repair. ``build_situations_block`` carries
+    none of it. Declaring ``situations`` here therefore did not add information;
+    it added a second, weaker rendering of the same rows for the model to read
+    the intensity off.
+
+    This is a CATALOG guard because the regression is a one-word descriptor edit.
+    """
+    offenders = [
+        name for name, body in _descriptor_bodies()
+        if ((body.get("identity") or {}).get("kind")) == "inline_target"
+        and "situations" in _grounding_sources(body)
+    ]
+    assert offenders == [], (
+        "an inline_target desk already gets the GUARDED unit_grounding register; "
+        "declaring `situations` adds an unguarded second copy to the same "
+        f"prompt (REGISTER-1g): {offenders}"
+    )
+
+
+def test_the_desks_that_keep_the_situations_source_have_no_second_copy():
+    """The dedupe is scoped, and the scope is the KIND GATE — not a blanket ban.
+
+    ``journal_assessor``-kind desks (journal / chronicle / consolidator) get NO
+    unit_grounding block at all, so for them ``situations`` is their ONLY register
+    and removing it would take their memory away rather than de-duplicate it.
+    Pinned so a later "tidy up the remaining ones" reads as the behaviour change
+    it would be.
+    """
+    keepers = {
+        name: (body.get("identity") or {}).get("kind")
+        for name, body in _descriptor_bodies()
+        if "situations" in _grounding_sources(body)
+    }
+    assert keepers, "the source must still be wired for the desks that need it"
+    assert set(keepers.values()) == {"journal_assessor"}, keepers
+
+
+def test_the_unit_register_block_is_gated_to_inline_target_alone():
+    """Why 1g is a DEDUPE and not a deletion: the surviving copy really does
+    reach every desk whose descriptor just lost the source. The gate is a literal
+    source-level clause, so it is proven against the source."""
+    assert 'if out and target_filter and _kind == "inline_target":' in (
+        _ACTOR_SLICE_SRC
+    )
+    assert "gather_unit_grounding_rows" in _ACTOR_SLICE_SRC
+
+
+def test_the_surviving_copy_is_the_one_that_carries_the_h1_repairs():
+    """THE DISCRIMINATING HALF, and the reason the dedupe kept THIS copy.
+
+    Renders both blocks over the SAME frame — one stale, never corroborated, at
+    an intensity a desk would read as live — and asserts the asymmetry that
+    decided it: only the unit block prints the evidence clock, the NEVER label,
+    the STALE label and the self-corroboration rule. The grounding block prints
+    the intensity with none of them, which is the M-1 render H1 was built to
+    close.
+    """
+    from legba.data.analysts.window_ledger import (
+        REGISTER_NO_CORROBORATION,
+        REGISTER_STALE_LABEL,
+    )
+    from legba.runtime.grounding import GroundingSituation, build_situations_block
+
+    frame = {
+        "situation_id": str(uuid4()),
+        "name": "Argentina - high energy-security pressure persists",
+        "status": "active",
+        "intensity_score": 59.1,
+        "event_count": 377,
+        "last_event_at": "2026-08-20T13:31:42+00:00",
+        "age_days": 30.1,
+        # Never corroborated, and old — the live shape of 21 of 49 open frames.
+        "last_corroborated_at": None,
+        "evidence_age_days": 30.1,
+    }
+    unit_block = "\n".join(ug._render_situations([frame], 6))
+    grounding_block = build_situations_block([
+        GroundingSituation(
+            name=frame["name"], category="country_watch_ar", status="active",
+            intensity_score=59.1, valid_from=None, last_event_at=None,
+        )
+    ]) or ""
+
+    # Both print the number a desk misread as evidence the strike was live.
+    assert "59.1" in unit_block and "59.1" in grounding_block
+
+    # Only ONE of them prints what makes that number readable.
+    for guard in (
+        "last_corroborated_at",
+        "evidence_age",
+        REGISTER_NO_CORROBORATION,
+        REGISTER_STALE_LABEL,
+        "may NEVER be your evidence that an event",
+    ):
+        assert guard in unit_block, guard
+        assert guard not in grounding_block, (
+            f"{guard!r} unexpectedly present — if the ASSESSED SITUATIONS block "
+            "has been guarded since, revisit the 1g dedupe rather than this "
+            "assertion"
+        )

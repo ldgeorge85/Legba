@@ -334,6 +334,37 @@ def _analyst(aid: str, *, selector_predicate: str | None) -> AnalystDescriptor:
     )
 
 
+def _composition_analyst(aid: str, *, selector_predicate: str) -> AnalystDescriptor:
+    """H4 — the shape of ``country_composition`` / ``region_composition``:
+    ``subscription.targets`` selector-bound like path 2 above, but
+    ``data_types=["finding"]`` — it reads OTHER analysts' heads
+    (``meta_findings_synthesizer``), never a raw signal off the target's own
+    ``sources:``. Otherwise identical to :func:`_analyst`'s selector shape so
+    the ONLY variable between the two in the test below is ``data_types``.
+    """
+    return AnalystDescriptor(
+        identity=AnalystIdentity(
+            id=aid, name=aid,
+            schema_uri="legba/analyst/2.0.0", version="0" * 16,
+            kind="meta_findings_synthesizer",
+            type_signature=TypeSignature(
+                input_type="legba.x.In", output_type="legba.x.Out",
+            ),
+            state=LifecycleState.ACTIVE, owner="c1-boot-wiring",
+        ),
+        subscription=SubscriptionBlock(
+            targets=SubscriptionTargets(
+                predicate=selector_predicate, data_types=["finding"],
+            ),
+        ),
+        method=MethodBlock(
+            kind="llm_planner",
+            prompt_module="legba.prompts.meta_findings_synthesizer.v1",
+        ),
+        cadence=AnalystCadenceBlock(fallback_schedule="30 11,23 * * *"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # The boot-wiring test
 # ---------------------------------------------------------------------------
@@ -482,6 +513,127 @@ async def test_boot_wiring_registers_triggers_and_marks_dirty(
     finally:
         await handles.stop()
         # Rig hygiene: drop the per-test NATS artifacts.
+        with suppress(Exception):
+            await nats_store.js.delete_consumer(engine._stream, trigger_durable)
+        with suppress(Exception):
+            await nats_store.js.delete_consumer(
+                engine._stream, target_consumer_name(target_id),
+            )
+        with suppress(Exception):
+            await nats_store.js.delete_stream(job_queue.stream)
+
+
+async def test_h4_finding_only_composition_registers_no_coalescing_trigger(
+    pg_store: PostgresStore,
+    nats_store: NatsStore,
+    registry: DescriptorRegistry,
+    registry_http,
+):
+    """H4 — THE SCHEDULING RACE, end to end through the REAL wiring pass.
+
+    ``country_composition`` / ``region_composition`` read OTHER ANALYSTS'
+    heads (``data_types=["finding"]``), never a raw signal off the target's
+    own ``sources:``. Before this fix, ``_wire_targets_and_triggers`` handed
+    them a coalescing trigger anyway, bound to the SAME raw-signal bindings
+    every unit on the target also watches — so a composition woke reactively
+    on wire volume with no bearing on whether its own units had run, and (via
+    the shared per-(analyst, target) cadence cooldown) could suppress its own
+    correctly-ordered scheduled tick. This seeds a real
+    ``meta_findings_synthesizer``-shaped analyst beside an ordinary selector-
+    bound unit on the SAME target and proves, through the production
+    ``bring_up_source_first_planes`` pass (not a hand-called helper), that
+    only the unit gets a coalescing-trigger registration.
+    """
+    run = uuid4().hex[:8]
+    source_id = f"source.h4race.{run}"
+    target_id = f"target_h4race_{run}"
+    unit_id = f"analyst_h4race_unit_{run}"
+    composition_id = f"analyst_h4race_composition_{run}"
+    scope_tag = f"h4race_{run}"
+    _base_url, registry_client = registry_http
+
+    await registry.register(_source(source_id, tags=["news"]), actor="c1")
+    await registry.register(
+        _analyst(unit_id, selector_predicate=f'has_tag("{scope_tag}")'),
+        actor="c1",
+    )
+    await registry.register(
+        _composition_analyst(
+            composition_id, selector_predicate=f'has_tag("{scope_tag}")',
+        ),
+        actor="c1",
+    )
+    await registry.register(
+        _target(
+            target_id, source_id=source_id, scope_tag=scope_tag,
+            analyst_ref=unit_id,  # path-1 binding stays on the unit only
+        ),
+        actor="c1",
+    )
+
+    job_queue = JobQueue(
+        nats_store,
+        stream=f"LEGBA_JOBS_H4RACE_{run.upper()}",
+        durable=f"legba-job-workers-h4race-{run}",
+        subject_prefix=f"jobs_h4race_{run}",
+        max_age_seconds=600,
+    )
+    trigger_durable = f"legba-trigger-h4race-{run}"
+
+    handles = await bring_up_source_first_planes(
+        pg_store=pg_store,
+        nats_store=nats_store,
+        standard_deps=object(),
+        registry_client=registry_client,
+        run_loops=False,
+        job_queue=job_queue,
+        trigger_durable=trigger_durable,
+    )
+    engine = handles.trigger_engine
+    try:
+        assert target_id in handles.registered_targets
+        regs = {
+            (r.analyst_id, r.target_id): r
+            for r in engine._regs
+            if r.target_id == target_id
+        }
+        assert (unit_id, target_id) in regs, (
+            "the signal-consuming unit must still get its coalescing trigger "
+            f"— got {sorted(regs)}"
+        )
+        assert (composition_id, target_id) not in regs, (
+            "a finding-only composition must NOT get a coalescing trigger — "
+            "it has no legitimate signal-driven wake, and one would race it "
+            f"against its own units; got {sorted(regs)}"
+        )
+
+        # And a real published signal only ever marks the UNIT dirty — never
+        # the composition, which the reactive path can no longer see at all.
+        await engine.bind()
+        await handles.subscription_engine.publish_signal(
+            signal=Signal(
+                source_id=source_id, owner_tenant="default", modality="text",
+                tags=["news"], payload={"severity": "low"},
+            )
+        )
+        for _ in range(10):
+            await engine.drain_once()
+            if engine.delivered >= 1:
+                break
+        assert engine.delivered >= 1
+        assert engine.matched == 1, (
+            "exactly one registration (the unit's) should have matched — "
+            "the composition was never registered to match anything"
+        )
+        unit_acc = await handles.trigger_state.get(unit_id, target_id)
+        assert unit_acc.pending_count == 1
+        comp_acc = await handles.trigger_state.get(composition_id, target_id)
+        assert comp_acc.pending_count == 0, (
+            "the composition's dirty-state must stay at zero — nothing ever "
+            "reaches it reactively"
+        )
+    finally:
+        await handles.stop()
         with suppress(Exception):
             await nats_store.js.delete_consumer(engine._stream, trigger_durable)
         with suppress(Exception):

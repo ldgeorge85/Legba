@@ -20,8 +20,10 @@ needed):
 from __future__ import annotations
 
 import json
+from uuid import uuid4
 
 import pytest
+import pytest_asyncio
 
 from datetime import datetime, timedelta, timezone
 
@@ -873,6 +875,108 @@ def test_discriminator_uses_newest_observation_in_the_run() -> None:
     assert [(d[0], d[3]) for d in degraded] == [("source.mixed.evidence", "cursor_fault")]
 
 
+# ---------------------------------------------------------------------------
+# 2026-08-27 DQ sweep — the HONEST-QUIET PROLONGED-STREAK escalation.
+#
+# source.wto.news: 110 consecutive empty/healthy poll-outcome rows over 9
+# days, every single one honestly evidenced quiet (the handler's own crawl
+# never observed anything newer than what was already ingested). Under the
+# PRE-FIX rule an 'honest_quiet' classification suppressed the alert
+# unconditionally, at any streak length — this synthetic fixture reproduces
+# that exact shape and proves the fix escalates it while leaving ordinary
+# (short) honest-quiet runs — the B0-11 weekly/monthly feed class — silent.
+# ---------------------------------------------------------------------------
+
+
+def _wto_news_synthetic_history(n: int, *, start=_NOW):
+    """A synthetic ``source_poll_outcomes`` run in the exact shape the sweep
+    found live: ``n`` consecutive 'empty' rows, each carrying a
+    ``newest_entry_ts`` observation that is (honestly) no newer than the
+    source's last real signal — i.e. every row independently classifies
+    honest-quiet, matching wto.news's 110-poll, 9-day dead streak."""
+    last_signal = start - timedelta(days=9)
+    rows = _with_last_signal(
+        _with_newest_entry(
+            _empty_run("source.wto.news", n, start=start),
+            newest_entry_ts=last_signal - timedelta(hours=1),
+        ),
+        last_signal=last_signal,
+    )
+    return rows, last_signal
+
+
+def test_discriminator_honest_quiet_below_prolonged_threshold_stays_silent() -> None:
+    # Default prolonged-quiet bound is 36; a 20-poll honest-quiet run (an
+    # ordinary quiet spell) must stay silent exactly as before this fix.
+    rows, _ = _wto_news_synthetic_history(20)
+    assert _evaluate_empty_streaks(rows, threshold=5) == []
+
+
+def test_discriminator_honest_quiet_escalates_past_prolonged_threshold() -> None:
+    # The wto.news shape itself: 110 consecutive honest-quiet empties, well
+    # past the default 36-poll bound → escalates as 'honest_quiet_prolonged',
+    # NOT as 'cursor_fault' (the evidence never showed a cursor/filter fault).
+    rows, _ = _wto_news_synthetic_history(110)
+    degraded = _evaluate_empty_streaks(rows, threshold=5)
+    assert [(d[0], d[1], d[3]) for d in degraded] == [
+        ("source.wto.news", 110, "honest_quiet_prolonged")
+    ]
+
+
+def test_discriminator_honest_quiet_prolonged_threshold_is_tunable() -> None:
+    # The bound is a caller-supplied parameter, not a hardcoded constant.
+    rows, _ = _wto_news_synthetic_history(15)
+    assert _evaluate_empty_streaks(rows, threshold=5, honest_quiet_threshold=10) != []
+    assert (
+        _evaluate_empty_streaks(rows, threshold=5, honest_quiet_threshold=20) == []
+    )
+
+
+def test_discriminator_honest_quiet_prolonged_threshold_zero_disables_escalation() -> None:
+    # Mirrors the existing threshold<=0 convention elsewhere in this module.
+    rows, _ = _wto_news_synthetic_history(110)
+    assert _evaluate_empty_streaks(rows, threshold=5, honest_quiet_threshold=0) == []
+
+
+@pytest.mark.asyncio
+async def test_empty_streak_check_escalates_wto_news_synthetic_history() -> None:
+    # End-to-end through the check (default WatchdogConfig threshold = 36):
+    # the synthetic 110-poll wto.news history alerts, durably records the
+    # transition, and is clearly labelled — not mistaken for a cursor fault.
+    rows, _ = _wto_news_synthetic_history(110)
+    sinks = _RecordingSinks()
+    wd, nats, pg = _streak_watchdog(rows, alert_sinks=sinks)
+    alerted = await wd.check_source_empty_streak_once(now_monotonic=1000.0)
+    assert alerted == ["source.wto.news"]
+    env = json.loads(nats.published_core[0][1])
+    assert env["fault_class"] == "honest_quiet_prolonged"
+    assert env["health_state"] == "degraded"
+    assert env["empty_streak"] == 110
+    assert "honest_quiet_prolonged" in env["tags"]
+    assert "cursor_fault" not in env["tags"]
+    assert "NOT a cursor/filter fault" in env["body"]
+    rows_d = _delivery_rows(pg)
+    assert rows_d[0]["channel"] == "source_degraded"
+    assert rows_d[0]["payload"]["kind"] == "source_honest_quiet_prolonged"
+    assert rows_d[0]["payload"]["fault_class"] == "honest_quiet_prolonged"
+    assert rows_d[0]["payload"]["empty_streak"] == 110
+    assert len(sinks.payloads) == 1
+
+
+@pytest.mark.asyncio
+async def test_empty_streak_check_short_honest_quiet_stays_silent_end_to_end() -> None:
+    # Contrast case, same check, a shorter (ordinary) honest-quiet run: no
+    # alert, no durable row, no fan-out — the B0-11 weekly/monthly class this
+    # exemption exists to protect is untouched by the new bound.
+    rows, _ = _wto_news_synthetic_history(10)
+    sinks = _RecordingSinks()
+    wd, nats, pg = _streak_watchdog(rows, alert_sinks=sinks)
+    assert await wd.check_source_empty_streak_once(now_monotonic=1000.0) == []
+    assert nats.published == []
+    assert _delivery_rows(pg) == []
+    assert sinks.payloads == []
+
+
 def _streak_watchdog(rows, *, is_leader=None, state_rows=None, alert_sinks=None):
     nats = _RecordingNats()
     cfg = WatchdogConfig(
@@ -1080,3 +1184,240 @@ async def test_stall_without_pg_still_alerts_no_durable_write() -> None:
     wd._last_finding_at = 100.0  # type: ignore[attr-defined]
     fired = await wd.check_once(now=100.0 + 901.0)
     assert fired is True and len(nats.published) == 1  # NATS-only path unchanged
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-29 DQ sweep, finding 1 — the honest-quiet escalation's REAL fetch
+# path.
+#
+# Every empty-streak test above drives ``_evaluate_empty_streaks`` (a pure
+# function) directly, or exercises ``check_source_empty_streak_once`` against
+# ``_FakePg``, whose ``_FakeConn.fetch`` ignores the SQL text entirely and
+# returns the full canned ``rows`` list regardless of any ``LIMIT`` clause —
+# so NONE of the tests above ever traverse
+# ``LivenessWatchdog._fetch_source_empty_streak_rows``'s real
+# ``LIMIT {window}`` fetch. That is exactly how
+# ``honest_quiet_streak_threshold`` (default 36) shipped structurally dead:
+# the fixed ``_EMPTY_STREAK_WINDOW = 20`` capped the real fetch BELOW the
+# threshold it is compared against, so the computable streak could never
+# reach it — verified live: 8 sources pinned at exactly streak 20, zero
+# ``honest_quiet_prolonged`` alerts ever written, source.who.news 0 signals
+# in 32 days / 120 consecutive empty polls / state='active' / health='healthy'
+# sitting unalerted. No unit test caught it because no unit test exercised
+# the real binding path (the repo's standing
+# tests-must-traverse-the-real-binding-path rule).
+#
+# The tests below hit a REAL migrated Postgres (``migrated_pg`` /
+# ``tests/data_pkg/conftest.py``, shared with e.g. ``test_budget.py``)
+# through the actual SQL, so a regression to a fetch window <= a threshold
+# fails here even while every pure-function test above stays green.
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def pg_pool(migrated_pg):
+    import asyncpg
+
+    pool = await asyncpg.create_pool(
+        host=migrated_pg.host,
+        port=migrated_pg.port,
+        user=migrated_pg.user,
+        password=migrated_pg.password,
+        database=migrated_pg.database,
+        min_size=1,
+        max_size=4,
+    )
+    yield pool
+    await pool.close()
+
+
+async def _seed_honest_quiet_source(
+    conn,
+    source_id: str,
+    n_polls: int,
+    *,
+    poll_spacing_minutes: int = 60,
+    last_signal_extra_days: int = 0,
+) -> None:
+    """Seed one ACTIVE source_descriptor + one real ``signals`` row (so
+    ``last_signal`` is non-null) + ``n_polls`` consecutive 'empty'/'healthy'
+    ``source_poll_outcomes`` rows, each stamped with a ``newest_entry_ts`` at
+    or before ``last_signal`` — every row independently classifies
+    honest-quiet (``_classify_streak``: ``observed <= last_signal`` →
+    'honest_quiet'), matching the wto.news / who.news shape: a feed that
+    keeps polling cleanly and reporting nothing genuinely newer than what is
+    already ingested.
+
+    ``last_signal`` is placed comfortably (5 extra spacing units, plus
+    ``last_signal_extra_days``) before the OLDEST seeded poll, so every poll
+    row counts toward the leading empty run (the SQL's own
+    ``last_signal``-bound logic — see ``_evaluate_empty_streaks`` — would
+    otherwise stop the count at the first poll at/before it).
+
+    All timestamps are computed from ONE Python-side anchor (not separate
+    SQL ``now()`` calls per statement) so ``newest_entry_ts`` and
+    ``last_signal`` land in an exact, deterministic ``<=`` relationship —
+    two independent ``now()`` calls a few milliseconds apart would otherwise
+    occasionally put ``newest_entry_ts`` a hair AFTER ``last_signal`` and
+    flip the discriminator to ``cursor_fault``.
+    """
+    anchor = datetime.now(tz=timezone.utc)
+    body = {
+        "identity": {"id": source_id, "kind": "rss", "state": "active"},
+        "acquisition": "poll",
+        "cadence": {"schedule": {"raw": "*/15 * * * *", "ui_hint": {}}},
+    }
+    await conn.execute(
+        """
+        INSERT INTO source_descriptors
+            (descriptor_id, version, schema_uri, is_head, kind, state, owner,
+             name, body, created_at)
+        VALUES ($1, 'v1', 'legba/source/1.0.0', TRUE, 'rss', 'active', 'test',
+                $1, $2::jsonb, $3)
+        """,
+        source_id,
+        json.dumps(body),
+        anchor - timedelta(days=365),
+    )
+    last_signal_at = anchor - timedelta(
+        minutes=poll_spacing_minutes * (n_polls + 5), days=last_signal_extra_days,
+    )
+    # Strictly before last_signal — still satisfies the discriminator's
+    # ``<=``, but leaves no doubt about ordering.
+    newest_entry_ts = last_signal_at - timedelta(seconds=1)
+    await conn.execute(
+        """
+        INSERT INTO signals
+            (id, source_id, source_version, payload, content_hash,
+             fetched_at, created_at, updated_at, schema_uri)
+        VALUES (gen_random_uuid(), $1, 'v1', '{}'::jsonb, $2, $3, $4, $4,
+                'iglu:legba/signal/jsonschema/1-0-0')
+        """,
+        source_id,
+        uuid4().hex,
+        last_signal_at,
+        anchor,
+    )
+    for i in range(n_polls):
+        # i=0 is the most recent poll; i=n_polls-1 the oldest — all strictly
+        # AFTER last_signal (see docstring).
+        occurred_at = anchor - timedelta(minutes=poll_spacing_minutes * i)
+        await conn.execute(
+            """
+            INSERT INTO source_poll_outcomes
+                (source_id, source_version, outcome, health_state,
+                 signals_written, occurred_at, newest_entry_ts)
+            VALUES ($1, 'v1', 'empty', 'healthy', 0, $2, $3)
+            """,
+            source_id,
+            occurred_at,
+            newest_entry_ts,
+        )
+
+
+def _empty_streak_watchdog(pg_pool) -> tuple["LivenessWatchdog", "_RecordingNats"]:
+    nats = _RecordingNats()
+    cfg = WatchdogConfig(stall_after_s=900.0, realert_every_s=1800.0, check_interval_s=60.0)
+    wd = LivenessWatchdog(nats, cfg, pg_store=pg_pool)
+    wd._started_at = 0.0  # type: ignore[attr-defined]
+    return wd, nats
+
+
+@pytest.mark.asyncio
+async def test_empty_streak_real_fetch_escalates_past_honest_quiet_bound(pg_pool) -> None:
+    # The window regression itself: 37 consecutive honest-quiet empty polls —
+    # ONE past the default honest_quiet_streak_threshold (36). Under the
+    # pre-fix _EMPTY_STREAK_WINDOW=20 fetch this could NEVER be seen (the
+    # query itself truncates at 20 rows); with the fix
+    # (_empty_streak_fetch_window() == 41 for default cfg) the real fetch
+    # sees all 37 rows and the escalation fires.
+    source_id = f"source.streaktest.window37.{uuid4().hex[:8]}"
+    async with pg_pool.acquire() as conn:
+        await _seed_honest_quiet_source(conn, source_id, 37)
+    wd, nats = _empty_streak_watchdog(pg_pool)
+    alerted = await wd.check_source_empty_streak_once(now_monotonic=1000.0)
+    assert alerted == [source_id]
+    env = json.loads(nats.published_core[0][1])
+    assert env["fault_class"] == "honest_quiet_prolonged"
+    assert env["health_state"] == "degraded"
+    assert env["stale_source_id"] == source_id
+
+
+@pytest.mark.asyncio
+async def test_empty_streak_real_fetch_35_streak_stays_silent(pg_pool) -> None:
+    # One below the default threshold (36) — an ordinary long-ish quiet
+    # spell — must NOT escalate, proven against the real fetch path (not
+    # just the pure evaluator).
+    source_id = f"source.streaktest.window35.{uuid4().hex[:8]}"
+    async with pg_pool.acquire() as conn:
+        await _seed_honest_quiet_source(conn, source_id, 35)
+    wd, nats = _empty_streak_watchdog(pg_pool)
+    alerted = await wd.check_source_empty_streak_once(now_monotonic=1000.0)
+    assert alerted == []
+    assert nats.published == []
+
+
+@pytest.mark.asyncio
+async def test_empty_streak_real_fetch_who_news_shaped_regression(pg_pool) -> None:
+    # Regression shaped exactly like the live source.who.news case the sweep
+    # found: last real signal a long time ago (here 40 days, vs. who.news's
+    # 32), the source still ACTIVE and still polling on a tight ~15-minute
+    # cadence, every poll reporting 'empty'/'healthy', 120 consecutive polls
+    # (matching who.news's 120) — deep past the honest-quiet bound. Poll
+    # spacing is compressed to 15 real minutes apart (not spread across the
+    # full 40 days) purely for test speed; the load-bearing shape — long
+    # genuine quiet, still active, frequent clean-empty polling, streak far
+    # past the escalation bound — is preserved. Before this fix this source
+    # would sit forever at the same silent, unalerted, active/healthy state
+    # who.news was found in.
+    source_id = f"source.whonewsshaped.{uuid4().hex[:8]}"
+    async with pg_pool.acquire() as conn:
+        await _seed_honest_quiet_source(
+            conn, source_id, 120, poll_spacing_minutes=15, last_signal_extra_days=40,
+        )
+    wd, nats = _empty_streak_watchdog(pg_pool)
+    alerted = await wd.check_source_empty_streak_once(now_monotonic=1000.0)
+    assert alerted == [source_id]
+    env = json.loads(nats.published_core[0][1])
+    assert env["fault_class"] == "honest_quiet_prolonged"
+    assert env["health_state"] == "degraded"
+    assert "NOT a cursor/filter fault" in env["body"]
+    # The real streak (120) exceeds the fetch window (41 for default cfg) —
+    # an accepted, documented trade-off (see _empty_streak_fetch_window's
+    # docstring): the reported count floors at the window, but the
+    # escalation still correctly fires because the window is sized to
+    # strictly exceed the threshold.
+    assert env["empty_streak"] >= WatchdogConfig().honest_quiet_streak_threshold
+    assert env["empty_streak"] <= 120
+
+
+# ---------------------------------------------------------------------------
+# Direct, DB-free regression on the window-sizing arithmetic — cheap and
+# deterministic, catches a future hardcoded-constant regression even without
+# standing up Postgres.
+# ---------------------------------------------------------------------------
+
+
+def test_empty_streak_fetch_window_exceeds_configured_thresholds() -> None:
+    nats = _RecordingNats()
+    for empty_thr, honest_thr in [(5, 36), (1, 1), (100, 5), (5, 500)]:
+        cfg = WatchdogConfig(
+            empty_streak_threshold=empty_thr,
+            honest_quiet_streak_threshold=honest_thr,
+        )
+        wd = LivenessWatchdog(nats, cfg)
+        window = wd._empty_streak_fetch_window()
+        assert window > empty_thr
+        assert window > honest_thr
+
+
+def test_empty_streak_fetch_window_default_exceeds_shipped_threshold() -> None:
+    # The exact defect this fix closes: the default honest_quiet_streak_threshold
+    # (36) must be strictly below the default fetch window. Pre-fix this was
+    # 20 < 36 — structurally unreachable, always.
+    nats = _RecordingNats()
+    cfg = WatchdogConfig()
+    wd = LivenessWatchdog(nats, cfg)
+    window = wd._empty_streak_fetch_window()
+    assert window > cfg.honest_quiet_streak_threshold
+    assert window == 41  # 36 + _EMPTY_STREAK_WINDOW_SLACK(5) — today's binding constraint

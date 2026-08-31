@@ -40,7 +40,10 @@ from legba.data.provenance.judge_assessability import (
     build_faithfulness_critique_payload,
     judge_sample_unit,
 )
-from legba.data.provenance.verify import verify_finding_faithfulness
+from legba.data.provenance.verify import (
+    JUDGE_PIPELINE_VERSION,
+    verify_finding_faithfulness,
+)
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
@@ -297,8 +300,9 @@ async def test_unsampled_critique_payload_contract(monkeypatch):
     assert verification["judge_unavailable_reason"] is None
     assert verification["provisional"] is True
     assert verification["overall_score"] is not None
-    # The population split key rides the same block (the RUST-1 stamp).
-    assert verification["judge_pipeline_version"] == "2026-08-21/1"
+    # The population split key rides the same block (whatever the current
+    # JUDGE_PIPELINE_VERSION stamp is — see judge_pipeline_version.py).
+    assert verification["judge_pipeline_version"] == JUDGE_PIPELINE_VERSION
 
     from legba.data.provenance.models import CritiquePayload
 
@@ -367,8 +371,16 @@ def test_kind_catalog_rejects_out_of_range_rates(bad):
 
 
 def test_unit_descriptors_carry_the_tree_default_rate():
-    """The 12 verify-bearing inline_target units ship judge_sample_rate 0.10 —
-    the tree default the J-c train PUTs live."""
+    """The 12 verify-bearing inline_target units ship judge_sample_rate 1.0.
+
+    D4a (2026-08-30): raised from the J-c train's 0.10 — a budget-era
+    artifact. The UUID-hash sampling gate was deciding which findings reached
+    compositions (judged 0.853 vs unsampled 0.571, 24.2% vs 3.2% floored;
+    R3's mech census measured 5.1x and worsening), and the judge plane sits
+    idle. At 1.0 the floor-escalation path (judge_floor_escalation.py) goes
+    structurally quiet; if a future budget cut lowers this again, that path
+    is the invariant that keeps the floor honest — and this pin is where the
+    new rate gets recorded deliberately."""
     import yaml
 
     units = [
@@ -383,7 +395,7 @@ def test_unit_descriptors_carry_the_tree_default_rate():
         )
         assert body["identity"]["kind"] == "inline_target", unit
         assert "verify" in body["method"]["llm"], unit
-        assert body["method"]["options"]["judge_sample_rate"] == 0.10, unit
+        assert body["method"]["options"]["judge_sample_rate"] == 1.0, unit
 
 
 # ---------------------------------------------------------------------------

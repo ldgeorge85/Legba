@@ -42,13 +42,14 @@ rebuild. See `ARCHITECTURE.md` for the descriptor registry and runtime, and
 
 ## 1. The shell
 
-The root component (`src/App.tsx`) lays out three regions:
+The root component (`src/App.tsx`) lays out four regions:
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ Sidebar │            Dockview workspace                   │
-│ (panel  │            (per-panel tiles)                    │
-│  tree)  │                                                 │
+│ Sidebar │ Morning Read │ Desk │ Investigate │ Trust │ …   │  ← workspace bar
+│ (panel  ├─────────────────────────────────────────────────│
+│  tree)  │            Dockview workspace                   │
+│         │            (per-panel tiles)                    │
 │         ├─────────────────────────────────────────────────│
 │         │            StatusBar                            │
 └──────────────────────────────────────────────────────────┘
@@ -64,6 +65,12 @@ The root component (`src/App.tsx`) lays out three regions:
   opens/focuses that panel in the workspace. Operations and the registry-scale
   Targets/Analysts groups start collapsed so the first screenful stays the
   five-group tree.
+
+  **The catalog is FOLDED** (UI_HOLISTIC_DESIGN_2026-08-24): all five verb
+  groups start collapsed and each header carries a count, so the sidebar opens
+  as five rows over the Desks section rather than the thirty-six-row catalog it
+  had grown into. Every row is one click away, and a saved collapse list still
+  wins — the fold is a default, not a forced state.
 
   A panel's group comes from an explicit per-kind override, else a prefix
   fallback on its kind segment (`registry.`/`source.`/`system.` → Operations,
@@ -141,42 +148,69 @@ families, ranked by recents → favorites → the rest:
 Arrow keys move the selection, `Esc` (or a backdrop click) dismisses; a leading
 star toggle persists favorites to localStorage.
 
-### Boot layout
+### Workspaces (the stance model) & the landing
 
-On first workspace-ready, in `personal` and `cis` modes the shell seeds the
-**mission-control grid** (S7-T2 — the first screenful is the glance state plus
-the product):
+The **workspace bar** above the dock (`components/WorkspaceBar.tsx`,
+`lib/workspaces.ts`) is the front door: six named stances, each a curated
+arrangement for one reason to open the app.
+
+| # | Workspace | The question it answers | Key |
+| --- | --- | --- | --- |
+| 1 | **Morning Read** | What happened, what moved, what does it mean? *(the landing)* | `Alt+1` |
+| 2 | **Desk** | Everything about the one place/lane I have selected | `Alt+2` |
+| 3 | **Investigate** | Follow this one thing to the bottom | `Alt+3` |
+| 4 | **Trust** | Is what it produced any good? | `Alt+4` |
+| 5 | **The Gate** | Work the human queues | `Alt+5` |
+| 6 | **Engine** | Is the machine running, and configured as what? | `Alt+6` |
+
+`Alt+backtick` cycles, `Alt+Shift+R` resets the active stance to its curated
+default, and `⌘K → #` lists the six (the guaranteed switcher if a keybinding is
+contested). `#ws=<stance>` rides the same URL hash as `#sel=`, so a shared link
+can carry the stance as well as the record.
+
+**A workspace is an object you return to, not a reset.** Switching serializes
+the OUTGOING stance into its own slot (`legba_ws[<workspace>][<mode>]`, wrapped
+as `{schemaVersion, layout}` because Dockview serializes no version of its own)
+and then restores the incoming one, seeding its curated default only on first
+entry. A `beforeunload` autosave means a reload returns the arrangement you
+left. On the first boot after this shipped, a pre-existing `legba_layout_custom`
+layout is **copied** into the Morning Read slot — never moved, so the sidebar's
+Save/Restore keeps its own key and behaviour.
+
+On first workspace-ready, in `personal` and `cis` modes, the shell seeds
+**Morning Read**:
 
 ```
 ┌───────────────────────────────────────────────────────────┐
-│  KPI STRIP (v4.kpi) — signals/findings/situations/sources │
-├──────────────────┬───────────────────┬────────────────────┤
-│  Live Feed       │  World Map        │  World Assessment  │
-│  (system.        │  (v4.map)         │  (v4.assessment,   │
-│   findings)      │  at real size     │   the REPORT)      │
-├──────────────────┤                   │  + Inspector       │
-│  Timeline lanes  │                   │    tabbed behind   │
-│  (v4.timeline)   │                   │                    │
-└──────────────────┴───────────────────┴────────────────────┘
+│  AT A GLANCE (v4.kpi) — signals/findings/situations/…     │
+├───────────────────────────────────────────────────────────┤
+│  THE WALL (system.wall) — world at a glance · MOVERS       │
+│  SINCE LAST VISIT · newest verified · health corner       │
+├──────────────────┬────────────────────────────────────────┤
+│  Live Feed       │  World Assessment │ Alerts │ Inspector  │
+│  (system.        ├────────────────────────────────────────┤
+│   findings)      │  World Map (v4.map)                     │
+└──────────────────┴────────────────────────────────────────┘
 ```
 
-The KPI glance strip spans the full width up top; the **Live Feed** anchors the
-left column with the global **Timeline lanes** beneath it; the **World Map**
-takes the center at real size; and the verified **World Assessment** report is a
-first-class right panel with the **Inspector** tabbed behind it. Everything is
-brushed by the one shared selection store, and `sizeMissionControl` pins the
-proportions after seeding. The Live Feed and the Inspector are pinned
-**non-closable anchors** (a close-button-less tab). `cis` boots the same grid —
-every panel in the seed ships in both `personal` and `cis`.
-
-(The Live Feed anchor is `system.findings` — the unified findings+signals feed
-described in §3 *Daily driver*. The former separate `v4.feed` rail was deleted
-in the #90 feed merge; `system.findings` subsumed it wholesale.)
+This supersedes the S7-T2 mission-control boot grid. The one substantive change
+to what mounts: **the Wall replaces the standalone `system.wall_movers` tile** —
+movers-since-last-visit is the Wall's own quadrant, and the old grid mounted it
+a second time beside its own parent. U-4's "cold boot must answer what changed"
+acceptance is kept, by the panel that owns the answer. Proportions are pinned
+from the stance's own `sizes` hints after seeding; every panel in the seed ships
+in both `personal` and `cis`, and a placement whose reference panel was
+mode-gated away is re-anchored rather than pointing at a panel Dockview never
+saw.
 
 ### Layout presets & custom layouts
 
 The sidebar's **Layouts** menu (`lib/layoutPresets.ts`) re-seeds the
-workspace with a named arrangement. Seven presets ship (the redesign swapped the
+workspace with a named arrangement. It is **additive to, and distinct from, the
+workspace bar above**: applying a preset CLEARS the dock and re-seeds it, where
+switching a workspace saves the outgoing stance and restores the incoming one.
+Presets own `legba_layout_custom`; workspaces own `legba_ws`; neither writes the
+other's key. Seven presets ship (the redesign swapped the
 former Lineage slot for the keystone Inspector and added a Zen focus mode; the
 #90 redesign added the **Workspace** intel-desk preset; P1-7 added the optional
 **Wall** preset — the default boot grid is unchanged, the operator opts in):
@@ -255,15 +289,29 @@ registrations** (P0-2f, `synthesize.ts` — see §1 Sidebar): the live
 panel kind was sidebar-unreachable; real rows stay authoritative, and a registry
 event re-runs the descriptor fetch so the synthesized groups track it.
 
-A handful of panel kinds are registered but **hidden** (`HIDDEN_KINDS` in
-`registry.ts`): they stay in the bundle so saved layouts referencing them still
-resolve, but don't surface in the sidebar (the ⌘K palette still lists them).
-The old DROP/consolidation cohorts (Global Pulse, Users, NATS-tail,
-wiring/mutations editors, dynamic dashboard, Discovery, Backfill, Targets
-Roster, Casework, Tenant View, Runtime Actor Health) were **deleted outright**
-in the S7-T2 shell reform — those kinds no longer exist. What remains hidden
-today are live panels merged under a peer or reachable via ⌘K only — see
-*Consolidated / hidden / deleted* below.
+A retired panel id must keep resolving forever — saved layouts, ⌘K deep-links,
+`#sel=` share hashes and `ui_panel_registrations` rows all persist ids. That is
+the job of the **alias table** (`panel-registry/aliases.ts`): one line per
+retired id naming its survivor and, where the survivor is tabbed, the tab that
+IS the retired surface. Three call sites resolve through it — `resolvePanel`
+(a stale `panel_id`), both panel openers in `App.tsx` (a stale kind, with the
+tab passed through `params` into `PanelProps.initialTab`), and a `fromJSON`
+pre-pass on both layout loaders that rewrites stale ids, **collapses
+duplicates** (a layout holding `v4.why` + `system.lineage` + `v4.flow` becomes
+ONE Provenance tile), and drops the unresolvable before Dockview — which has no
+per-panel fallback for an unknown component — can throw.
+
+The alias table **replaced `HIDDEN_KINDS` as the retirement mechanism**. Hiding
+cost a full registry row per retirement (component import, bundle weight,
+catalog membership, a flag to remember); at its peak eighteen of sixty-seven
+kinds existed only to be invisible. Twelve of those became alias rows; six kinds
+remain registered-but-hidden because no shipped surface renders them yet, which
+is the honest holding position until their merge train (see *Consolidated /
+hidden / deleted* below). The old DROP/consolidation cohorts (Global Pulse,
+Users, NATS-tail, wiring/mutations editors, dynamic dashboard, Discovery,
+Backfill, Targets Roster, Casework, Tenant View, Runtime Actor Health) were
+**deleted outright** in the S7-T2 shell reform — no kind and no alias, because
+nothing renders them at all.
 
 ---
 
@@ -338,6 +386,22 @@ tile that headlines the whole panel set.
   "supported" is not recorded per-chip, and the card never claims one); a
   floor-only or legacy row reads the explicit `claim-level verdict not
   recorded`. Nothing is fabricated.
+
+  **All six grounding kinds are carried verbatim** (2026-08-30,
+  `lib/citationsModel.ts`). The citation model used to recognise exactly one
+  grounding kind and *guess* about the rest, with two visible consequences: a
+  resolved window-ledger reference rendered as an amber **"Unresolved
+  citation"** warning when it was neither unresolved nor a problem, and a
+  prior-read reference was captioned `signal` and drilled to a signal that does
+  not exist. The shared vocabulary (`GroundingKind` / `GROUNDING_KINDS`,
+  `citationDrill()`, `citationKindLabel()`, `citationAnchorId()`,
+  `isGroundingCitation()`) is now read by all four consumers — `CitedProse`,
+  `CitedAssessment`, `EntityGraph` and the report download — so a chip's label,
+  its `data-cite-kind`, and its drill target all come from the kind the row
+  actually carries. Id-less evidence blocks get distinct per-marker anchors
+  instead of colliding on a shared prefix. The rule is the house rule: a kind
+  the client does not know is rendered as what it says it is, never guessed
+  into the nearest familiar one.
 
   Two selection-origin affordances ride the Inspector header: **add to export**
   (A10) drops the selected finding into the collection basket
@@ -994,6 +1058,33 @@ The evaluation and operations surfaces (mostly `personal`-only).
   redeliveries (poison messages), unacked backlog (slow consumers); polled
   every 5s. Hidden from the sidebar (rolled into System Status's Queues
   section; still ⌘K-reachable).
+- **Read Scoreboard** (`system.read_scoreboard`, added 2026-08-29 — the 56th
+  registered kind) — the one panel whose subject is **the operator**, off
+  `GET /api/v1/read-events/rollup`: reads today, morning reads, drills, a
+  per-kind table and a fourteen-day dense strip. It exists because the platform
+  receipted ~80 write tables and had never once receipted a read, so "is this
+  product actually read" was an unanswerable question. Three honesty rules ride
+  it: an **empty log renders as a stated finding** ("nothing read in the last 30
+  days"), never as a broken panel — the instrument has to be able to return bad
+  news; the **`panel_open` bias is disclosed in-surface**, because it is by far
+  the highest-volume kind and a naive "reads total" looks healthy even when the
+  morning read is never opened; and the headline scalars are the ones the
+  90-day question actually turns on (distinct days with a morning read, and
+  whether anything was drilled), not the ones that flatter.
+
+  Emission is `lib/readTelemetry.ts`, wired at **seven chokepoint surfaces**
+  rather than at call sites — panel opens, workspace switches, finding opens,
+  citation drills, lineage/provenance walks, the consult panel, and the morning
+  read itself. It batches on a 4s debounce behind a 200-event queue that drops
+  **oldest**, flushes with `sendBeacon` on `visibilitychange` / `pagehide` /
+  `beforeunload`, dedupes on a 1200 ms window keyed
+  `(kind, workspace, subject)`, and is **fail-silent in every path** — it
+  `console.debug`s and never throws, because telemetry that can break the
+  product it measures is worse than no telemetry. A failed batch is dropped
+  rather than retried: a retry would backdate a week of reading into one minute
+  and corrupt the exact number the ledger exists to produce. The server side is
+  append-only at the database (`DELETE`/`UPDATE` fail loud) over a closed
+  seven-value vocabulary — see `docs/RUNBOOK.md` §4.1.1.
 
 ### Product
 
@@ -1061,9 +1152,28 @@ Targets Roster's function lives in **Target Registry**, `registry.targets`).
 Tenant View's deletion is deliberate truth-in-labeling: multitenancy is not
 product-baked (Legba ships single-tenant; see `docs/DIRECTION.md` §0).
 
-What remains in `HIDDEN_KINDS` (`registry.ts`) today are **live** panels kept in
-the bundle — saved layouts and ⌘K deep links still resolve them — but dropped
-from the sidebar so the catalog stays ~25–30 good panels:
+**Retired into the alias table** (`panel-registry/aliases.ts`) — the kind is
+gone from the registry, and the id still resolves onto the survivor that already
+renders it, on the right tab:
+
+| Retired kind | Resolves to | Tab |
+| --- | --- | --- |
+| `v4.timeline` | `system.timeline` | Events |
+| `v4.why` | `system.provenance` | Why |
+| `system.lineage` | `system.provenance` | Lineage |
+| `v4.flow` | `system.provenance` | Flow |
+| `system.situations` | `system.provenance` | Trajectory |
+| `system.narratives` | `system.provenance` | Narratives |
+| `system.watchlist` | `system.alerts_watches` | Watches |
+| `system.alert_center` | `system.alerts_watches` | Triggers |
+| `system.escalations` | `system.alerts_watches` | Deliveries |
+| `system.deep_consult` | `system.consult` | Deep |
+| `system.entity_graph` | `system.entities` | Graph |
+| `system.notable_structure` | `system.entities` | Structure |
+
+What remains in `HIDDEN_KINDS` (`registry.ts`) are **live** panels with no
+survivor to alias onto yet — kept in the bundle so saved layouts and ⌘K deep
+links still resolve them, but dropped from the sidebar:
 
 | Hidden kind | Why | Where the function lives now |
 | --- | --- | --- |
@@ -1071,7 +1181,8 @@ from the sidebar so the catalog stays ~25–30 good panels:
 | `source.subscription_builder` | niche source-config | ⌘K |
 | `source.subscription_policy` | niche source-config | ⌘K |
 | `source.fanout` | niche explorer | ⌘K |
-| `system.stream_lag` | rolled into the at-a-glance view | **System Status** (Queues section) |
+| `system.stream_lag` | consumer-lag drill; System Status shows the rollup, not this detail | **System Status** (Queues section) + ⌘K |
+| `system.wall_movers` | the Wall carries movers as its own quadrant, so the landing mounts the WALL | **The Wall** (Q2) — the tile stays for saved layouts that hold it |
 
 (`system.report_export` left this set in A10 — no longer the Report panel's
 download twin but the collection-basket export surface, unhidden and `live`.)

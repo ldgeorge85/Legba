@@ -569,6 +569,97 @@ def max_head_age_hours(
 
 
 # ---------------------------------------------------------------------------
+# H4 — THE EVIDENCE WINDOW: the two real dates a composition's as-of line owes
+# ---------------------------------------------------------------------------
+#
+# A composition's body opens with a model-WRITTEN as-of line — "As of <date>;
+# composed from <N> ... reads, latest <time>" (``composition_prompts._composition_
+# as_of``) — that the model was, until now, told to DERIVE itself by scanning
+# every rendered block for the newest ``produced_at``. That is arithmetic over
+# a long prompt, and it drifted: an IR read claimed "latest 01:40 UTC" against
+# heads the render actually showed produced at 16-17 UTC
+# (``planning/PROOF_ROUND_2026-08-25/VERDICT_DRAFT.md``). Meanwhile no
+# composition declared its evidence WINDOW at all — only a single as-of
+# instant — so a reader had no way to see that the packet's own
+# ``window_days: 14`` (the FRAME-1 admissibility horizon) coexists with
+# 72h-trailing per-desk collection underneath it.
+#
+# :func:`evidence_window_span` computes the REAL span — oldest to newest
+# ``produced_at`` among the rows actually consumed — from the SAME ``sliced``
+# rows :func:`head_ages_stamp` already reads (zero extra queries, one source of
+# truth). :func:`render_evidence_window_directive` hands the model the answer
+# as a COPY-ONLY directive, exactly the house pattern :func:`render_coverage_
+# ledger_block` already uses for "do not re-derive this, print it": the model
+# is told which two strings its as-of line's ``<date>``/``<time>`` must be, not
+# asked to compute them.
+
+
+def evidence_window_span(
+    rows: Sequence[Mapping[str, Any]], *, now: datetime | None = None
+) -> dict[str, Any] | None:
+    """The real calendar span the consumed heads cover, or ``None``.
+
+    ``None`` when no row carries a parsable ``produced_at`` — an unmeasured
+    window and a zero-width one are different facts (the same absent-not-zero
+    discipline :func:`head_ages_stamp` already keeps), so a run with nothing
+    datable renders no evidence-window directive at all rather than a
+    fabricated "as of now".
+    """
+    dated: list[tuple[Mapping[str, Any], datetime]] = []
+    for row in rows:
+        dt = _as_datetime(row.get("produced_at"))
+        if dt is not None:
+            dated.append((row, dt))
+    if not dated:
+        return None
+    _oldest_row, oldest_dt = min(dated, key=lambda pair: pair[1])
+    _newest_row, newest_dt = max(dated, key=lambda pair: pair[1])
+    span_hours = max(0.0, (newest_dt - oldest_dt).total_seconds() / 3600.0)
+    return {
+        "oldest": oldest_dt.isoformat(),
+        "newest": newest_dt.isoformat(),
+        "oldest_human_date": human_date(oldest_dt),
+        "newest_human_date": human_date(newest_dt),
+        "newest_human_datetime": human_datetime(newest_dt),
+        "span_hours": round(span_hours, 2),
+        "heads": len(dated),
+    }
+
+
+def render_evidence_window_directive(window: Mapping[str, Any] | None) -> str:
+    """The EVIDENCE WINDOW directive block appended to a composition prompt.
+
+    Deterministic and COPY-ONLY: names the exact span the consumed heads
+    cover and the exact ``<date>``/``<time>`` values the as-of line's
+    "As of <date>; composed from <N> ... reads, latest <time>" clause must
+    print. Returns ``""`` when the window is unmeasured (:func:`evidence_
+    window_span` returned ``None``), so a run with no datable head renders
+    byte-identically to the pre-fix prompt — the as-of rule's own fallback
+    wording still applies.
+    """
+    if not window:
+        return ""
+    newest_date = window.get("newest_human_date")
+    newest_dt = window.get("newest_human_datetime")
+    oldest_date = window.get("oldest_human_date")
+    if not newest_date or not newest_dt or not oldest_date:
+        return ""
+    span_txt = (
+        newest_date
+        if oldest_date == newest_date
+        else f"{oldest_date} - {newest_date}"
+    )
+    return (
+        "\nEVIDENCE WINDOW (deterministic — this is computed from the heads "
+        "actually shown to you below; COPY it into your as-of line, never "
+        "re-derive it by scanning the blocks yourself): the consumed heads "
+        f"span {span_txt}. Your as-of line's <date> is \"{newest_date}\" and "
+        f"its <time> is \"{newest_dt}\" — these two strings are the ONLY "
+        "values the as-of line's date and time may state."
+    )
+
+
+# ---------------------------------------------------------------------------
 # FRAME-1 — the NEWEST FLOOR-PASSING head (the GB-drone class)
 # ---------------------------------------------------------------------------
 
@@ -1062,6 +1153,7 @@ __all__ = [
     "_select_periphery",
     "age_suffix",
     "build_coverage_ledger",
+    "evidence_window_span",
     "floor_fallback_suffix",
     "format_age_hours",
     "head_age_hours",
@@ -1073,6 +1165,7 @@ __all__ = [
     "read_floor_fallback_heads",
     "read_periphery_findings",
     "render_coverage_ledger_block",
+    "render_evidence_window_directive",
     "select_floor_fallback",
     "units_missing_from_basis",
 ]

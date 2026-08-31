@@ -223,14 +223,22 @@ def fold_unit_eval(
 
 
 def basis_uuids_for_verdict(verdict: Mapping[str, Any]) -> list[UUID]:
-    """The row's ``derived_from`` = the UNION of every REAL basis id across the
-    four dimensions + the composition basis id, coerced to UUID.
+    """The row's ``derived_from`` = the UNION of every REAL id the card rests on
+    or consulted: each dimension's basis, each dimension's H3 ``consumed_basis``,
+    and the composition basis id, coerced to UUID.
 
-    A dimension whose ``basis == []`` (insufficient) contributes NOTHING, and an
-    absent composition contributes nothing — so the lineage array NAMES exactly
-    the verified claims the bands rest on (ZERO dangling). An unparseable basis id
-    is skipped defensively (the T1 gather only ever returns real
-    ``analyst_outputs.id`` rows, so this is belt-and-suspenders)."""
+    A dimension whose ``basis == []`` and whose ``consumed_basis`` is empty
+    contributes NOTHING, and an absent composition contributes nothing — so the
+    lineage array NAMES exactly the verified claims involved (ZERO dangling). An
+    unparseable basis id is skipped defensively (the T1 gather only ever returns
+    real ``analyst_outputs.id`` rows, so this is belt-and-suspenders).
+
+    H3: ``consumed_basis`` is included so the one case that most needs a lineage
+    is not the one case that lacks it. A ``consumed-unbandable`` dimension
+    abstains BESIDE a composition that consumed a head for it — the abstention is
+    only falsifiable if a lineage walk can reach that head. Every id added here is
+    a real row the card read; ``basis`` (what the BAND rests on) stays untouched
+    and still empty on every insufficient dimension."""
     seen: set[UUID] = set()
     ordered: list[UUID] = []
 
@@ -246,8 +254,14 @@ def basis_uuids_for_verdict(verdict: Mapping[str, Any]) -> list[UUID]:
     dimensions = verdict.get("dimensions") or {}
     if isinstance(dimensions, Mapping):
         for dim in dimensions.values():
-            for bid in (dim.get("basis") or []) if isinstance(dim, Mapping) else []:
+            if not isinstance(dim, Mapping):
+                continue
+            for bid in dim.get("basis") or []:
                 _add(bid)
+            alignment = dim.get("basis_alignment")
+            if isinstance(alignment, Mapping):
+                for bid in alignment.get("consumed_basis") or []:
+                    _add(bid)
     comp = verdict.get("composition") or {}
     if isinstance(comp, Mapping) and comp.get("present"):
         for bid in comp.get("basis") or []:

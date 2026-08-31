@@ -14,7 +14,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { ANCHOR_KINDS } from './App'
-import { DEFAULT_BOOT_LAYOUT } from '@/lib/layoutPresets'
+import { findWorkspace, LANDING_WORKSPACE } from '@/lib/workspaces'
 
 describe('anchor panels', () => {
   it('pins nothing — every panel carries a close button', () => {
@@ -27,7 +27,8 @@ describe('anchor panels', () => {
   })
 
   it('still seeds both panels at boot (unpinned is not unopened)', () => {
-    const seeded = DEFAULT_BOOT_LAYOUT.map((p) => p.kind)
+    // The landing seed is now the Morning Read workspace (lib/workspaces.ts).
+    const seeded = findWorkspace(LANDING_WORKSPACE)!.seed.map((p) => p.kind)
     expect(seeded).toContain('system.findings')
     expect(seeded).toContain('system.inspector')
   })

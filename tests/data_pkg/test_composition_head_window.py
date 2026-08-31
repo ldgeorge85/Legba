@@ -318,6 +318,164 @@ async def test_legacy_global_meta_stamps_no_head_ages():
 
 
 # ---------------------------------------------------------------------------
+# 2b. H4 — THE EVIDENCE WINDOW: the composition's self-description, computed
+# ---------------------------------------------------------------------------
+#
+# ``planning/PROOF_ROUND_2026-08-25/VERDICT_DRAFT.md``: no composition declared
+# its evidence WINDOW (only a single as-of instant), and IR's stamp was
+# self-inconsistent — it claimed "latest 01:40 UTC" against heads the render
+# actually showed produced at 16-17 UTC, because the as-of line's date/time
+# was the MODEL'S OWN arithmetic over every rendered block. These tests prove
+# the replacement is computed, real, and — the load-bearing claim — that the
+# stamped "latest" always equals the TRUE max produced_at among the heads
+# actually consumed, never a value the model asserts.
+
+
+def test_evidence_window_span_computes_the_real_oldest_and_newest():
+    rows = [
+        _row(analyst_id="escalation", age_hours=42.0),   # oldest
+        _row(analyst_id="energy_security", age_hours=6.0),  # newest
+        _row(analyst_id="military_posture", age_hours=20.0),
+    ]
+    window = cw.evidence_window_span(rows, now=NOW)
+    assert window is not None
+    assert window["newest"] == (NOW - timedelta(hours=6.0)).isoformat()
+    assert window["oldest"] == (NOW - timedelta(hours=42.0)).isoformat()
+    assert window["newest_human_datetime"] == cw.human_datetime(
+        (NOW - timedelta(hours=6.0)).isoformat()
+    )
+    assert window["heads"] == 3
+    assert window["span_hours"] == pytest.approx(36.0)
+
+
+def test_evidence_window_span_is_absent_not_zero_when_nothing_is_datable():
+    assert cw.evidence_window_span([{"produced_at": None}], now=NOW) is None
+    assert cw.evidence_window_span([], now=NOW) is None
+
+
+def test_evidence_window_span_single_head_has_zero_span_and_equal_dates():
+    rows = [_row(analyst_id="escalation", age_hours=4.0)]
+    window = cw.evidence_window_span(rows, now=NOW)
+    assert window["oldest_human_date"] == window["newest_human_date"]
+    assert window["span_hours"] == 0.0
+
+
+def test_render_evidence_window_directive_is_copy_only_and_names_the_span():
+    rows = [
+        _row(analyst_id="escalation", age_hours=79.0),
+        _row(analyst_id="energy_security", age_hours=6.0),
+    ]
+    window = cw.evidence_window_span(rows, now=NOW)
+    block = cw.render_evidence_window_directive(window)
+    assert "EVIDENCE WINDOW" in block
+    assert "COPY it into your as-of line" in block
+    assert window["newest_human_date"] in block
+    assert window["oldest_human_date"] in block
+    assert window["newest_human_datetime"] in block
+    # A two-date span (not the same calendar day) states BOTH ends.
+    assert window["oldest_human_date"] != window["newest_human_date"]
+    assert f"{window['oldest_human_date']} - {window['newest_human_date']}" in block
+
+
+def test_render_evidence_window_directive_single_day_names_one_date():
+    rows = [_row(analyst_id="escalation", age_hours=2.0)]
+    window = cw.evidence_window_span(rows, now=NOW)
+    block = cw.render_evidence_window_directive(window)
+    # Same-day span: no "X - X" degenerate range in the rendered text.
+    assert f"{window['newest_human_date']} - {window['newest_human_date']}" not in block
+
+
+def test_render_evidence_window_directive_empty_when_unmeasured():
+    assert cw.render_evidence_window_directive(None) == ""
+
+
+@pytest.mark.asyncio
+async def test_run_stamps_the_evidence_window_with_the_true_max_consumed_head_time():
+    """THE load-bearing proof: synthetic trace rows at staggered ages
+    (simulating a composition that consumed heads spanning its cycle), and the
+    stamped "newest" is asserted to equal the actual max ``produced_at`` among
+    the consumed (``sliced``) rows — never a value the model could assert on
+    its own. This is the defect class the IR stamp exhibited, closed at the
+    data layer rather than trusted to the model's arithmetic."""
+    llm = _CannedLLM()
+    rows = [
+        _row(analyst_id="leadership_transition", age_hours=79.0, horizon=336),
+        _row(analyst_id="escalation", age_hours=41.0, horizon=336),
+        _row(analyst_id="energy_security", age_hours=6.0, horizon=336),  # newest
+        _row(analyst_id="military_posture", age_hours=23.0, horizon=336),
+    ]
+    # The true max produced_at, computed independently of the module under
+    # test — a straight Python max() over the same rows' produced_at strings
+    # (ISO-8601 with a fixed-width fractionless offset sorts lexicographically
+    # in date order, so string max() and datetime max() agree here).
+    true_newest_iso = max(r["produced_at"] for r in rows)
+    result = await synth.run_method(rows, dict(_COUNTRY_OPTS), _Deps(llm))
+    window = result.finding.data["evidence_window"]
+    assert window["newest"] == true_newest_iso
+    assert window["newest"] == (NOW - timedelta(hours=6.0)).isoformat()
+    assert window["oldest"] == (NOW - timedelta(hours=79.0)).isoformat()
+    steps = {s.get("phase") for s in result.intermediate_steps}
+    assert "head_ages" in steps  # unchanged sibling stamp still fires
+
+
+@pytest.mark.asyncio
+async def test_run_renders_the_evidence_window_directive_with_the_true_dates():
+    llm = _CannedLLM()
+    rows = [
+        _row(analyst_id="escalation", age_hours=79.0, horizon=336),
+        _row(analyst_id="energy_security", age_hours=6.0, horizon=336),
+    ]
+    await synth.run_method(rows, dict(_COUNTRY_OPTS), _Deps(llm))
+    prompt = _user_prompt_of(llm)
+    assert "EVIDENCE WINDOW" in prompt
+    newest_human = cw.human_datetime((NOW - timedelta(hours=6.0)).isoformat())
+    assert newest_human in prompt
+    assert f'<time> is "{newest_human}"' in prompt
+
+
+@pytest.mark.asyncio
+async def test_run_without_a_datable_row_stamps_no_evidence_window():
+    """An unparseable-produced_at slice renders no directive and stamps no
+    envelope field — absent, never a fabricated "as of now" (mirrors the
+    ``head_ages`` absent-not-zero discipline this train extends)."""
+    llm = _CannedLLM()
+    rows = [
+        _row(analyst_id="escalation", age_hours=4.0, extra={"produced_at": None}),
+    ]
+    result = await synth.run_method(rows, dict(_COUNTRY_OPTS), _Deps(llm))
+    assert "evidence_window" not in result.finding.data
+    prompt = _user_prompt_of(llm)
+    assert "EVIDENCE WINDOW" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_legacy_global_meta_stamps_no_evidence_window():
+    """The legacy global meta stays byte-for-byte, same as ``head_ages``."""
+    llm = _CannedLLM()
+    result = await synth.run_method(
+        [_row(analyst_id="country_assessor", age_hours=42.0)],
+        {"analyst_id": "analyst_meta_synthesizer"},
+        _Deps(llm),
+    )
+    assert "evidence_window" not in result.finding.data
+
+
+def test_as_of_rule_prefers_the_evidence_window_across_every_composition_variant():
+    """The prompt-side half: every composition system prompt tells the model
+    to COPY the EVIDENCE WINDOW block's date/time, and only falls back to
+    scanning the blocks itself when that block is absent."""
+    for prompt in (
+        synth._COMPOSITION_SYSTEM,
+        synth._REGION_COMPOSITION_SYSTEM,
+        synth._WORLD_OVER_REGIONS_SYSTEM,
+        synth._THEMATIC_COMPOSITION_SYSTEM,
+    ):
+        assert "EVIDENCE WINDOW" in prompt
+        assert "copy them verbatim, never recompute them" in prompt
+        assert "MOST RECENT produced_at printed on a shown block" in prompt
+
+
+# ---------------------------------------------------------------------------
 # 3. THE HEAD-WINDOW BLOCK — horizon, staleness duty, coverage ledger
 # ---------------------------------------------------------------------------
 

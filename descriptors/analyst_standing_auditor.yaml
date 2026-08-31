@@ -1,0 +1,185 @@
+# Standing External Auditor (D5) — the platform's only STANDING external check.
+#
+# THE GAP. ~84% of this fleet's LLM calls are the system watching itself:
+# faithfulness judges grading our prose against our own citations, calibration
+# trackers scoring our own bands, lineage sweeps walking our own derived_from.
+# Every one is a CONSISTENCY check, and not one of them can see a tower that is
+# internally immaculate and factually WRONG about the world. The only external
+# contact the platform has ever had is the episodic operator correctness round —
+# expensive, rare, and by construction unable to notice drift between rounds.
+#
+# WHAT THIS IS. A `deterministic`-kind META analyst (sub_handler=standing_auditor)
+# that runs ONCE daily and, on the $0 core plane:
+#   1. reads the live world read (world_assessor head) + one head per desk
+#      (country_composition / region_composition) inside `window_hours`;
+#   2. selects `max_desks` desks by a DATE-SEEDED ROTATION over a
+#      (severity, severity_delta, desk) pre-sort — pure, replayable, no RNG. The
+#      rotation visits every desk on a fixed period, so a permanently-critical
+#      desk cannot monopolize the slots and starve the quiet ones (the same
+#      starvation the alert plane's per-kind budget cap had to fix);
+#   3. lifts up to `max_claims_per_head` CHECKABLE world-claims from each
+#      (concrete states of the world — never forecasts, judgements or coverage
+#      statements) via one bounded core-plane call per head;
+#   4. checks each claim against EXTERNAL search through the `web_access` PACK
+#      TOOL, and judges SUPPORTED / CONTRADICTED / NOT_FOUND with the evidence
+#      quoted and the source URL cited;
+#   5. writes ONE kind=critique row per claim, plus a kind=alert row when a
+#      CONTRADICTED verdict lands on a high/critical standing severity;
+#   6. upserts a HEARTBEAT row so the auditor is itself watchable.
+#
+# WHY `deterministic` AND NOT `inline_target`. An llm_planner GATHER loop would
+# let the model choose what to audit — an auditor whose sample is model-chosen
+# can quietly stop auditing the uncomfortable desks, and its verdicts could never
+# be replayed. So the SAMPLE, the CAPS, the ROTATION, the VERDICT VOCABULARY and
+# the WRITES are code; the model is a bounded instrument used exactly twice per
+# head. Its verdict is then RE-VALIDATED in code: a source URL that was not in
+# the search results is dropped, and a SUPPORTED/CONTRADICTED verdict left with
+# no surviving URL is demoted to NOT_FOUND. An external auditor that can itself
+# hallucinate a source is worse than none.
+#
+# CRITIQUE PLANE — INDEPENDENT, NOT A FAITHFULNESS GAP. These rows use the
+# existing critique contract (analyzed_output_id + overall_score) so the
+# finding-critique join and the reads-API verification surface work unchanged,
+# but they are a DIFFERENT KIND (the structural_claims precedent): their own
+# population stamp (EXTERNAL_AUDIT_PIPELINE_VERSION), and a title prefix
+# "External audit" that can never be caught by the `title LIKE 'Faithfulness
+# verify%'` pin every faithfulness consumer keys on. JUDGE_PIPELINE_VERSION is
+# NOT touched — pooling external verdicts into the faithfulness population would
+# describe a population that never existed.
+#
+# overall_score is COMPUTE-AND-SHOW: 1.0 for SUPPORTED and NOT_FOUND, 0.0 only
+# for CONTRADICTED. `effective_confidence = min(confidence, overall_score)` is a
+# faithfulness-path gate and an external audit must not silently reach into it —
+# a NOT_FOUND (the common case, and only ever a statement about the SEARCH)
+# would otherwise quietly demote a perfectly sound read.
+#
+# THE HEARTBEAT, AND WHY IT IS NOT `analyst_traces`. A run whose search provider
+# is unbound, whose LLM never resolved, or which found no heads still ends
+# `status='success'` — so a trace-based liveness read shows a dead auditor as a
+# healthy one. That is exactly the shape of the judge outage that went unnoticed
+# for three days: analysts kept running, the deficit was in the GRADER, and
+# nothing gauged the grader. So every run — including one that audited nothing —
+# upserts a row into the EXISTING `alert_trigger_watermarks` table (migration
+# 0091) as trigger_class='external_audit', watermark_key='_heartbeat' (the
+# claim_watch precedent — no new table), carrying ran_at, heads sampled,
+# claims_checked (UNCHECKED verdicts deliberately EXCLUDED, so a dead search
+# plane cannot look busy), the verdict mix, and an explicit degraded_reason.
+# GET /api/v1/v3/system/external-audit reads it.
+#
+# DEGRADE, DON'T DIE. A missing deps.pg_pool RAISES (an audit that cannot read
+# the tower must not emit a clean-looking zero). Every other gap — no LLM, no
+# search binding, no heads — completes the run and writes a heartbeat naming the
+# gap. A crash is invisible to everything but a log; a heartbeat that says "I ran
+# and audited nothing because the search provider is unbound" is actionable.
+#
+# ALERT PLANE. The handler writes the kind='alert' ROW and does NO outward
+# fan-out — the page is the alert plane's own budgeted step. INTEGRATION POINT:
+# when the `alert-suppression-guard` branch (fleet-wide daily page budget +
+# per-trigger-class diversity cap + FRAME-3 steady-state suppression) lands, give
+# trigger_class 'external_audit' a slot in that budget's kind vocabulary and let
+# apply_daily_page_budget rank an external-audit contradiction against the other
+# classes. Nothing in the handler changes: the row already carries trigger_class
+# in its tags and in routing_hint.
+#
+# VOLUME. ONE global sweep per day. Worst case ~10 core-plane calls (1 extraction
+# per sampled head + 1 verdict per audited claim) and ~6 web_search invocations.
+# A rounding error against the fleet, and that is the point — the value here is
+# CONTINUITY, not volume.
+#
+# State: draft in-tree. Registration
+# (scripts/bringup_register_standing_auditor.py) and the operator's activate flip
+# are DEPLOY steps. A NEW deterministic sub-handler needs a REGISTRY REBUILD +
+# runtime recreate to activate. The `web_access` action pack must already be
+# registered, and its web_search provider bound, or the auditor runs and reports
+# an unaudited heartbeat (loudly, on purpose).
+
+identity:
+  id: standing_auditor
+  name: Standing External Auditor
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: d5_standing_audit
+
+subscription:
+  # No `targets` block => META analyst: ONE global sweep per cadence tick. The
+  # handler reads the tower heads directly via deps.pg_pool and ignores the
+  # materialized input slice (the composition_lineage_sweep precedent).
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: standing_auditor
+  # X-1 declared knobs (see handler_options.HANDLER_OPTIONS['standing_auditor']).
+  # Every one bounds a COST — heads read, core-plane calls, external searches —
+  # so an operator can widen or narrow the daily audit with a descriptor PUT and
+  # no code edit. Values below are the in-source defaults, stated explicitly so
+  # the descriptor documents the shipped volume rather than implying it.
+  options:
+    window_hours: 48
+    max_desks: 3
+    max_claims_per_head: 2
+    max_claims_total: 6
+    search_limit: 5
+  llm:
+    # THE $0 CORE PLANE, and nothing else. The deterministic deps-builder's
+    # shared _wire_deterministic_llm hard-refuses an Anthropic component for any
+    # deterministic sub-handler, so this ref cannot be repointed onto the billed
+    # plane by a descriptor PUT — consult / deep_consult remain the only
+    # sanctioned Anthropic users. Both legs (claim extraction, verdict) run here.
+    temperature: 0.0        # an auditor is not a writer; reproducibility wins
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # Output cap. The vLLM handler drops max_tokens from the wire by default (a
+    # self-hosted server serves its own budget), so this is the hosted-endpoint
+    # safety net rather than the live control; the handler's own per-call caps
+    # (EXTRACT_MAX_TOKENS / JUDGE_MAX_TOKENS) are what actually bound the reply.
+    max_tokens: 1200
+  # Per-day CORE-plane token cap (24h bucket). Sized well above the worst case
+  # (~10 bounded calls) so a legitimately long world read never truncates, and
+  # far below anything that could crowd the shared gateway.
+  budget_tokens_per_day: 120000
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # Daily at 05:12 UTC — AFTER the 03:xx deterministic maintenance block
+  # (calibration_tracking :20, unit_correctness_scorer :30) and after the
+  # overnight compositions have landed their heads, so the auditor reads a
+  # settled tower rather than racing it. Its own minute, so it never co-fires.
+  fallback_schedule: "12 5 * * *"
+  # 22h — below the 24h interval, so an organic daily tick is never swallowed by
+  # its own cooldown (the alert_trigger_scan 0.8x ratio).
+  cooldown_seconds: 79200
+
+# THE AGENCY GRANT. `web_access` is the ONLY way this analyst reaches outside the
+# substrate: there is no ad-hoc HTTP anywhere in its path and no httpx import in
+# its module. Granting the pack does NOT activate search — the three-way gate
+# still applies (this META path self-allows under GLOBAL_SCOPE, the same as the
+# META GATHER path), the web_search ToolSpec still needs its provider stack_ref
+# bound, and the SSRF egress guard still has to permit the engine host. Every one
+# of those gaps fails LOUDLY, and lands in the heartbeat's degraded_reason rather
+# than as a silent empty result.
+action_packs:
+  - pack_id: web_access
+
+# No output bindings: the run summary is TRACE_ONLY (audited in analyst_traces +
+# mirrored into the heartbeat row); the REAL product — the kind=critique verdict
+# rows and the kind=alert contradiction rows — is side-written by the handler
+# through write_analyst_output with its own kinds. No outward fan-out from here.
+outputs: []

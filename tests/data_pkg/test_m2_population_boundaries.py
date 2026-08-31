@@ -164,17 +164,26 @@ def test_scorecard_route_selects_the_split_key_from_the_verification_block():
 
 
 def test_unit_scorer_faithfulness_sql_filters_and_groups_on_the_split_key():
+    """2026-08-29 — the filter is now the lineage-declared POOL rather than the
+    single head stamp (``judge_pipeline_version.poolable_stamps``), so the
+    parameter is a ``text[]`` and the complement is ``NOT (... = ANY(...))``.
+    The PROPERTY this test has always guarded is unchanged and is what is
+    asserted below: the headline is filtered to one declared population, the
+    priors are grouped so each excluded pipeline keeps its own mean, and the
+    excluded counter reads the exact complement of the headline."""
     from legba.data.analysts.deterministic_handlers import (
         unit_correctness_scorer as ucs,
     )
 
-    # The headline mean is FILTERED to one pipeline...
-    assert "judge_pipeline_version' = $3" in ucs._FAITHFULNESS_SQL
+    # The headline mean is FILTERED to one declared population...
+    assert "judge_pipeline_version' = ANY($3::text[])" in ucs._FAITHFULNESS_SQL
     # ...and the priors are GROUPED by it, so each gets its own mean rather than
     # collapsing into a single excluded count.
     assert "GROUP BY 1" in ucs._FAITHFULNESS_PRIORS_SQL
     assert "avg(confidence)" in ucs._FAITHFULNESS_PRIORS_SQL
     # The excluded counter and the priors read the SAME complement, so the two
-    # can be reconciled by a reader.
+    # can be reconciled by a reader. COALESCE keeps a pre-stamp NULL row counted
+    # as excluded instead of vanishing into three-valued logic.
     for sql in (ucs._FAITHFULNESS_EXCLUDED_SQL, ucs._FAITHFULNESS_PRIORS_SQL):
-        assert "COALESCE(" in sql and "<> $3" in sql
+        assert "COALESCE(" in sql and "= ANY($3::text[])" in sql
+        assert "NOT (COALESCE(" in sql

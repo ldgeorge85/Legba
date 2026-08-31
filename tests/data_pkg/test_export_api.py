@@ -47,6 +47,8 @@ from legba.data.registry.export_api import (
     build_export_router,
     render_markdown,
 )
+from legba.data.analysts import unit_grounding as ug
+from legba.data.provenance.models import FindingPayload
 from legba.data.registry.signing import SigningIdentity
 from legba.data.registry.stack import StackRegistry
 from legba.data.registry.vocabulary_cache import VocabularyCache
@@ -125,6 +127,52 @@ def _golden_items() -> list[dict]:
                     "canonical_url": "https://state.example/deny",
                     "resolved": False,
                 },
+                # 2026-08-30 — the kinds the signal_id filter used to strip.
+                # A prior read HAS a drill target (an analyst_outputs uuid);
+                # the four synthetic blocks have none by design, so none is
+                # named for them rather than one being minted.
+                {
+                    "marker": "[3]",
+                    "citation_kind": "prior_read",
+                    "resolves_against": "data.citations",
+                    "marker_class": "desk_grounding",
+                    "signal_id": None,
+                    "ref_id": "dddd",
+                    "title": "Ruritania — morning read, 18 July",
+                    "canonical_url": None,
+                    "resolved": True,
+                    "resolution_source": "in_row",
+                    "archived": False,
+                    "archive_sha256": None,
+                },
+                {
+                    "marker": "[4]",
+                    "citation_kind": "window_ledger",
+                    "resolves_against": "data.citations",
+                    "marker_class": "desk_grounding",
+                    "signal_id": None,
+                    "ref_id": None,
+                    "title": "Window ledger (this unit's trailing 14-day record)",
+                    "canonical_url": None,
+                    "resolved": True,
+                    "resolution_source": "in_row",
+                    "archived": False,
+                    "archive_sha256": None,
+                },
+                {
+                    "marker": "[[ref:5]]",
+                    "citation_kind": "finding",
+                    "resolves_against": "analyst_outputs",
+                    "marker_class": None,
+                    "signal_id": None,
+                    "ref_id": "eeee",
+                    "title": "Ruritania unit read — 20 July",
+                    "canonical_url": None,
+                    "resolved": True,
+                    "resolution_source": "in_row",
+                    "archived": False,
+                    "archive_sha256": None,
+                },
             ],
             "verify_state": "faithfulness=0.67",
             "verify_flags": {"hard_fail": 1, "soft_fail": 1},
@@ -193,6 +241,9 @@ Army units moved toward the capital overnight [1].
 
 - [1] Troop columns filmed on Route 9 — https://example.org/route9 — evidence preserved, sha256:d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0
 - [2] Official denial — https://state.example/deny *(signal no longer in substrate; stored citation shown)*
+- [3] Ruritania — morning read, 18 July — *desk grounding · prior read dddd; resolves against data.citations*
+- [4] Window ledger (this unit's trailing 14-day record) — *desk grounding · window ledger; resolves against data.citations*
+- [[ref:5]] Ruritania unit read — 20 July — *sub-claim finding eeee; resolves against analyst_outputs*
 
 ---
 
@@ -358,9 +409,21 @@ async def _insert_finding(
 ) -> UUID:
     row_id = uuid4()
     ts = datetime.now(timezone.utc)
-    data: dict = {}
-    if citations is not None:
-        data["citations"] = citations
+    # THE REAL BINDING PATH. `analyst_outputs.data` holds the whole
+    # `payload.model_dump()` (provenance.writes), and `FindingPayload` has its
+    # OWN field named `data` — so a citation list written as
+    # `finding.data['citations']` lands DOUBLE-nested at
+    # `data->'data'->'citations'`. This fixture used to insert the flat shape
+    # by hand, which is why it never caught the export reading the wrong level
+    # (every real exported finding printed "no citations recorded"). Built
+    # through the real payload model so the nesting can never drift out of the
+    # fixture again.
+    data: dict = FindingPayload(
+        title=title,
+        body=body,
+        confidence=confidence,
+        data={"citations": citations} if citations is not None else {},
+    ).model_dump(mode="json")
     async with pg_store.acquire() as conn:
         await conn.execute(
             """
@@ -550,16 +613,26 @@ async def test_export_mixed_finding_and_journal_json(export_app, client: AsyncCl
     c1, c2 = f["citations"]
     assert c1 == {
         "marker": "[1]",
+        # 2026-08-30 — every exported citation declares its kind and the set
+        # its ordinal indexes, so a reader never has to infer "signal" from
+        # the presence of `signal_id` (that inference IS the defect this
+        # train closed for the four non-signal kinds).
+        "citation_kind": "signal",
+        "resolves_against": "signals",
+        "marker_class": None,
         "signal_id": str(sig_id),
+        "ref_id": None,
         "title": "Troop columns filmed on Route 9",
         "canonical_url": "https://example.org/route9",
         "resolved": True,
+        "resolution_source": "live",
         # P2-1 additive evidence-archive surface — this signal carries no
         # object_ref, so both stay honestly empty (never fabricated).
         "archived": False,
         "archive_sha256": None,
     }
     assert c2["resolved"] is False
+    assert c2["resolution_source"] == "stored"
     assert c2["title"] == "stored ghost title"
     assert c2["canonical_url"] == "https://stored.example/ghost"
     assert c2["archived"] is False and c2["archive_sha256"] is None
@@ -586,6 +659,274 @@ async def test_export_mixed_finding_and_journal_json(export_app, client: AsyncCl
     assert j["verify_state"] == (
         "unverified — no faithfulness verdict recorded for this journal entry"
     )
+
+
+def _grounding_citations(start: int) -> list[dict]:
+    """The five DESK GROUNDING citations, built by the REAL producer
+    (``unit_grounding.citation_for_block``) rather than hand-shaped — so this
+    test cannot pass against a citation shape the desk does not actually
+    write, and gains the ``marker_class`` mark automatically the moment the
+    producer stamps it."""
+    rows = [
+        {
+            ug.UNIT_GROUNDING_ROW_KEY: ug.GROUNDING_PRIOR_READ,
+            "id": str(uuid4()),
+            "title": "Ruritania — morning read, 18 July",
+            "body": "BLUF: tension flat versus the prior sweep.",
+            "analyst_id": "country_assessor",
+            "produced_at": "2026-07-18T06:00:00+00:00",
+            "age_hours": 48.0,
+        },
+        {
+            ug.UNIT_GROUNDING_ROW_KEY: ug.GROUNDING_WINDOW_LEDGER,
+            ug.GROUNDING_PAYLOAD_KEY: [
+                {
+                    "finding_id": str(uuid4()),
+                    "analyst_id": "escalation",
+                    "severity": "elevated",
+                    "severity_rank": 3,
+                    "title": "Ruritania — dated fortnight record",
+                    "read_date": "16 July 2026",
+                    "day": "2026-07-16",
+                    "produced_at": "2026-07-16T07:00:00+00:00",
+                },
+            ],
+        },
+        {
+            ug.UNIT_GROUNDING_ROW_KEY: ug.GROUNDING_SITUATIONS,
+            ug.GROUNDING_PAYLOAD_KEY: [
+                {
+                    "situation_id": str(uuid4()),
+                    "name": "Ruritania — open frame",
+                    "status": "active",
+                    "intensity_score": 52.7,
+                    "event_count": 31,
+                    "last_event_at": "2026-07-17T12:00:00+00:00",
+                    "age_days": 30.2,
+                },
+            ],
+        },
+        {
+            ug.UNIT_GROUNDING_ROW_KEY: ug.GROUNDING_BASELINE,
+            ug.GROUNDING_PAYLOAD_KEY: [
+                {
+                    "desk_id": "country_g20_RR",
+                    "metric": "signal_volume_24h",
+                    "expected": 41.2,
+                    "center_median": 39.0,
+                    "band_low": 21.4,
+                    "band_high": 61.0,
+                    "current": 118.0,
+                    "deviation": "above",
+                    "deviation_sigma": 3.7,
+                    "n_sigma": 2.0,
+                    "baseline_days": 28,
+                    "sample_days": 26,
+                    "active_days": 26,
+                    "computed_at": "2026-07-18T06:00:00+00:00",
+                },
+            ],
+        },
+        {
+            ug.UNIT_GROUNDING_ROW_KEY: ug.GROUNDING_QUESTIONS,
+            ug.GROUNDING_PAYLOAD_KEY: [
+                {
+                    "question_id": str(uuid4()),
+                    "question": "Who controls the Route 9 corridor?",
+                    "asked_at": "2026-07-12T19:00:00+00:00",
+                    "age_days": 6.8,
+                    "analyst_id": "country_assessor",
+                },
+            ],
+        },
+    ]
+    out = []
+    for offset, row in enumerate(rows):
+        cite = ug.citation_for_block(row, start + offset)
+        assert cite is not None, row[ug.UNIT_GROUNDING_ROW_KEY]
+        out.append(cite)
+    return out
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_export_carries_every_citation_kind(export_app, client: AsyncClient):
+    """THE 2026-08-30 CONSUMER REPAIR.
+
+    A finding's ``data['citations']`` holds THREE shapes and only one of them
+    carries a ``signal_id``: the unit signal ref, the composition sub-claim ref
+    (``ref_kind='finding'``, ``ref_id``), and the five DESK GROUNDING blocks
+    (four of which carry no id at all). The export kept only the first,
+    so a composition report exported as uncited and a unit read lost every
+    block the verify plane had scored SUPPORTED — and, because the reader also
+    looked at the wrong nesting level, a REAL row lost all of them.
+
+    Every kind must now survive with its ``citation_kind`` and its
+    ``resolves_against`` declared, and the "no citations" line must appear
+    only when there genuinely are none.
+    """
+    _, _, pg_store = export_app
+
+    sig_id = await _insert_signal(
+        pg_store, title="Route 9 column", canonical_url="https://example.org/r9",
+    )
+    sub_id = uuid4()
+    citations = [
+        {"marker": "[1]", "signal_id": str(sig_id), "title": "stored title"},
+        # The composition convention — no signal_id, so it was stripped too.
+        {
+            "marker": "[[ref:2]]",
+            "ordinal": 2,
+            "ref_id": str(sub_id),
+            "ref_kind": "finding",
+            "title": "Ruritania unit read — 18 July",
+            "evidence_text": "Units moved overnight.",
+        },
+        *_grounding_citations(3),
+    ]
+    finding_id = await _insert_finding(
+        pg_store,
+        title="Every citation kind",
+        body="Claim [1]. Sub-claim [[ref:2]]. Prior [3]. Ledger [4].",
+        citations=citations,
+    )
+
+    resp = await client.post(
+        "/api/v1/v3/export",
+        json={"items": [{"kind": "finding", "id": str(finding_id)}], "format": "json"},
+    )
+    assert resp.status_code == 200, resp.text
+    exported = resp.json()["items"][0]["citations"]
+
+    # Nothing dropped: 1 signal + 1 sub-claim + all five grounding blocks.
+    assert len(exported) == 7
+    assert [c["citation_kind"] for c in exported] == [
+        "signal",
+        "finding",
+        "prior_read",
+        "window_ledger",
+        "situation_register",
+        "desk_baseline",
+        "open_questions",
+    ]
+    # Every entry names the SET its ordinal indexes — no reader has to infer
+    # the kind from which id field happens to be populated.
+    by_kind = {c["citation_kind"]: c for c in exported}
+    assert by_kind["signal"]["resolves_against"] == "signals"
+    assert by_kind["signal"]["resolved"] is True
+    assert by_kind["signal"]["resolution_source"] == "live"
+    assert by_kind["signal"]["title"] == "Route 9 column"  # live beats stored
+    assert by_kind["finding"]["resolves_against"] == "analyst_outputs"
+    assert by_kind["finding"]["ref_id"] == str(sub_id)
+    for kind in (
+        "prior_read", "window_ledger", "situation_register",
+        "desk_baseline", "open_questions",
+    ):
+        entry = by_kind[kind]
+        assert entry["resolves_against"] == "data.citations", kind
+        assert entry["resolution_source"] == "in_row", kind
+        assert entry["signal_id"] is None, kind
+        assert entry["title"], kind
+    # Only the prior read has a real drill target; the four synthetic blocks
+    # carry none and NONE is minted for them.
+    assert by_kind["prior_read"]["ref_id"]
+    for kind in ("window_ledger", "situation_register", "desk_baseline", "open_questions"):
+        assert by_kind[kind]["ref_id"] is None, kind
+
+    # THE COUPLING, end to end (task #78 phase B). `resolves_against` in the
+    # exported document is the value the PRODUCER wrote, not one this module
+    # re-derived from `ref_kind` — the citations above came out of the real
+    # `unit_grounding.citation_for_block`. The signal and sub-claim refs carry
+    # no `marker_class`, and none is invented for them.
+    for kind in (
+        "prior_read", "window_ledger", "situation_register",
+        "desk_baseline", "open_questions",
+    ):
+        produced = next(
+            c for c in citations
+            if c.get("ref_kind") == kind
+        )
+        assert produced["marker_class"] == "desk_grounding", kind
+        assert by_kind[kind]["marker_class"] == produced["marker_class"], kind
+        assert by_kind[kind]["resolves_against"] == produced["resolves_against"], kind
+    assert by_kind["signal"]["marker_class"] is None
+    assert by_kind["finding"]["marker_class"] is None
+
+    # -- the markdown half: kind + target stated, and no false "no citations" --
+    resp_md = await client.post(
+        "/api/v1/v3/export",
+        json={
+            "items": [{"kind": "finding", "id": str(finding_id)}],
+            "format": "markdown",
+        },
+    )
+    assert resp_md.status_code == 200
+    md = resp_md.text
+    assert "no citations recorded on this row" not in md
+    assert "- [1] Route 9 column — https://example.org/r9" in md
+    assert f"*sub-claim finding {sub_id}; resolves against analyst_outputs*" in md
+    assert "*desk grounding · prior read" in md
+    assert "*desk grounding · window ledger; resolves against data.citations*" in md
+    assert "*desk grounding · open questions; resolves against data.citations*" in md
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_export_classifies_pre_stamp_grounding_rows(export_app, client: AsyncClient):
+    """The fallback is the load-bearing path, not a courtesy.
+
+    `marker_class` / `resolves_against` arrive with the `2026-08-30/1` stamp,
+    so EVERY row already in the substrate lacks them. Classification has to
+    work off the canonical `GROUNDING_REF_KINDS` registry for those, or the
+    repair only fixes findings that do not exist yet."""
+    _, _, pg_store = export_app
+    citations = [
+        {k: v for k, v in c.items() if k not in ("marker_class", "resolves_against")}
+        for c in _grounding_citations(1)
+    ]
+    assert all("marker_class" not in c for c in citations)
+    finding_id = await _insert_finding(
+        pg_store, title="Pre-stamp read", body="Prior [1].", citations=citations,
+    )
+    resp = await client.post(
+        "/api/v1/v3/export",
+        json={"items": [{"kind": "finding", "id": str(finding_id)}], "format": "json"},
+    )
+    assert resp.status_code == 200, resp.text
+    exported = resp.json()["items"][0]["citations"]
+    assert [c["citation_kind"] for c in exported] == [
+        "prior_read", "window_ledger", "situation_register",
+        "desk_baseline", "open_questions",
+    ]
+    # The mark is not fabricated for a row that never carried it; the
+    # resolution target falls back to the one the kind means.
+    assert all(c["marker_class"] is None for c in exported)
+    assert all(c["resolves_against"] == "data.citations" for c in exported)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_export_uncited_finding_states_it_without_a_false_filter(
+    export_app, client: AsyncClient,
+):
+    """The honest empty case survives the repair: a row with NO citations at
+    all still says so. What changed is that the line is now reachable ONLY
+    when the row is genuinely uncited — it used to fire for every finding
+    whose citations were all grounding blocks, and (via the nesting bug) for
+    every real finding regardless."""
+    _, _, pg_store = export_app
+    finding_id = await _insert_finding(
+        pg_store, title="Uncited read", body="No markers here.",
+    )
+    resp = await client.post(
+        "/api/v1/v3/export",
+        json={
+            "items": [{"kind": "finding", "id": str(finding_id)}],
+            "format": "markdown",
+        },
+    )
+    assert resp.status_code == 200
+    assert "*(no citations recorded on this row)*" in resp.text
 
 
 @pytest.mark.integration

@@ -21,7 +21,7 @@
  */
 import { useState } from 'react'
 import type { PanelProps } from '@/types'
-import { PanelTabStrip, type PanelTabDef } from '@/components/PanelTabs'
+import { initialTab, PanelTabStrip, type PanelTabDef } from '@/components/PanelTabs'
 import { PanelTierProvider } from '@/components/PanelTierContext'
 import { PanelEmbedProvider } from '@/components/PanelEmbedContext'
 import WatchlistPanel from '@/panels/system/Watchlist'
@@ -37,7 +37,9 @@ const TABS: readonly PanelTabDef[] = [
 ]
 
 export default function AlertsWatchesMerged(props: PanelProps) {
-  const [tab, setTab] = useState<Tab>('watches')
+  // system.watchlist / system.alert_center / system.escalations retired onto
+  // the watches / triggers / deliveries tabs (aliases.ts).
+  const [tab, setTab] = useState<Tab>(() => initialTab(props.initialTab, TABS, 'watches') as Tab)
   return (
     <div className="flex h-full w-full flex-col bg-surf-2">
       <div className="flex items-center gap-2 border-b border-line bg-surf-3 px-density py-1.5">

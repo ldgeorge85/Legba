@@ -42,6 +42,24 @@ from legba.data.analysts.deterministic_handlers import fact_contention_arbiter a
 NOW = datetime(2026, 7, 24, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _frozen_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the arbiter's clock to :data:`NOW` — the instant every fixture row is
+    dated from.
+
+    The full-pass tests drive ``_run_arbiter``, which reads ``_now()`` ONCE and
+    threads it into ``_score_group``. ``R`` is an exponential half-life decay
+    (``HALFLIFE_DAYS`` = 30) on the row ages, so against a WALL-CLOCK now the
+    fixture scores shrink every day the suite is not run: the weight-decisive
+    pair scores 0.35 at age 0 but crosses ``MIN_SURFACE_SCORE`` (0.15) at age
+    ~36.7d, which silently reclassifies the abstain from ``near_tie`` (the
+    tie-break layers' ONLY entry point) to ``weak`` (which never tie-breaks).
+    Freezing the clock makes every age in this file relative to ``NOW``, so the
+    scores — and therefore the abstain CAUSE each test is really pinning — are
+    the same at any future date."""
+    monkeypatch.setattr(arb, "_now", lambda: NOW)
+
+
 # ---------------------------------------------------------------------------
 # Fakes — recording conn / pool (mirrors the sibling arbiter tests).
 # ---------------------------------------------------------------------------
@@ -331,8 +349,11 @@ def test_full_pass_soak_defers_young_group(monkeypatch):
     monkeypatch.delenv(arb.SOAK_HOURS_ENV, raising=False)  # default 48h
     rows = _weight_decisive_rows()
     # _group_surface_state returns opened_at = NOW (fresh) -> inside soak window.
+    # Dated off the FROZEN clock, not wall-clock: the soak gate compares
+    # opened_at against the arbiter's own ``now``, so a real-clock opened_at
+    # would sit ~37 days in that clock's FUTURE.
     surface_state = [{
-        "opened_at": datetime.now(tz=timezone.utc),
+        "opened_at": NOW,
         "status": "contested", "surfaced_value": None, "surfaced_fact_id": None,
         "surfaced_by": None, "surfaced_at": None, "surface_rationale": None,
     }]

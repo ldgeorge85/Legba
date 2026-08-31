@@ -53,6 +53,45 @@
   --line-2: rgba(148, 163, 184, 0.30);
 
   --accent: #3b82f6; /* info / link / focus */
+
+  /* ── THE THREE CHANNELS (UI_HOLISTIC_DESIGN_2026-08-24 §5.2) ─────────────
+     "One meaning, one channel, one ramp." Four overlapping colour systems had
+     grown up: red meant "critical severity" AND "danger" AND "low confidence";
+     green meant "LOW severity" (nothing is wrong) AND "ok" AND "high
+     confidence". Three different questions sharing one set of hues with three
+     different mappings. These tokens are the single home for each answer —
+     values are Primer's graduated dark set, which ships the four-rung shape
+     this product's severity axis actually needs.
+
+     These tokens are the DOCUMENTED HOME of the three ramps and the values the
+     light theme re-tunes. `tailwind.config.ts` mirrors them as literals rather
+     than reading them, because Tailwind v3 drops every opacity modifier
+     (`bg-accent-ok/20`) applied to a plain `var(--…)` colour — the two must be
+     kept in sync by hand.
+
+     A · SEVERITY — the only WARM ramp in the product. Note `low`: it was
+     #55ff55, pure neon green, which made the calmest datum on the screen the
+     brightest colour on it. Low severity RECEDES. */
+  --sev-critical: #f85149;
+  --sev-high: #db6d28;
+  --sev-medium: #d29922;
+  --sev-low: #6e7681;
+  --sev-info: #4493f8;
+
+  /* B · CONFIDENCE — one hue, sequential, plus a cartographic "no data"
+     neutral. Deliberately desaturated so a band chip never competes with a
+     severity mark, and never borrows red/green's meaning (low confidence is
+     not "danger", high confidence is not "ok"). */
+  --conf-high: #79c0ff;
+  --conf-moderate: #4493f8;
+  --conf-low: #1f6feb;
+  --conf-unassessed: #30363d;
+
+  /* C · SYSTEM STATE — the ONLY place ok-green appears, and only on ops
+     surfaces (`accent.*` in tailwind.config.ts is this channel). */
+  --state-ok: #3fb950;
+  --state-warn: #d29922;
+  --state-error: #f85149;
 }
 
 /* Light theme (accessibility affordance — dark stays the default + design
@@ -72,6 +111,23 @@
   --line-2: rgba(15, 23, 42, 0.20);
 
   --accent: #2563eb;
+
+  /* The three channels, re-tuned for light (same meanings, darker rungs so
+     they hold contrast on a white surface). */
+  --sev-critical: #cf222e;
+  --sev-high: #bc4c00;
+  --sev-medium: #9a6700;
+  --sev-low: #6e7781;
+  --sev-info: #0969da;
+
+  --conf-high: #0969da;
+  --conf-moderate: #218bff;
+  --conf-low: #54aeff;
+  --conf-unassessed: #afb8c1;
+
+  --state-ok: #1a7f37;
+  --state-warn: #9a6700;
+  --state-error: #cf222e;
 }
 
 /* Density tokens. The default (no class / comfortable) targets ~30–40%

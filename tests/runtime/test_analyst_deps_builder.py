@@ -659,6 +659,108 @@ async def test_consult_on_demand_without_substrate_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
+# D5 — the standing external auditor's two deps legs
+# ---------------------------------------------------------------------------
+
+
+def _standing_auditor_descriptor(
+    llm_ref: str = _PRIMARY_LLM_REF,
+) -> AnalystDescriptor:
+    """A ``standing_auditor``-bound deterministic descriptor with an LLM block."""
+    return AnalystDescriptor(
+        identity=_identity(AnalystKind.DETERMINISTIC),
+        subscription=SubscriptionBlock(),
+        mapping=MappingBlock(),
+        method=MethodBlock(
+            kind="deterministic",
+            impl="legba.data.analysts.deterministic.run_method",
+            sub_handler="standing_auditor",
+            llm={
+                "primary": Property.StackRef(
+                    raw=llm_ref, expected_family="llm_provider",
+                ).model_dump(),
+                "max_tokens": 1200,
+            },
+        ),
+        cadence=CadenceBlock(fallback_schedule="12 5 * * *"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_standing_auditor_wires_the_core_plane_llm() -> None:
+    """D5: the descriptor's ``method.llm.primary`` must actually REACH the
+    handler. Without this the auditor would run every day, find no LLM in
+    ``deps.extras``, and write an honest-but-permanent degraded heartbeat — a
+    silent no-op wearing a working analyst's clothes."""
+    from legba.data.analysts.deterministic_handlers.standing_auditor import (
+        LLM_DEPS_EXTRA_KEY,
+    )
+
+    llm = _StubLLMHandler()
+    run_method, kind_deps, *_ = await build_analyst_run_method(
+        _standing_auditor_descriptor(),
+        deps=_standard_deps(),
+        registry_client=RegistryHTTPClient(base_url="http://invalid"),
+        pg_pool=object(),  # type: ignore[arg-type]
+        llm_handler_factory=AsyncMock(return_value=llm),
+    )
+    assert kind_deps.extras.get(LLM_DEPS_EXTRA_KEY) is llm
+
+    # And it survives the Pydantic ``_AnalystDeps`` bundle the actor caches and
+    # dispatches from — the live-specific hop an Any-typed kind_deps can be
+    # silently stripped by (the fact_contention_arbiter precedent).
+    from legba.runtime.dapr_actors import _AnalystDeps
+
+    bundle = _AnalystDeps(
+        descriptor=_standing_auditor_descriptor(),
+        deps=_standard_deps(),
+        run_method=run_method,
+        kind_deps=kind_deps,
+    )
+    assert bundle.kind_deps.extras.get(LLM_DEPS_EXTRA_KEY) is llm
+
+
+@pytest.mark.asyncio
+async def test_standing_auditor_refuses_an_anthropic_primary() -> None:
+    """The house rule, enforced at the wiring seam: a SCHEDULED analyst runs the
+    $0 core plane only. A descriptor PUT repointing this analyst at the billed
+    plane must not take effect — the shared ``_wire_deterministic_llm`` refuses
+    and the auditor stays on its no-LLM path rather than quietly spending Opus
+    on a daily sweep."""
+    from legba.data.analysts.deterministic_handlers.standing_auditor import (
+        LLM_DEPS_EXTRA_KEY,
+    )
+
+    _run, kind_deps, *_ = await build_analyst_run_method(
+        _standing_auditor_descriptor("llm.anthropic.opus"),
+        deps=_standard_deps(),
+        registry_client=RegistryHTTPClient(base_url="http://invalid"),
+        pg_pool=object(),  # type: ignore[arg-type]
+        llm_handler_factory=AsyncMock(return_value=_StubLLMHandler()),
+    )
+    assert LLM_DEPS_EXTRA_KEY not in kind_deps.extras
+
+
+@pytest.mark.asyncio
+async def test_standing_auditor_without_the_pack_grant_gets_no_binding() -> None:
+    """The GRANT leg is real. A descriptor that does not declare ``web_access``
+    gets no binding at all — and the handler then says so in its heartbeat,
+    rather than reaching through an ungranted pack."""
+    from legba.data.analysts.deterministic_handlers.standing_auditor import (
+        WEB_BINDING_DEPS_EXTRA_KEY,
+    )
+
+    _run, kind_deps, *_ = await build_analyst_run_method(
+        _standing_auditor_descriptor(),   # no action_packs block
+        deps=_standard_deps(),
+        registry_client=RegistryHTTPClient(base_url="http://invalid"),
+        pg_pool=object(),  # type: ignore[arg-type]
+        llm_handler_factory=AsyncMock(return_value=_StubLLMHandler()),
+    )
+    assert WEB_BINDING_DEPS_EXTRA_KEY not in kind_deps.extras
+
+
+# ---------------------------------------------------------------------------
 # Tests: output-kind table is consistent
 # ---------------------------------------------------------------------------
 

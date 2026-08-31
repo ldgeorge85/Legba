@@ -567,3 +567,101 @@ async def test_prior_judge_populations_are_annotated_not_pooled():
     assert sum(p["n_scored"] for p in pop["prior_populations"]) == (
         pop["excluded_other_pipeline"]
     )
+
+
+# ---------------------------------------------------------------------------
+# LINEAGE-AWARE STAMP POOLING (2026-08-29)
+#
+# The number this module publishes IS mean `faithfulness_score`, so the
+# `faithfulness_score` metric family in STAMP_EXPECTED_SHIFTS characterises it
+# exactly — the same argument that licenses pooling in band_calibration_tracker
+# licenses it here, and the strict filter cost the same thing: 573 of 26,949
+# critiques usable, per-unit n ~19-32 (CAMPAIGN_2026-08-29 A-7).
+# ---------------------------------------------------------------------------
+
+
+def test_the_faithfulness_sql_partitions_on_a_STAMP_SET_not_one_stamp():
+    """All three faithfulness reads take the pool as an array. A scalar `= $n`
+    left in one of them means that query partitions on a different boundary
+    than the other two, and "excluded" stops meaning "not in the mean above"."""
+    for sql in (
+        ucs._FAITHFULNESS_SQL,
+        ucs._FAITHFULNESS_EXCLUDED_SQL,
+        ucs._FAITHFULNESS_PRIORS_SQL,
+    ):
+        assert "= ANY(" in sql and "::text[]" in sql, sql
+        # ...and every one still reads the stamp at its one true path.
+        assert "data->'data'->'verification'->>'judge_pipeline_version'" in sql
+
+
+def test_the_scorer_pools_on_the_same_family_as_band_calibration():
+    """One family, one rule. If these two readouts pooled on different families
+    they would disagree about which judge populations are comparable, and the
+    scorecard would carry both numbers as though they described one thing."""
+    from legba.data.analysts.deterministic_handlers import band_calibration_tracker
+    from legba.data.provenance.judge_pipeline_version import METRIC_FAITHFULNESS_SCORE
+
+    assert ucs.CALIBRATED_METRIC_FAMILY == METRIC_FAITHFULNESS_SCORE
+    assert ucs.CALIBRATED_METRIC_FAMILY == (
+        band_calibration_tracker.CALIBRATED_METRIC_FAMILY
+    )
+
+
+@pytest.mark.asyncio
+async def test_faithfulness_population_reports_the_pooled_stamp_set():
+    """The disclosure is a SET now. A mean over several pooled stamps that
+    names only the head would misdescribe its own population, and a pool of one
+    (which is what the live lineage yields today) must stay visibly a pool of
+    one rather than reading as a widening that did not happen."""
+    from legba.data.provenance.judge_pipeline_version import (
+        METRIC_FAITHFULNESS_SCORE,
+        poolable_stamps,
+    )
+    from legba.data.provenance.verify import JUDGE_PIPELINE_VERSION
+
+    data_by_unit = {
+        "escalation": {
+            "findings": [],
+            "labels": [],
+            "faithfulness": [{"confidence": 0.8}],
+            "faithfulness_excluded": 3,
+        },
+    }
+    result = await ucs.handle(
+        [], {"sub_handler": "unit_correctness_scorer", "units": ["escalation"]},
+        _FakeDeps(_FakePool(_FakeConn(data_by_unit))),
+    )
+    pop = result.finding.data["units"]["escalation"]["faithfulness_population"]
+
+    expected = list(poolable_stamps(JUDGE_PIPELINE_VERSION, METRIC_FAITHFULNESS_SCORE))
+    assert pop["judge_pipeline_versions"] == expected
+    assert pop["pooling"]["metric_family"] == METRIC_FAITHFULNESS_SCORE
+    assert pop["pooling"]["stamp_count"] == len(expected)
+    assert pop["pooling"]["widened_by"] == len(expected) - 1
+    # The head stamp is still named — it is what a critique graded now carries.
+    assert pop["judge_pipeline_version"] == JUDGE_PIPELINE_VERSION
+
+
+@pytest.mark.asyncio
+async def test_failed_pull_population_carries_the_same_pooling_keys():
+    """An outage must not change the SHAPE of the disclosure, or every reader
+    has to special-case it. n_scored=0 with the pool it WOULD have read — never
+    a measured zero, never a missing key."""
+    from legba.data.provenance.verify import JUDGE_PIPELINE_VERSION
+
+    class _BoomPool:
+        def acquire(self):
+            raise RuntimeError("pull exploded")
+
+    result = await ucs.handle(
+        [],
+        {"sub_handler": "unit_correctness_scorer", "units": ["escalation"]},
+        _FakeDeps(_BoomPool()),
+    )
+    pop = result.finding.data["units"]["escalation"]["faithfulness_population"]
+    assert pop["n_scored"] == 0
+    assert pop["judge_pipeline_version"] == JUDGE_PIPELINE_VERSION
+    assert pop["judge_pipeline_versions"]
+    assert set(pop["pooling"]) == {
+        "metric_family", "stamps", "stamp_count", "widened_by"
+    }

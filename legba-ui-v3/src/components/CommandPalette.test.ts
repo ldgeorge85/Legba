@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { fuzzyMatch, RECORD_PRIMARY_PANEL } from './CommandPalette'
+import { fuzzyMatch, parsePalettePrefix, RECORD_PRIMARY_PANEL } from './CommandPalette'
 import { PANEL_REGISTRY } from '@/panel-registry/registry'
 
 describe('RECORD_PRIMARY_PANEL', () => {
@@ -19,6 +19,32 @@ describe('RECORD_PRIMARY_PANEL', () => {
     // target/analyst primaries must be requiresBinding panels (P-B1).
     expect(PANEL_REGISTRY[RECORD_PRIMARY_PANEL.target].definition.requiresBinding).toBe(true)
     expect(PANEL_REGISTRY[RECORD_PRIMARY_PANEL.analyst].definition.requiresBinding).toBe(true)
+  })
+})
+
+describe('parsePalettePrefix — namespaced families (design §3.3)', () => {
+  it('splits the workspace sigil off the query', () => {
+    expect(parsePalettePrefix('#')).toEqual({ prefix: '#', rest: '' })
+    expect(parsePalettePrefix('#trust')).toEqual({ prefix: '#', rest: 'trust' })
+    // VS Code's "prefix + space" form narrows the same way.
+    expect(parsePalettePrefix('# morning')).toEqual({ prefix: '#', rest: 'morning' })
+  })
+
+  it('splits the panel/layout sigil', () => {
+    expect(parsePalettePrefix('>wall')).toEqual({ prefix: '>', rest: 'wall' })
+  })
+
+  it('leaves an unprefixed query completely alone (the default index is unchanged)', () => {
+    expect(parsePalettePrefix('ukraine')).toEqual({ prefix: null, rest: 'ukraine' })
+    expect(parsePalettePrefix('')).toEqual({ prefix: null, rest: '' })
+  })
+
+  it('does not claim sigils it has no family for (they stay part of the query)', () => {
+    // `/` (substrate) and `@` (entities) are named by the design but wait on
+    // the search fan-out moving under the palette — until then they must NOT
+    // silently swallow a character.
+    expect(parsePalettePrefix('/hormuz')).toEqual({ prefix: null, rest: '/hormuz' })
+    expect(parsePalettePrefix('@wagner')).toEqual({ prefix: null, rest: '@wagner' })
   })
 })
 

@@ -9,7 +9,7 @@
  * .md download (the floor). All DOM-free string building lives here so it is
  * unit-testable; only the two side-effecting helpers touch the browser.
  */
-import type { Citation } from '@/lib/citationsModel'
+import { citationKindLabel, isGroundingCitation, type Citation } from '@/lib/citationsModel'
 
 export interface ReportDoc {
   title: string
@@ -56,7 +56,18 @@ export function reportToMarkdown(doc: ReportDoc): string {
     lines.push('## Evidence')
     lines.push('')
     for (const c of cites) {
-      const bits = [c.title ?? c.refId]
+      // A grounding block has no id and no url, so `c.title ?? c.refId` used
+      // to fall through to an empty string. Name the KIND and the set it
+      // resolves against instead — a downloaded report has no citation record
+      // to join against, so the line has to carry it.
+      const bits = [c.title ?? (c.refId || citationKindLabel(c))]
+      if (isGroundingCitation(c)) {
+        bits.push(
+          `desk grounding · ${citationKindLabel(c)} · resolves against ${
+            c.resolvesAgainst ?? "this finding's citation record"
+          }`,
+        )
+      }
       if (c.source) bits.push(c.source)
       if (typeof c.effectiveConfidence === 'number') {
         bits.push(`effective_confidence ${Math.round(c.effectiveConfidence * 100)}%`)
@@ -151,7 +162,16 @@ export function reportToPrintHtml(doc: ReportDoc): string {
     cites.length > 0
       ? `<h2>Evidence</h2><ol class="evidence">${cites
           .map((c) => {
-            const parts = [esc(c.title ?? c.refId)]
+            const parts = [esc(c.title ?? (c.refId || citationKindLabel(c)))]
+            if (isGroundingCitation(c)) {
+              parts.push(
+                `<span class="src">${esc(
+                  `desk grounding · ${citationKindLabel(c)} · resolves against ${
+                    c.resolvesAgainst ?? "this finding's citation record"
+                  }`,
+                )}</span>`,
+              )
+            }
             if (c.source) parts.push(`<span class="src">${esc(c.source)}</span>`)
             if (typeof c.effectiveConfidence === 'number') {
               parts.push(`<span class="eff">eff ${Math.round(c.effectiveConfidence * 100)}%</span>`)

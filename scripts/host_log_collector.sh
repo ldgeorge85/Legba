@@ -59,6 +59,31 @@
 # stated rather than buried; trim it with LEGBA_LOGSHIP_SERVICES (an explicit
 # allowlist) or MAX_BYTES / KEEP before raising anything else.
 #
+# PER-SERVICE BUDGET OVERRIDE (2026-08-29, ops-heartbeat-retention). The
+# uniform 4x32MiB=128MiB budget starves a genuinely high-volume container: on
+# legba-runtime-dapr, the by-design reminder-GC existence-check sweep
+# (src/legba/runtime/reminder_gc.py — ~300 GET .../reminders/run_cadence
+# calls every 5 min, 100% 404, "in steady state `removed` is genuinely
+# zero... legitimate re-checking, not a bug" per its own docstring) plus
+# httpx INFO-level request logging (60% of its lines) measured LIVE at
+# ~17.3 MiB/hour (173.95 MB retained across 9h34m43s, 2026-08-29
+# 10:21:33Z-19:56:15Z, computed from the four retained files' byte counts and
+# their first/last embedded --timestamps lines). The stock 128 MiB budget
+# only covers ~7.4h at that rate — consistent with the observed ~9h
+# retention window that left 08-27->08-29 10:21Z unrecoverable for this one
+# service. See MAX_BYTES_OVERRIDE below: this raises ONLY that service's
+# budget rather than the global default, because doing this for all 15
+# services would add ~19 GB against a host already at ~86-92% disk.
+#
+# CROSS-CHECK (post-host-reboot, same day): the host hard-locked and
+# rebooted ~21:01-21:08Z; legba-runtime-dapr came back at 21:08:03Z. A clean
+# 3-minute post-restart window (21:08:09.733Z-21:11:11.990Z, 255,169 bytes)
+# reads ~4.6 MiB/hour — lower than the ~17.3 MiB/hour pre-reboot figure, but
+# a 3-minute sample is shorter than the reminder-GC sweep's own 5-minute
+# cadence, so it plausibly caught zero or a partial sweep and undercounts
+# steady state. Sizing below stays on the longer, higher (conservative)
+# pre-reboot measurement.
+#
 # MEMORY. One `docker logs --follow` CLI process per container, ~15 MB RSS
 # each, ~225 MB across the project. That is the honest cost of the simple
 # design. LEGBA_LOGSHIP_SERVICES trims it if the host needs the RAM back.
@@ -87,6 +112,26 @@ DISABLE_FLAG="/etc/legba-watchdog.disabled"
 # own log would be a poor answer to that. Cron holds it O_APPEND, so
 # copy-truncate is valid here for exactly the reason it is for the followers.
 SELF_LOG="${LEGBA_LOGSHIP_SELF_LOG:-/var/log/legba_log_collector.log}"
+
+# Per-service MAX_BYTES override, keyed by compose SERVICE name (the same
+# name `discover()` yields and the log file is named after). Falls back to
+# the global $MAX_BYTES for every service not listed here — see the DISK
+# comment above for the legba-runtime-dapr arithmetic.
+#   360 MiB/file x (KEEP+1 = 4 files) = 1440 MiB total, ~83.2h retention at
+#   the measured ~17.3 MiB/hour rate — a ~15% margin over the 72h target.
+#   Extra disk vs. the stock budget: (360-32) MiB x 4 = 1312 MiB (~1.28 GiB),
+#   for this one service only.
+declare -A MAX_BYTES_OVERRIDE=(
+    [legba-runtime-dapr]="${LEGBA_LOGSHIP_RUNTIME_DAPR_MAX_BYTES:-377487360}"
+)
+max_bytes_for() {
+    local svc="$1"
+    if [ -n "${MAX_BYTES_OVERRIDE[$svc]:-}" ]; then
+        echo "${MAX_BYTES_OVERRIDE[$svc]}"
+    else
+        echo "$MAX_BYTES"
+    fi
+}
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 log() { echo "$(now_iso) $*"; }
@@ -124,12 +169,16 @@ follower_alive() {
 }
 
 # --- rotation (copy-truncate; see the header) --------------------------------
+# rotate_if_needed <file> [max_bytes] — max_bytes defaults to the global
+# $MAX_BYTES; callers pass a per-service override (max_bytes_for) where one
+# applies.
 rotate_if_needed() {
     local file="$1"
+    local max_bytes="${2:-$MAX_BYTES}"
     [ -f "$file" ] || return 0
     local size
     size="$(stat -c %s "$file" 2>/dev/null || echo 0)"
-    [ "$size" -le "$MAX_BYTES" ] && return 0
+    [ "$size" -le "$max_bytes" ] && return 0
 
     local i
     i="$KEEP"
@@ -142,7 +191,7 @@ rotate_if_needed() {
     # next write lands at offset 0. `mv` here would silently strand the writer
     # on the rotated inode — the classic logrotate-without-copytruncate bug.
     cp -f "$file" "${file}.1" 2>/dev/null && : > "$file"
-    log "ROTATED $file (${size}B > ${MAX_BYTES}B), keeping ${KEEP}"
+    log "ROTATED $file (${size}B > ${max_bytes}B), keeping ${KEEP}"
 }
 
 # --- follower lifecycle ------------------------------------------------------
@@ -299,7 +348,7 @@ while IFS='|' read -r name svc; do
     cid="$(docker inspect -f '{{.Id}}' "$name" 2>/dev/null)"
     [ -n "$cid" ] || continue
 
-    rotate_if_needed "${LOG_DIR}/${svc}.log"
+    rotate_if_needed "${LOG_DIR}/${svc}.log" "$(max_bytes_for "$svc")"
 
     pid="$(cat "${STATE_DIR}/${svc}.pid" 2>/dev/null)"
     known_cid="$(cat "${STATE_DIR}/${svc}.cid" 2>/dev/null)"

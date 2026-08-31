@@ -218,13 +218,19 @@ async def _journal_calibration_evidence(conn: Any) -> CalibrationEvidence:
         calibration_thin = not isinstance(exo_n, int) or exo_n < 5
 
     # The journal's OWN recent critic scores (its track record, §7.5(a)).
+    # ``analyst_critiques`` carries ``overall_score`` as a real column and no
+    # analyst attribution of its own — the analyzed desk is one join away via
+    # ``trace_id -> analyst_traces.run_id``. (The original query invented a
+    # ``data`` JSONB and an ``analyzed_analyst_id`` column; it 500'd the whole
+    # proposals list the first time a self_revision row reached the gate.)
     crit = await conn.fetchrow(
         """
-        SELECT avg((data->>'overall_score')::float) AS mean, count(*) AS n
-        FROM analyst_critiques
-        WHERE analyzed_analyst_id IN ('journal_assessor', 'journal_consolidator')
-          AND produced_at > now() - interval '30 days'
-          AND (data->>'overall_score') IS NOT NULL
+        SELECT avg(c.overall_score) AS mean, count(*) AS n
+        FROM analyst_critiques c
+        JOIN analyst_traces t ON t.run_id = c.trace_id
+        WHERE t.analyst_id IN ('journal_assessor', 'journal_consolidator')
+          AND c.produced_at > now() - interval '30 days'
+          AND c.overall_score IS NOT NULL
         """
     )
     critic_mean = (

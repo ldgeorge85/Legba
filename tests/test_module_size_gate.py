@@ -66,7 +66,17 @@ CEILINGS: dict[str, int] = {
     # closes on the new floor: this is the number the V-G train must fit under,
     # and the next extraction seam is the JUDGE subsystem (prompt registry +
     # ``_run_judge`` + the quote/severity rules).
-    "data/provenance/verify.py": 5910,  # 5853 @ 2026-08-05 — the V-D/W2/V-G1/V-G3 QUOTE RULES extracted to judge_quote_rules.py and the CITATION MARKER parsing/drift set to citation_markers.py (judge-subsystem bricks 4 and 5, the seam named in the banner above), ceiling re-seeded down twice in the V-I train. DO NOT RAISE.
+    # LOWERED AGAIN 2026-08-27 (V-I): the JUDGE-VERDICT PARSING cluster —
+    # ``_JudgeVerdictError``, ``_extract_json_objects``, ``_judge_reason`` and
+    # ``_judge_detail`` — moved to ``data/provenance/judge_verdict_parsing.py``,
+    # the judge subsystem's next brick, which ``verify.py`` imports ONE WAY and
+    # re-exports. ``_is_uncited_world_baseline`` (V-G5) rode along as the
+    # smallest adjacent self-contained helper once the cluster alone didn't
+    # clear the margin. The severity DECISION (the fail-class table and
+    # ``_DEMOTION_COUNTERS``) and the markerless-uncited FOLD stayed behind —
+    # both manipulate report/ledger types this module owns. Ratchet closes on
+    # the new floor. DO NOT RAISE.
+    "data/provenance/verify.py": 5900,  # 5866 @ 2026-08-27 (V-I) — judge_verdict_parsing.py extracted (see banner above); 5853 @ 2026-08-05 — the V-D/W2/V-G1/V-G3 QUOTE RULES extracted to judge_quote_rules.py and the CITATION MARKER parsing/drift set to citation_markers.py (judge-subsystem bricks 4 and 5), ceiling re-seeded down twice in the V-I train.
     # LOWERED 2026-08-20 (FRAME-1): the C-TIER two-tier evidence subsystem — the
     # periphery GATHER, its worst-first selection and its render, plus the
     # row-reading primitives all three share — moved to
@@ -99,9 +109,20 @@ CEILINGS: dict[str, int] = {
     # doctrine to each of the four prompts and the file still came down 398
     # lines; the ratchet closes on the new floor. The slice-assembly seam named
     # above is STILL the next one here.
-    "data/analysts/meta_findings_synthesizer.py": 5250,  # 5192 @ 2026-08-21 (VOICE-4); 5585 @ 2026-08-20 (FRAME-2); 5750 @ 2026-08-20 (FRAME-1); 5279 @ 2026-08-02
+    # LOWERED AGAIN 2026-08-29 (the JSON-envelope leak): the file had regrown to
+    # 5,248 against 5,250 — two lines of headroom — and the world-composition
+    # leak fix had to land inside it. The OUTPUT-COERCION unit (``_coerce_finding``,
+    # ``_looks_like_resolvable_evidence`` and the new degrade path) moved to
+    # ``data/analysts/composition_coercion.py``, which the synthesizer imports ONE
+    # WAY and re-exports, so both names resolve unchanged for every caller and
+    # test. Pure, DB-free and LLM-free, so it tests without a slice. The train
+    # ADDED the salvage-or-raise contract and the file still came down 117 lines;
+    # the ratchet closes on the new floor. The slice-assembly seam named above is
+    # STILL the next one here.
+    "data/analysts/meta_findings_synthesizer.py": 5190,  # 5131 @ 2026-08-29 (envelope leak); 5192 @ 2026-08-21 (VOICE-4); 5585 @ 2026-08-20 (FRAME-2); 5750 @ 2026-08-20 (FRAME-1); 5279 @ 2026-08-02
     "runtime/dapr_actors.py": 4110,  # 3735 @ 2026-08-02
-    "data/analysts/inline_target.py": 3930,  # 3882 @ 2026-08-05 — slice rendering extracted to slice_render.py, ceiling re-seeded down
+    "runtime/liveness_watchdog.py": 1660,  # 1507 @ 2026-08-30 — merge-wave entrant (honest-quiet dynamic window + prolonged-streak escalation)
+    "data/analysts/inline_target.py": 3915,  # 3909 @ 2026-08-25 — the per-clean render RECEIPT (_slice_render_stats) extracted to slice_render.py beside the render it describes, paying for the task-#57 wire-pair collapse hook; ceiling re-seeded down again (was 3930)
     "runtime/substrate_query_port.py": 3910,  # 3551 @ 2026-08-02
     "data/analysts/journal_assessor.py": 3000,  # 2965 @ 2026-08-11 (leak guards extracted)
     "runtime/grounding.py": 3000,  # 2719 @ 2026-08-02
@@ -118,7 +139,19 @@ CEILINGS: dict[str, int] = {
     "data/registry/api.py": 2590,  # 2524 @ 2026-08-02; 2353 after K-2
     "data/filters/fact_extractor.py": 2620,  # 2381 @ 2026-08-02
     "data/analysts/deterministic_handlers/claim_watch.py": 2560,  # 2320 @ 2026-08-02
-    "data/registry/v3_api.py": 2430,  # 2209 @ 2026-08-02
+    # LOWERED 2026-08-27 (H3-GUARD): projecting the two new semantics stamps
+    # (`banding_semantics`/`damping_semantics`) onto `CountryScorecard` pushed
+    # this file 5 lines over the 2430 ceiling. The escalation-delivery route's
+    # models + pure reducer — four models and two functions, used by exactly
+    # ONE route (`GET /system/escalations`) and nothing else in this module —
+    # were the smallest self-contained route-helper cluster left (the
+    # scorecard-reconcile seam was already taken, B0-5). Moved to
+    # `data/registry/escalation_delivery.py`, which this module imports ONE WAY
+    # and re-exports under the historical private names, so every call site —
+    # and `test_v3_escalations.py`, which imports these names off THIS module —
+    # stayed byte-identical. The train added the two projected fields and the
+    # file still came down 171 lines; the ratchet closes on the new floor.
+    "data/registry/v3_api.py": 2300,  # 2259 @ 2026-08-27 (H3-GUARD); 2209 @ 2026-08-02
     "data/provenance/writes.py": 2340,  # 2126 @ 2026-08-02
     "data/_entity_canon.py": 2330,  # 2115 @ 2026-08-02
     "data/analysts/consult_on_demand.py": 2310,  # 2092 @ 2026-08-02
@@ -130,7 +163,56 @@ CEILINGS: dict[str, int] = {
     "data/analysts/competing_hypotheses.py": 1840,  # 1666 @ 2026-08-02
     "data/filters/geocode.py": 1740,  # 1580 @ 2026-08-02
     "data/analysts/entity_researcher.py": 1740,  # 1580 @ 2026-08-02
-    "data/analysts/deterministic_handlers/alert_trigger_scan.py": 1710,  # 1546 @ 2026-08-02
+    # 2026-08-29 (FRAME-3 steady-state guard + D2 90-day-wager daily page
+    # budget + kill list). Two new sibling modules were extracted FIRST
+    # (_steady_state_guard.py: the pure suppression classifier + its
+    # guard-suppressed write path; _daily_page_budget.py: the budget
+    # ranking/allocation + the kill-switch's shared advance-and-log path),
+    # pulling ~340 lines of the new logic out before this measurement — what
+    # remains in-file is handle()'s own orchestration wiring (five new
+    # options, three new scan-result branches, the suppressed/killed/
+    # budget-deferred receipt fields) and the module docstring's account of
+    # the 2026-08-29 soak decision, neither of which has a clean further
+    # extraction seam without separating the wiring from the handler it
+    # wires. Seeded at the measured count + ~10%, the standard first-touch
+    # allowance this file's own prior entries use.
+    "data/analysts/deterministic_handlers/alert_trigger_scan.py": 2130,  # 1931 @ 2026-08-29; 1546 @ 2026-08-02
+    # NEW ENTRANT 2026-08-29. alert_trigger_scan's FRAME-3 guard + D2 wager
+    # (above) added five OptionSpec declarations — a flat, alphabetically-ish
+    # grouped catalog of ~180 existing handlers' knobs with no per-handler
+    # module boundary to split along (every entry already lives beside its
+    # own handler's other options; the file's OWN section banners are the
+    # only seams, and the alert_trigger_scan block they'd move with it is a
+    # fraction of the total). NOT split for the same reason V-J1's entry
+    # below gives for its own file. Seeded at measured + ~10%.
+    "data/analysts/handler_options.py": 1670,  # 1518 @ 2026-08-29
+    # NEW ENTRANT 2026-08-28 (V-J1). This module is itself the K-1 extraction of
+    # verify.py's absence subsystem (903 lines then), and the hedged-conflict
+    # guard put it over the 1,500 threshold: the predicate is ~45 lines and its
+    # banner — the census, the three conjunctive conditions and the five
+    # confirmed catches it must not reach — is the rest, which is the same
+    # doctrine-beside-the-rule shape W1(e), V-G2, V-H4 and V-H5 already carry in
+    # here. NOT split: it belongs beside the other route exclusions it is
+    # ordered against, and there is no cohesive unit to move that would not
+    # separate a rule from the exclusions it must stay consistent with. Seeded
+    # at the measured count + ~10%, which is what a first-time entrant gets; the
+    # next train pays for the next one.
+    "data/provenance/absence_slice.py": 1720,  # 1558 @ 2026-08-28 (V-J1)
+    # NEW ENTRANT 2026-08-29 (D5 standing external auditor). Five OptionSpec
+    # declarations for the new `standing_auditor` sub-handler carried this over
+    # the 1,500 threshold. NOT split: it is a flat catalog of ~180 handlers'
+    # knobs with no per-handler module boundary to split along — every entry
+    # already lives beside its own handler's other options, and the file's own
+    # section banners are the only seams, each covering a fraction of the
+    # total. Splitting it would also break the ONE property the X-1 catalog
+    # exists for: a single dict a test can diff against SUB_HANDLERS to prove
+    # no knob is unreachable. Seeded at measured + ~10%, the first-touch
+    # allowance every prior entrant here got.
+    #
+    # NOTE for the merge: the unmerged `alert-suppression-guard` branch crosses
+    # this same threshold in the same week for the same reason (its FRAME-3 +
+    # D2 options) and pins the SAME number. Two trains, one ceiling — take
+    # either side of the conflict.
 }
 
 _EXTRACT_DONT_RAISE = (

@@ -20,6 +20,7 @@ import {
   zoomDomain,
   type TimelineItem,
 } from './timelineWindows'
+import { SEVERITY_COLOR } from '@/v4/world/types'
 
 const NOW = Date.parse('2026-07-24T12:00:00Z')
 const DAY = 86_400_000
@@ -80,9 +81,13 @@ describe('shapeItems', () => {
 })
 
 describe('itemColor', () => {
-  it('colors a finding by severity when known', () => {
+  it('colors a finding by severity from the ONE severity ramp', () => {
+    // The literal moved out of this module: severity is a single ramp shared
+    // with the map + the v4 timeline (UI_HOLISTIC_DESIGN_2026-08-24 §5.1 —
+    // this map had drifted onto the accent.* ramp, where "medium" was blue).
+    // Assert against the ramp, not a hex, so a future re-tune is one edit.
     const s = shapeItem(item({ id: 'f', kind: 'finding', severity: 'critical' }), NOW)!
-    expect(itemColor(s)).toBe('#ef4444')
+    expect(itemColor(s)).toBe(SEVERITY_COLOR.critical)
   })
   it('falls back to the kind color for a finding with no/unknown severity', () => {
     const s = shapeItem(item({ id: 'f', kind: 'finding', severity: null }), NOW)!

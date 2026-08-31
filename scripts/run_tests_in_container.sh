@@ -164,5 +164,20 @@ spec.loader.exec_module(cf)
 cf._ensure_pivot_test_db()
 " || echo ">> WARN: legba_pivot_test provisioning skipped (Postgres unreachable?)" >&2
 
+# R7-fix (2026-08-30): `-q` hides pytest-randomly's seed header, which made
+# every shuffled gate/nightly failure UNREPLAYABLE (the gate-green train had
+# to re-bisect from scratch). Mint the seed here, log it loudly, pass it
+# explicitly. Replay a run with LEGBA_TEST_SHUFFLE_SEED=<seed>. Ordered
+# callers pass `-p no:randomly`, where the option would be unknown — skip it.
+SEED_ARGS=()
+case " $* " in
+  *" no:randomly "*|*"-p no:randomly"*) : ;;  # ordered run — no seed to mint
+  *)
+    SHUFFLE_SEED="${LEGBA_TEST_SHUFFLE_SEED:-$(( (RANDOM << 15) | RANDOM ))}"
+    echo ">> shuffle seed=${SHUFFLE_SEED} (replay: LEGBA_TEST_SHUFFLE_SEED=${SHUFFLE_SEED})"
+    SEED_ARGS=(-p "randomly" "--randomly-seed=${SHUFFLE_SEED}")
+    ;;
+esac
+
 exec "${DOCKER_RUN[@]}" \
-  -m pytest "${@:-tests/}" -q -p no:cacheprovider -o addopts=''
+  -m pytest "${@:-tests/}" -q -p no:cacheprovider -o addopts='' "${SEED_ARGS[@]}"

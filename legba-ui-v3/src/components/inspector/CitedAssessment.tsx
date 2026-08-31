@@ -20,7 +20,13 @@ import CitedProse from '@/components/CitedProse'
 import { RecordLink } from '@/components/inspector/RecordLink'
 import { UnitEvalBadge } from '@/components/inspector/UnitEvalBadge'
 import { VerdictBadge } from '@/components/VerdictBadge'
-import { type Citation, evidenceAnchorId } from '@/lib/citationsModel'
+import {
+  citationAnchorId,
+  citationDrill,
+  citationKindLabel,
+  isGroundingCitation,
+  type Citation,
+} from '@/lib/citationsModel'
 import {
   STRUCTURAL_EXEMPT_NOTE,
   buildVerdict,
@@ -112,29 +118,48 @@ export default function CitedAssessment({
             Evidence
           </div>
           <ul className="space-y-1">
-            {citations.map((c) => (
+            {citations.map((c) => {
+              // Where this row's link goes, or null when the citation names a
+              // synthetic desk grounding block that has no single record to
+              // point at. Only `situation_register` was handled before, so
+              // the other three id-less blocks reached `RecordLink` with an
+              // empty id and `prior_read` reached it typed as a SIGNAL —
+              // a badge and a drill for a row that cannot exist.
+              const drill = citationDrill(c)
+              return (
               <li
-                key={`${c.marker}:${c.refId}`}
-                id={evidenceAnchorId(c.refId)}
+                key={`${c.marker}:${c.refId || c.refKind}`}
+                id={citationAnchorId(c)}
                 data-testid="evidence-row"
+                data-cite-kind={c.refKind}
                 className="flex items-baseline gap-2 rounded px-1 py-0.5 text-body transition-colors data-[flash=true]:bg-surf-1"
               >
                 <span className="mt-px shrink-0 font-mono text-label text-accent-info">{c.marker}</span>
                 <div className="min-w-0 flex-1">
-                  {c.refKind === 'situation_register' ? (
-                    // Continuity situation register: a real citation with NO
-                    // single drill target by design — labeled, non-drilling.
-                    <span className="text-body text-fg-muted">
-                      {c.title ?? 'Open-situation register'}
-                    </span>
-                  ) : (
+                  {drill ? (
                     <RecordLink
-                      kind={c.refKind}
-                      id={c.refId}
-                      label={c.title ?? c.refId}
+                      kind={drill.kind}
+                      id={drill.id}
+                      label={c.title ?? drill.id}
                       origin="cited-assessment"
                       showKind
                     />
+                  ) : (
+                    // A desk grounding block with no single drill target by
+                    // design — labeled with its KIND and non-drilling, never
+                    // a dead link and never an "unresolved" chip.
+                    <span className="text-body text-fg-muted" data-testid="evidence-nonlink">
+                      <span className="mr-1 rounded bg-surf-2 px-1 text-[10px] leading-tight text-ink-3">
+                        {citationKindLabel(c)}
+                      </span>
+                      {c.title ?? citationKindLabel(c)}
+                    </span>
+                  )}
+                  {isGroundingCitation(c) && (
+                    <span className="mt-0.5 block text-label text-ink-3">
+                      desk grounding · resolves against{' '}
+                      {c.resolvesAgainst ?? "this finding's citation record"}
+                    </span>
                   )}
                   {c.source && (
                     <a
@@ -149,7 +174,8 @@ export default function CitedAssessment({
                   )}
                 </div>
               </li>
-            ))}
+              )
+            })}
           </ul>
         </div>
       )}

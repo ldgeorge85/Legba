@@ -260,7 +260,7 @@ connection — the receipt vs. side-write split is called out in the Writes colu
 | `consult_on_demand` | `react_loop` | free-form question + scope predicate | single-turn ReAct over 4 read tools | FINDING | yes | on-demand (no `fallback_schedule`) |
 | `deep_consult` | `react_loop` | free-form deep-research question | schedules the deep-consult Dapr Workflow | FINDING | yes (within the workflow) | on-demand (no `fallback_schedule`) |
 | **`journal_assessor`** (extension kind) | `llm_planner` (META, in-actor GATHER one-soul arc) | the whole organism via its own `journal_read` self-instruments (its own last entry / consolidation, plus `get_assessments` / `get_graph_structure` / `get_critic_scores` / `get_calibration` / `get_run_health` / `get_budget_status` / …) | one-soul PLAN→GATHER→NARRATE arc; narrate a coherent first-person POV OVER the system | **JOURNAL** → `journal_entries`, OFF-chain (empty `derived_from`) | yes (both phases now on the core plane — gpt-oss / vLLM gather + core-plane voice; Anthropic is reserved for consult/deep_consult only) | **ON cadence** — 12h entry (`0 0,12`) + daily consolidation (`0 2`); an introspective instrument that writes only `journal_entries` and cannot pollute product output (§3.10) |
-| **`scorecard_producer`** | `deterministic` (`sub_handler`, META) | already-verified claims (14-day window) per active desk tagged `g20`/`watch` | high-precision banding rules (severity × effective_confidence, demote-never-promote); one honest row per desk | **SCORECARD** side-write; TRACE_ONLY receipt | **no** ($0) | daily (`40 4 * * *`) |
+| **`scorecard_producer`** | `deterministic` (`sub_handler`, META) | already-verified claims (14-day window) per active desk tagged `g20`/`watch` | high-precision banding rules (severity × effective_confidence as an ADMISSION test — H3 retired the one-rung damper, so no rule demotes or promotes); one honest row per desk, aligned to the composition's consumed basis | **SCORECARD** side-write; TRACE_ONLY receipt | **no** ($0) | daily (`40 4 * * *`) |
 | **`forecast_scoreboard`** | `deterministic` (`sub_handler`, META) | the `acute_forecasts` pilot table | weekly issue → **exogenous** resolve → count of the acute-binary forecast pilot; abstains on a degenerate p-vector | `acute_forecasts` rows; TRACE_ONLY receipt (never a claim/finding) | **no** ($0) | weekly |
 | **`unit_correctness_scorer`** | `deterministic` (`sub_handler`, META) | each unit's findings vs operator gold labels (`unit_reference_labels`) | per-unit faithfulness + correctness-vs-reference (honest-null when a unit has 0 labels) | FINDING (the skill-scoreboard feed) | **no** ($0) | daily |
 | **`indicator_tracker`** (I&W) | `deterministic` (`sub_handler`, META) | the two most-recent indicator-bearing findings per unit-stream (`data.indicators[]`) | diffs each pre-registered indicator `id` slug run-over-run; emits a FINDING when a status FLIPS (esp. `not_observed → triggered` — a warning signpost firing); `force_trace_only` when nothing flipped | FINDING | **no** ($0) | 30-min heartbeat (`15-59/30 * * * *`) |
@@ -865,13 +865,19 @@ idempotent re-run never repeats a feed row.
 A pure-SQL, LLM-free ($0) META sweep that enumerates every active target tagged
 `g20`/`watch` and writes **one** banded `kind='scorecard'`
 row per desk from high-precision **rules** over the already-verified
-claims (severity tag × `effective_confidence`, banded over a 14-day window,
-**demote-never-promote**). Every band names the verified-claim id it rests on
+claims (severity tag × `effective_confidence`, banded over a 14-day window;
+`effective_confidence` decides ADMISSION only — since H3 (2026-08-27) the engine
+**neither demotes nor promotes**, and the retired one-rung damper survives only as
+the recorded `damped_would_have_been`). Every band names the verified-claim id it rests on
 (`basis`, a real `analyst_outputs.id`), and the row's `derived_from` names those
 ids so a lineage walk resolves with zero dangling refs. A dimension with no
 qualifying verified claim reads **`insufficient-evidence`** with an explicit
 `reason` — never a fabricated band — and a per-claim faithfulness below the floor
-demotes the band to **`low-faithfulness`**. A country with no qualifying claim at
+excludes the claim with the dedicated reason **`low-faithfulness`**. Since H3 it may
+not abstain SILENTLY beside a composition that consumed a verified head for that
+desk: the card resolves the composition's `derived_from` and either bands the head
+the prose actually used (same guards, no relaxation) or names the consumed ids and
+the rule that refused them (`basis_alignment`). A country with no qualifying claim at
 all still emits an all-insufficient row (never omit, never invent), so the read
 route returns exactly one honest card per active country.
 

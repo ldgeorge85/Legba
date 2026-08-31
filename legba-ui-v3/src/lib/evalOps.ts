@@ -781,10 +781,42 @@ export interface DimensionBand {
   confidence: number | null
   /** the per-claim folded faithfulness (banding's own gather). */
   critic_score: number | null
+  /**
+   * H3: the one-rung confidence damper is RETIRED, so this is always `false` on
+   * a card written since. Kept because a stored card from before the change
+   * still carries `true`, and a reader must be able to tell the two apart —
+   * `damping_semantics` on the card says which contract produced it.
+   */
   damped: boolean
+  /**
+   * H3: the band the retired damper WOULD have shipped, or null when it would
+   * not have fired. Absent on cards written before the change.
+   */
+  damped_would_have_been?: string | null
   reason: string
   produced_at: string | null
+  /**
+   * H3: how this dimension's evidence relates to the evidence the composition on
+   * the same page consumed. Absent on cards written before the change.
+   */
+  basis_alignment?: DimensionBasisAlignment
   eval: DimensionEval
+}
+
+/**
+ * H3 basis alignment — the card and the composition admit rows under the same
+ * rule at the same grain, and this block records the relation per dimension.
+ * `state` is one of `aligned` | `consumed-basis` | `consumed-unbandable` |
+ * `banded-unconsumed` | `not-consumed` | `no-composition`.
+ */
+export interface DimensionBasisAlignment {
+  state: string
+  /** real analyst_outputs.ids the composition consumed for this dimension. */
+  consumed_basis: string[]
+  /** why a consumed head could not be banded (`consumed-unbandable` only). */
+  reason: string | null
+  /** the newer head the card could not band, dated (`consumed-basis` only). */
+  newer_head: { finding_id: string; reason: string; produced_at: string | null } | null
 }
 
 /** The P3 composition aggregate node — the country-level verified composition. */

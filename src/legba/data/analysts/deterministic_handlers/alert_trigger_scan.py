@@ -24,16 +24,27 @@ outcome + webhook when configured). Seven trigger classes:
      those never enter the verify pass, so they can never meet the bar; the
      exclusion makes that explicit rather than incidental).
 
-     **"NEW" IS WEAKER NOW, AND DELIBERATELY UNCHANGED (FRAME-3, 2026-08-21).**
-     ``severity`` was the unit's SLICE DELTA, so ``high`` meant "something big
-     just happened"; it is now the dimension's STANDING STATE, so a war still
-     running tags ``high`` every run, writes a new head, and — the watermark
-     being per finding id — clears this gate each time (the live bar passes 14
-     findings/7d today, read-only census 2026-08-21). The guard is one line
-     (drop a candidate whose ``severity_delta`` is ``steady``; the tags are
-     already in :data:`_VERIFIED_FINDINGS_SQL`) and is NOT taken: its error
-     direction is a SUPPRESSED PAGE keyed on a model-emitted tag with no live
-     reliability measurement yet. Measure it over the soak, then decide.
+     **"NEW" WAS WEAKER, AND DELIBERATELY UNTAKEN THROUGH THE SOAK (FRAME-3,
+     2026-08-21 → 2026-08-29).** ``severity`` was the unit's SLICE DELTA, so
+     ``high`` meant "something big just happened"; it is now the dimension's
+     STANDING STATE, so a war still running tags ``high`` every run and clears
+     this per-finding-id gate each time. The 2026-08-29 soak confirmed the
+     predicted failure mode live: ``verified_finding`` volume roughly DOUBLED
+     (~19-26/day → ~44-52/day) on standing-high desks, and 38% (85/221) of the
+     post-soak alerts carried explicit steady-state language in the title.
+
+     **THE GUARD IS NOW TAKEN, KEYED ON STRUCTURED STATE** — see
+     :mod:`._steady_state_guard` (extracted, module-size gate) for the full
+     mechanism. In short: THREE structured signals must all agree
+     "unchanged, recent" before a page is dropped — this handler's OWN
+     desk-scoped watermark of the last-recorded band (primary, deterministic,
+     never the model's own claim), the finding's ``severity_delta`` tag read
+     only as a VETO (never trusted alone to suppress, per the original
+     2026-08-21 hesitation), and a per-desk cooldown anchored to the last
+     REAL page (a standing-high desk still gets a periodic heartbeat, never
+     indefinite silence). SUPPRESS never means DROP — the semantics-migration
+     guard's observable-retirement idiom
+     (:attr:`scorecard_banding.DimensionVerdict.damped_would_have_been`).
   3. **contention_flip** — a ``fact_contention`` group changed state
      (status / surfaced winner) or newly appeared, AND at least one of its
      supporting facts is cited (``derived_from``) by a non-superseded finding
@@ -136,13 +147,40 @@ unavailable (visible, never silent).
 
 Registered via ``scripts/bringup_register_alert_trigger_scan.py`` — NOT inline
 through a test fixture.
+
+D2 — the 90-day product wager (2026-08-29)
+-------------------------------------------
+Two more config-gated, observable-not-dropped mechanisms on top of the
+FRAME-3 guard, in this order — guard first (kills no-change noise per desk),
+budget second (caps whatever survives). Mechanics: :mod:`._daily_page_budget`.
+
+  * **Daily page budget** — at most :data:`DEFAULT_DAILY_PAGE_BUDGET` alerts
+    (env ``LEGBA_ALERT_DAILY_PAGE_BUDGET`` / option ``daily_page_budget``)
+    actually PAGE per UTC day, fleet-wide. Survivors rank worst-first by
+    severity then :func:`budget_magnitude_tier`; the rest still write their
+    row, tagged ``data.budget_deferred=true`` — never a silent drop.
+    **Kind-diversity cap** — no single ``trigger_class`` may take more than
+    :data:`DEFAULT_BUDGET_PER_KIND_CAP` slots (env
+    ``LEGBA_ALERT_BUDGET_PER_KIND_CAP`` / option ``budget_per_kind_cap``),
+    DAY-cumulative across scans. Answers the always-critical-class
+    starvation the soak replay found (``situation_escalation`` is 100%
+    ``severity=critical`` and would otherwise win every slot every day); a
+    slot no other kind can fill stays unused rather than backfilled with
+    more of the capped kind.
+  * **Kill list** — ``contention_flip`` / ``geo_convergence`` default OFF
+    (env ``LEGBA_ALERT_CONTENTION_FLIP_ENABLED`` /
+    ``LEGBA_ALERT_GEO_CONVERGENCE_ENABLED``, options
+    ``contention_flip_enabled`` / ``geo_convergence_enabled``). The scan
+    still runs and its watermarks still advance as if fired (no backlog on
+    resurrection), but nothing is written or paged — the would-have-fired
+    count rides the receipt. Re-enabling is a config flip, not a train.
 """
 from __future__ import annotations
 
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 from uuid import UUID, uuid4
 
@@ -151,11 +189,19 @@ from ...provenance.kinds import (
     STRUCTURAL_VERIFY_EXEMPT_ANALYSTS,
     OutputKind,
 )
-from ...provenance.models import AlertPayload, FindingPayload, severity_from_tags
+from ...provenance.models import (
+    AlertPayload,
+    FindingPayload,
+    severity_delta_from_tags,
+    severity_from_tags,
+)
 from ....runtime.analyst_method import AnalystMethodResult
 from . import (
+    _band_crossing_scan,
+    _daily_page_budget,
     _production_deficit_scan,
     _situation_escalation_scan,
+    _steady_state_guard,
     _watchlist_scan,
     geo_convergence_scan,
     scorecard_banding,
@@ -172,6 +218,11 @@ CHANNEL_NAME = "trigger_scan"
 # Trigger-class identifiers (the watermark table's trigger_class values).
 TRIGGER_BAND = "band_crossing"
 TRIGGER_FINDING = "verified_finding"
+#: FRAME-3 steady-state guard's desk-scoped watermark namespace — see
+#: :mod:`._steady_state_guard` (extracted, module-size gate) for the full
+#: rationale. Re-exported here so ``TRIGGER_FINDING_STATE`` keeps working
+#: exactly as before.
+TRIGGER_FINDING_STATE = _steady_state_guard.TRIGGER_FINDING_STATE
 TRIGGER_CONTENTION = "contention_flip"
 TRIGGER_BASELINE = "baseline_deviation"
 TRIGGER_WATCHLIST = "watchlist_hit"
@@ -213,6 +264,9 @@ DEFAULT_FINDING_WINDOW_HOURS = 24
 #: verified_finding watermark rows older than this are pruned (they can no
 #: longer match the scan window, so keeping them buys nothing).
 _FINDING_WATERMARK_PRUNE_DAYS = 7
+
+#: FRAME-3 steady-state guard's default cooldown — see :mod:`._steady_state_guard`.
+DEFAULT_STEADY_COOLDOWN_HOURS = _steady_state_guard.DEFAULT_STEADY_COOLDOWN_HOURS
 
 #: baseline_deviation: trailing same-desk baseline depth (24h buckets).
 DEFAULT_BASELINE_DAYS = 28
@@ -260,6 +314,27 @@ _CLASS_PRIORITY = {
 DEFAULT_GEO_WINDOW_HOURS = geo_convergence_scan.DEFAULT_WINDOW_HOURS
 DEFAULT_GEO_MIN_DISTINCT_FAMILIES = geo_convergence_scan.DEFAULT_MIN_DISTINCT_FAMILIES
 
+# ---------------------------------------------------------------------------
+# D2 — the 90-day product wager (2026-08-29): daily page budget + kill list.
+# See the module docstring's "D2" section for the full design; both are
+# config-gated (env var, descriptor-option override) so the operator retunes
+# or reverses either with no deploy — S-1's precedent. The mechanics live in
+# :mod:`._daily_page_budget` (extracted, module-size gate); re-exported below
+# so every ``ats.*`` name a caller or test already used keeps working.
+# ---------------------------------------------------------------------------
+
+DEFAULT_DAILY_PAGE_BUDGET = _daily_page_budget.DEFAULT_DAILY_PAGE_BUDGET
+_DAILY_PAGE_BUDGET_ENV = _daily_page_budget.DAILY_PAGE_BUDGET_ENV
+_CONTENTION_FLIP_ENABLED_ENV = _daily_page_budget.CONTENTION_FLIP_ENABLED_ENV
+_GEO_CONVERGENCE_ENABLED_ENV = _daily_page_budget.GEO_CONVERGENCE_ENABLED_ENV
+#: Kind-diversity cap (addendum) — see _daily_page_budget's module docstring.
+DEFAULT_BUDGET_PER_KIND_CAP = _daily_page_budget.DEFAULT_BUDGET_PER_KIND_CAP
+_BUDGET_PER_KIND_CAP_ENV = _daily_page_budget.BUDGET_PER_KIND_CAP_ENV
+_bool_env = _daily_page_budget.bool_env
+_daily_page_budget_from_env = _daily_page_budget.daily_page_budget_from_env
+_budget_per_kind_cap_from_env = _daily_page_budget.budget_per_kind_cap_from_env
+_count_paged_today_by_kind = _daily_page_budget.count_paged_today_by_kind
+
 
 # ---------------------------------------------------------------------------
 # Candidate + pure helpers (testable with NO database)
@@ -292,7 +367,9 @@ class AlertCandidate:
         return self.target_id or GLOBAL_DESK_KEY
 
 
-def classify_band_transition(from_band: str, to_band: str) -> tuple[str, str]:
+def classify_band_transition(
+    from_band: str, to_band: str, *, semantics_changed: bool = False
+) -> tuple[str, str]:
     """(direction, severity) for one band change.
 
     Ladder→ladder: up the risk ladder = ``deterioration``/``high``; down =
@@ -301,7 +378,23 @@ def classify_band_transition(from_band: str, to_band: str) -> tuple[str, str]:
     ``evidence-gained`` / ``evidence-lost`` at ``medium``. An off-ladder value
     (defensive — the banding engine only emits ladder values + INSUFFICIENT)
     reads ``indeterminate``/``medium`` so a real change is never dropped.
+
+    H3-GUARD — ``semantics_changed`` (see
+    :func:`scorecard_banding.semantics_changed`) PRE-EMPTS every classification
+    above: when the prior and current card were computed under different
+    banding/damping semantics, the two bands are not comparable on the ladder
+    at all, and the transition reads
+    :data:`scorecard_banding.SEMANTICS_MIGRATION` /
+    :data:`scorecard_banding.SEMANTICS_MIGRATION_SEVERITY` regardless of which
+    way the band moved. Default ``False`` reproduces today's behavior exactly
+    — a caller that never checks semantics gets the same five outcomes it
+    always has.
     """
+    if semantics_changed:
+        return (
+            scorecard_banding.SEMANTICS_MIGRATION,
+            scorecard_banding.SEMANTICS_MIGRATION_SEVERITY,
+        )
     ladder = scorecard_banding.BAND_LADDER
     ins = scorecard_banding.INSUFFICIENT
     if from_band == ins and to_band in ladder:
@@ -325,6 +418,18 @@ def baseline_exceeds(
 ) -> bool:
     """The mean+Nσ exceedance test with an absolute minimum-count floor."""
     return current >= min_current and current > mean + n_sigma * sigma
+
+
+# FRAME-3 steady-state guard (extracted to :mod:`._steady_state_guard`,
+# module-size gate — fully self-contained, no reverse import needed since
+# it's pure Python with no DB and no AlertCandidate dependency) and the D2
+# daily-budget ranking (extracted to :mod:`._daily_page_budget`, same gate —
+# ``AlertCandidate`` is TYPE_CHECKING-only there). Re-exported here so every
+# name a caller or test already used keeps working byte-for-byte.
+classify_finding_suppression = _steady_state_guard.classify_finding_suppression
+budget_magnitude_tier = _daily_page_budget.budget_magnitude_tier
+budget_sort_key = _daily_page_budget.budget_sort_key
+apply_daily_page_budget = _daily_page_budget.apply_daily_page_budget
 
 
 def apply_desk_cap(
@@ -488,112 +593,24 @@ async def _mark_seeded(conn: Any, trigger_class: str) -> None:
     )
 
 
+# D2 kill list + daily budget DB helpers — extracted to
+# :mod:`._daily_page_budget` (module-size gate); re-exported so
+# ``ats._advance_watermarks_only`` / ``ats._count_paged_today`` keep working.
+_advance_watermarks_only = _daily_page_budget.advance_watermarks_only
+_count_paged_today = _daily_page_budget.count_paged_today
+
+
 # ---------------------------------------------------------------------------
 # Trigger 1 — band crossing (scorecard head vs the watermark's last-seen band)
+#
+# Extracted to ._band_crossing_scan (module-size gate) the same way triggers
+# 5-8 already are — see that module's docstring for the scan + the H3-GUARD
+# semantics-mismatch classification. `scan_band_crossings` there imports
+# `TRIGGER_BAND` / `AlertCandidate` / `_load_class_watermarks` /
+# `_parse_jsonish` / `_uuid_or_none` / `classify_band_transition` /
+# `_MAX_DERIVED_REFS` back from THIS module at call time (the reverse-import
+# precedent every sibling scan module already uses).
 # ---------------------------------------------------------------------------
-
-_HEAD_SCORECARDS_SQL = """
-    SELECT id::text AS row_id, target_id, data, produced_at
-      FROM analyst_outputs
-     WHERE kind = 'scorecard'
-       AND superseded_by IS NULL
-     ORDER BY target_id
-"""
-
-
-async def _scan_band_crossings(
-    conn: Any,
-) -> tuple[list[AlertCandidate], list[tuple[str, str, dict[str, Any]]], bool]:
-    """Returns (candidates, silent_watermark_upserts, was_seeded)."""
-    seeded, watermarks = await _load_class_watermarks(conn, TRIGGER_BAND)
-    rows = await conn.fetch(_HEAD_SCORECARDS_SQL)
-
-    candidates: list[AlertCandidate] = []
-    silent: list[tuple[str, str, dict[str, Any]]] = []
-    for row in rows:
-        desk = str(row["target_id"] or "")
-        if not desk:
-            continue
-        data = _parse_jsonish(row["data"]) or {}
-        if not isinstance(data, Mapping):
-            continue
-        # The analyst_outputs.data column stores the FULL payload dump, so the
-        # producer's payload `data` dict is NESTED under 'data' (mirrors the
-        # parse_unit_eval contract in scorecard_producer). Accept a bare
-        # {'bands': ...} too (defensive).
-        inner = data.get("data") if isinstance(data.get("data"), Mapping) else data
-        bands = inner.get("bands") if isinstance(inner, Mapping) else None
-        dims = bands.get("dimensions") if isinstance(bands, Mapping) else None
-        if not isinstance(dims, Mapping):
-            continue
-        row_id = str(row["row_id"])
-        for dim, verdict in dims.items():
-            if not isinstance(verdict, Mapping):
-                continue
-            band = str(verdict.get("band") or "")
-            if not band:
-                continue
-            key = f"{desk}|{dim}"
-            state = {"band": band, "scorecard_row_id": row_id}
-            prev = watermarks.get(key)
-            if not seeded or prev is None:
-                # First-ever scan of the class, or a desk×dimension appearing
-                # for the first time: seed silently (no previous row to
-                # transition FROM).
-                silent.append((TRIGGER_BAND, key, state))
-                continue
-            prev_band = str(prev.get("band") or "")
-            if prev_band == band:
-                if prev.get("scorecard_row_id") != row_id:
-                    # New scorecard row, same band — bookkeeping only.
-                    silent.append((TRIGGER_BAND, key, state))
-                continue
-            direction, severity = classify_band_transition(prev_band, band)
-            refs: list[UUID] = []
-            rid = _uuid_or_none(row_id)
-            if rid is not None:
-                refs.append(rid)
-            for bid in verdict.get("basis") or []:
-                b = _uuid_or_none(bid)
-                if b is not None and b not in refs and len(refs) < _MAX_DERIVED_REFS:
-                    refs.append(b)
-            transition_key = f"{desk}|{dim}|{prev_band}->{band}|{row_id}"
-            candidates.append(
-                AlertCandidate(
-                    trigger_class=TRIGGER_BAND,
-                    severity=severity,
-                    title=(
-                        f"Band {direction}: {desk} {dim} "
-                        f"{prev_band} → {band}"
-                    ),
-                    body=(
-                        f"desk={desk} dimension={dim}\n"
-                        f"from={prev_band} to={band} direction={direction}\n"
-                        f"scorecard_row={row_id} "
-                        f"prev_scorecard_row={prev.get('scorecard_row_id')}\n"
-                        f"band_reason={verdict.get('reason')} "
-                        f"effective_confidence={verdict.get('effective_confidence')}"
-                    ),
-                    target_id=desk,
-                    derived_from=refs,
-                    data={
-                        "trigger_class": TRIGGER_BAND,
-                        "desk": desk,
-                        "dimension": str(dim),
-                        "from_band": prev_band,
-                        "to_band": band,
-                        "direction": direction,
-                        "scorecard_row_id": row_id,
-                        "prev_scorecard_row_id": prev.get("scorecard_row_id"),
-                        "transition_key": transition_key,
-                        "band_basis": [str(b) for b in (verdict.get("basis") or [])],
-                    },
-                    watermarks=[(TRIGGER_BAND, key, state)],
-                    event_at=row["produced_at"],
-                )
-            )
-    return candidates, silent, seeded
-
 
 # ---------------------------------------------------------------------------
 # Trigger 2 — new high-severity VERIFIED finding
@@ -657,7 +674,22 @@ async def _scan_verified_findings(
     *,
     floor: float,
     window_hours: int,
-) -> tuple[list[AlertCandidate], list[tuple[str, str, dict[str, Any]]], bool]:
+    cooldown_hours: float = DEFAULT_STEADY_COOLDOWN_HOURS,
+    suppress_enabled: bool = True,
+) -> tuple[
+    list[AlertCandidate],
+    list[tuple[str, str, dict[str, Any]]],
+    bool,
+    list[AlertCandidate],
+]:
+    """Returns ``(pageable_candidates, silent, seeded, suppressed_candidates)``.
+
+    ``suppressed_candidates`` are FULL :class:`AlertCandidate` rows (title,
+    body, ``derived_from``, the per-finding no-refire watermark) — they still
+    get written by the caller, just never fanned out and never desk-capped
+    alongside pageable candidates (see ``handle``'s suppressed-write block and
+    the FRAME-3 guard docstring above).
+    """
     seeded, _ = await _load_class_watermarks(conn, TRIGGER_FINDING)
     # Prune aged-out per-finding rows (they can no longer match the window).
     await conn.execute(
@@ -674,8 +706,14 @@ async def _scan_verified_findings(
         TRIGGER_FINDING,
         _MAX_FINDINGS_PER_SCAN,
     )
+    # FRAME-3 steady-state guard's OWN watermark namespace (desk -> last-paged
+    # severity + timestamp) — a small, bounded (one row per desk) read,
+    # entirely separate from the per-finding-id rows just fetched above.
+    _, desk_states = await _load_class_watermarks(conn, TRIGGER_FINDING_STATE)
+    now = datetime.now(timezone.utc)
 
     candidates: list[AlertCandidate] = []
+    suppressed: list[AlertCandidate] = []
     silent: list[tuple[str, str, dict[str, Any]]] = []
     for row in rows:
         finding_id = str(row["finding_id"])
@@ -694,43 +732,85 @@ async def _scan_verified_findings(
         if not seeded:
             silent.append((TRIGGER_FINDING, finding_id, state))
             continue
-        refs = [r for r in (_uuid_or_none(finding_id),) if r is not None]
-        candidates.append(
-            AlertCandidate(
-                trigger_class=TRIGGER_FINDING,
-                # P1-3 mapping: new-high-sev = high; a critical finding keeps
-                # its own (strictly higher) level rather than being understated.
-                severity="critical" if severity == "critical" else "high",
-                title=(
-                    f"Verified {severity}-severity finding: "
-                    f"{str(row['title'] or '')[:160]}"
-                ),
-                body=(
-                    f"analyst={row['analyst_id']} target={row['target_id']}\n"
-                    f"finding={finding_id}\n"
-                    f"severity={severity} confidence={conf} "
-                    f"faithfulness={faith} effective_confidence={eff} "
-                    f"(floor={floor})"
-                ),
-                target_id=str(row["target_id"]) if row["target_id"] else None,
-                derived_from=refs,
-                data={
-                    "trigger_class": TRIGGER_FINDING,
-                    "finding_id": finding_id,
-                    "finding_analyst_id": str(row["analyst_id"] or ""),
-                    "finding_severity": severity,
-                    "confidence": conf,
-                    "faithfulness_score": faith,
-                    "effective_confidence": eff,
-                    "effective_conf_floor": floor,
-                },
-                watermarks=[(TRIGGER_FINDING, finding_id, state)],
-                effective_confidence=eff,
-                faithfulness_score=faith,
-                event_at=row["produced_at"],
-            )
+
+        desk = str(row["target_id"]) if row["target_id"] else None
+        delta_tag = severity_delta_from_tags(
+            scorecard_banding._coerce_tags(row.get("tags"))
         )
-    return candidates, silent, seeded
+        should_suppress = False
+        suppress_reason = "no_desk"
+        if desk is not None:
+            if suppress_enabled:
+                should_suppress, suppress_reason = classify_finding_suppression(
+                    prev_state=desk_states.get(desk),
+                    severity=severity,
+                    delta_tag=delta_tag,
+                    now=now,
+                    cooldown_hours=cooldown_hours,
+                )
+            else:
+                suppress_reason = "suppression_disabled"
+
+        refs = [r for r in (_uuid_or_none(finding_id),) if r is not None]
+        watermarks: list[tuple[str, str, dict[str, Any]]] = [
+            (TRIGGER_FINDING, finding_id, state)
+        ]
+        if not should_suppress and desk is not None:
+            # Advance the desk's steady-state record ONLY on a real page —
+            # never on a suppressed occurrence — so the cooldown always
+            # counts from what the operator last actually saw.
+            watermarks.append(
+                (
+                    TRIGGER_FINDING_STATE,
+                    desk,
+                    {"severity": severity, "paged_at": now.isoformat()},
+                )
+            )
+        cand = AlertCandidate(
+            trigger_class=TRIGGER_FINDING,
+            # P1-3 mapping: new-high-sev = high; a critical finding keeps
+            # its own (strictly higher) level rather than being understated.
+            severity="critical" if severity == "critical" else "high",
+            title=(
+                f"Verified {severity}-severity finding: "
+                f"{str(row['title'] or '')[:160]}"
+            ),
+            body=(
+                f"analyst={row['analyst_id']} target={row['target_id']}\n"
+                f"finding={finding_id}\n"
+                f"severity={severity} confidence={conf} "
+                f"faithfulness={faith} effective_confidence={eff} "
+                f"(floor={floor})"
+            ),
+            target_id=desk,
+            derived_from=refs,
+            data={
+                "trigger_class": TRIGGER_FINDING,
+                "finding_id": finding_id,
+                "finding_analyst_id": str(row["analyst_id"] or ""),
+                "finding_severity": severity,
+                "confidence": conf,
+                "faithfulness_score": faith,
+                "effective_confidence": eff,
+                "effective_conf_floor": floor,
+                # Always present (never conditionally added) so a query over
+                # analyst_outputs can measure fired vs suppressed per row.
+                # NAMED guard_suppressed, never bare "suppressed" — that key
+                # is ALREADY a rollup's list-of-summaries field elsewhere.
+                "severity_delta_tag": delta_tag,
+                "guard_suppressed": should_suppress,
+                "guard_suppression_reason": suppress_reason,
+            },
+            watermarks=watermarks,
+            effective_confidence=eff,
+            faithfulness_score=faith,
+            event_at=row["produced_at"],
+        )
+        if should_suppress:
+            suppressed.append(cand)
+        else:
+            candidates.append(cand)
+    return candidates, silent, seeded, suppressed
 
 
 # ---------------------------------------------------------------------------
@@ -1328,7 +1408,14 @@ async def _write_alert_row(
             f"trigger:{cand.trigger_class}",
             f"severity:{cand.severity}",
         ]
-        + ([f"target:{cand.target_id}"] if cand.target_id else []),
+        + ([f"target:{cand.target_id}"] if cand.target_id else [])
+        # FRAME-3 steady-state guard — an explicit tag (never inferred solely
+        # from `data.guard_suppressed`) so a tag-only query can measure
+        # suppressed volume without parsing the jsonb data column.
+        + (["suppressed:true"] if cand.data.get("guard_suppressed") else [])
+        # D2 90-day wager — same idiom for the daily page budget and the
+        # kill list.
+        + (["budget_deferred:true"] if cand.data.get("budget_deferred") else []),
         data={"sub_handler": SUB_HANDLER_NAME, **cand.data},
         severity=cand.severity,  # type: ignore[arg-type]
         routing_hint=cand.trigger_class[:256],
@@ -1376,11 +1463,23 @@ def _build_receipt(
     fanout_failed: int,
     fanout_unavailable: bool,
     per_desk_cap: int,
+    guard_suppressed: int = 0,
+    guard_suppressed_write_failures: int = 0,
+    budget_deferred: int = 0,
+    daily_page_budget: int = 0,
+    already_paged_today: int = 0,
+    budget_per_kind_cap: int = 0,
+    already_paged_today_by_kind: dict[str, int] | None = None,
 ) -> FindingPayload:
     title = (
         f"Alert trigger scan: {fired} alert(s) fired, {rollups} rollup(s), "
         f"{suppressed} summarized"
     )
+    if guard_suppressed or budget_deferred:
+        title = (
+            f"{title}, {guard_suppressed} steady-state suppressed, "
+            f"{budget_deferred} budget-deferred"
+        )
     if seeded_classes:
         title = f"{title} (seeded: {', '.join(sorted(seeded_classes))})"
     body_lines = [
@@ -1390,12 +1489,30 @@ def _build_receipt(
             f"fanout_ok={fanout_ok} fanout_failed={fanout_failed} "
             f"fanout_unavailable={fanout_unavailable}"
         ),
+        # FRAME-3 guard: written+tagged, never fanned out. D2 budget: the
+        # fleet-wide UTC-day cap on ACTUAL pages, applied after every filter.
+        (
+            f"guard_suppressed={guard_suppressed} "
+            f"guard_suppressed_write_failures={guard_suppressed_write_failures}"
+        ),
+        (
+            f"daily_page_budget={daily_page_budget} "
+            f"already_paged_today={already_paged_today} "
+            f"budget_deferred={budget_deferred}"
+        ),
+        (
+            f"budget_per_kind_cap={budget_per_kind_cap} "
+            f"already_paged_today_by_kind={already_paged_today_by_kind or {}}"
+        ),
     ]
     for cls in sorted(counts_by_class):
         c = counts_by_class[cls]
+        extra = ""
+        if c.get("killed"):
+            extra = f" killed=yes killed_would_have_fired={c.get('killed_would_have_fired', 0)}"
         body_lines.append(
             f"{cls}: candidates={c.get('candidates', 0)} "
-            f"seeded={'yes' if cls in seeded_classes else 'no'}"
+            f"seeded={'yes' if cls in seeded_classes else 'no'}{extra}"
         )
     return FindingPayload(
         title=title[:2048],
@@ -1415,6 +1532,15 @@ def _build_receipt(
             "per_desk_cap": per_desk_cap,
             "seeded_classes": sorted(seeded_classes),
             "counts_by_class": counts_by_class,
+            # FRAME-3 steady-state guard.
+            "guard_suppressed": guard_suppressed,
+            "guard_suppressed_write_failures": guard_suppressed_write_failures,
+            # D2 — the 90-day product wager.
+            "daily_page_budget": daily_page_budget,
+            "already_paged_today": already_paged_today,
+            "budget_deferred": budget_deferred,
+            "budget_per_kind_cap": budget_per_kind_cap,
+            "already_paged_today_by_kind": already_paged_today_by_kind or {},
         },
     )
 
@@ -1477,6 +1603,36 @@ async def handle(
             )
         ),
     )
+    # FRAME-3 steady-state guard (2026-08-29) — descriptor-option override,
+    # env-agnostic (this one was never gated behind an env var; the operator
+    # tunes it the same way as every other threshold in this file).
+    steady_cooldown_hours = float(
+        options.get("steady_cooldown_hours", DEFAULT_STEADY_COOLDOWN_HOURS)
+    )
+    suppress_steady_state = bool(
+        options.get("suppress_steady_state", True)
+    )
+    # D2 — the 90-day product wager (2026-08-29). Env var is the base
+    # default (tunable with no deploy); a descriptor option, when set,
+    # always wins — same override order as every other option here.
+    daily_page_budget = int(
+        options.get("daily_page_budget", _daily_page_budget_from_env())
+    )
+    budget_per_kind_cap = int(
+        options.get("budget_per_kind_cap", _budget_per_kind_cap_from_env())
+    )
+    contention_flip_enabled = bool(
+        options.get(
+            "contention_flip_enabled",
+            _bool_env(_CONTENTION_FLIP_ENABLED_ENV, False),
+        )
+    )
+    geo_convergence_enabled = bool(
+        options.get(
+            "geo_convergence_enabled",
+            _bool_env(_GEO_CONVERGENCE_ENABLED_ENV, False),
+        )
+    )
     # S-1: every gauge threshold is a GaugeConfig field under the `gauge_`
     # option prefix, so the operator retunes precision through descriptor
     # options with no deploy. Unknown or uncoercible keys keep their default
@@ -1487,17 +1643,12 @@ async def handle(
     silent: list[tuple[str, str, dict[str, Any]]] = []
     seeded_classes: list[str] = []
     counts_by_class: dict[str, dict[str, int]] = {}
+    guard_suppressed_written = 0
+    guard_suppressed_write_failures = 0
 
     async with pool.acquire() as conn:
         for cls, scan in (
-            (TRIGGER_BAND, _scan_band_crossings(conn)),
-            (
-                TRIGGER_FINDING,
-                _scan_verified_findings(
-                    conn, floor=floor, window_hours=window_hours
-                ),
-            ),
-            (TRIGGER_CONTENTION, _scan_contention_flips(conn, floor=floor)),
+            (TRIGGER_BAND, _band_crossing_scan.scan_band_crossings(conn)),
             (
                 TRIGGER_BASELINE,
                 _scan_baseline_deviation(
@@ -1511,6 +1662,58 @@ async def handle(
             counts_by_class[cls] = {"candidates": len(cls_candidates)}
             if not was_seeded:
                 seeded_classes.append(cls)
+
+        # Trigger 2 — verified finding (P1-3), now carrying the FRAME-3
+        # steady-state guard (see the module docstring + _steady_state_guard).
+        # Guard-suppressed candidates ride back as their OWN list, written
+        # directly via _steady_state_guard.write_suppressed — never
+        # desk-capped, never fanned out (SUPPRESS never means DROP).
+        f_candidates, f_silent, f_seeded, f_suppressed = (
+            await _scan_verified_findings(
+                conn,
+                floor=floor,
+                window_hours=window_hours,
+                cooldown_hours=steady_cooldown_hours,
+                suppress_enabled=suppress_steady_state,
+            )
+        )
+        candidates.extend(f_candidates)
+        silent.extend(f_silent)
+        counts_by_class[TRIGGER_FINDING] = {
+            "candidates": len(f_candidates),
+            "guard_suppressed": len(f_suppressed),
+            "steady_cooldown_hours": steady_cooldown_hours,
+            "suppress_steady_state": suppress_steady_state,
+        }
+        if not f_seeded:
+            seeded_classes.append(TRIGGER_FINDING)
+        guard_suppressed_written, guard_suppressed_write_failures = (
+            await _steady_state_guard.write_suppressed(
+                conn,
+                f_suppressed,
+                analyst_id=analyst_id,
+                analyst_version=analyst_version,
+                run_uuid=run_uuid,
+            )
+        )
+
+        # Trigger 3 — contention flip. D2 KILL LIST (default OFF — see the
+        # module docstring's "D2" section and _daily_page_budget.handle_kill_switch).
+        c_candidates, c_silent, c_seeded = await _scan_contention_flips(
+            conn, floor=floor
+        )
+        silent.extend(c_silent)
+        if not c_seeded:
+            seeded_classes.append(TRIGGER_CONTENTION)
+        c_kill_stats = await _daily_page_budget.handle_kill_switch(
+            conn, TRIGGER_CONTENTION, c_candidates, enabled=contention_flip_enabled
+        )
+        if contention_flip_enabled:
+            candidates.extend(c_candidates)
+        counts_by_class[TRIGGER_CONTENTION] = {
+            "candidates": len(c_candidates) if contention_flip_enabled else 0,
+            **c_kill_stats,
+        }
 
         # Trigger 5 — operator watchlist hits (P5-6). Separate call shape:
         # the scan also returns per-class stats (watches evaluated / window
@@ -1533,12 +1736,9 @@ async def handle(
         if not wl_seeded:
             seeded_classes.append(TRIGGER_WATCHLIST)
 
-        # Trigger 6 — geo convergence (A7, folded 2026-07-29 from the former
-        # standalone geo_convergence_scan analyst). Same call shape as the
-        # watchlist scan: per-class stats (currently_formed_bins / cell vs
-        # country breakdown / window signal counts) ride the receipt's
-        # counts_by_class entry — the exact figures the standalone analyst's
-        # own summary finding used to report.
+        # Trigger 6 — geo convergence (A7, folded 2026-07-29). Same call
+        # shape as the watchlist scan: per-class stats ride counts_by_class.
+        # D2 KILL LIST — same treatment as contention_flip above.
         geo_candidates, geo_silent, geo_seeded, geo_stats = (
             await geo_convergence_scan.scan_geo_convergence(
                 conn,
@@ -1546,14 +1746,22 @@ async def handle(
                 min_families=geo_min_distinct_families,
             )
         )
-        candidates.extend(geo_candidates)
         silent.extend(geo_silent)
-        counts_by_class[TRIGGER_GEO_CONVERGENCE] = {
-            "candidates": len(geo_candidates),
-            **geo_stats,
-        }
         if not geo_seeded:
             seeded_classes.append(TRIGGER_GEO_CONVERGENCE)
+        geo_kill_stats = await _daily_page_budget.handle_kill_switch(
+            conn,
+            TRIGGER_GEO_CONVERGENCE,
+            geo_candidates,
+            enabled=geo_convergence_enabled,
+        )
+        if geo_convergence_enabled:
+            candidates.extend(geo_candidates)
+        counts_by_class[TRIGGER_GEO_CONVERGENCE] = {
+            "candidates": len(geo_candidates) if geo_convergence_enabled else 0,
+            **geo_kill_stats,
+            **geo_stats,
+        }
 
         # Trigger 7 — production deficit (S-1). Same 4-tuple call shape; the
         # per-class stats (loops / gauged / deficits / paging / escalations /
@@ -1600,6 +1808,7 @@ async def handle(
     # Anti-noise: per-desk cap, worst-first; remainder into one honest rollup.
     kept, rollup_cands = apply_desk_cap(candidates, per_desk_cap)
     suppressed = sum(int(r.data.get("suppressed_count", 0)) for r in rollup_cands)
+    pageable = kept + rollup_cands
 
     dispatcher = _resolve_dispatcher(deps)
     fired = 0
@@ -1610,7 +1819,30 @@ async def handle(
     to_fan_out: list[tuple[UUID, AlertCandidate]] = []
 
     async with pool.acquire() as conn:
-        for cand in kept + rollup_cands:
+        # D2 daily page budget — applied AFTER the guard + per-desk cap, on
+        # whatever survives both (see _daily_page_budget.apply_daily_page_budget).
+        # Marks every candidate's data['budget_deferred'] BEFORE
+        # _write_alert_row reads cand.data, so the row carries the decision.
+        day_start_utc = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        already_paged_today = await _count_paged_today(
+            conn, analyst_id, day_start_utc
+        )
+        # Kind-diversity cap (addendum) — DAY-cumulative per trigger_class,
+        # so a kind capped by an earlier scan today stays capped now.
+        already_paged_today_by_kind = await _count_paged_today_by_kind(
+            conn, analyst_id, day_start_utc
+        )
+        budget_deferred_count = apply_daily_page_budget(
+            pageable,
+            already_paged_today=already_paged_today,
+            budget=daily_page_budget,
+            per_kind_cap=budget_per_kind_cap,
+            already_paged_today_by_kind=already_paged_today_by_kind,
+        )
+
+        for cand in pageable:
             row_id = await _write_alert_row(
                 conn,
                 cand,
@@ -1630,7 +1862,11 @@ async def handle(
                 await _upsert_watermark(
                     conn, wm_class, wm_key, wm_state, fired=True
                 )
-            to_fan_out.append((row_id, cand))
+            # Budget-deferred candidates are written and watermarked exactly
+            # like any other — durable and never re-detected as a fresh
+            # transition — they are simply never handed to the dispatcher.
+            if not cand.data.get("budget_deferred"):
+                to_fan_out.append((row_id, cand))
 
     # Outward fan-out — best-effort by P1-1 contract; the rows are already
     # durable and every sink outcome lands its own ledger row.
@@ -1654,13 +1890,22 @@ async def handle(
                     exc,
                 )
 
-    if fired or rollups_written or seeded_classes:
+    if fired or rollups_written or seeded_classes or guard_suppressed_written:
         logger.info(
-            "alert_trigger_scan.done fired=%d rollups=%d suppressed=%d "
-            "seeded=%s write_failures=%d fanout_ok=%d fanout_failed=%d",
+            "alert_trigger_scan.done fired=%d rollups=%d rollup_suppressed=%d "
+            "guard_suppressed=%d budget_deferred=%d daily_page_budget=%d "
+            "budget_per_kind_cap=%d already_paged_today=%d "
+            "already_paged_today_by_kind=%s seeded=%s write_failures=%d "
+            "fanout_ok=%d fanout_failed=%d",
             fired,
             rollups_written,
             suppressed,
+            guard_suppressed_written,
+            budget_deferred_count,
+            daily_page_budget,
+            budget_per_kind_cap,
+            already_paged_today,
+            already_paged_today_by_kind,
             sorted(seeded_classes),
             write_failures,
             fanout_ok,
@@ -1678,6 +1923,13 @@ async def handle(
         fanout_failed=fanout_failed,
         fanout_unavailable=(dispatcher is None and bool(to_fan_out)),
         per_desk_cap=per_desk_cap,
+        guard_suppressed=guard_suppressed_written,
+        guard_suppressed_write_failures=guard_suppressed_write_failures,
+        budget_deferred=budget_deferred_count,
+        daily_page_budget=daily_page_budget,
+        already_paged_today=already_paged_today,
+        budget_per_kind_cap=budget_per_kind_cap,
+        already_paged_today_by_kind=already_paged_today_by_kind,
     )
     return AnalystMethodResult(
         finding=finding,
@@ -1687,9 +1939,13 @@ async def handle(
 
 __all__ = [
     "AlertCandidate",
+    "apply_daily_page_budget",
     "apply_desk_cap",
     "baseline_exceeds",
+    "budget_magnitude_tier",
+    "budget_sort_key",
     "classify_band_transition",
+    "classify_finding_suppression",
     "handle",
 ]
 

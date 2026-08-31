@@ -16,12 +16,49 @@ char/token accounting.
 **Part B — END-TO-END byte identity against the pre-refactor splice.** The real
 ``_run`` is exercised across every composition path; each ``_render_*`` block
 function is wrapped in a spy, and the prompt the pre-refactor code WOULD have
-produced is reconstructed from the observed renderer outputs using the verbatim
-068d515 splice logic (:func:`_ref_splice`). The reconstruction is compared
-byte-for-byte with the prompt production actually sent to the LLM.
+produced is reconstructed from the observed renderer outputs using the 068d515
+splice logic PLUS its dated post-baseline additions (:func:`_ref_splice`). The
+reconstruction is compared byte-for-byte with the prompt production actually
+sent to the LLM.
 
 Part B is the load-bearing proof: it does not re-implement ``_run``'s internals,
-it replays the ORIGINAL splice over the REAL blocks of a REAL run.
+it replays the splice — 068d515's order, plus each addition spliced at its own
+real application point — over the REAL blocks of a REAL run.
+
+**2026-08-27 addition — H4.** ``fix(analysts): H4 window`` (25226563) gave the
+composer a ninth block: ``composition_window.render_evidence_window_directive``,
+appended after ``desk_coverage`` and before the two PREPEND blocks (see
+``_run``'s "H4 — the EVIDENCE WINDOW" comment). It renders on every composition
+path with a datable head, which is why it touched all 15 non-``legacy_meta``
+parametrizations at once. Folded into :func:`_ref_splice` at its real position;
+see :data:`_BLOCK_FNS` for the tracked-renderer list.
+
+**Checked, not needed — H1.** The same 2026-08-27 batch (``feat(situations):
+H1``, 0c6344ad) added ``last_corroborated_at`` / ``evidence_age_days`` /
+STALE-NO-NEW-EVIDENCE to the situation-register render path
+(``window_ledger._render_situation_register_lines``, reached through
+``_render_continuity_block``). That path only renders when a run carries
+CONTINUITY-marked rows (``prior_row`` / ``register_situations`` /
+``ledger_entries`` all come from ``inputs`` rows stamped with
+``CONTINUITY_ROW_KEY``) — none of :func:`_scenarios` construct one, so
+``_render_continuity_block`` is never invoked here (confirmed: it is absent
+from :data:`_BLOCK_FNS` and stays that way) and H1 contributes no bytes to any
+prompt this file produces. No splice change was needed for it.
+
+**2026-08-29 — Checked, not needed — REGISTER-1c / 1g, and now MEASURED.**
+``REGISTER-1c`` stops ``_render_situation_register_lines`` printing an
+``unchanged_checkpoint``'s ``why``, and ``REGISTER-1g`` drops the ``situations``
+grounding source from ten ``inline_target`` descriptors. Neither reaches this
+file: 1c lives on the same continuity path H1 does (still uninvoked here), and
+1g is a UNIT-layer block, not a composition one — this file exercises
+``synth._run`` only. Both were checked exactly as H1 was, and the check now has
+a test behind it rather than a paragraph:
+:func:`test_the_register_render_contributes_no_bytes_to_any_scenario` replaces
+the register renderer with a CORRUPTED one and re-runs every scenario, asserting
+each prompt is byte-identical to the uncorrupted run. That turns "this file does
+not reach the register" from a claim about the code into a measurement — and it
+fails loudly the day a scenario starts constructing a CONTINUITY row, which is
+the day this docstring would otherwise go quietly out of date.
 """
 
 from __future__ import annotations
@@ -171,8 +208,11 @@ def test_assembler_matches_hand_splice_over_guard_matrix(flags: tuple[bool, ...]
 # ===========================================================================
 # Part B — end-to-end byte identity against the pre-refactor splice
 # ===========================================================================
-#: The block renderers the composer splices, in the order the ORIGINAL code
-#: applied them.
+#: The block renderers the composer splices. The first eight are in the order
+#: the ORIGINAL (068d515) code applied them; the ninth is a dated post-baseline
+#: addition (see the module docstring's "2026-08-27 addition — H4" note and
+#: :func:`_ref_splice`, which splices it at its real application point rather
+#: than at the tuple's tail).
 _BLOCK_FNS = (
     "_render_user_prompt",
     "_render_periphery_block",
@@ -182,6 +222,10 @@ _BLOCK_FNS = (
     "_render_desk_coverage_block",
     "_render_salience_lead_block",
     "_render_freshness_advisory_block",
+    # 2026-08-27 — H4 (25226563). Imported into ``synth`` from
+    # composition_window (like ``_render_periphery_block`` above), so it is
+    # spied and monkeypatched the SAME way despite living in another module.
+    "render_evidence_window_directive",
 )
 
 
@@ -218,11 +262,16 @@ class _BlockSpy:
 
 
 def _ref_splice(spy: _BlockSpy) -> str:
-    """The VERBATIM pre-refactor (068d515) block splice.
+    """The 068d515 block splice, plus its dated post-baseline additions.
 
     Reconstructs what the ad-hoc assembly WOULD have produced, from the blocks
-    the real run actually rendered. Kept structurally identical to the original
-    statements — do NOT tidy this into a loop; being a frozen copy is the point.
+    the real run actually rendered. The 068d515 portion is kept structurally
+    identical to the original statements — do NOT tidy it into a loop; being a
+    frozen copy is the point. Each addition below is spliced at the REAL
+    position ``_run`` applies it (per its own comment there), not tacked onto
+    the end, so the reconstruction still tracks the real application order —
+    see the module docstring for what has been added and why, and what was
+    checked and found NOT to apply (H1).
     """
     user_prompt = spy.one("_render_user_prompt")
     assert user_prompt is not None, "base prompt was never rendered"
@@ -251,6 +300,17 @@ def _ref_splice(spy: _BlockSpy) -> str:
     if _desk_block is not None:
         if _desk_block:
             user_prompt = user_prompt + "\n" + _desk_block
+    # 2026-08-27 — H4 (25226563): "if is_composition and _evidence_window:"
+    # (``_run``'s own guard). Appended directly after desk_coverage and before
+    # the two PREPEND blocks below — the real application position of the
+    # ninth ``_blocks.add(...)`` call, per ``_run``'s "H4 — the EVIDENCE
+    # WINDOW" comment. Same append rule as every block above it (separator
+    # "\n", empty renders skipped) — nothing about the splice MECHANICS is
+    # new, only that a ninth block now exists.
+    _evidence_window_block = spy.one("render_evidence_window_directive")
+    if _evidence_window_block is not None:
+        if _evidence_window_block:
+            user_prompt = user_prompt + "\n" + _evidence_window_block
     # if is_composition:
     _sal_block = spy.one("_render_salience_lead_block")
     if _sal_block is not None:
@@ -698,3 +758,95 @@ async def test_world_prompt_block_order_is_freshness_salience_findings() -> None
     i_region = p.index("REGION COVERAGE")
     i_aperture = p.index("APERTURE")
     assert i_fresh < i_sal < i_findings < i_region < i_aperture
+
+
+#: The bytes a corrupted register render would inject, if this file reached it.
+_REGISTER_CORRUPTION = "!!REGISTER-BLOCK-CORRUPTED-BY-THE-1C-DISCRIMINATOR!!"
+
+
+async def _all_scenario_prompts() -> list[str]:
+    """Every scenario's produced user turn, in matrix order."""
+    out: list[str] = []
+    for _name, rows, options in _SCENARIOS:
+        llm = _CapturingLLM()
+        await synth._run(
+            rows, options, llm=llm, max_tokens=512, temperature=0.2,
+            system_prompt="unused-global",
+        )
+        out.append(llm.user_prompt)
+    return out
+
+
+@pytest.mark.asyncio
+async def test_the_register_render_contributes_no_bytes_to_any_scenario(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REGISTER-1c / 1g — the "checked, not needed" note, MEASURED.
+
+    The module docstring has twice now recorded a situation-register change as
+    not applying to this file (H1 in August, 1c/1g on 2026-08-29). Both times the
+    reasoning was correct and both times it was an ARGUMENT: the register renders
+    only behind a CONTINUITY-marked input row and :func:`_scenarios` builds none.
+    An argument like that stops being true silently — the day someone adds a
+    scenario carrying a ``CONTINUITY_ROW_KEY`` row, this file starts carrying
+    register bytes and its docstring starts lying.
+
+    So: CORRUPT the renderer and re-run the whole matrix. If the register
+    contributed a single byte to any prompt, the corrupted output would appear in
+    it and the byte-identity assertion below would fail. It passing is a
+    measurement that the register is genuinely absent — which is what licenses
+    changing the register render without touching the splice.
+
+    Deliberately NOT a spy in :data:`_BLOCK_FNS`: adding it there would make
+    :func:`_ref_splice` responsible for a block the composer does not splice, and
+    :func:`test_scenarios_actually_exercise_every_block` would then demand a
+    scenario that renders it — inverting the very property being proven.
+    """
+    from legba.data.analysts import window_ledger as wl
+
+    baseline = await _all_scenario_prompts()
+    assert baseline and any(baseline), "the matrix must produce real prompts"
+
+    def _corrupt(situations: Any, ordinal: int) -> list[str]:
+        return [_REGISTER_CORRUPTION, f"{_REGISTER_CORRUPTION} ord={ordinal}"]
+
+    # Both names, because the register render is reachable under two: the
+    # composition splice path imports it into ``synth``, and ``window_ledger``
+    # owns it. Patching one and not the other would prove half the property.
+    monkeypatch.setattr(synth, "_render_situation_register_lines", _corrupt)
+    monkeypatch.setattr(wl, "_render_situation_register_lines", _corrupt)
+
+    corrupted = await _all_scenario_prompts()
+
+    assert corrupted == baseline, (
+        "a corrupted situation-register render changed a composer prompt — this "
+        "file DOES reach the register now, so REGISTER-1c/1g (and any future "
+        "register render change) must be spliced into _ref_splice rather than "
+        "recorded in the docstring as not applying"
+    )
+    assert not any(_REGISTER_CORRUPTION in p for p in corrupted)
+
+
+@pytest.mark.asyncio
+async def test_the_corruption_discriminator_can_actually_fail() -> None:
+    """The control for the test above: prove the corrupted renderer really does
+    leave a visible mark, so a green result there is absence of the register and
+    not absence of a working probe.
+
+    Without this, replacing ``_corrupt`` with something that returned the real
+    lines would make the discriminator vacuously pass forever.
+    """
+    from legba.data.analysts import window_ledger as wl
+
+    def _corrupt(situations: Any, ordinal: int) -> list[str]:
+        return [_REGISTER_CORRUPTION, f"{_REGISTER_CORRUPTION} ord={ordinal}"]
+
+    real = "\n".join(
+        wl._render_situation_register_lines(
+            [{"name": "f", "status": "active", "intensity_score": 1.0}], 3
+        )
+    )
+    fake = "\n".join(_corrupt([{"name": "f"}], 3))
+    assert _REGISTER_CORRUPTION in fake
+    assert _REGISTER_CORRUPTION not in real
+    assert fake != real

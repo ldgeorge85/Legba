@@ -19,7 +19,7 @@
  */
 import { useState } from 'react'
 import type { PanelProps } from '@/types'
-import { PanelTabStrip, type PanelTabDef } from '@/components/PanelTabs'
+import { initialTab, PanelTabStrip, type PanelTabDef } from '@/components/PanelTabs'
 import { PanelEmbedProvider } from '@/components/PanelEmbedContext'
 import ConsultPanel from '@/panels/system/Consult'
 import DeepConsultPanel from '@/panels/system/DeepConsult'
@@ -32,7 +32,8 @@ const TABS: readonly PanelTabDef[] = [
 ]
 
 export default function ConsultMerged(props: PanelProps) {
-  const [depth, setDepth] = useState<Depth>('chat')
+  // `system.deep_consult` retired onto the "deep" depth (aliases.ts).
+  const [depth, setDepth] = useState<Depth>(() => initialTab(props.initialTab, TABS, 'chat') as Depth)
   return (
     <div className="flex h-full w-full flex-col bg-surf-2">
       <div className="flex items-center gap-2 border-b border-line bg-surf-3 px-density py-1.5">

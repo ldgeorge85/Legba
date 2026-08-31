@@ -38,6 +38,17 @@ from legba.data.analysts.deterministic_handlers import fact_contention_arbiter a
 NOW = datetime(2026, 6, 29, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _frozen_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the arbiter's clock to :data:`NOW`, the instant the fixtures date
+    from — the tail file's fix applied here too. This file's full-pass test
+    only asserts a cause-independent invariant, so it never FAILED as the rows
+    aged past the recency floor — it just silently stopped exercising the
+    near-tie routing it was written for (a MEANING bomb, not a failure bomb;
+    see ARBITER_TAIL_FIX.md item 3)."""
+    monkeypatch.setattr(arb, "_now", lambda: NOW)
+
+
 # ---------------------------------------------------------------------------
 # Fake pool / conn — captures every execute + scripts fetch/fetchval results.
 # ---------------------------------------------------------------------------

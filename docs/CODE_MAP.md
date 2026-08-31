@@ -308,6 +308,9 @@ The HTTP/WebSocket API is `server.py` (the `legba-registry` entry point, port
 | `journal_api.py` | `/api/v1` | journal entries read — `GET /api/v1/journal` (the reflective-voice feed) |
 | `journal_proposals_api.py` | `/api/v1` | journal proposal review queue — `GET /api/v1/journal_proposals` + `POST .../{id}/accept` / `.../{id}/reject` (human-gated) |
 | `production_gauge_api.py` | `/api/v1/v3` | S-1 expected-vs-actual production gauge — `GET /api/v1/v3/system/production-gauge`, one row per producing loop (analyst cadence, analyst output, source signal production, declared backlog drain), worst-first |
+| `read_events_api.py` | `/api/v1` | the read-telemetry ledger (migration 0189) — `POST /read-events` (append a batch, 202; per-event validation, a bad event is dropped and counted rather than failing the batch; one `executemany`, no joins at write time) and `GET /read-events/rollup?days=N` (bounded `[1,365]`, grouped in Postgres so a polling tile can't become a table scan). The table is append-only: `DELETE`/`UPDATE` fail loud at a trigger |
+| `external_audit_api.py` | `/api/v1/v3` | the standing external auditor's board — `GET /v3/system/external-audit?days=N`: the heartbeat (`present` / `age_hours` / `stale` past 30h / `degraded_reason` / `claims_checked`), the verdict mix, the CONTRADICTED rows by name with source URLs, and a `contradiction_rate` over *checked* claims that is **absent, never `0.0`**, when nothing was checked. Never 500s at a polling panel |
+| `escalation_delivery.py` | *(imported by `v3_api.py`)* | not a mounted router — the escalation-delivery route's models + pure reducer, split out when projecting the two banding-semantics stamps onto `GET /v3/eval/country_scorecard` pushed `v3_api.py` over its ceiling. Imported back and aliased (the `scorecard_reconcile` precedent), so every call site and test stays byte-identical |
 
 `production_gauge.py` holds the gauge's expectation model and is the SAME
 judgment the `production_deficit` alert-trigger class reads (the
@@ -391,6 +394,22 @@ The runner
 (`migrate.py`) globs `*.sql` in order; cold-start from empty volumes is one-shot.
 The historical 30-step chain remains in git; add a migration by dropping the
 next-numbered `.sql` here (see §5).
+
+**Current head: `0189`.** The four newest, because two of them move live rows
+rather than only adding structure: `0186_analyst_traces_prompt_sha256.sql`
+(additive column + index, no backfill — the hash is over the FULL prompt even
+when `prompt_rendered` is truncated at 32k);
+`0187_band_calibration_semantics_migration.sql` (additive boolean, so the
+calibration aggregation can exclude stamp-migration transitions by query
+predicate and report the excluded count rather than hide it);
+`0188_situation_mega_frame_split.sql` (**the heavy one** — re-stamps
+`situation_signature` on derived-key findings and their supersession audit
+rows, splits each open mega-frame into one `situations` row per producing
+dimension conserving members / intensity share / validity window, and re-bases
+`hypotheses.intensity_at_emit` by the same share while preserving the original
+in `intensity_at_emit_pre_0188` — the guard that stops a re-scale from
+mass-refuting ~4,400 live hypotheses); and `0189_read_events.sql` (the
+append-only read-telemetry ledger, §2.2).
 
 ### 2.5 `sources/` — source-kind handler library
 
@@ -550,6 +569,46 @@ see the spine notes above), `critic.py`, `optimizer.py` (GEPA loop —
 `cross_analyst_correlator.py`,
 `deep_consult.py`, `consult_on_demand.py`,
 `journal_assessor.py` (the `journal` kind — see below).
+
+**The composition + slice siblings** — extracted from the two largest analyst
+modules under the module-size gate, and every one of them invisible to this
+map until the 2026-08-29 catch-up:
+
+- `composition_window.py` — the composition's real evidence window:
+  `evidence_window_span` computes the true oldest/newest `produced_at` among
+  the CONSUMED heads (rows `head_ages_stamp` already reads, zero extra
+  queries) and `render_evidence_window_directive` hands the model a copy-only
+  EVIDENCE WINDOW block. Replaced a model-derived as-of instant that drifted.
+- `window_ledger.py` — the coverage/window ledger block rendered into the
+  composition prompt (and the register checkpoint rendering the
+  2026-08-29 pass trimmed to a date + delta name).
+- `composition_prompts.py` — the four composition prompt bodies, lifted out
+  of the synthesizer so a doctrine revision is a diff on prose, not on a
+  5,000-line module.
+- `composition_coercion.py` (2026-08-29) — the output-coercion seam:
+  `_coerce_finding`, `_looks_like_resolvable_evidence`, and the
+  salvage-or-raise degrade path. `output_contract.salvage_json_envelope`
+  unwraps a JSON-wrapped composition body when the intent is unambiguous and
+  **raises `OutputContractError` (→ DLQ) when it is not** — never publishes
+  the envelope as the body, which is what used to happen. Synthesizer −117
+  lines.
+- `wire_pair_collapse.py` — same-wire-story collapse: two mastheads carrying
+  one agency dispatch reach a desk as ONE numbered signal. **Not desk-scoped**
+  — `inline_target._orient` calls it unconditionally and the function takes no
+  analyst identity at all, only the row list (a 2026-08-27 sweep read the
+  module's narrative-desk motivating example as scoping it, and regression
+  coverage now runs it across five named desks so it cannot silently
+  re-scope). Both signal ids stay in `derived_from`; the survivor renders a
+  `carried_by=` masthead line. Guard: **≥2 DISTINCT mastheads**, which is what
+  keeps same-title auto-generated disaster alerts from collapsing.
+- `slice_render.py` — the render-side slice statistics (`_slice_render_stats`
+  moved here: every counter it emits is a statement about what the render did
+  to a row).
+- `open_question_conversion.py` (2026-08-30) — the post-persist open-question
+  conversion, extracted from `inline_target.py` to buy back ceiling headroom.
+  Re-exports `convert_open_questions`, so the frozen `runtime/dapr_actors.py`
+  is unaffected; note the logger name moved with the code even though the log
+  message key did not.
 `deterministic_handlers/` holds the deterministic analyst impls (e.g. the spine
 handlers `scorecard_banding.py` + `scorecard_producer.py`,
 `unit_correctness_scorer.py`, `forecast_acute.py` + `forecast_scoreboard.py`,
@@ -575,9 +634,9 @@ promotion), `hypothesis_lifecycle.py`, `structural_balance.py`,
 `_graph_metrics_sink.py` (Phase D — `write_graph_metric` helper),
 `anomaly_detection.py`).
 
-**The rest of the directory — it is 50 modules, not the ~29 this map used to
-name, and the two LARGEST were among the unnamed.** The families the older
-enumeration froze out:
+**The rest of the directory — it is 58 modules, not the ~29 this map used to
+name (and not the 50 the previous correction froze at), and the two LARGEST
+were among the unnamed.** The families the older enumeration froze out:
 
 - alerting / watch — `claim_watch.py` (the biggest module in the directory),
   `alert_trigger_scan.py`, `_watchlist_scan.py`;
@@ -593,9 +652,48 @@ enumeration froze out:
 - retention + archive — `_retention_sweep.py` (the ONE engine both retention
   handlers drive, configured by the `retention_policies` table),
   `analyst_traces_retention.py`, `evidence_archiver.py`, `fact_decay_scan.py`;
-- gated off — `bearing_gate.py` (`DEFAULT_BEARING_GATE = "off"`).
+- gated off — `bearing_gate.py` (`DEFAULT_BEARING_GATE = "off"`);
+- **external audit (2026-08-29)** — `standing_auditor.py`, the platform's
+  first analyst that checks a claim against the WORLD rather than against
+  internal consistency: it samples the world read plus a rotating subset of
+  desk reads, extracts checkable world-claims, checks each through the
+  **`web_access` action pack** (never ad-hoc HTTP), and writes
+  `SUPPORTED`/`CONTRADICTED`/`NOT_FOUND`/`UNCHECKED` per claim. Registered
+  `TRACE_ONLY` — the real product is side-written critique / alert / heartbeat
+  rows. **It writes a heartbeat on every run, including a run that audits
+  nothing**, so "nothing to contradict" and "the auditor is dead" cannot look
+  alike. Its pure logic (desk rotation, priority pre-sort, full-width-bracket
+  normalization, strict-JSON verdict parsing) is the sibling
+  `_external_audit_sampling.py`; its verdicts are keyed by
+  `EXTERNAL_AUDIT_PIPELINE_VERSION`, deliberately a separate population key
+  from `JUDGE_PIPELINE_VERSION`. Read route: `registry/external_audit_api.py`;
+  tool binding: `runtime/external_audit_binding.py`.
 
-The dispatch table is `deterministic.SUB_HANDLERS` (40 entries); the modules NOT
+**`alert_trigger_scan.py`'s own siblings** deserve naming, because the scan is
+now a family rather than a module — each split off under the module-size gate
+and each owning one decision:
+
+- `_band_crossing_scan.py` — the band-crossing class, including the
+  semantics-migration pre-emption (a stamp mismatch between two cards is a
+  MIGRATION, not a world event: low severity, one folded informational alert
+  per desk rather than one per dimension).
+- `_steady_state_guard.py` — the three-condition suppression on
+  `verified_finding` (banded severity unchanged AND movement tag
+  `steady`/absent AND inside the desk's cooldown). Owns the
+  `verified_finding_state` watermark namespace — a new `trigger_class` value
+  in the existing `alert_trigger_watermarks` table, no migration. Fails
+  toward paging.
+- `_daily_page_budget.py` — the fleet-wide daily page budget
+  (`DEFAULT_DAILY_PAGE_BUDGET = 5`), the per-kind diversity cap
+  (`DEFAULT_BUDGET_PER_KIND_CAP = 3`, day-cumulative), and the kill-list
+  handling. Over-budget candidates still write their row tagged
+  `data.budget_deferred=true`; a killed class still advances its watermarks
+  as if it had fired, so re-enabling is a flip and not a backlog.
+- `_watchlist_scan.py`, `geo_convergence_scan.py`,
+  `_production_deficit_scan.py`, `_situation_escalation_scan.py` — the
+  earlier siblings, same pattern.
+
+The dispatch table is `deterministic.SUB_HANDLERS` (42 entries); the modules NOT
 in it are imported helpers, not orphans. Note the package `__init__.py` eagerly
 imports only a subset while `deterministic.py` imports every registered one —
 two partial, hand-maintained import lists for one directory. `agency/` is the **action-pack
@@ -708,18 +806,55 @@ floor, never a fabricated score), `checkpointer.py` durable checkpoints,
 
 The **judge subsystem** is the named extraction seam `verify.py` is being split
 along (its module-size ceiling is DO-NOT-RAISE; the way under it is a brick, not
-a bigger number). Four so far: `judge_evidence.py` renders the evidence view the
-judge grades against; `judge_assessability.py` owns claim SHAPE (the corrected
-labeled-scaffold rule, the JSON tripwire) and SCORE STATE (`unassessable` vs
-`scored`, the PROVISIONAL ceiling for a non-`llm` verdict, and the critique-payload
-contract that publishes them); `judge_input_checks.py` grades a composition
-against what it was SHOWN rather than what it cited — a buried salience lead (R3)
-and a detected input contradiction the body never surfaced (R2), both counted soft
-failures; and `judge_quote_rules.py` owns the hard-fail quote contract — the
-withdraw-only guard family (word-numeral/digit/unit/percent confirmation
-fingerprints, endpoint-aware ranges, diverging prose direction, carve-out
-clauses, one-authority claim routing) that retracts a contradiction whose quote
-actually confirms the claim. The contradiction detection itself is `analysts/claim_contradiction.py`.
+a bigger number). **Eight bricks so far** — this map named four for a while and
+went stale through three extractions in a single week; if you add a ninth, add
+it here in the same breath.
+
+- `judge_evidence.py` renders the evidence view the judge grades against.
+- `judge_assessability.py` owns claim SHAPE (the corrected labeled-scaffold
+  rule, the JSON tripwire) and SCORE STATE (`unassessable` vs `scored`, the
+  PROVISIONAL ceiling for a non-`llm` verdict, and the critique-payload
+  contract that publishes them).
+- `judge_input_checks.py` grades a composition against what it was SHOWN
+  rather than what it cited — a buried salience lead and a detected input
+  contradiction the body never surfaced, both counted soft failures.
+- `judge_quote_rules.py` owns the hard-fail quote contract — the withdraw-only
+  guard family (word-numeral/digit/unit/percent confirmation fingerprints,
+  endpoint-aware ranges, diverging prose direction, carve-out clauses,
+  one-authority claim routing) that retracts a contradiction whose quote
+  actually confirms the claim. The contradiction detection itself is
+  `analysts/claim_contradiction.py`.
+- **`judge_verdict_parsing.py`** (2026-08-27) — the JUDGE-VERDICT PARSING
+  cluster: `_JudgeVerdictError`, `_extract_json_objects`, `_judge_reason`,
+  `_judge_detail`, plus the uncited-world-baseline helper that rode along.
+  Imported back ONE WAY and re-exported, so every caller and test resolves
+  unchanged. **The AST-level fail-class drift guard
+  (`tests/data_pkg/test_verify_claim_ledger.py`) parses this module too** —
+  without that, every `judge_*` reason would report DEAD the moment the
+  function moved house. The severity DECISION (`_DEMOTION_COUNTERS`) and the
+  markerless-uncited fold deliberately stay in `verify.py`: both manipulate
+  report/ledger types this module does not own.
+- **`composition_integrity.py`** (2026-08-27) — grades a composition against
+  **the desk reads it cites**, using evidence the pass already held in
+  `citations[].evidence_text` and had never read. Four arms:
+  `absence_scope_laundered` (soft), `attribution_direction_conflict` (HARD),
+  `attribution_asserts_desk_negative` (soft), `attribution_ungrounded_quote`
+  (soft). Carries **its own** collection-scope predicate — the shared lexicon
+  minus the two time nouns, because a time bound answers *when* and only a
+  collection bound answers *what was searched*.
+- **`world_knowledge_guards.py`** (2026-08-28) — the world-knowledge guard
+  family lifted out of `verify.py` whole (the M13/M15/E-1 cluster);
+  behaviour-neutral, ceiling unchanged, `verify.py` 5,891 → 5,526.
+- **`judge_floor_escalation.py`** (2026-08-29) — floor-triggered judging: an
+  unjudged finding about to be excluded by the composition verify floor is
+  re-entered through `verify_finding_faithfulness` at rate 1.0 *first*, so the
+  floor may only exclude on JUDGED evidence. Owns enablement
+  (`LEGBA_JUDGE_FLOOR_ESCALATION`, unset = ON), floor resolution (reuses
+  `LEGBA_COMPOSITION_VERIFY_FLOOR` rather than duplicating it), the escalation
+  predicate, the re-entry wrapper, and the counters. Writes `judge_trigger`
+  (`sampled` / `floor_escalation`) plus the pre-escalation score and status
+  onto the critique payload, so an escalated verdict is never pooled with a
+  sampled one.
 
 > **The `journal` kind is the one OFF-chain exception** (`kinds.py`,
 > `OutputKind.JOURNAL` + its `KIND_REGISTRY` spec).
@@ -889,9 +1024,13 @@ substrate + reconcile loop:
 `pipeline.py` the enrichment pipeline; `analyst_method.py` the analyst run
 method; `budget.py` budget enforcement; `substrate_query_port.py` the
 substrate read port; `audit_checkpointer_wiring.py` audit / checkpoint
-wiring. (The orphaned `lineage.py` / `scheduling.py` modules were deleted by
-C-3 — zero callers; lineage reads live in the registry `lineage_api`, cadence
-in the Dapr reminder plumbing.)
+wiring; `external_audit_binding.py` builds the `web_access`
+`AgencyToolBinding` for the `standing_auditor` sub-handler — the auditor
+reaches external search **only** through the governed pack, and with no
+search binding it refuses to spend a model call at all rather than auditing
+against nothing. (The orphaned `lineage.py` / `scheduling.py` modules were
+deleted by C-3 — zero callers; lineage reads live in the registry
+`lineage_api`, cadence in the Dapr reminder plumbing.)
 
 `grounding.py` is the **Tier-1 knowledge-grounding** module (analysis-time
 current-world-state injection — the stale-cutoff fix): `SubstrateGroundingResolver`
@@ -961,8 +1100,11 @@ src/
   state/                   client state — selection.ts (unified record-selection store)
   lib/                     api.ts (registry client), ws.ts/useLiveTail.ts (live tail),
                            starter-descriptors.ts, and per-view models (graphModel,
-                           findingsViews, alertModel, geoPoints, timelinePoints, …)
-  panel-registry/          dynamic panel registry + loader (registry.ts, loader.ts, useRegistry.ts)
+                           findingsViews, alertModel, geoPoints, timelinePoints,
+                           citationsModel, …); workspaces.ts + readTelemetry.ts +
+                           readScoreboard.ts (see below)
+  panel-registry/          dynamic panel registry + loader (registry.ts, loader.ts, useRegistry.ts),
+                           aliases.ts (retired-kind → survivor table — see below)
   components/              CommandPalette.tsx (record-jump palette), Sidebar.tsx (workspace
                            switcher + demoted menu), inspector/ (InspectorPanel.tsx +
                            RecordLink.tsx + useInspectorDetail.ts — the unified Inspector),
@@ -990,6 +1132,46 @@ src/
     _DeferredStub.tsx      placeholder for not-yet-built panels (future-seam UIs)
 ```
 
+**The 2026-08-29/30 shell modules**, because none of them is inferable from a
+directory listing:
+
+- `lib/workspaces.ts` — **the six stances as DATA**: id, label, the question
+  each answers, its `Alt+N` index, an ordered seed using the `PresetPlacement`
+  shape, default-active tabs, pinned proportions, plus `seedWorkspace` /
+  `sizeWorkspace`. The landing is no longer a hardcoded boot grid; it is the
+  Morning Read stance's seed. Layouts persist per stance under `legba_ws`
+  (`{schemaVersion, layout}`); the legacy `legba_layout_custom` key is
+  preserved and copied once into the Morning Read slot on first boot.
+- `components/WorkspaceBar.tsx` — the stance tabs (`aria-selected`, the
+  active-stance caption, the per-stance reset).
+- `panel-registry/aliases.ts` — **replaces `HIDDEN_KINDS` as the retirement
+  mechanism.** A table of retired kind → survivor (with the tab to land on),
+  consumed by `resolvePanel`, both panel openers, and a `fromJSON` pre-pass on
+  both layout loaders — so a saved layout naming a retired kind resolves to
+  its survivor instead of restoring a tombstone. Twelve kinds retired this way
+  (registry 67 → 55; nothing deleted). **The pre-pass must dedupe globally,
+  not per dock group** — tracking per group let two retired tiles in different
+  groups resolving to the same survivor mount that panel three times, caught
+  only by a test that mounts the REAL dock (`aliasesRuntime.test.tsx`), which
+  is now the standing pattern for layout-level behaviour.
+- `lib/readTelemetry.ts` — the read-events emitter: 4s batch/debounce, a
+  200-event bounded queue that drops OLDEST, `sendBeacon` on
+  `visibilitychange`/`pagehide`/`beforeunload`, a 1200 ms dedupe window keyed
+  `(kind, workspace, subject)`, and **fail-silent in every path** (`console.debug`,
+  never throws). A failed batch is dropped, not retried — a retry would
+  backdate a week of reading into one minute. Emission is at seven
+  **chokepoints**, not at call sites.
+- `lib/readScoreboard.ts` + `panels/system/ReadScoreboard.tsx` — pure
+  data-shaping and the scoreboard panel (`system.read_scoreboard`, the 56th
+  kind). An empty log renders as a stated finding, not a broken panel.
+- `lib/citationsModel.ts` — the shared citation vocabulary
+  (`GroundingKind`/`GROUNDING_KINDS`, `citationDrill`, `citationKindLabel`,
+  `citationAnchorId`, `isGroundingCitation`) that `CitedProse`,
+  `CitedAssessment`, `EntityGraph` and `reportDownload` all read. It
+  previously recognised ONE grounding kind out of six, which is why a
+  resolved window-ledger reference rendered as an "unresolved citation"
+  warning and a prior-read reference drilled to a signal that does not exist.
+
 **Panel tiers (present-but-hidden is a deliberate distinction).**
 `panel-registry/registry.ts` `def()` returns a machine-readable `tier: 'live'`
 by default; two sets then reclassify in one place:
@@ -1000,7 +1182,13 @@ by default; two sets then reclassify in one place:
   `tenant_view`).
 - `HIDDEN_KINDS` flips `hidden = true` so a panel stays in `PANEL_REGISTRY`
   (layouts referencing it by id still resolve) but drops out of the sidebar /
-  singleton list. **These panels are present-but-hidden, NOT file-deleted** —
+  singleton list. **It is no longer the retirement mechanism** — that is
+  `panel-registry/aliases.ts` (UI_HOLISTIC_DESIGN_2026-08-24 §4.4), a data table
+  mapping a retired id onto the survivor that renders it (and the tab that IS
+  the retired surface), resolved by `resolvePanel`, both `App.tsx` panel
+  openers, and a `fromJSON` pre-pass that also collapses duplicates and drops
+  the unresolvable. Hiding cost a registry ROW per retirement; an alias costs a
+  line. What is still hidden is the set with no survivor to alias onto yet. **These panels are present-but-hidden, NOT file-deleted** —
   the §6 redesign + #90 Wave A consolidation HID them (`system.pulse`,
   `system.eval`, `registry.discovery`, `system.targets.roster`, `v4.case`,
   `v4.assessment`, `system.runtime`, `system.tenant_view`, …), they were not

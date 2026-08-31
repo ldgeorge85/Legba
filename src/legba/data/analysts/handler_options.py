@@ -372,6 +372,48 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
             minimum=2,
             maximum=1000,
         ),
+        # -- FRAME-3 steady-state guard (2026-08-29) --------------------------
+        _nonneg_float(
+            "steady_cooldown_hours",
+            "verified_finding: a desk's unchanged-band candidate is "
+            "suppressed only within this many hours of the desk's last real "
+            "page; 0 disables the cooldown (every unchanged candidate pages).",
+            maximum=_MAX_WINDOW_HOURS,
+        ),
+        _flag(
+            "suppress_steady_state",
+            "verified_finding: the FRAME-3 guard's master switch. False "
+            "reproduces pre-guard behavior exactly — every verified_finding "
+            "candidate pages.",
+        ),
+        # -- D2, the 90-day product wager (2026-08-29) ------------------------
+        _nonneg_int(
+            "daily_page_budget",
+            "Fleet-wide hard cap on ACTUAL pages (fan-outs) per UTC calendar "
+            "day, across every trigger class, applied after the FRAME-3 "
+            "guard and the per-desk cap. 0 pages nothing.",
+            maximum=100_000,
+        ),
+        _nonneg_int(
+            "budget_per_kind_cap",
+            "Kind-diversity cap: no single trigger_class may take more than "
+            "this many of the day's daily_page_budget slots (cumulative "
+            "across scans). Prevents one always-critical class (e.g. "
+            "situation_escalation) from starving every other kind; a slot "
+            "no other kind can fill stays unused rather than backfilled.",
+            maximum=100_000,
+        ),
+        _flag(
+            "contention_flip_enabled",
+            "D2 kill list: contention_flip defaults OFF. The scan still "
+            "runs and its watermarks still advance as if fired; disabled, "
+            "no row is written and nothing pages.",
+        ),
+        _flag(
+            "geo_convergence_enabled",
+            "D2 kill list: geo_convergence defaults OFF. Same treatment as "
+            "contention_flip_enabled.",
+        ),
         # -- S-1 production gauge (production_deficit class) -----------------
         # Every knob is a legba.data.registry.production_gauge.GaugeConfig
         # field under the `gauge_` prefix, so the route and the alert plane
@@ -1085,6 +1127,23 @@ HANDLER_OPTIONS: dict[str, tuple[OptionSpec, ...]] = {
     ),
     "composition_lineage_sweep": (
         _window_hours("window_hours", "Composition-root window swept per run."),
+    ),
+    # D5 standing external audit. Every knob here bounds a COST (heads read,
+    # core-plane calls, external searches), so an operator can widen or narrow
+    # the daily audit without a code edit — the volume is deliberately tiny and
+    # this is where that decision lives.
+    "standing_auditor": (
+        _window_hours(
+            "window_hours", "Desk-head recency window the rotation draws from."
+        ),
+        _pos_int("max_desks", "Desk heads sampled per run (world read is extra)."),
+        _pos_int(
+            "max_claims_per_head", "Checkable claims lifted from one head."
+        ),
+        _pos_int(
+            "max_claims_total", "Hard cap on claims audited in one run."
+        ),
+        _pos_int("search_limit", "Results requested per web_search call."),
     ),
     "indicator_tracker": (
         _window_days("lookback_days", "Run-over-run diff window."),

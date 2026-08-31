@@ -68,6 +68,7 @@ __all__ = [
     "extract_json_object",
     "is_unusable_output",
     "repair_confidence_word_token",
+    "salvage_json_envelope",
     "strip_tool_plan_preamble",
 ]
 
@@ -338,3 +339,242 @@ def is_unusable_output(body: str) -> bool:
             continue
         return False
     return True
+
+
+# ---------------------------------------------------------------------------
+# The JSON-ENVELOPE LEAK (2026-08-29) — unwrap it, or fail; never publish it
+# ---------------------------------------------------------------------------
+#
+# WHAT THIS CLOSES. The world composition of 2026-08-29 12:00Z
+# (``823ff9dd-89b9-47f9-9c7e-8c9cc631e31d``) published a BODY that was the
+# model's raw JSON envelope, escapes and all:
+#
+#     { "title": "Russia mobilization heightens European escalation risk…",
+#       "body": "*As of 29 August 2026; composed from 6 region reads…\n\n…" }
+#
+# Nothing was broken at the LLM layer: ``finish_reason=stop``, same model, same
+# subprovider and the same prompt template as the healthy 00:00Z run twelve
+# hours earlier. The model simply invented an unrequested sixth key,
+# ``body_additional_sections``, and emitted it MALFORMED — a member of the shape
+# ``"## Tension": "…text…": "…text…"``, two string values for one key. That is a
+# syntax error, ``json.loads`` raised on it, and the composition coercer's
+# fail-SAFE branch stored ``body=raw`` and shipped.
+#
+# The fault is not the model's mangled sixth key. It is that ONE malformed token
+# ANYWHERE in the envelope forfeits the whole contract, including the ``title``
+# and ``body`` string literals that were sitting there COMPLETE and well-formed
+# two lines above the break. Downstream reads it as analysis: the faithfulness
+# judge segmented the JSON blob into 2 checkable claims instead of the healthy
+# run's 13, scored 0.50 against 0.85, and the finding shipped at 0.30.
+#
+# THE RULE. A completion that is JSON-SHAPED is a contract attempt, and it has
+# exactly two honest outcomes:
+#
+#   * UNWRAP, when the envelope's own ``body`` is recoverable UNAMBIGUOUSLY —
+#     the object closes, and ``body`` is a COMPLETE, decodable JSON string
+#     literal at the top level. What is recovered is then real markdown, and the
+#     broken sixth key is simply not carried.
+#   * RAISE, otherwise — truncated mid-string, an object that never closes, a
+#     ``body`` that is not a string, no ``body`` key at all (the tool-call JSON
+#     shape: ``{"action": "search_corpus", …}``), or a body that decodes to
+#     nothing. :class:`OutputContractError` routes the run to the pipeline's
+#     existing error path per ``kind_contracts`` §7, where a human sees it.
+#
+# There is no third outcome, and in particular PUBLISHING THE ENVELOPE is not
+# one. A JSON blob in the body column is indistinguishable from analysis at
+# every layer above this one — which is exactly how this one survived to a
+# product surface and was found by an operator READING it.
+#
+# PROSE IS NOT JSON-SHAPED and is not touched: a completion that does not open
+# with ``{`` returns ``{}`` here and keeps its caller's degrade path
+# byte-for-byte. D27's plain-markdown finding still lands.
+#
+# RELATIONSHIP TO ``inline_target._salvage_envelope_body`` (#125). That helper
+# solves the same leak on the UNIT path and is deliberately LENIENT: it accepts
+# a truncated body and minimally unescapes what it can, because a unit read cut
+# off mid-sentence is still worth keeping. This one is deliberately STRICT,
+# because a composition is a scheduled cadence with a retry behind it: a partial
+# world read is worth LESS than an honest failure that runs again. Two tiers,
+# two contracts, one doctrine — never publish the wrapper.
+
+
+def _read_json_string(text: str, i: int) -> tuple[str | None, int]:
+    """Read the JSON string literal opening at ``text[i]``.
+
+    Returns ``(raw_span_without_quotes, index_after_the_closing_quote)``, or
+    ``(None, len(text))`` when the literal is UNTERMINATED — the signature of a
+    completion the stream cut off mid-value. Escape-aware, so a ``\\"`` inside
+    the value does not end it.
+    """
+    j = i + 1
+    escaped = False
+    while j < len(text):
+        char = text[j]
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == '"':
+            return text[i + 1:j], j + 1
+        j += 1
+    return None, len(text)
+
+
+def _skip_json_value(text: str, i: int) -> int:
+    """Skip a non-string member value, returning the index of the ``,`` that
+    follows it (one past) or of the envelope's own closing ``}``.
+
+    Depth- and quote-aware, so a nested object or array is skipped whole. It
+    does NOT validate what it skips: the whole point is that a member we do not
+    need may be malformed — that is the defect this module closes — and a
+    malformed member must not cost us the members we DO need. Returns ``-1``
+    when the text runs out first (truncated).
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    while i < len(text):
+        char = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char in "{[":
+            depth += 1
+        elif char in "}]":
+            if depth == 0:
+                return i  # the envelope's own closing brace
+            depth -= 1
+        elif char == "," and depth == 0:
+            return i + 1
+        i += 1
+    return -1
+
+
+def _scan_top_level_strings(text: str) -> dict[str, str] | None:
+    """Every TOP-LEVEL string-valued member of the first JSON object in ``text``,
+    as ``{key: undecoded_span}``. ``None`` when the object does not close.
+
+    Depth-1 only, and quote-aware at every step — a ``"body"`` token sitting
+    INSIDE another member's string value is never mistaken for the envelope's
+    own ``body`` key, which is the difference between an unambiguous unwrap and
+    a regex guess. Nested members (objects, arrays, numbers, literals) are
+    skipped by :func:`_skip_json_value` without being validated.
+    """
+    start = text.find("{")
+    if start == -1:
+        return None
+    fields: dict[str, str] = {}
+    i = start + 1
+    while i < len(text):
+        char = text[i]
+        if char in ", \t\r\n":
+            i += 1
+            continue
+        if char == "}":
+            return fields  # closed cleanly
+        if char != '"':
+            return None  # a member key that is not a string: not our envelope
+        key, i = _read_json_string(text, i)
+        if key is None:
+            return None
+        while i < len(text) and text[i] in " \t\r\n":
+            i += 1
+        if i >= len(text) or text[i] != ":":
+            return None
+        i += 1
+        while i < len(text) and text[i] in " \t\r\n":
+            i += 1
+        if i >= len(text):
+            return None
+        if text[i] == '"':
+            span, i = _read_json_string(text, i)
+            if span is None:
+                return None
+            fields[key] = span
+        else:
+            i = _skip_json_value(text, i)
+            if i < 0:
+                return None
+    return None  # ran off the end without closing: truncated
+
+
+def _decode_field(fields: dict[str, str], key: str) -> str:
+    """JSON-decode one scanned span's escapes (``\\n``, ``\\"``, ``\\uXXXX``).
+
+    ``strict=False`` is load-bearing and is NOT a loosening of the unwrap rule.
+    It is the stdlib switch for exactly one condition — a LITERAL control
+    character inside the string — and that is the SECOND malformation shape this
+    defect class arrives in: a model that writes its markdown body across real
+    newlines instead of ``\\n`` escapes. ``json.loads`` rejects the whole
+    envelope for it, but a raw newline inside a string span means a newline and
+    nothing else, so the unwrap stays unambiguous. Eight of the ten composition
+    envelopes in the live census are this shape.
+
+    Everything genuinely ambiguous still raises: an invalid ``\\escape``, a
+    truncated ``\\uXXXX``. A span whose escapes do not decode is a PARTIAL
+    value, and a partially-decoded world read is what this module refuses to
+    publish.
+    """
+    try:
+        decoded = json.loads('"' + fields[key] + '"', strict=False)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise OutputContractError(
+            f"JSON envelope's {key!r} field does not decode ({exc}); refusing to "
+            f"publish the envelope: {fields[key][:200]!r}"
+        ) from exc
+    return str(decoded).strip()
+
+
+def salvage_json_envelope(raw: str) -> dict[str, str]:
+    """Unwrap ``title``/``body`` from a JSON-shaped completion ``json.loads``
+    refused — or raise. NEVER returns the envelope itself.
+
+    ``{}`` when ``raw`` is not JSON-shaped at all (it is prose, and the caller's
+    own degrade path keeps it byte-for-byte). Otherwise a dict carrying
+    ``body`` and, when the envelope declared a usable one, ``title``.
+
+    :raises OutputContractError: ``raw`` IS JSON-shaped but cannot be unwrapped
+        unambiguously. See the section banner above for the full rule.
+    """
+    if not raw:
+        return {}
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    if not text.startswith("{"):
+        return {}
+
+    fields = _scan_top_level_strings(text)
+    if fields is None:
+        raise OutputContractError(
+            "JSON envelope is truncated or does not close; refusing to publish "
+            f"the wrapper as a body ({len(raw)} raw chars): {raw.strip()[:200]!r}"
+        )
+    if "body" not in fields:
+        raise OutputContractError(
+            "JSON-shaped completion carries no top-level string 'body' — it is "
+            "scaffolding, not a finding; refusing to publish it as a body "
+            f"(keys={sorted(fields)[:12]}): {raw.strip()[:200]!r}"
+        )
+
+    body = _decode_field(fields, "body")
+    if is_unusable_output(body):
+        raise OutputContractError(
+            "JSON envelope's 'body' decodes to nothing readable; refusing to "
+            f"publish the wrapper ({len(raw)} raw chars): {raw.strip()[:200]!r}"
+        )
+    salvaged = {"body": body}
+    if "title" in fields:
+        title = _decode_field(fields, "title")
+        if title:
+            salvaged["title"] = title
+    return salvaged

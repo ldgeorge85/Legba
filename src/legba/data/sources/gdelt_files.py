@@ -501,6 +501,78 @@ def _parse_sqldate(sqldate: str | None) -> datetime | None:
         return None
 
 
+# 2026-08-29 DQ sweep §3 (finding: GDELT staleness is a deterministic
+# year-off-by-one) — GDELT's own upstream events export sometimes carries
+# SQLDATE with the YEAR wrong by exactly one, month-day intact. Measured live:
+# 372/372 of the affected 30-day sample had `payload->>'published_at'`'s year
+# one less than the ingest year with month-day IDENTICAL to the fetch date.
+# Confirmed upstream (not our parse) by inspecting the untouched
+# `payload->raw_body->SQLDATE` for the same rows — this handler applies ZERO
+# transformation to SQLDATE before this fix (`row_to_signal` stored
+# `row.get("SQLDATE")` verbatim), so a corrupted year already visible in the
+# raw, never-touched source row can only have arrived that way from GDELT.
+#
+# DATEADDED — a SEPARATE field on the same row, GDELT's own "when the export
+# added this row" stamp — reliably carries the correct year (verified against
+# real wall-clock fetch dates across the sample). The signature below uses it
+# as the trusted anchor, deliberately narrow so it corrects ONLY the exact
+# deterministic pattern proven live and leaves every other date — including
+# the 14/161 genuinely years-old rows and the separate ~30-day month-lag band
+# the same sweep found (a different shape: month decremented, not year) —
+# completely untouched:
+#   1. SQLDATE and DATEADDED both parse as valid calendar dates.
+#   2. Their month-day match EXACTLY.
+#   3. DATEADDED's year is EXACTLY SQLDATE's year + 1 (not >1 apart, not 0).
+#   4. The corrected date is not in the future relative to wall-clock UTC now
+#      (the one direction that could manufacture a forward-dated event) —
+#      mirrors the future-skew-clamp idiom already used for this exact class
+#      of upstream date corruption in ``legba.data.sources.rss``'s
+#      ``_NEWEST_ENTRY_MAX_FUTURE_SKEW``.
+#
+# Ingest-forward only: this does not rewrite rows already in the substrate
+# (372 of them, at last measurement) — that is a separate operator decision
+# (see planning/CAMPAIGN_2026-08-29/INGESTION_SMALLS_REPORT.md).
+_SQLDATE_YEAR_OFFSET_MAX_FUTURE_SKEW = timedelta(hours=26)
+
+
+def _correct_sqldate_year_offset(
+    sqldate: str | None,
+    date_added: str | None,
+    *,
+    now: datetime | None = None,
+) -> tuple[str | None, bool]:
+    """Guarded correction for GDELT's upstream SQLDATE year-off-by-one defect.
+
+    Returns ``(value_to_store, was_corrected)``. ``value_to_store`` is the
+    ORIGINAL ``sqldate`` string unchanged unless every element of the
+    deterministic signature (module docstring above) holds, in which case it
+    is the year-corrected 8-digit ``YYYYMMDD`` string. Never raises — any
+    parse failure, missing evidence, or signature mismatch fails safe to the
+    original, uncorrected value (today's behaviour).
+    """
+    if not sqldate or len(sqldate) != 8 or not sqldate.isdigit():
+        return sqldate, False
+    if not date_added or len(date_added) < 8 or not date_added[:8].isdigit():
+        return sqldate, False  # no DATEADDED evidence on this row — don't guess
+    try:
+        event_date = datetime.strptime(sqldate, "%Y%m%d").replace(tzinfo=timezone.utc)
+        added_date = datetime.strptime(date_added[:8], "%Y%m%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return sqldate, False
+    if (event_date.month, event_date.day) != (added_date.month, added_date.day):
+        return sqldate, False
+    if added_date.year - event_date.year != 1:
+        return sqldate, False
+    try:
+        corrected = event_date.replace(year=added_date.year)
+    except ValueError:  # pragma: no cover — Feb 29 landing on a non-leap year
+        return sqldate, False
+    skew_ceiling = (now or datetime.now(tz=timezone.utc)) + _SQLDATE_YEAR_OFFSET_MAX_FUTURE_SKEW
+    if corrected > skew_ceiling:
+        return sqldate, False
+    return corrected.strftime("%Y%m%d"), True
+
+
 def synthesize_title(row: dict[str, str]) -> str:
     """Compose a human-readable title from actors + event + location.
 
@@ -558,10 +630,20 @@ def row_to_signal(row: dict[str, str], *, ctx: SourceContext, export_url: str) -
     export carries that the BigQuery handler's narrower ``EVENT_COLUMNS``
     selection doesn't (e.g. Actor1Geo_* / Actor2Geo_* alongside ActionGeo_*).
     """
-    published_at = _parse_sqldate(row.get("SQLDATE"))
+    # 2026-08-29 DQ sweep §3 — correct GDELT's deterministic upstream
+    # SQLDATE year-off-by-one BEFORE it reaches the payload (see
+    # ``_correct_sqldate_year_offset``'s docstring for the diagnosis and the
+    # guard signature). ``raw_body`` below stays the fully untouched original
+    # row for audit; only ``published_at`` (the field the render layer and
+    # every staleness read actually consume) and its parsed provenance copy
+    # reflect the correction.
+    sqldate_for_payload, sqldate_year_corrected = _correct_sqldate_year_offset(
+        row.get("SQLDATE"), row.get("DATEADDED"),
+    )
+    published_at = _parse_sqldate(sqldate_for_payload)
     payload: dict[str, Any] = {
         "external_id": row.get("GLOBALEVENTID"),
-        "published_at": row.get("SQLDATE"),
+        "published_at": sqldate_for_payload,
         "date_added": row.get("DATEADDED"),
         "title": synthesize_title(row),
         "geo": {
@@ -629,9 +711,14 @@ def row_to_signal(row: dict[str, str], *, ctx: SourceContext, export_url: str) -
             "fetch_kind": "gdelt_files",
             "global_event_id": row.get("GLOBALEVENTID"),
             "date_added": row.get("DATEADDED"),
-            "sql_date": row.get("SQLDATE"),
+            "sql_date": row.get("SQLDATE"),  # untouched upstream original, always
             "export_file_url": export_url,
             "published_at": published_at.isoformat() if published_at else None,
+            # 2026-08-29 DQ sweep §3 provenance marker — True only when the
+            # guarded year-off-by-one correction above actually fired for
+            # this row (the raw, uncorrected value is always still available
+            # above as `sql_date`).
+            "sqldate_year_corrected": sqldate_year_corrected,
         },
     )
 

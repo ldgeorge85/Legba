@@ -41,8 +41,8 @@ mapping:
   schema_drift_policy: warn_and_continue
 
 # Tier-1 knowledge-grounding, ported from the retired country_assessor monolith
-# (2026-07-01). Injects the target's ACCUMULATED facts/nexuses + assessed
-# situations + graph structure as a fenced "CURRENT CONTEXT" preamble so this
+# (2026-07-01). Injects the target's ACCUMULATED facts/nexuses + graph
+# structure as a fenced "CURRENT CONTEXT" preamble so this
 # unit integrates the multi-week substrate, not only the fresh signal slice.
 # target_geo + slice-entity scoped; capped; analysis-derived context stays fenced
 # off from ground truth (the grounding-quality provenance gate applies).
@@ -51,10 +51,25 @@ mapping:
 # NARRATIVES" block — which claims are contested and how they spread
 # (publish-order timing only; the block header carries the detect-only /
 # descriptive-not-causal honesty contract). Empty sidecar ⇒ no block.
+# REGISTER-1g (2026-08-29) — NO `situations` SOURCE, AND THAT IS THE FIX.
+# This unit is `kind: inline_target`, so `actor_substrate_slice` ALREADY hands it
+# the desk's OPEN SITUATION REGISTER as a citable [N] block
+# (`unit_grounding._render_situations`) on every run with a target. Declaring
+# `situations` here added a SECOND copy of the same frames, drawn by a second
+# query, rendered by a second renderer, in the same context window — and the
+# copy this line produced was the UNGUARDED one: `build_situations_block` prints
+# name/status/intensity/`last activity Nd ago` with NO `last_corroborated_at`, NO
+# `evidence_age`, NO STALE-NO-NEW-EVIDENCE label and NO
+# REGISTER_SELF_CORROBORATION_RULE. So the desk read the register's intensity
+# with none of H1's render repairs attached, which is the exact M-1 shape H1 was
+# built to close, ten prompts wide.
+# The unit_grounding block strictly dominates it (same table, same open
+# predicate, same target scope, same intensity ordering, plus the evidence clock
+# and the rule), so this is a DEDUPE, not a loss: one guarded copy remains.
 grounding:
   enabled: true
   scope: [target_geo, slice_entities]
-  sources: [substrate, situations, graph_structure, narratives]
+  sources: [substrate, graph_structure, narratives]
   max_facts: 30
 
 method:
@@ -71,7 +86,7 @@ method:
   # judge_sample_always list here overrides that default (an explicit []
   # clears it).
   options:
-    judge_sample_rate: 0.10
+    judge_sample_rate: 1.0
   # Inline, topic-scoped prompt (NOT the generic country_assessor prompt_module).
   # It binds this unit to the narrative/coordination question ONLY and pins the
   # STRICT-JSON FindingPayload contract so the [N] citation pass + verify gate

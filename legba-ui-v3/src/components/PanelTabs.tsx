@@ -10,6 +10,25 @@
  */
 import { cn } from '@/lib/cn'
 
+/**
+ * Pick a tabbed panel's opening tab.
+ *
+ * `requested` comes from `PanelProps.initialTab` — set when a RETIRED kind
+ * resolved onto this panel through `panel-registry/aliases.ts` (opening
+ * `system.lineage` must land on Provenance's Lineage tab), or when a workspace
+ * seed asks for a specific tab. An unrecognized value falls back to the
+ * panel's own default: a stale tab name in an old saved layout must never
+ * render an empty surface.
+ */
+export function initialTab(
+  requested: string | undefined,
+  tabs: readonly PanelTabDef[],
+  fallback: string,
+): string {
+  if (requested && tabs.some((t) => t.id === requested)) return requested
+  return fallback
+}
+
 export interface PanelTabDef {
   id: string
   label: string

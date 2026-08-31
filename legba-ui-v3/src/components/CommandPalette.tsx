@@ -13,9 +13,13 @@
  *      source→Detail); ⌘/Ctrl-Enter selects it into the Inspector instead.
  *   2. PANELS   — every singleton panel kind (including the §6 hidden-7, which
  *      stay deep-link-only on the sidebar but are discoverable here, Move 3b).
- *   3. PRESETS  — the curated layout workspaces (Monitoring / Investigation /
- *      Operations …), so a workspace is one fuzzy match away.
- *   4. ACTIONS  — "Investigate" entries that open the bound analysis grid for a
+ *   3. WORKSPACES — the six stances (Morning Read / Desk / Investigate / Trust /
+ *      The Gate / Engine). `#` narrows to just these: the guaranteed switcher
+ *      when a keybinding is contested (design §3.2/§3.3).
+ *   4. PRESETS  — the curated layout arrangements (Monitoring / Investigation /
+ *      Operations …). Distinct from a workspace: a preset clears and re-seeds,
+ *      a workspace saves the outgoing stance and restores the incoming one.
+ *   5. ACTIONS  — "Investigate" entries that open the bound analysis grid for a
  *      target/analyst (same machinery as the sidebar pickers).
  *
  * A leading dot+chevron favorite toggle persists to localStorage. The modal is
@@ -29,6 +33,7 @@ import type { Mode, PanelKind } from '@/types'
 import type { SelectionKind } from '@/state/selection'
 import { PANEL_REGISTRY, type RegistryEntry } from '@/panel-registry/registry'
 import { LAYOUT_PRESETS } from '@/lib/layoutPresets'
+import { WORKSPACES, type WorkspaceId } from '@/lib/workspaces'
 import {
   loadFavorites,
   loadRecents,
@@ -48,15 +53,42 @@ export interface CommandPaletteProps {
   onOpenBound: (kind: PanelKind, recordKind: PaletteRecord['recordKind'], id: string) => void
   /** Select a record into the unified selection store → the Inspector. */
   onSelectRecord: (recordKind: SelectionKind, id: string, label: string) => void
-  /** Apply a named layout preset (curated workspace). */
+  /** Apply a named layout preset (a curated arrangement — clears and re-seeds). */
   onApplyPreset: (presetId: string) => void
+  /** Switch stances (saves the outgoing workspace, restores/seeds the incoming). */
+  onSwitchWorkspace: (ws: WorkspaceId) => void
   /** Open the target-scoped analysis grid. */
   onInvestigateTarget: (targetId: string) => void
   /** Open the analyst-scoped analysis grid. */
   onInvestigateAnalyst: (analystId: string) => void
 }
 
-type EntryKind = 'panel' | 'record' | 'preset' | 'action'
+type EntryKind = 'panel' | 'record' | 'preset' | 'action' | 'workspace'
+
+/**
+ * Prefix namespacing (design §3.3) — VS Code's mechanism for getting depth out
+ * of a flat list without a nested menu: a leading sigil narrows the index to
+ * one family before the fuzzy match runs.
+ *
+ *   `#` → the six workspaces (the guaranteed stance switcher, even if a
+ *         keybinding is contested — design §3.2)
+ *   `>` → panels + layout presets ("what can I open / arrange")
+ *
+ * The design's other two rows (`/` the substrate, `@` entities) wait on the
+ * search fan-out moving under the palette; unprefixed search is unchanged and
+ * still spans every family.
+ */
+const PREFIX_FAMILIES: Record<string, ReadonlySet<EntryKind>> = {
+  '#': new Set<EntryKind>(['workspace']),
+  '>': new Set<EntryKind>(['panel', 'preset']),
+}
+
+/** Split a leading namespace sigil off the query. */
+export function parsePalettePrefix(query: string): { prefix: string | null; rest: string } {
+  const head = query.slice(0, 1)
+  if (head in PREFIX_FAMILIES) return { prefix: head, rest: query.slice(1).trimStart() }
+  return { prefix: null, rest: query }
+}
 
 interface PaletteEntry {
   /** Stable composite key — used for recents/favorites addressing + React keys. */
@@ -144,14 +176,32 @@ function panelEntries(mode: Mode, onOpen: CommandPaletteProps['onOpen']): Palett
   return out
 }
 
-/** Layout-preset (curated workspace) entries. */
+/**
+ * Workspace (stance) entries — the `#` family, and the guaranteed switcher.
+ *
+ * Distinct from a layout preset below: switching a workspace SAVES the outgoing
+ * arrangement into its own slot and restores the incoming one, where applying a
+ * preset clears the dock and re-seeds it.
+ */
+function workspaceEntries(onSwitch: CommandPaletteProps['onSwitchWorkspace']): PaletteEntry[] {
+  return WORKSPACES.map((w) => ({
+    key: `workspace:${w.id}`,
+    label: `Workspace · ${w.label}`,
+    hint: `stance · alt+${w.index}`,
+    entryKind: 'workspace' as const,
+    search: `${w.label} ${w.question} workspace stance ${w.id}`,
+    open: () => onSwitch(w.id),
+  }))
+}
+
+/** Layout-preset (curated arrangement) entries. */
 function presetEntries(onApplyPreset: CommandPaletteProps['onApplyPreset']): PaletteEntry[] {
   return LAYOUT_PRESETS.map((p) => ({
     key: `preset:${p.id}`,
-    label: `Workspace · ${p.label}`,
-    hint: 'workspace',
+    label: `Layout · ${p.label}`,
+    hint: 'layout',
     entryKind: 'preset' as const,
-    search: `${p.label} ${p.description} workspace preset layout`,
+    search: `${p.label} ${p.description} preset layout arrangement`,
     open: () => onApplyPreset(p.id),
   }))
 }
@@ -219,6 +269,7 @@ export function CommandPalette({
   onOpenBound,
   onSelectRecord,
   onApplyPreset,
+  onSwitchWorkspace,
   onInvestigateTarget,
   onInvestigateAnalyst,
 }: CommandPaletteProps) {
@@ -231,9 +282,10 @@ export function CommandPalette({
   // Records are fetched only while the palette is open (lazy index).
   const { records } = usePaletteRecords(open)
 
-  // The full index: panels ∪ records ∪ presets ∪ investigate actions.
+  // The full index: workspaces ∪ records ∪ panels ∪ presets ∪ investigate actions.
   const allEntries = useMemo(
     () => [
+      ...workspaceEntries(onSwitchWorkspace),
       ...recordEntries(
         records,
         onOpenBound,
@@ -251,6 +303,7 @@ export function CommandPalette({
       onOpenBound,
       onSelectRecord,
       onApplyPreset,
+      onSwitchWorkspace,
       onInvestigateTarget,
       onInvestigateAnalyst,
     ],
@@ -260,10 +313,17 @@ export function CommandPalette({
   // the rest — never an empty alphabetical wall. With a query, fuzzy-filter then
   // float favorites to the top of the matches.
   const filtered = useMemo(() => {
-    if (!query) {
+    // Prefix namespacing narrows the FAMILY before the match runs (`#` = the
+    // six workspaces, `>` = panels + layouts); the sigil itself is not part of
+    // the query. Unprefixed behaviour is exactly as it was.
+    const { prefix, rest } = parsePalettePrefix(query)
+    const allEntriesInScope = prefix
+      ? allEntries.filter((e) => PREFIX_FAMILIES[prefix].has(e.entryKind))
+      : allEntries
+    if (!rest) {
       const recents = loadRecents()
       const recentRank = new Map(recents.map((id, i) => [id, i]))
-      return allEntries.slice().sort((a, b) => {
+      return allEntriesInScope.slice().sort((a, b) => {
         const ra = recentRank.has(a.key) ? recentRank.get(a.key)! : Infinity
         const rb = recentRank.has(b.key) ? recentRank.get(b.key)! : Infinity
         if (ra !== rb) return ra - rb
@@ -276,8 +336,8 @@ export function CommandPalette({
     // Scored match: rank by HOW each entry matched (exact > prefix > word-
     // boundary > substring > subsequence), best of the label vs the search
     // haystack. Ties break on favorites, then label.
-    const scored = allEntries
-      .map((e) => ({ e, score: Math.max(scoreMatch(query, e.label), scoreMatch(query, e.search)) }))
+    const scored = allEntriesInScope
+      .map((e) => ({ e, score: Math.max(scoreMatch(rest, e.label), scoreMatch(rest, e.search)) }))
       .filter((x) => x.score > 0)
     scored.sort((a, b) => {
       if (a.score !== b.score) return b.score - a.score
@@ -374,7 +434,7 @@ export function CommandPalette({
             setQuery(e.target.value)
             setActive(0)
           }}
-          placeholder="Jump to a target, analyst, source, panel, or workspace…"
+          placeholder="Jump to a target, analyst, source, panel… (# workspaces, > panels)"
           aria-label="Search records, panels, and workspaces"
           data-testid="command-palette-input"
           className="w-full bg-surf-1 px-4 py-3 text-body text-ink-1 placeholder:text-ink-3 outline-none border-b border-line"
@@ -429,7 +489,7 @@ export function CommandPalette({
           ))}
         </ul>
         <div className="flex items-center justify-between px-4 py-2 text-label text-ink-3 border-t border-line">
-          <span>↑↓ navigate · ↵ open/select · ⌘↵ panel · ★ favorite · esc close</span>
+          <span>↑↓ navigate · ↵ open/select · ⌘↵ panel · # workspace · ★ favorite · esc</span>
           <span>
             {filtered.length} result{filtered.length === 1 ? '' : 's'}
           </span>

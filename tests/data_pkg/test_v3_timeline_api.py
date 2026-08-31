@@ -423,22 +423,34 @@ async def test_supersession_edge_is_surfaced(client: AsyncClient, timeline_app):
 async def test_target_filter_scopes_items(client: AsyncClient, timeline_app):
     _, _, pg = timeline_app
     now = datetime.now(timezone.utc)
+    # UNIQUE desks, the same discipline `test_window_excludes_stale_rows`
+    # below already states: the assertion is an EXACT statement about the
+    # whole session-shared table, so a real desk name makes it a statement
+    # about every sibling's rows too. `country_g20_ir` is written by at least
+    # six other files — `test_alert_trigger_scan.py` alone leaves enough
+    # in-window rows to turn `[mine]` into three ids (proven by running those
+    # two files in that order). Uniqueness keeps the exact-equality assertion
+    # (still fully discriminating: `theirs` must be absent, `mine` present,
+    # nothing else at all) instead of relaxing it to a membership check.
+    mine_desk = f"country_tl_mine_{uuid4().hex[:8]}"
+    other_desk = f"country_tl_other_{uuid4().hex[:8]}"
     mine = await _insert_finding(
-        pg, title="mine", target_id="country_g20_ir",
+        pg, title="mine", target_id=mine_desk,
         produced_at=now - timedelta(hours=1),
     )
-    await _insert_finding(
-        pg, title="theirs", target_id="country_g20_tr",
+    theirs = await _insert_finding(
+        pg, title="theirs", target_id=other_desk,
         produced_at=now - timedelta(hours=1),
     )
 
     r = await client.get(
-        "/api/v1/v3/timeline", params={"target_id": "country_g20_ir", "days": 7},
+        "/api/v1/v3/timeline", params={"target_id": mine_desk, "days": 7},
     )
     body = r.json()
     ids = [it["id"] for it in body["items"]]
+    assert str(theirs) not in ids
     assert ids == [str(mine)]
-    assert body["target_id"] == "country_g20_ir"
+    assert body["target_id"] == mine_desk
 
 
 @pytest.mark.integration

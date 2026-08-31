@@ -140,6 +140,21 @@ async def client(api_app):
         yield c
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _clean_actor_state(clean_tables):
+    """The confirmed root polluter behind the 2026-08-29 nightly's shuffled
+    ``test_postgres_pool_search_path.py::
+    test_actor_state_table_reachable_from_every_acquire`` failure
+    (``assert 3 == 0``): ``_insert_actor_state`` writes directly to the
+    session-shared ``actor_state`` table (3 call sites in this file) and
+    nothing here ever cleaned them up. Autouse + setup-time TRUNCATE so
+    EVERY test in this file (the 3 writers and the "empty" readers alike)
+    starts from a table this file doesn't share evidence of with any other
+    session-shared consumer — matches the ``clean_tables`` primitive's
+    setup-only idiom in ``conftest.py``."""
+    await clean_tables("actor_state")
+
+
 # ---------------------------------------------------------------------------
 # Insert helpers — write directly to the substrate.
 # ---------------------------------------------------------------------------

@@ -82,6 +82,79 @@ Evidence transitions (in/out of ``insufficient-evidence``) and off-ladder
 logged for them — they are counted in the receipt as
 ``skipped_non_directional`` (coverage events are not resolvable claims).
 
+H3-GUARD — semantics-migration claims (2026-08-27)
+---------------------------------------------------
+A ladder→ladder transition whose prior and current scorecard were computed
+under DIFFERENT ``banding_semantics`` / ``damping_semantics`` stamps (see
+:func:`scorecard_banding.semantics_changed`) is not a real deterioration or
+improvement — the two cards disagree about what the band even MEANS, so "did
+the band hold" is not a question this table can honestly answer for them. The
+H3 deploy is the reference case: ``damping_semantics`` is a NEW stamp, so
+every pre-H3 card lacks it and every post-H3 card carries ``"off"`` — the
+first post-deploy sweep would otherwise mint ~30 fleet-wide calibration claims
+whose "resolution" measures a semantics change, not the world.
+
+``classify_band_transition`` (shared with ``alert_trigger_scan``) reads these
+as ``direction='semantics-migration'`` instead of
+``deterioration``/``improvement``. They are LOGGED, never silently dropped —
+an operator can see the transition happened and why it was excluded — with
+``semantics_migration=True`` (migration 0187), a HARD flag rather than a
+cosmetic tag: the aggregation query (:func:`_pull_claims_for_summary`)
+filters ``WHERE NOT semantics_migration``, so these rows can never enter
+:func:`summarize_claims`'s ``overall`` / ``by_direction`` / ``by_dimension``
+blocks, and the excluded count is surfaced honestly as
+``population.excluded_semantics_migration`` (the same "report what you
+excluded" shape M-2 uses for a judge-pipeline swap). They still resolve at
+their horizons like any other claim (the resolver has no direction filter)
+and read ``unresolvable`` there — off-ladder classification, never a
+fabricated grade — but that outcome is moot for scoring: the exclusion
+already happened upstream, at the population pull.
+
+LINEAGE-AWARE STAMP POOLING (2026-08-29) — why the split key stopped splitting
+------------------------------------------------------------------------------
+The judge-pipeline filter above is right and its parameterisation was
+self-defeating. A claim resolves at T0+14d at the earliest; the stamp's mean
+lifetime is ~2.3 days (12 distinct stamps in the 26 days this table covers). A
+claim can therefore never be BOTH current-stamped AND resolved, so
+``n_scored`` has been 0 on every run since 2026-08-04 — 1,802 claims, all
+excluded, daily, for 25 days (CAMPAIGN_2026-08-29/PREMISE_GRADING_LOOP.md A-7).
+The apparatus optimised so hard against pooling a lie that it reliably reported
+nothing, and refusing to measure is not the honest end of that trade.
+
+The fix is NOT a looser filter. It is reading the lineage the stamps already
+carry: :data:`~legba.data.provenance.judge_pipeline_version.STAMP_EXPECTED_SHIFTS`
+records, per stamp and per metric family, whether that boundary is declared to
+move the family at all. Consecutive stamps whose boundaries ALL declare
+``'none'`` for the family this harness calibrates are one population for it and
+are pooled; any boundary that declares a real shift is HARD and the pool stops
+there. The relation is transitive over consecutive ``'none'`` boundaries and
+nothing else joins.
+
+The family here is ``faithfulness_score`` (:data:`CALIBRATED_METRIC_FAMILY`) —
+a band is a verdict about faithfulness-gated findings, so it is the SCORE that
+has to be comparable, not the hard/soft split or the reason census. A stamp
+that only re-labels severities (2026-08-20/1's demotion train, in its own
+words: "the demotion train never moves the score, only the severity label") is
+poolable HERE and would not be for a panel reading hard-fail share.
+
+WHAT THIS DOES NOT DO. It never widens silently: the pooled stamp SET, its
+size, the family it was computed for and everything still excluded are all
+reported on the finding (``population.pooling``). It cannot widen past a
+written declaration — an unregistered or ambiguous stamp pools with nothing, so
+the failure mode is the OLD behaviour, never a fabricated population. And it
+does not manufacture a sample: if the pool is still too thin, the rates stay
+honest ``None`` over their real n exactly as before.
+
+MEASURED YIELD AT THE HEAD, recorded because it is the finding and not a
+footnote: ``2026-08-29/1`` pools with NOTHING. Every boundary back to
+2026-08-21/1 declares a real score shift, and the two poolable runs in the whole
+lineage ({2026-08-09/1, 2026-08-10/1} and {2026-08-15/1, 2026-08-20/1}) are both
+strictly historical. So this change does not, today, move ``n_scored`` off zero
+— the remaining defect is the stamp CADENCE, not this reader. What it does is
+make the reader correct, so the moment a score-neutral train ships on top (a
+pure demotion or severity relabel, the 08-20/1 shape) the population widens by
+itself instead of staying dark for another 25 days.
+
 Registered via ``scripts/bringup_register_band_calibration_tracker.py`` — NOT
 inline through a test fixture. Ships ``state: draft``; migration 0093 must be
 applied BEFORE first activation.
@@ -93,6 +166,10 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
+from ...provenance.judge_pipeline_version import (
+    METRIC_FAITHFULNESS_SCORE,
+    poolable_stamps,
+)
 from ...provenance.models import FindingPayload
 from ...provenance.verify import JUDGE_PIPELINE_VERSION
 from ....runtime.analyst_method import AnalystMethodResult
@@ -150,6 +227,13 @@ DEFAULT_MAX_SCAN_ROWS = 2000
 
 #: Per-run cap on due claims resolved per horizon (retry next tick).
 _MAX_RESOLVE_PER_HORIZON = 500
+
+#: THE metric family this harness calibrates (module docstring, "LINEAGE-AWARE
+#: STAMP POOLING"). Band persistence is a statement about faithfulness-gated
+#: findings, so the population has to be comparable on the SCORE — a stamp that
+#: only moved the hard/soft split or a reason census did not move what is being
+#: measured here. Pooling is computed for this family and no other.
+CALIBRATED_METRIC_FAMILY = METRIC_FAITHFULNESS_SCORE
 
 #: Aggregation lookback (days) for the summary metrics.
 DEFAULT_LOOKBACK_DAYS = 365
@@ -231,6 +315,23 @@ def extract_dimension_bands(data: Any) -> dict[str, str]:
         if band:
             out[str(dim)] = band
     return out
+
+
+def extract_card_semantics(data: Any) -> tuple[Optional[str], Optional[str]]:
+    """``(banding_semantics, damping_semantics)`` from one scorecard row's
+    ``data`` column — the SAME parse :func:`extract_dimension_bands` performs,
+    stopping one level higher (the stamps sit BESIDE ``dimensions`` on the
+    card, not inside it; see :func:`scorecard_banding.bands_semantics`).
+    Unreadable rows yield ``(None, None)``, exactly as informative as a card
+    written before the stamps existed — the H3-GUARD's "treat absent as
+    differing from a present value" rule (module docstring) handles the rest.
+    """
+    payload = _parse_jsonish(data) or {}
+    if not isinstance(payload, Mapping):
+        return None, None
+    inner = payload.get("data") if isinstance(payload.get("data"), Mapping) else payload
+    bands = inner.get("bands") if isinstance(inner, Mapping) else None
+    return scorecard_banding.bands_semantics(bands)
 
 
 def _rate_block(outcomes: Mapping[str, int]) -> dict[str, Any]:
@@ -363,6 +464,7 @@ def build_finding(
     skipped_non_directional: int,
     scanned_rows: int,
     warnings: list[str],
+    logged_semantics_migration: int = 0,
 ) -> FindingPayload:
     """The per-run honest summary finding — counts + rates, NEVER a boast.
 
@@ -389,6 +491,9 @@ def build_finding(
         f"claims_total={claims_total}",
         f"scanned_scorecard_rows={scanned_rows}",
         f"skipped_non_directional={skipped_non_directional}",
+        # H3-GUARD — logged, not skipped: a semantics-migration claim IS
+        # recorded (semantics_migration=True), just excluded from scoring.
+        f"logged_semantics_migration={logged_semantics_migration}",
         f"resolution_spec={summary.get('resolution_spec')}",
     ]
     horizons = summary.get("horizons") or {}
@@ -412,9 +517,30 @@ def build_finding(
             f"population: judge_pipeline_version={pop.get('judge_pipeline_version')} "
             f"excluded_pre_stamp={pop.get('excluded_pre_stamp')} "
             f"excluded_other_pipeline={pop.get('excluded_other_pipeline')} "
-            "(rates cover ONE judge pipeline; cross-swap claims are excluded, "
-            "never pooled)"
+            f"excluded_semantics_migration={pop.get('excluded_semantics_migration')} "
+            "(rates cover ONE judge population; cross-boundary AND semantics-"
+            "migration claims are excluded, never pooled)"
         )
+        # The POOLED SET, spelled out — a rate over several stamps must never
+        # read as a rate over the one stamp named above, and a pool of one must
+        # never read as a pool at all.
+        pooling = pop.get("pooling")
+        if isinstance(pooling, Mapping):
+            stamps = list(pooling.get("stamps") or [])
+            widened = pooling.get("widened_by")
+            body_lines.append(
+                f"pooled_judge_pipeline_versions={stamps} "
+                f"(n_stamps={pooling.get('stamp_count')} "
+                f"widened_by={widened} "
+                f"metric_family={pooling.get('metric_family')}) — "
+                + (
+                    "pooled ACROSS boundaries the lineage declares cannot move "
+                    "this family; any declared shift is a hard stop"
+                    if isinstance(widened, int) and widened > 0
+                    else "NO widening: every reachable boundary declares a real "
+                    "shift for this family, so this is the head stamp alone"
+                )
+            )
         # M-2 — each excluded pipeline as its OWN readout. Reporting only the
         # excluded COUNT would have turned a working readout into a blank one
         # the day the split filter went live (every existing claim is
@@ -443,6 +569,7 @@ def build_finding(
         "band_calibration": {
             **dict(summary),
             "logged_this_run": int(logged),
+            "logged_semantics_migration_this_run": int(logged_semantics_migration),
             "resolved_this_run": resolved_this_run,
             "resolved_this_run_by_horizon": dict(resolved_by_horizon),
             "skipped_non_directional": int(skipped_non_directional),
@@ -536,10 +663,11 @@ _INSERT_CLAIM_SQL = """
     INSERT INTO band_calibration_claims
         (desk, dimension, from_band, to_band, direction, transition_at,
          scorecard_row_id, prev_scorecard_row_id, resolution_spec,
-         horizon_14_at, horizon_28_at, judge_pipeline_version)
+         horizon_14_at, horizon_28_at, judge_pipeline_version,
+         semantics_migration)
     VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::uuid, $8::uuid, $9,
             $6::timestamptz + interval '14 days',
-            $6::timestamptz + interval '28 days', $10)
+            $6::timestamptz + interval '28 days', $10, $11)
     ON CONFLICT (desk, dimension, scorecard_row_id) DO NOTHING
 """
 
@@ -550,7 +678,14 @@ async def _scan_and_log_claims(
     """Pair-compare scorecard rows past the watermark; INSERT one claim per
     ladder→ladder transition (dup-proof via the unique index). Advances the
     watermark ONLY over rows actually processed (a cap-truncated backlog
-    resumes next run). Returns the run counters."""
+    resumes next run). Returns the run counters.
+
+    H3-GUARD: a transition whose prior/current card carry different
+    ``banding_semantics``/``damping_semantics`` (module docstring) is still
+    LOGGED — with ``semantics_migration=True`` and ``direction=
+    'semantics-migration'`` — never folded into ``skipped_non_directional``,
+    which stays reserved for genuine evidence/indeterminate coverage events.
+    """
     watermark = await _load_watermark(conn)
     rows = await conn.fetch(_SCAN_SQL, watermark, int(max_scan_rows))
 
@@ -561,6 +696,7 @@ async def _scan_and_log_claims(
             by_desk.setdefault(desk, []).append(row)
 
     logged = 0
+    logged_semantics_migration = 0
     skipped_non_directional = 0
     scanned_new = 0
     max_processed: Optional[datetime] = None
@@ -568,22 +704,32 @@ async def _scan_and_log_claims(
         chain = sorted(by_desk[desk], key=lambda r: (r["produced_at"], r["row_id"]))
         prev_row: Any = None
         prev_dims: dict[str, str] = {}
+        prev_semantics: tuple[Optional[str], Optional[str]] = (None, None)
         for row in chain:
             dims = extract_dimension_bands(row["data"])
+            # H3-GUARD — one card-level read, not per-dimension: every
+            # dimension on a card shares the same semantics stamps.
+            curr_semantics = extract_card_semantics(row["data"])
             if row["is_new"]:
                 scanned_new += 1
                 ts = row["produced_at"]
                 if max_processed is None or ts > max_processed:
                     max_processed = ts
                 if prev_row is not None:
+                    changed = scorecard_banding.semantics_changed(
+                        prev_semantics, curr_semantics
+                    )
                     for dim, band in sorted(dims.items()):
                         prev_band = prev_dims.get(dim)
                         if prev_band is None or prev_band == band:
                             continue
                         direction, _severity = classify_band_transition(
-                            prev_band, band
+                            prev_band, band, semantics_changed=changed
                         )
-                        if direction not in CLAIMABLE_DIRECTIONS:
+                        is_migration = (
+                            direction == scorecard_banding.SEMANTICS_MIGRATION
+                        )
+                        if direction not in CLAIMABLE_DIRECTIONS and not is_migration:
                             # Evidence / indeterminate transitions carry no
                             # directional risk statement — not a claim.
                             skipped_non_directional += 1
@@ -605,16 +751,21 @@ async def _scan_and_log_claims(
                             # possibly under a different judge; this is what
                             # lets the aggregate refuse to pool across a swap.
                             JUDGE_PIPELINE_VERSION,
+                            is_migration,
                         )
                         if isinstance(res, str) and res.endswith("1"):
                             logged += 1
+                            if is_migration:
+                                logged_semantics_migration += 1
             prev_row = row
             prev_dims = dims
+            prev_semantics = curr_semantics
 
     if max_processed is not None:
         await _save_watermark(conn, max_processed)
     return {
         "logged": logged,
+        "logged_semantics_migration": logged_semantics_migration,
         "skipped_non_directional": skipped_non_directional,
         "scanned_rows": scanned_new,
     }
@@ -711,25 +862,53 @@ async def _resolve_due_claims(conn: Any, *, now: datetime) -> dict[str, int]:
 # faithfulness-gated findings, so pooling claims graded by different judges
 # reports a rate for a population that never existed — and the live history
 # straddles a swap (07-30 20:14Z) that moved mean faithfulness +7pp.
+#
+# 2026-08-29 — "ONE population" is now the POOL, not the single head stamp: the
+# set of consecutive stamps whose lineage declares no `faithfulness_score` shift
+# across their boundaries (module docstring; `poolable_stamps`). The parameter
+# is a text[] rather than a scalar and every query below shares it, so the
+# headline, the exclusion counters and the prior-population rollup can never
+# disagree about where the boundary is. A pool of one is exactly the old
+# behaviour, which is what makes this safe to widen only by declaration.
+#
+# H3-GUARD: `AND NOT semantics_migration` on every query below (this one, the
+# excluded-count query, and the prior-populations query) — that axis is
+# ORTHOGONAL to the judge-pipeline split (a semantics-migration claim can carry
+# any judge_pipeline_version) and is reported on its OWN, via
+# `_AGG_SEMANTICS_MIGRATION_SQL`, so it is never silently absorbed into either
+# the headline or a prior-population block.
 _AGG_SQL = """
     SELECT dimension, direction, outcome_14, outcome_28
       FROM band_calibration_claims
      WHERE transition_at > now() - make_interval(days => $1)
-       AND judge_pipeline_version = $3
+       AND judge_pipeline_version = ANY($3::text[])
+       AND NOT semantics_migration
      ORDER BY transition_at
      LIMIT $2
 """
 
 # What the filter left out, so the readout can SAY so rather than quietly
-# shrinking. `NULL` = logged before the split key existed; a non-null mismatch
-# = logged under a superseded judge pipeline.
+# shrinking. `NULL` = logged before the split key existed; a non-null stamp
+# outside the pool = logged under a judge pipeline this one may not pool with.
 _AGG_EXCLUDED_SQL = """
     SELECT
         count(*) FILTER (WHERE judge_pipeline_version IS NULL)::int  AS pre_stamp,
         count(*) FILTER (WHERE judge_pipeline_version IS NOT NULL
-                           AND judge_pipeline_version <> $2)::int    AS other_stamp
+                           AND NOT (judge_pipeline_version = ANY($2::text[])))::int
+                                                                     AS other_stamp
       FROM band_calibration_claims
      WHERE transition_at > now() - make_interval(days => $1)
+       AND NOT semantics_migration
+"""
+
+# H3-GUARD — the semantics-migration exclusion count, over the SAME lookback
+# window, independent of judge pipeline (a claim is excluded here for what its
+# TWO SCORECARDS disagreed about, not which judge graded either one).
+_AGG_SEMANTICS_MIGRATION_SQL = """
+    SELECT count(*)::int AS n
+      FROM band_calibration_claims
+     WHERE transition_at > now() - make_interval(days => $1)
+       AND semantics_migration
 """
 
 # M-2 — the EXCLUDED claims, kept as ANNOTATED PRIOR POPULATIONS rather than a
@@ -745,11 +924,19 @@ _AGG_EXCLUDED_SQL = """
 # It is not the only honest option. Each prior pipeline is its OWN population
 # with its OWN rates: reported side by side, labelled, and never summed or
 # averaged into the headline. The operator keeps the history, and nothing pools.
+#
+# Priors stay split PER STAMP even though the headline pools: a prior block is
+# never merged with another (this function's whole contract), and showing the
+# history at its finest grain can only help a reader who wants to check the
+# pooling decision for themselves. Pooling widens the HEADLINE; it never
+# coarsens the record beside it.
 _AGG_PRIORS_SQL = """
     SELECT judge_pipeline_version, dimension, direction, outcome_14, outcome_28
       FROM band_calibration_claims
      WHERE transition_at > now() - make_interval(days => $1)
-       AND (judge_pipeline_version IS NULL OR judge_pipeline_version <> $3)
+       AND (judge_pipeline_version IS NULL
+            OR NOT (judge_pipeline_version = ANY($3::text[])))
+       AND NOT semantics_migration
      ORDER BY transition_at
      LIMIT $2
 """
@@ -763,32 +950,77 @@ async def _pull_claims_for_summary(
     P3 §5a — the `judge_pipeline_version` stamp had writers and no readers, so
     the split key split nothing. This is the reader: the rates describe one
     judge pipeline, and the boundary block reports exactly what that cost.
+
+    2026-08-29 — "one judge pipeline" is the lineage-declared POOL for
+    :data:`CALIBRATED_METRIC_FAMILY` (module docstring). The pool is computed
+    ONCE here and handed to all three queries, so the headline population, the
+    exclusion counters and the prior-population rollup are partitioned by the
+    same boundary by construction rather than by three matching literals.
     """
-    rows = await conn.fetch(
-        _AGG_SQL, int(lookback_days), _MAX_AGG_ROWS, JUDGE_PIPELINE_VERSION
-    )
-    exc = await conn.fetchrow(
-        _AGG_EXCLUDED_SQL, int(lookback_days), JUDGE_PIPELINE_VERSION
-    )
+    pool = poolable_stamps(JUDGE_PIPELINE_VERSION, CALIBRATED_METRIC_FAMILY)
+    pool_list = list(pool)
+    rows = await conn.fetch(_AGG_SQL, int(lookback_days), _MAX_AGG_ROWS, pool_list)
+    exc = await conn.fetchrow(_AGG_EXCLUDED_SQL, int(lookback_days), pool_list)
     pre_stamp = int(exc["pre_stamp"]) if exc else 0
     other_stamp = int(exc["other_stamp"]) if exc else 0
+    # H3-GUARD — the semantics-migration exclusion, ORTHOGONAL to the judge-
+    # pipeline split above: counted once here, never folded into pre_stamp /
+    # other_stamp, and never present in `rows` or `prior_rows` (both queries
+    # already filter `NOT semantics_migration`).
+    sm = await conn.fetchrow(_AGG_SEMANTICS_MIGRATION_SQL, int(lookback_days))
+    excluded_semantics_migration = int(sm["n"]) if sm else 0
     prior_rows = await conn.fetch(
-        _AGG_PRIORS_SQL, int(lookback_days), _MAX_AGG_ROWS, JUDGE_PIPELINE_VERSION
+        _AGG_PRIORS_SQL, int(lookback_days), _MAX_AGG_ROWS, pool_list
     )
     boundary = {
+        # The stamp claims are WRITTEN with — the head of the pool, and the one
+        # a new claim logged this run carries.
         "judge_pipeline_version": JUDGE_PIPELINE_VERSION,
+        # ...and the population actually READ: the pooled SET, oldest first. A
+        # single-element list here means the head pooled with nothing, which is
+        # the old behaviour and must stay visible as such.
+        "judge_pipeline_versions": list(pool),
         "excluded_pre_stamp": pre_stamp,
         "excluded_other_pipeline": other_stamp,
+        "excluded_semantics_migration": excluded_semantics_migration,
+        # M-2 — every excluded pipeline as its OWN readout, per STAMP even
+        # though the headline pools (see `_AGG_PRIORS_SQL`).
         "prior_populations": summarize_prior_populations(
             prior_rows, lookback_days=lookback_days
         ),
+        "pooling": {
+            "metric_family": CALIBRATED_METRIC_FAMILY,
+            "stamps": list(pool),
+            "stamp_count": len(pool),
+            # How many stamps beyond the head the lineage licensed. 0 = the
+            # lineage declared a real shift at every reachable boundary and this
+            # readout is exactly as narrow as it was before pooling existed.
+            "widened_by": len(pool) - 1,
+            "note": (
+                "Stamps are pooled only across boundaries whose lineage entry "
+                "declares NO expected shift for this metric family "
+                "(judge_pipeline_version.STAMP_EXPECTED_SHIFTS); the relation "
+                "is transitive over consecutive such boundaries and any "
+                "declared shift is a HARD stop. An unregistered or ambiguous "
+                "stamp pools with nothing. widened_by=0 means the pool is the "
+                "head stamp alone — no widening happened and this rate is as "
+                "thin as it looks."
+            ),
+        },
         "note": (
-            "Rates cover ONE judge pipeline. Claims graded by a superseded "
-            "judge, or logged before the split key existed, are excluded "
+            "Rates cover ONE judge population — the lineage-declared POOL for "
+            "the " + CALIBRATED_METRIC_FAMILY + " family, listed in "
+            "judge_pipeline_versions. Claims graded under a pipeline outside "
+            "that pool, or logged before the split key existed, are excluded "
             "rather than pooled — a band rests on faithfulness, and mixing "
-            "judges reports a rate for a population that never existed. Each "
-            "excluded pipeline is reported as its OWN population below, with "
-            "its own n and its own rates; nothing is summed across them."
+            "judges that are declared to grade differently reports a rate for "
+            "a population that never existed. Each excluded pipeline is "
+            "reported as its OWN population below, with its own n and its own "
+            "rates; nothing is summed across them. Semantics-migration claims "
+            "(H3-GUARD: prior/current scorecard computed under different "
+            "banding/damping semantics) are a SEPARATE exclusion axis — "
+            "counted in excluded_semantics_migration, never in either count "
+            "above."
         ),
     }
     claims = [
@@ -848,17 +1080,24 @@ async def handle(
         claim_rows, lookback_days=lookback_days, population=population
     )
     logger.info(
-        "band_calibration_tracker.tick logged=%d resolved=%s claims_total=%d "
-        "scanned=%d skipped_non_directional=%d judge_pipeline_version=%s "
-        "excluded_pre_stamp=%d excluded_other_pipeline=%d",
+        "band_calibration_tracker.tick logged=%d logged_semantics_migration=%d "
+        "resolved=%s claims_total=%d scanned=%d skipped_non_directional=%d "
+        "judge_pipeline_version=%s pooled_versions=%s widened_by=%d "
+        "metric_family=%s excluded_pre_stamp=%d "
+        "excluded_other_pipeline=%d excluded_semantics_migration=%d",
         scan["logged"],
+        scan["logged_semantics_migration"],
         resolved_by_horizon,
         summary["claims_total"],
         scan["scanned_rows"],
         scan["skipped_non_directional"],
         population["judge_pipeline_version"],
+        population["judge_pipeline_versions"],
+        population["pooling"]["widened_by"],
+        population["pooling"]["metric_family"],
         population["excluded_pre_stamp"],
         population["excluded_other_pipeline"],
+        population["excluded_semantics_migration"],
     )
     finding = build_finding(
         summary=summary,
@@ -867,6 +1106,7 @@ async def handle(
         skipped_non_directional=scan["skipped_non_directional"],
         scanned_rows=scan["scanned_rows"],
         warnings=warnings,
+        logged_semantics_migration=scan["logged_semantics_migration"],
     )
     return AnalystMethodResult(
         finding=finding,
@@ -875,6 +1115,7 @@ async def handle(
 
 
 __all__ = [
+    "CALIBRATED_METRIC_FAMILY",
     "CLAIMABLE_DIRECTIONS",
     "CONFIRMED_OUTCOMES",
     "HONESTY_NOTE",
@@ -884,6 +1125,7 @@ __all__ = [
     "SUB_HANDLER_NAME",
     "build_finding",
     "classify_horizon_outcome",
+    "extract_card_semantics",
     "extract_dimension_bands",
     "handle",
     "summarize_claims",

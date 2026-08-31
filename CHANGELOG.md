@@ -5,6 +5,475 @@ on `main` — so this file is the release record. Entries are dated (newest firs
 written against the docs as they shipped; [docs/STATUS.md](docs/STATUS.md) remains the
 always-current truth-in-labeling table.
 
+## 2026-08-30
+
+**Every export this platform has ever produced shipped an empty citation
+list, and that deserves saying plainly before anything else.** The export
+route's citation reader had two defects in the same eight lines: it read the
+wrong nesting level of the stored payload, and it filtered on a field that
+only one of the citation kinds carries. On a real stored row the two
+compounded into the same answer — zero citations, of any kind. So every
+exported finding carried an empty `### Citations` section under the actively
+false line *"(no resolved citations recorded on this row)"*, whatever the
+finding had actually cited; a world or country report exported with 100% of
+its citations gone. A product whose entire claim is that its reads are
+checkable was shipping the one artifact meant to travel outside the console
+with the checking stripped out.
+
+- **The reader now reads the level the writer writes**, and keeps every kind
+  — raw-signal references, composition sub-claim references, and all five of
+  the desk-grounding block kinds, none of which carry the signal field the
+  old filter demanded. Measured against the same real payload: 0 citations
+  before, 4 after.
+- **The test fixture was the reason nothing caught it.** The export suite
+  hand-inserted a flat payload shape the writer has never produced, so the
+  suite was faithfully testing a document that does not exist. The fixture
+  now matches the column, and a new test pins the producer→consumer coupling
+  directly so the two can't drift apart again silently.
+- Each exported citation now also carries its **kind**, what it **resolves
+  against**, its **marker class**, and the **source of its resolution** —
+  four additive fields, deliberately named apart from the pre-existing
+  resolution field rather than overloading it, because two fields called
+  `resolution` meaning different things in one document is a trap.
+- The same misreading had a console half: the citation model recognized one
+  grounding kind out of six. A window-ledger reference rendered as an amber
+  "unresolved citation" warning when it was resolved and fine, and a
+  prior-read reference was labelled "signal" and drilled to a signal that
+  does not exist. All six kinds are now carried verbatim, labelled honestly,
+  and drilled to the row they actually name. Judge stamp `2026-08-30/1`.
+
+**The landing page becomes a stance you choose, not a grid somebody
+hardcoded.** The console's boot layout is now one of **six workspaces** —
+Morning Read, Desk, Investigate, Trust, The Gate, Engine — each answering a
+different question, each with its own persisted layout, each one keystroke
+away (`Alt+1`…`Alt+6`, `` Alt+` `` to cycle, `Alt+Shift+R` to reset the
+current one). Morning Read is the new landing: an at-a-glance strip, the
+wall, the live feed and the world assessment, seeded in a single paint. A
+custom layout saved under the old scheme is preserved and copied once into
+the Morning Read slot on first boot, so nobody loses a workspace they built.
+
+- **The catalog folds.** The sidebar's 36 always-open rows collapse into five
+  verb-grouped headers with counts, so the panel list stops spending the
+  whole sidebar budget on itself.
+- **Twelve retired panel kinds get an alias table instead of a graveyard.**
+  Kinds that had been merged into better successors were previously just
+  hidden — present in the registry, invisible in the catalog, and still
+  liable to be restored out of a saved layout. They are now *aliases*: a
+  saved layout naming a retired kind silently resolves to the survivor that
+  replaced it, with the tab it belongs on. The registry drops from 67 kinds
+  to 55, and no component was deleted to get there.
+- Building this found a real defect in the alias pre-pass: duplicate
+  collapsing was tracked per dock group rather than globally, so two retired
+  tiles in *different* groups resolving to the same survivor mounted that
+  panel three times. Caught by a test that mounts the real dock rather than a
+  stand-in, which is now the standing pattern for layout-level behavior.
+- **The palette is recalibrated.** One meaning, one channel, one ramp:
+  severity's worst rung was rendering in a colour that read as *safe*, and
+  confidence shared hues with severity so the two could be mistaken for each
+  other at a glance. Severity now runs a single red→amber→blue ramp with a
+  neutral floor; confidence runs a desaturated blue sequential ramp of its
+  own. This is the most visible change in the release and the most
+  arguable one.
+
+**The platform receipts every write and had never once receipted a read.**
+Roughly eighty tables record what the machine produced; nothing anywhere
+recorded whether a human ever looked at it. A new append-only **read-events
+ledger** (migration `0189`) closes that, with a closed seven-value vocabulary
+enforced by a database constraint rather than convention — panel opens,
+workspace switches, finding opens, lineage walks, citation drills, consult
+opens, and the headline *brief read* (opening the morning landing). The
+console emits at seven chokepoint surfaces rather than at call sites, batched
+every four seconds behind a bounded queue that drops oldest rather than
+growing, flushed on tab close, and fail-silent in every path — telemetry that
+can break the product it measures is worse than none.
+
+- `POST /api/v1/read-events` appends a batch (202, per-event validation: a
+  malformed event is dropped and counted, never a batch-wide rejection) and
+  `GET /api/v1/read-events/rollup?days=N` serves a bounded daily rollup
+  grouped in the database, so a scoreboard on a timer can never turn into a
+  table scan.
+- Deletes and updates on the ledger **fail loud at the database** — an
+  attention record you can quietly revise is not evidence.
+- A new **Read Scoreboard** panel (the 56th kind) shows reads today, morning
+  reads, drills, a per-kind table and a fourteen-day strip. An empty log
+  renders as a stated finding — *"nothing read in the last 30 days"* — not as
+  a broken panel, because the whole point of the instrument is that it must
+  be able to return bad news.
+
+**Alerting learns to spend a daily budget instead of a per-event impulse.**
+A desk under standing sanctions was re-paging every cycle because the model
+had re-written the same unchanged fact in new words. Three mechanisms, in
+order, and none of them drops anything:
+
+- **A steady-state guard** suppresses a verified-finding page only when all
+  three of these hold: the desk's banded severity is unchanged, the finding's
+  own movement tag reads *steady* or is absent, and the desk was paged within
+  the last 24 hours. A *rose* / *fell* / *new* tag always pages. No prior
+  record for a desk, or an unreadable timestamp, pages — it fails toward
+  noise, never toward silence. Measured over 221 real alerts: 62.9%
+  suppressed.
+- **A fleet-wide daily page budget** — five pages per UTC day by default,
+  ranked worst-first — plus a **kind-diversity cap** of three slots per
+  trigger class per day, because one always-critical class would otherwise
+  take every slot every day and starve everything else. A slot no other kind
+  can fill goes unused rather than being backfilled with more of the capped
+  kind. Everything over budget still writes its row, tagged as deferred.
+- **A kill list**: two low-signal trigger classes now default to not paging.
+  Their scans still run and their watermarks still advance as though they had
+  fired, so re-enabling is a config flip and not a backlog. Replayed over the
+  same window, 1,507 pages become 25.
+- All of it is tunable without a rebuild — `LEGBA_ALERT_DAILY_PAGE_BUDGET`,
+  `LEGBA_ALERT_BUDGET_PER_KIND_CAP`, and per-descriptor options for the
+  cooldown, the caps and the master switch.
+
+**A finding is no longer excluded from a composition on evidence nobody
+graded.** The LLM judge is sampled by a content-independent hash of the
+finding id, which means whether a finding was judged is a coin flip with no
+relationship to whether it was any good. Measured over fourteen days,
+findings the judge never sampled failed the composition's 0.50 verify floor
+at **24.2%**, against **3.2%** for judged findings — the gap being almost
+entirely a failure class the deterministic scorer cannot recognize and the
+judge can. So the floor was excluding real reads for the crime of not having
+been sampled. Now any unjudged finding about to be excluded by the floor is
+sent to the judge *first*: the floor may only ever exclude on judged
+evidence. The escalation happens at the verify boundary, not in the
+composition query, and it carries its own marker so an escalated verdict is
+never mistaken for a sampled one. Expect roughly +43% judge volume and a
+fleet-mean faithfulness that moves *up* after deploy — that is a selection
+change, not a quality improvement, and anything tracking the mean across the
+deploy date must partition on the new marker to stay honest.
+
+**Legba now checks its own claims against the outside world.** Every
+verification surface the platform had graded internal consistency: does this
+read follow from what it cited, does this composition follow from its inputs.
+None of them could tell you whether the underlying claim was *true*. A new
+**standing external auditor** runs once daily on the free model plane: it
+samples the world read plus a rotating subset of desk reads, extracts one or
+two checkable world-claims from each, checks them against live external
+search through the governed web-access pack (never ad-hoc HTTP), and records
+a verdict per claim — supported, contradicted, not found, or unchecked. A
+contradiction on a high-severity claim writes an alert row.
+
+- **It writes a heartbeat on every run, including runs that audit nothing** —
+  so "there was nothing to contradict" and "the auditor is dead" can never
+  look the same from outside. That distinction is not hypothetical: a judge
+  outage went unnoticed for days once, for exactly this reason.
+- `GET /api/v1/v3/system/external-audit` serves the heartbeat, the verdict
+  mix, the contradiction rate over *checked* claims (absent, never `0.0`,
+  when nothing was checked), and the contradicted rows by name with their
+  source URLs. It never returns a 500 at a polling panel.
+- **Both planes or neither**: with no search binding the auditor refuses to
+  spend a model call at all and files a loudly unaudited heartbeat naming the
+  gap. Missing database access raises; every other gap degrades honestly.
+- It ships as a **draft descriptor** — activation is an explicit operator
+  decision, not a side effect of deploying.
+
+**The situations register stops being one frame per desk.** The clustering
+key was topic-only, so every producing dimension on a country desk collapsed
+into a single mega-frame — one situation per desk, fleet-wide, absorbing
+everything. The key now carries the producing dimension (migration `0188`
+splits the existing open frames accordingly, conserving members, intensity
+share and validity windows, and re-basing the hypotheses that were emitted
+against the old intensity so a re-scale cannot mass-refute 4,405 live
+hypotheses). Dormancy detection, which had been structurally unreachable —
+zero transitions to dormant across 2,052 ledger rows, because it keyed off
+any desk's last write rather than the evidence clock — now shares one
+evidence-anchored predicate with the register's forgetting curve.
+
+- The tracker's fixed selection was an absorbing state: it re-adjudicated its
+  own top rows and never reached a frame that had never been picked. It now
+  splits its per-tick budget between an intensity leg and a **staleness leg**,
+  and the budget itself is tunable
+  (`LEGBA_SITUATION_TRACKER_MAX_SITUATIONS`, default 12) because the frame
+  population grows several-fold under the split.
+- The register's checkpoint rows stop printing free prose. An unchanged
+  checkpoint now renders as a date and a movement name only; prose survives
+  only on deltas that carry cited evidence — closing a path where the
+  system's own bookkeeping read as testimony that an event was still live.
+- Ten desk prompts were carrying **two** register blocks: the guarded one
+  that ships staleness and corroboration warnings, and an older unguarded
+  duplicate that did not. The duplicate is gone, along with a cross-target
+  leak that fell back to a global top-list for non-country desks.
+- The journal's "new situations" counter was reading a modified timestamp
+  that a twenty-minute clustering pass touches on every live frame, so it
+  reported 44 new situations per cycle when the true number was zero. It
+  reads creation time now. Expect that number to fall to about zero — that
+  is the fix, not a collection failure.
+
+**The world read shipped its own JSON wrapper as the body.** When a
+composition returned a JSON envelope with one malformed key, the whole
+response was discarded and the raw envelope published as the finding — a raw
+JSON blob standing on the surface as the platform's current assessment of the
+world, scoring a healthy-looking faithfulness on the two claims a wrapper
+happens to contain. The body is now unwrapped when the intent is
+unambiguous, and **fails loud to the dead-letter queue** when it genuinely
+cannot be recovered — never published. A sibling hole is closed the same way:
+tool-call JSON that parsed "successfully" into an empty body was scoring a
+vacuous perfect faithfulness, and now raises instead. Salvaged rows are
+marked as salvaged. Historical rows are deliberately not rewritten.
+
+**The verify floor's exemptions now belong to the clause that earns them.**
+Three exemption rungs — synthesis prefixes, assessment scaffolding, and
+absence phrasing — were keyed to the whole span. A sentence that opened with
+a scaffold prefix and then named a president, an agency head and a country
+escaped scoring entirely. Each rung is now tested positionally, against the
+clause that earns the exemption, gated by whether the rest of the span
+asserts a specific fact — the same standard the judge itself already applies.
+Strictly additive: **+6,772 spans enter the denominator, none leave**, over
+54,610 segmented spans and 6,000 replayed findings. The floor arm's spread
+between published and true gate narrows 0.452 → 0.308; the judged arm is
+byte-identical across all 1,394 replayed rows. Unassessable verdicts fall 67%.
+Judge stamp `2026-08-29/1`.
+
+- Riding the same stamp: **a guard that had never once fired**. The
+  hedged-conflict rule shipped in the prior release was spelled with ASCII
+  hyphens, while 58% of graded claims carry a non-breaking hyphen the
+  producer emits — so it matched nothing, 0 of 573 graded claims, and the
+  regression suite could not see it because the suite's fixtures were typed
+  by hand in ASCII. The Unicode fold is applied; four of seven archived
+  specimens now fire as designed and the other three correctly stay silent.
+  A sibling omission of the same fold, in a place where fixing it can move
+  published scores, is deliberately held for its own stamp rather than
+  smuggled in here.
+
+**Calibration pooling shipped, and its honest result is zero.** Band
+calibration and unit correctness partition their populations on the current
+judge-pipeline stamp, so a stamp change starts the population over. They can
+now *pool* consecutive stamps into one population when the pipeline's own
+lineage prose affirmatively declares that a metric family cannot move across
+that boundary — tracked per metric family, disclosed on the wire as the exact
+pooled stamp set rather than silently widened. Applied to real lineage it
+yields **nothing**: fourteen stamps collapse to twelve populations, both
+poolable pairs are historical, and the live headline stays at zero. That is
+the finding, not a failure of the mechanism — band calibration resolves a
+claim at fourteen days while the mean stamp lifetime is about 2.3 days, so a
+claim can never be both currently-stamped and resolved. The population has
+been empty every day since 2026-08-04: 1,802 claims, all excluded, for
+twenty-five days. The fix is a slower stamp cadence, which is a decision, not
+a patch. No stamp bump — this is a reader-only change.
+
+**Ingestion smalls.**
+
+- A dead-source escalation added in the prior release was **dead code**: its
+  poll-history fetch window was smaller than the streak length required to
+  escalate, so a permanently-dead-but-cleanly-polling source could never
+  alert however long it stayed silent. The window is now sized from the
+  thresholds it is measured against. Expect a burst of prolonged-quiet
+  escalations on the first cycle after deploy for the sources currently
+  pinned just under the old window — intended.
+- One upstream feed intermittently exports rows carrying the **previous
+  year** in their date field. Ingest now detects that exact signature (prior
+  year, matching month and day, within a bounded future skew) and stores the
+  corrected date while preserving the original for audit. 369 existing rows
+  carry the defect; this change is forward-only and does not rewrite them.
+- One more evidenced near-miss spelling of a severity-movement tag
+  normalizes to its canonical value; anything ambiguous still reads as
+  absent, never guessed.
+
+## 2026-08-27
+
+**A situation could not stop being urgent, because the only clock it had was
+the one the product wound itself.** An event enters the situations register.
+The desks' 72-hour slices stop seeing it, so they write "no material change
+since the prior read." The register records those as activity, reports the
+frame back as standing intensity, and the desks cite that as confirmation the
+event is live. The composition then leads with it. At one measured moment a
+frame stood at intensity 59.3, event count 396, status active — on a strike
+that had **ended three weeks earlier**, with one wire signal in 45 days
+headlined that the workers had resumed. Nothing was miscalculated. Intensity
+was a measure of how often the pipeline ran.
+
+- **A second clock, wound only by the world.** Intensity now decays against
+  the newest *significant* ledger delta — a movement that cannot be written
+  without cited evidence, whose timestamp is the evidence's own. The
+  half-life scales with evidence density, so a frame with one corroborated
+  move decays fast and a frame with nine decays slowly. Past the desks' own
+  72-hour horizon a frame is demoted to dormant. Demotion only: it never
+  promotes and never auto-closes.
+- **A frame the ledger has never moved decays on age alone** from its own
+  opening. This is the largest class in the fleet: 24 of 50 non-closed frames
+  had no evidence-bearing ledger row *ever*, and all of them were rendering
+  as active, one of them 73 days old.
+- **A resolution now reaches the register.** A trajectory close had been
+  landing only in the event ledger while both register reads gate on the
+  frame's own status — so a frame that had been formally closed went on
+  rendering at full intensity.
+- **The register says what it is.** Both renders now carry the frame's last
+  corroboration time, its evidence age, and an explicit stale-no-new-evidence
+  or never-corroborated label, under a stated rule that the register is the
+  system's own bookkeeping and may never be evidence that an event is
+  current. A finding whose citations are *all* register references asserting
+  currency is now a counted soft verify failure.
+- Fleet effect, replayed against live data: active frames 42 → 17, dormant
+  8 → 26, and the frames the world is genuinely moving keep 95–98% of their
+  intensity. Judge stamp `2026-08-27/1`.
+
+**A composition may no longer claim what its own inputs don't support.** The
+rule already existed and was already obeyed one layer up — by prompt. The
+prompts are good and it failed anyway. This is the mechanical version: a new
+deterministic grader reads a composition against **the desk reads it cites**,
+using evidence the verify pass already held and had never once read. Four
+arms, four named failures:
+
+- **Scope laundering** (soft) — a desk wrote "no coordinated narrative
+  appears in *this desk's collection*"; the composition deleted the qualifier
+  and led with "in the country's information environment". Every one of that
+  read's inaccurate verdicts came off that single deletion.
+- **Direction conflict** (hard) — a composition asserting a cited read
+  "confirms increasing and expanding" activity over a head whose verdict was
+  "remains unchanged". The house definition of a hard failure, with the
+  aggravator that the composition named that source as its authority. It
+  quotes both poles verbatim or it declines.
+- **Asserting a desk negative** the desk never wrote, and **quoting a desk**
+  words that appear nowhere in its read (both soft).
+- A time bound answers *when*; only a collection bound answers *what was
+  searched*. The composition-layer scope test therefore drops the two time
+  nouns the unit-layer lexicon carries — a read claiming a whole country's
+  information environment "in the latest 72-hour slice" is the exact case
+  that motivates the distinction. Measured over ten graded compositions with
+  a deliberately over-broad citation set: five violations found, all
+  grader-confirmed, zero false positives.
+
+**The confidence damper is retired from the banding path.** A band sitting
+between the confidence floor and the confident knee shipped one rung *down*.
+When the tag being banded described a week's movement, discounting a
+weakly-evidenced week was a defensible hedge. Since the tag became the
+standing *state* of a dimension, the identical subtraction says something
+absurd: "we are 55% sure this desk read the war correctly, so call the war
+one rung smaller." A dimension carrying a moderate severity and a *rose*
+movement shipped as `low`; the only dimension in its read that had risen was
+the only one damped, and it shipped as `watch` in the sixth month of a
+shooting war.
+
+- Weak confidence is now **named** (`qualified-low-confidence`) rather than
+  subtracted, the floors decide admission and nothing else, and every row
+  records the rung the retired damper *would* have shipped — so the change is
+  auditable per row instead of from a deploy log. The damper's definition is
+  kept; restoring it is one branch.
+- **The card and the prose stopped contradicting each other.** Every
+  insufficient-evidence slot in the graded round sat beside a composition
+  that had *consumed* a verified read for that same desk — 20 of 21 clearing
+  the composition's own bar. The divergence was an ordering: the composition
+  applies its floor before folding to the freshest head, this engine folded
+  first and applied the floor after, so it abstained on a failing head with a
+  passing one one cycle behind it, unread. The card now resolves the rows the
+  prose actually rests on. It is not a softer path — a consumed head that
+  fails a guard is refused exactly as a fresh one is, and when none can be
+  banded the dimension still reads insufficient-evidence, but now names which
+  rule refused which rows.
+- Replayed over ten countries pinned to each card's own instant: mean
+  distance to the graders' blind reference bands 1.449 → 1.245, exact matches
+  6 → 8, and 20 of 21 abstentions recovered with none landing above
+  reference. Attribution is clean — every band move in the previously-banded
+  population came from the damper alone, every recovery from the alignment
+  alone.
+
+**A stamp change is a migration, not a world event.** Retiring the damper
+legitimately moves about thirty bands fleet-wide on the first sweep after
+deploy, and every one of those moves straddles a change in the banding
+semantics stamp. Both the alert scan and the calibration tracker would have
+read that as thirty deteriorations and thirty resolvable calibration claims —
+the platform paging the operator about its own upgrade. A semantics mismatch
+between two cards now pre-empts every other classification: the transition is
+labelled a semantics migration at low severity regardless of which way the
+band moved, folded into **one** informational alert per desk rather than one
+per dimension, and excluded from calibration aggregates by a query predicate
+that reports the excluded count honestly rather than hiding it (migration
+`0187`). Cards missing the stamp on both sides read as unchanged, so
+untouched history is byte-identical.
+
+**A composition could freeze before the reads it was composing had run.** The
+country and region compositions read their own units' heads and never consume
+a raw signal — but every analyst matched onto a target was being registered
+for that target's raw-signal trigger regardless of what it reads. Two
+unrelated wire signals could therefore wake a composition hours before that
+day's later units had run, and the reactive fire's cooldown then suppressed
+the correctly-ordered scheduled tick outright. Measured: 30 of 31 country
+targets had desk heads landing *after* their own composition had frozen. An
+analyst that does not read signals is no longer wired to the signal trigger,
+so a composition runs only on its own cadence — and the ordering invariant
+(every composition's tick lands strictly after every one of its units') is
+now pinned by a test against the shipped descriptors.
+
+**A composition now declares the evidence window it actually covers.** The
+self-description was a single as-of instant the model derived by scanning the
+rendered blocks, and it drifted — one read claimed a latest timestamp fifteen
+hours earlier than the heads the render had shown it. The real oldest and
+newest timestamps among the consumed heads are now computed from rows already
+being read (no extra queries) and handed to the model as a copy-only block,
+and the same computed value is stamped onto the finding so a downstream
+reader can check the prose against data instead of trusting it.
+
+**Two publishers, one wire story, one numbered signal.** The last
+false-positive class on the narrative desk, and the one four rounds of prompt
+text could not close: a single agency dispatch reaching a desk under two
+mastheads as two separately numbered signals, on which the desk then called
+"coordination" — quoting the identical phrasing while describing the sources
+as independent. No prompt text makes a desk un-see two numbered signals it
+was handed. The substrate-level dedup cannot reach this either, and not by
+oversight: two publishers hash differently however identical the headlines,
+and the semantic tier's threshold is deliberately high because a false link
+hides a signal from every desk on the platform.
+
+- So the collapse lives where its blast radius matches its confidence: one
+  desk, one run, one prompt. Nothing is written to the substrate, both
+  signal ids stay in the provenance chain — the desk read both, it simply
+  reads them as the one story they are — and the survivor renders a line
+  naming the mastheads, which turns the false-positive surface into the
+  corroboration datum it always was.
+- The precision guard was measured rather than assumed. Keying on headline
+  and day alone collapsed five groups in the sample window and only one was a
+  wire pair; the other four were disaster alerts sharing an auto-generated
+  title while describing different events. Requiring **two distinct
+  mastheads** drops every one of them and keeps the pair — syndication *is*
+  one story under several mastheads, and a same-publisher repeat never
+  presents the two-publishers surface.
+- It was never desk-scoped, and a later sweep read the code's own motivating
+  example as saying it was. Regression coverage now runs the collapse across
+  five named desks so it cannot silently re-scope.
+
+**A source can be dead for nine days and healthy the whole time.** One feed
+returned 110 consecutive empty-but-successful polls, state active throughout,
+and no alert ever fired — because a poll the discriminator classes as
+*honestly quiet* (the source's own crawl saw nothing newer) was exempted from
+escalation with no ceiling on how long the streak could run. The exemption
+exists to protect genuinely low-cadence feeds and still does; there is now a
+much higher, tunable bound past which an honest-quiet run escalates anyway,
+worded to tell the operator this is **not** a cursor or filter fault so the
+wrong investigation is ruled out up front.
+
+**An honest hedge stops being a hard failure.** The composition layer
+correctly writes sentences like "a weakly-supported read says no such event,
+which conflicts with the verified finding that it occurred; the former is
+below the verification floor" — two conflicting inputs, both named, the
+stronger preferred. But the absence-claim test was a substring match over the
+whole span, so the embedded quoted negative tripped the absence grammar,
+found a "violating" row, and that row resolved back to the same weak side the
+sentence had already named and already cited. The sentence was hard-failed
+for not believing the thing it explicitly said it did not believe. A
+deterministic guard now recognizes the shape — a weakness marker governing
+the absence idiom, a strength marker bound to a finding noun, and a conflict
+connective separating them — and returns the detail naming both poles
+verbatim or nothing at all, so the demotion is auditable from the ledger row
+alone. It demotes; it does not acquit. Judge stamp `2026-08-28/1`.
+
+- Two over-firing families from the same census are one word spanning two
+  subject matters, which no lexical test can separate — a forestry penalty
+  read as trade coercion, a civilian power station read as military
+  procurement. They ship as worked negatives in the judge's rubric rather
+  than as a rule.
+
+**Smaller repairs.** The absence screen was reading a signal's raw title
+while the desk had always read the stored English translation, so on a
+non-Latin-script source the screen and the desk were grading different text
+and an English content term could never collide with a native-script title
+(judge stamp `2026-08-25/1`). A movement tag emitted once in a spelling
+outside its vocabulary now normalizes through a narrow evidenced table —
+`rise`/`rising` to *rose*, `fall`/`falls`/`falling` to *fell* — with anything
+ambiguous still reading as absent. And a journal critic query named two
+columns that do not exist on the table it reads, returning a 500 from the
+proposals endpoint whenever a self-revision proposal sat in the queue.
+
 ## 2026-08-21
 
 **The ops deck, and the number nobody could see.** Seven server

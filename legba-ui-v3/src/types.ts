@@ -43,12 +43,10 @@ export type PanelKind =
   //    empty wiring table, superseded mutations queue, 0 discovery descriptors)
   // System (S1–S8 + P-1 cross-target findings feed)
   | 'system.findings'
-  | 'system.lineage'
   | 'system.budget'
   | 'system.optimizer'
   | 'system.dead_letter'
   | 'system.consult'
-  | 'system.deep_consult'
   | 'system.settings'
   //   (system.eval→system.eval_scorecard, system.runtime→system.actor_health,
   //    system.streams/users/backfill DELETED in S7-T2 consolidation)
@@ -63,24 +61,19 @@ export type PanelKind =
   // verified + a system-health corner, one glanceable 2×2 screen
   | 'system.wall'
   // U-4 (COHERENCE_WAVES_PLAN_2026-07-28) — a standalone mount of JUST the
-  // Wall's movers-since-last-visit quadrant, boot-seeded (App.tsx) so cold
-  // boot answers "what changed while I was away" without any user action.
-  // Hidden from the sidebar (registry.ts HIDDEN_KINDS) — not a merge alias
-  // like the rest of that set, but a deliberate choice to keep the sidebar's
-  // ≤22-row budget (U-3) unspent by a tile that's already on-screen at boot;
-  // still reachable via ⌘K and the "Wall" preset's full panel.
+  // Wall's movers-since-last-visit quadrant. The landing workspace now mounts
+  // the WALL itself (which carries that quadrant), so this tile is no longer
+  // boot-seeded; it stays registered + hidden (registry.ts HIDDEN_KINDS) so a
+  // saved layout holding it keeps rendering, and ⌘K can still open it.
   | 'system.wall_movers'
   // Entity knowledge-graph (UI-3 — source-first analogue of v2's entity KG)
   | 'system.entities'
-  | 'system.entity_graph'
   // K-G4 — the graph WALK: anchored ego expansion over the reified
   // `entity_edges` store, one interactive hop per click, with per-edge
   // evidence. Distinct from system.entity_graph (the older `proposed_edges`
   // top-N subgraph projection); this is the surface under the operator's
   // "walking the world graph" vision.
   | 'system.graph_walk'
-  // Notable-structure overlay (#99 — ranked interesting graph-structure shortlist)
-  | 'system.notable_structure'
   // Source-first surfaces (UI-2 / Tier C — pivot)
   | 'registry.sources'
   | 'source.detail'
@@ -99,16 +92,6 @@ export type PanelKind =
   | 'system.actor_health'
   // Product surfaces (UI-6 / Tier G — pivot)
   | 'system.search'
-  | 'system.alert_center'
-  // Escalation-delivery audit edge (audit finding C3 / decision D1): renders
-  // alert_sink_deliveries so a human SEES whether an escalation landed or
-  // went nowhere. Distinct from system.alert_center (the localStorage
-  // subscription watchlist over the findings feed).
-  | 'system.escalations'
-  // Watchlist v2 (P5-6): SERVER-side standing watches (entity/topic/place) the
-  // alert_trigger_scan's watchlist_hit class evaluates — distinct from
-  // system.alert_center's client-only localStorage subscriptions.
-  | 'system.watchlist'
   | 'system.report_export'
   //   (system.tenant_view DELETED — multitenancy is ingestion-only, not baked)
   // The Inspector — the unified detail surface (redesign Move 1, the keystone)
@@ -122,12 +105,6 @@ export type PanelKind =
   // `journal_proposals` accept/reject. Journal writes are human-gated by
   // standing rule, and the gate was API-only until this kind existed.
   | 'system.journal_gate'
-  // The situation register's frames + the append-only trajectory ledger
-  // (Continuity P2 — `/v3/situations/{id}/trajectory`).
-  | 'system.situations'
-  // Reified contested-claim families + the directed source-echo graph
-  // (P4-1/P4-2 — `/v3/narratives`, `/v3/narratives/echo`).
-  | 'system.narratives'
   // GLASS-3 — the ops deck. Four kinds over seven server surfaces that had no
   // consumer at all, plus the one new API the track shipped. All four land in
   // Engine Room, whose rows fold behind a single collapsed header and so cost
@@ -147,20 +124,26 @@ export type PanelKind =
   // The three eval boards that had live routes and no reader:
   // `/v3/eval/desk_baselines`, `/band_trajectory`, `/analyst_runtime`.
   | 'system.eval_boards'
+  // THE READ SCOREBOARD (D2e) — `/read-events/rollup`. The only panel that
+  // measures the OPERATOR rather than the engine: reads today / this week and
+  // the morning-read day count the 90-day oracle wager is graded on.
+  | 'system.read_scoreboard'
   // v4 visual workspace panels (geotemporal / flow / provenance)
   //   (v4.case Casework Board DELETED in S7-T2 — shelved, no pin board reachable)
   | 'v4.map'
-  | 'v4.flow'
-  | 'v4.why'
   | 'v4.assessment'
   // Mission-control default-layout surfaces (S7-T2): the KPI glance strip and
   // the global banded Timeline lanes — self-fetching singletons.
   | 'v4.kpi'
-  | 'v4.timeline'
-  // U-3 merges (COHERENCE_WAVES_PLAN_2026-07-28 §U-3) — one visible panel kind
-  // per merge set; the folded-away originals (v4.why/system.lineage/v4.flow,
-  // system.alert_center/system.watchlist/system.escalations) stay in this
-  // union + the registry (HIDDEN_KINDS) so old saved-layout panel ids resolve.
+  // U-3 merges (COHERENCE_WAVES_PLAN_2026-07-28 §U-3) — one panel kind per
+  // merge set. The folded-away originals (v4.why / system.lineage / v4.flow /
+  // system.situations / system.narratives, system.alert_center /
+  // system.watchlist / system.escalations, system.deep_consult, v4.timeline,
+  // system.entity_graph / system.notable_structure) no longer appear in this
+  // union at all: they RETIRED into `panel-registry/aliases.ts`, which resolves
+  // an old saved-layout id / ⌘K deep-link onto the survivor and the tab that
+  // renders it (UI_HOLISTIC_DESIGN_2026-08-24 §4.4). A retired kind costs one
+  // line of data instead of a registry row.
   | 'system.provenance'
   | 'system.alerts_watches'
 
@@ -258,6 +241,17 @@ export interface PanelProps {
   }
   /** Current deployment mode for cross-cutting concerns. */
   mode: Mode
+  /**
+   * Which tab/mode a TABBED panel should open on.
+   *
+   * Set when a RETIRED kind resolved onto this panel through the alias table
+   * (`panel-registry/aliases.ts`): opening `system.watchlist` must land on
+   * Alerts & Watches' "Watches" tab, not its default. Also honored by a
+   * workspace seed that wants a specific tab up front. Ignored by panels with
+   * no tabs, and an unrecognized value falls back to the panel's own default —
+   * a stale tab name must never render an empty surface.
+   */
+  initialTab?: string
 }
 
 /** JWT scope claims — populated by `auth/jwt.ts`. */

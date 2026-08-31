@@ -118,6 +118,17 @@ _VERDICT_ROUTE_EXCLUDED = "contradicted_route_excluded"
 #: decided this claim is a continuity / volume / trajectory read rather than a
 #: slice-checkable negative, the judge does not get to hard-fail it anyway.
 _JUDGE_CONTRADICTED_ROUTE_EXCLUDED = "judge_contradicted_route_excluded"
+#: V-J1 (2026-08-28) — the verdict label for a contradiction on a claim that
+#: already DISCLOSED the pole the refutation comes from and marked it WEAK (see
+#: ``absence_slice.hedged_conflict_disclosure`` for the shape and its census).
+_VERDICT_CONTRADICTED_HEDGED = "contradicted_hedged_conflict"
+#: Its span reason — SOFT, and deliberately NOT folded into V-I5's class. V-I5
+#: is about what KIND of read the ROUTER said this is, and it is gated on a
+#: scope qualifier; this is about what the SENTENCE ITSELF says — it named the
+#: weak pole and rejected it — and must be reachable on the generic route, where
+#: the 08-27 check found the same template. Two mechanisms, two counters (the
+#: V-G8 fidelity rule): pooling them would hide which fix moved precision.
+_JUDGE_CONTRADICTED_HEDGED = "judge_contradicted_hedged_conflict"
 #: Shortest quote we will try to resolve. A 1-3 word fragment matches almost any
 #: evidence by accident, which would make the requirement decorative.
 _JUDGE_QUOTE_MIN_CHARS = 16

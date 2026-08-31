@@ -3505,9 +3505,25 @@ class PostgresQdrantSubstrateQueryPort:
                 "  AND produced_at >= $1",
                 since_dt,
             )
+            # ``created_at``, NOT ``updated_at`` — REGISTER-1h (2026-08-29).
+            # ``situations`` is a MUTABLE row that ``situation_clustering``
+            # UPSERTs every 20 minutes with ``updated_at=NOW()``, so an
+            # ``updated_at`` count is a count of the CRON, not of anything that
+            # happened. Measured on the live register at the premise review: 44
+            # of 89 rows carried an ``updated_at`` inside the last 20 minutes —
+            # and the same 44 for the last hour and the last 24 hours — while
+            # frames actually CREATED in the last 24 hours numbered ZERO. So the
+            # journal desks' "what changed since I last wrote" prompt was told
+            # ``new_situations: 44`` for any cursor older than one cadence tick,
+            # when the true answer was 0. ``created_at`` is written once at
+            # materialization (the upsert's DO UPDATE branch never touches it),
+            # so it is the one column on this row that answers "is this NEW".
+            # The sibling counters already read a creation-time column
+            # (``analyst_outputs.produced_at`` / ``nexuses.produced_at``); this
+            # makes the third one consistent with them.
             new_situations = await conn.fetchval(
                 "SELECT count(*) FROM situations "
-                "WHERE superseded_by IS NULL AND updated_at >= $1",
+                "WHERE superseded_by IS NULL AND created_at >= $1",
                 since_dt,
             )
             new_nexuses = await conn.fetchval(

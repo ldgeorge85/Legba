@@ -79,6 +79,7 @@ import logging
 import re
 from typing import Any, Mapping, Sequence
 
+from ..situations.trajectory import DELTA_UNCHANGED_CHECKPOINT
 from .composition_window import (
     MAX_TITLE_CHARS,
     _SEVERITY_RANK,
@@ -799,14 +800,117 @@ def _render_prior_read_lines(row: Mapping[str, Any], ordinal: int) -> list[str]:
     ]
 
 
+#: H1 — how old a frame's last CORROBORATING evidence may be before the register
+#: labels it STALE. The desk's own 72-hour slice: the admissibility horizon
+#: inside which a read is licensed to treat something as current. It matches
+#: ``situation_clustering._CORROBORATION_ACTIVE_MAX_DAYS`` deliberately — the
+#: same horizon that demotes ``status`` to ``dormant`` is the one that labels the
+#: line, so a reader never sees a frame the writer called dormant printed without
+#: a reason beside it.
+REGISTER_STALE_AFTER_DAYS: float = 3.0
+
+#: The label a stale frame carries, and the phrase the anti-self-corroboration
+#: rule names. Rendered in caps because it must survive being skimmed.
+REGISTER_STALE_LABEL: str = "STALE-NO-NEW-EVIDENCE"
+
+#: What the register says when the trajectory ledger has never moved a frame.
+#: NOT "0d", NOT ``last_event_at`` — see the H1 note in
+#: :func:`_render_evidence_age`. "We have never corroborated this" and "we
+#: corroborated it just now" must never render alike.
+REGISTER_NO_CORROBORATION: str = "NEVER-CORROBORATED"
+
+#: THE ANTI-SELF-CORROBORATION RULE (H1, CORRECTNESS-R2 §1 recommendation 1).
+#:
+#: The register is ``[N]``-citable, which is what makes the loop possible: the
+#: standing "no claim may rest on orientation alone" clause does not reach a
+#: block that carries an ordinal. So the rule is stated where the block is
+#: rendered, in the block itself, immediately above the frames it governs.
+#:
+#: At the round's T0 the AR escalation desk wrote "The open-situation register
+#: records a high intensity (59.1) and recent activity, indicating concrete
+#: operational impact rather than mere rhetoric" at confidence 0.90, and the
+#: composition's BLUF said the register "confirms the strike remains the active
+#: driver". Both sentences are the product citing its own bookkeeping as
+#: evidence about the world. This paragraph is what forbids them.
+REGISTER_SELF_CORROBORATION_RULE: str = (
+    "HOW TO READ THIS BLOCK. Every number on a frame line is the PRODUCT'S OWN "
+    "BOOKKEEPING, not a report from the world. `intensity` and `events` count "
+    "how much THIS SYSTEM has written about the frame — a desk that looks and "
+    "sees nothing still writes, so a high count can mean nothing has happened. "
+    "`last_event_at` is the last time any desk WROTE about the frame; "
+    "`last_corroborated_at` is the last time NEW EVIDENCE actually moved it, "
+    "and it is the only date here that says anything about the world. "
+    "THEREFORE: this register may orient you, and you may cite it for what the "
+    f"SYSTEM currently holds, but it may NEVER be your evidence that an event "
+    f"is ongoing, current, confirmed, or still the active driver. Do not write "
+    f"that the register 'confirms' or 'corroborates' anything about the world. "
+    f"A frame marked {REGISTER_STALE_LABEL} has had NO new corroborating "
+    "evidence inside the current read's horizon, and one marked "
+    f"{REGISTER_NO_CORROBORATION} has NEVER had any: treat both as standing "
+    "questions, not live events, and say so in those words if you mention them "
+    "at all. Any claim that an event is still happening must rest on a dated "
+    "item from the evidence slice or the window ledger."
+)
+
+
+def is_stale_frame(situation: Mapping[str, Any]) -> bool:
+    """True when a frame's last KNOWN CONTACT WITH THE WORLD is past the horizon.
+
+    ``evidence_age_days`` is the age of the frame's evidence anchor: its last
+    significant trajectory delta, or — for a frame the ledger has never moved —
+    the frame's own OPENING. So a never-corroborated frame is stale exactly when
+    it is OLD, which is the case the 2026-08-27 DQ sweep found fleet-wide (24 of
+    50 non-closed frames, 22 with no ledger rows at all, rendering ``active`` at
+    intensity up to 60.9; the worst 73 days old with zero events ever).
+    """
+    age = _as_float(situation.get("evidence_age_days"))
+    return age is not None and age > REGISTER_STALE_AFTER_DAYS
+
+
+def _render_evidence_age(situation: Mapping[str, Any]) -> str:
+    """The EVIDENCE-age fragment every register line carries.
+
+    ``last_corroborated_at=<iso> evidence_age=<N>d`` plus the
+    :data:`REGISTER_STALE_LABEL` past the horizon;
+    :data:`REGISTER_NO_CORROBORATION` in place of the date when the trajectory
+    ledger has never moved the frame — the age is still printed, and so is the
+    label, because a frame nothing has ever corroborated is not a fresher one.
+
+    This fragment is the load-bearing half of the H1 render repair. The register
+    already printed a date — ``last_event_at`` — and a desk read it as a world
+    date, writing "the latest event timestamp on 20 August 2026" into prose about
+    a strike that had ended on 5 August. The column was telling the truth; it was
+    answering a different question. Printing the evidence clock BESIDE the
+    bookkeeping clock, on every line, is what makes the two impossible to
+    confuse — and printing NEVER as a word rather than as a missing field is what
+    stops the fleet's 24 never-corroborated frames reading as merely quiet ones.
+    """
+    when = situation.get("last_corroborated_at") or REGISTER_NO_CORROBORATION
+    age = _as_float(situation.get("evidence_age_days"))
+    age_part = f" evidence_age={age:.1f}d" if age is not None else ""
+    stale_part = f" {REGISTER_STALE_LABEL}" if is_stale_frame(situation) else ""
+    return f"last_corroborated_at={when}{age_part}{stale_part}"
+
+
 def _render_situation_register_lines(
     situations: Sequence[Mapping[str, Any]], ordinal: int
 ) -> list[str]:
     """The OPEN SITUATION REGISTER sub-block — ONE citable ordinal for the whole
-    register (it is a single orienting index, not N pieces of evidence)."""
+    register (it is a single orienting index, not N pieces of evidence).
+
+    H1: every frame line now carries its EVIDENCE age beside its bookkeeping age
+    (:func:`_render_evidence_age`), and the block leads with
+    :data:`REGISTER_SELF_CORROBORATION_RULE` — the rule that forbids resting a
+    world claim on the register's own numbers.
+
+    REGISTER-1c: a trailing ``unchanged_checkpoint`` renders its DATE and its
+    delta name and nothing else. H1 damped the loop's NUMBER and left its
+    SENTENCE — see the comment on the checkpoint branch below.
+    """
     lines = [
         f"[[ref:{ordinal}]] OPEN SITUATION REGISTER "
         f"({len(situations)} open frame(s) in scope, highest-intensity first):",
+        f"      {REGISTER_SELF_CORROBORATION_RULE}",
     ]
     for s in situations:
         intensity = s.get("intensity_score")
@@ -821,7 +925,8 @@ def _render_situation_register_lines(
         lines.append(
             f"      - {s.get('name')} :: status={s.get('status')} "
             f"intensity={intensity_txt} events={events_txt} "
-            f"last_event_at={s.get('last_event_at') or '(none)'} open_for={age_txt}"
+            f"last_event_at={s.get('last_event_at') or '(none)'} "
+            f"{_render_evidence_age(s)} open_for={age_txt}"
             + (f" trajectory={state}" if state else "")
         )
         # CONTINUITY P2 — the frame's own DATED deltas. FRAME-2 (§2.3.1): these
@@ -842,9 +947,48 @@ def _render_situation_register_lines(
             when = delta.get("occurred_at")
             human = human_date(when)
             when_txt = f"{human} ({when})" if human else (when or "(undated)")
-            lines.append(
-                f"          * {when_txt} {delta.get('delta')}: {delta.get('why')}"
-            )
+            kind = delta.get("delta")
+            # REGISTER-1c (2026-08-29) — A CHECKPOINT RENDERS ITS DATE, NEVER ITS
+            # PROSE.
+            #
+            # H1 exempted ``unchanged_checkpoint`` from the evidence requirement
+            # on the ground that "a checkpoint asserts nothing about the world
+            # (it is the one delta the ledger writes without evidence), so
+            # showing an old one cannot mislead the way an old escalation
+            # could". That is true of the delta TYPE and false of the ROW: the
+            # row also carries ``why`` — free LLM prose written under a prompt
+            # whose own instruction is "situations mostly continue" — and this
+            # render printed it verbatim into nine desk prompts.
+            #
+            # MEASURED at the 2026-08-29 premise review: of 1,095
+            # ``unchanged_checkpoint`` rows, 375 (34%) carry currency language
+            # (remains / continues / ongoing / persists / still) and 53 carry
+            # CORROBORATION language (confirms / corroborates / verifies) — in
+            # the one row class the design exempted because it "asserts
+            # nothing". Of the checkpoints actually RENDERED (one per frame,
+            # UNWINDOWED on purpose, mean age 3.7d, max 17.3d), HALF asserted
+            # currency or confirmation. The live example is the whole defect in
+            # one line: the AR frame's rendered checkpoint, dated 23 August,
+            # read "No material change was observed; the maritime pilot strike
+            # continues with…" — 24 days after the strike ended, in a prompt
+            # that also rendered ``trajectory=escalating``.
+            #
+            # So the fix is the one the exemption's own logic implies. A
+            # checkpoint's FACT is "we looked on <date> and nothing had changed";
+            # that fact is fully carried by the date and the delta name, which
+            # is why the checkpoint line was kept in the first place. Its ``why``
+            # adds no fact and is the only channel by which the loop's SENTENCE
+            # reached the desks. A SIGNIFICANT delta keeps its ``why``: it cannot
+            # be written without cited evidence (``trajectory.TrajectoryEvent``
+            # rejects it, and so does migration 0184's
+            # ``situation_events_delta_requires_evidence`` CHECK) and it is
+            # windowed to the read's own
+            # fortnight, so its prose is a dated, evidence-backed statement of
+            # what moved — exactly what the block exists to carry.
+            if kind == DELTA_UNCHANGED_CHECKPOINT:
+                lines.append(f"          * {when_txt} {kind}")
+                continue
+            lines.append(f"          * {when_txt} {kind}: {delta.get('why')}")
     return lines
 
 
@@ -948,6 +1092,10 @@ __all__ = [
     "LEDGER_UNIT_TOTAL_CAP",
     "LEDGER_VERIFY_FLOOR",
     "LEDGER_WINDOW_HOURS",
+    "REGISTER_NO_CORROBORATION",
+    "REGISTER_SELF_CORROBORATION_RULE",
+    "REGISTER_STALE_AFTER_DAYS",
+    "REGISTER_STALE_LABEL",
     "SITUATION_REGISTER_CAP",
     "SITUATION_REGISTER_EVIDENCE_CHARS",
     "SITUATION_REGISTER_NAME_CHARS",
@@ -962,9 +1110,11 @@ __all__ = [
     "_ledger_selection",
     "_register_situations",
     "_render_continuity_block",
+    "_render_evidence_age",
     "_render_prior_read_lines",
     "_render_situation_register_lines",
     "defuse_ledger_markers",
+    "is_stale_frame",
     "ledger_block_lines",
     "ledger_entry",
     "ledger_evidence_text",

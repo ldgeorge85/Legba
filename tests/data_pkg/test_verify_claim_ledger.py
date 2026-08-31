@@ -31,8 +31,11 @@ import inspect
 from typing import Any
 from uuid import uuid4
 
+import legba.data.provenance.composition_integrity as composition_integrity
 import legba.data.provenance.judge_input_checks as judge_input_checks
+import legba.data.provenance.judge_verdict_parsing as judge_verdict_parsing
 import legba.data.provenance.verify as verify
+import legba.data.provenance.world_knowledge_guards as world_knowledge_guards
 from legba.data.provenance.models import CritiquePayload
 from legba.data.provenance.verify import (
     FAIL_CLASS_HARD,
@@ -114,6 +117,11 @@ def test_fail_class_mapping_table() -> None:
         # / unverified) sub-claims asserted WITHOUT hedged attribution — the
         # overclaim family, counted on the deterministic floor.
         "unhedged_periphery_citation": FAIL_CLASS_SOFT,
+        # H1 — a world claim resting ONLY on the open-situation register,
+        # stated as currency or corroboration. Overclaim family: the clause
+        # claims a verification status the product's own bookkeeping cannot
+        # carry. Nothing fabricated, nothing contradicted — SOFT.
+        "register_self_corroboration": FAIL_CLASS_SOFT,
         "double_counted": FAIL_CLASS_SOFT,
         "indicator_uncited_triggered": FAIL_CLASS_SOFT,
         # W31: a world-scoped absence claim with no collection-scoping language
@@ -150,6 +158,10 @@ def test_fail_class_mapping_table() -> None:
         # slice checking and the judge hard-failed it anyway. One claim cannot
         # have two authorities.
         "judge_contradicted_route_excluded": FAIL_CLASS_SOFT,
+        # V-J1: the claim NAMED both poles and marked one WEAK, and the quote is
+        # that same disclosed weak side — a sentence hard-failed for not
+        # believing the thing it said it does not believe.
+        "judge_contradicted_hedged_conflict": FAIL_CLASS_SOFT,
         # V-G5: a markerless claim resting on a historical/structural BASELINE
         # about the world — a premise whose truthmaker no cited row contains.
         "uncited_world_knowledge": FAIL_CLASS_SOFT,
@@ -169,6 +181,27 @@ def test_fail_class_mapping_table() -> None:
         # it did before the fourth verdict existed. An EARNED one is ungraded
         # and reaches no table at all.
         "judge_nonpropositional_unearned": FAIL_CLASS_SOFT,
+        # H2: a collection-scoped desk negative republished by the composition as
+        # a world fact. Soft — the overclaim family W31 lives in, and disjoint
+        # from it (W31 skips cited spans; this arm requires the citation).
+        "absence_scope_laundered": FAIL_CLASS_SOFT,
+        # H2: an ATTRIBUTED clause whose direction is the opposite of the cited
+        # desk head's own verdict ("the military-posture read CONFIRMS ...
+        # INCREASING" over "remains UNCHANGED"). The house definition of hard —
+        # a claim its own cited source contradicts — with the aggravator that the
+        # composition named that source as its authority. Earned the V-D way:
+        # both poles are named verbatim in the detail or nothing is emitted.
+        "attribution_direction_conflict": FAIL_CLASS_HARD,
+        # H2: a desk cited for the PRESENCE of what its read records as absent
+        # ("the internal-stability read notes only modest, isolated protests"
+        # over "No unrest ... appears in this desk's collection"). Soft: the
+        # term-overlap binding is a heuristic and a false hard is the expensive
+        # error.
+        "attribution_asserts_desk_negative": FAIL_CLASS_SOFT,
+        # H2: a coinage QUOTED as a named desk's own words that appears nowhere
+        # in that desk's cited read. Soft — a provenance defect, not a
+        # fabricated world fact.
+        "attribution_ungrounded_quote": FAIL_CLASS_SOFT,
     }
     # Unknown reasons degrade conservatively (soft, never a fabricated hard).
     assert fail_class_for_reason("some_future_reason") == FAIL_CLASS_SOFT
@@ -180,7 +213,7 @@ def _reason_literals(node: ast.AST) -> tuple[set[str], bool]:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return {node.value}, False
     if isinstance(node, ast.Name):
-        for mod in (verify, judge_input_checks):
+        for mod in (verify, judge_input_checks, composition_integrity):
             resolved = getattr(mod, node.id, None)
             if isinstance(resolved, str):
                 return {resolved}, False
@@ -216,9 +249,31 @@ def test_fail_class_drift_guard() -> None:
     # module would have called them DEAD — i.e. the extraction seam the tree is
     # deliberately growing would have silently disabled this test's second half.
     # Any future brick that emits a span reason joins this tuple.
+    # H2 (2026-08-27): the composition-integrity brick is the SECOND module to
+    # emit span reasons from outside verify.py — and the first whose reasons are
+    # not even spelled in verify's table as literals (they arrive as
+    # ``**composition_integrity.FAIL_CLASSES``, because the module-size ceiling
+    # left the wiring six lines). Both halves of the guard therefore have to
+    # parse it: without this it would report all four as DEAD.
+    # V-I (2026-08-27): ``_judge_reason`` itself — the FOURTH source the
+    # docstring above names — moved to ``judge_verdict_parsing`` when that
+    # cluster was extracted off verify.py's own ceiling. Its RETURNS are the
+    # bulk of the "judge_*" reasons; without parsing this module too, every one
+    # of them reports DEAD the moment the function it lives in moves house.
+    # 2026-08-29 ([N+1] transparency train): the WORLD-KNOWLEDGE GUARDS moved to
+    # ``world_knowledge_guards`` when the extraction-first phase cleared the
+    # module-size ceiling. ``stale_leader``, ``stale_leader_vs_facts`` and
+    # ``cross_target_leak`` are emitted THERE now — three HARD classes that would
+    # all have reported DEAD the moment the family changed house.
     trees = [
         ast.parse(inspect.getsource(mod))
-        for mod in (verify, judge_input_checks)
+        for mod in (
+            verify,
+            judge_input_checks,
+            composition_integrity,
+            judge_verdict_parsing,
+            world_knowledge_guards,
+        )
     ]
     emitted: set[str] = set()
     for tree in trees:
@@ -587,3 +642,109 @@ async def test_profile_env_selects_independent(monkeypatch) -> None:
 def test_unknown_profile_degrades_to_current() -> None:
     assert verify._judge_prompt_profile("adversarial-typo") == JUDGE_PROFILE_CURRENT
     assert verify._generic_judge_system("adversarial-typo") == _GENERIC_JUDGE_SYSTEM
+
+
+# ---------------------------------------------------------------------------
+# H1 — REGISTER SELF-CORROBORATION (CORRECTNESS-R2 M-1 / recommendation 1)
+#
+# The claims below are the ROUND'S OWN PROSE. The AR composition's BLUF and the
+# AR escalation head, verbatim, about a maritime pilots' strike that had ended
+# three weeks earlier and whose only wire signal in 45 days was headlined
+# "Argentina's Pilots Resume Work".
+# ---------------------------------------------------------------------------
+
+_REGISTER_ORD = 45
+_SLICE_ORD = 3
+
+
+def _register_citations() -> list[dict[str, Any]]:
+    return [
+        {"ordinal": _SLICE_ORD, "ref_kind": "finding", "marker": f"[[ref:{_SLICE_ORD}]]"},
+        {
+            "ordinal": _REGISTER_ORD,
+            "ref_kind": "situation_register",
+            "marker": f"[[ref:{_REGISTER_ORD}]]",
+            "situation_ids": [str(uuid4())],
+        },
+    ]
+
+
+def test_the_ref_kind_literal_matches_the_renderer():
+    """``verify`` sits UNDER ``data.analysts`` in the import graph so the kind is
+    duplicated as a literal. This is the drift guard that makes that safe."""
+    from legba.data.analysts.window_ledger import SITUATION_REGISTER_REF_KIND
+
+    assert verify._REGISTER_REF_KIND == SITUATION_REGISTER_REF_KIND
+
+
+def test_the_round_s_own_bluf_is_flagged():
+    """"the register confirms the strike remains the active driver" — the
+    strongest corroboration verb in the read, pointed at the product's own
+    bookkeeping."""
+    body = (
+        "The open-situation register confirms the strike remains the active "
+        f"driver with high intensity [[ref:{_REGISTER_ORD}]].\n"
+    )
+    spans = verify.register_self_corroboration_spans(body, _register_citations())
+    assert [s.reason for s in spans] == ["register_self_corroboration"]
+    assert spans[0].markers == [_REGISTER_ORD]
+    assert verify._FAIL_CLASS_BY_REASON[spans[0].reason] == verify.FAIL_CLASS_SOFT
+
+
+def test_the_round_s_own_escalation_head_is_flagged():
+    """The desk's decisive evidence sentence, cited at ordinal 45 — past its own
+    43-signal slice count, i.e. the grounding block rather than the wire."""
+    body = (
+        "The open-situation register records a high intensity and recent "
+        "activity, and the maritime pilot strike continues today "
+        f"[[ref:{_REGISTER_ORD}]].\n"
+    )
+    spans = verify.register_self_corroboration_spans(body, _register_citations())
+    assert len(spans) == 1
+
+
+def test_a_claim_with_real_evidence_beside_the_register_passes():
+    """ALL resolved markers must be the register. One slice citation alongside
+    and the clause is grounded in that citation — flagging it would demote a
+    legitimate continuity sentence."""
+    body = (
+        "Grain movements remain disrupted at Rosario "
+        f"[[ref:{_SLICE_ORD}]][[ref:{_REGISTER_ORD}]].\n"
+    )
+    assert verify.register_self_corroboration_spans(body, _register_citations()) == []
+
+
+def test_reporting_what_the_register_holds_is_never_flagged():
+    """The register may be cited for what the SYSTEM holds. Only CURRENCY and
+    CORROBORATION language about the world is the defect."""
+    body = (
+        "The register lists three open frames for Argentina, the oldest opened "
+        f"on 6 August [[ref:{_REGISTER_ORD}]].\n"
+    )
+    assert verify.register_self_corroboration_spans(body, _register_citations()) == []
+
+
+def test_the_guard_is_inert_without_a_register_citation():
+    """No ``ref_kind='situation_register'`` in the list ⇒ no spans, whatever the
+    prose says. Most of the fleet never sees a register block and its verdicts
+    must be byte-identical to pre-H1."""
+    plain = [{"ordinal": 1, "ref_kind": "finding", "marker": "[[ref:1]]"}]
+    body = "The strike remains the active driver and the record confirms it [[ref:1]].\n"
+    assert verify.register_self_corroboration_spans(body, plain) == []
+    assert verify.register_self_corroboration_spans(body, None) == []
+    assert verify.register_self_corroboration_spans("", _register_citations()) == []
+
+
+def test_the_unit_bracket_convention_is_covered_too():
+    """The DESK-facing register uses ``[N]`` markers — and the desk is where the
+    round's chain actually started."""
+    cits = [{"ordinal": 44, "ref_kind": "situation_register", "marker": "[44]"}]
+    body = "The maritime pilot strike remains active and ongoing [44].\n"
+    spans = verify.register_self_corroboration_spans(body, cits)
+    assert [s.markers for s in spans] == [[44]]
+
+
+def test_a_malformed_citation_list_never_raises():
+    """A guard never breaks the verify path."""
+    for junk in ("not-a-list", [None, 7, {"ordinal": "x"}], [{"no_ordinal": 1}]):
+        assert verify.register_self_corroboration_spans("Anything remains.", junk) == []

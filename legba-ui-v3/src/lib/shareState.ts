@@ -65,6 +65,41 @@ function writeHash(kind: SelectionKind | null, id: string | null): void {
 }
 
 /**
+ * Read `#ws=<workspace>` — the STANCE a shared link carries alongside the
+ * record (design §3.5 #4: "look at this finding *in Investigate*"). Returns
+ * null when absent; the caller validates the id against the workspace list.
+ */
+export function readWorkspaceHash(): string | null {
+  try {
+    const params = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+    return params.get('ws')
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Mirror the active workspace into the hash, preserving `sel` (the two params
+ * share one hash: `#sel=finding:8f21&ws=investigate`). Replace, never push —
+ * switching stances is not a history entry.
+ */
+export function writeWorkspaceHash(ws: string | null): void {
+  try {
+    const params = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+    if (ws) params.set('ws', ws)
+    else params.delete('ws')
+    const q = params.toString()
+    const next = q ? `#${q}` : ''
+    if (next !== window.location.hash) {
+      const { pathname, search } = window.location
+      window.history.replaceState(null, '', `${pathname}${search}${next}`)
+    }
+  } catch {
+    // history/URL unavailable — sharing is best-effort, never fatal.
+  }
+}
+
+/**
  * Mount once (from the App root). Restores the selection from the hash on load,
  * mirrors every selection change back into the hash, and follows manual hash
  * edits / browser back-forward.

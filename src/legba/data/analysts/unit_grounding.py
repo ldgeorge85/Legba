@@ -104,9 +104,12 @@ import re
 from typing import Any, Mapping, Sequence
 from uuid import UUID
 
+from ..provenance.citation_markers import prior_read_ref
 from ._tradecraft import RETRIEVED_CONTEXT_RULE, as_of_rule
 from .window_ledger import (
     LEDGER_UNIT_TOTAL_CAP,
+    REGISTER_SELF_CORROBORATION_RULE,
+    _render_evidence_age,
     ledger_block_lines,
     ledger_finding_ids,
     read_window_ledger,
@@ -602,6 +605,16 @@ def _render_prior_read(row: Mapping[str, Any], ordinal: int) -> list[str]:
         f"[{ordinal}] PRIOR READ — this unit's previous verified read of this "
         f"target: {title}",
         f"    analyst_id={analyst_id} produced_at={produced_at}{age_part}",
+        # 2026-08-29 (task #62) — the LICENSED SPELLING. Citing this block as a
+        # bare ``[N]`` is correct and stays correct; naming it costs the desk
+        # nothing, because both marker parsers rewrite the long form back to
+        # ``[N]`` before anything grades it (``citation_markers
+        # ._PRIOR_READ_REF_RE`` at verify time, ``inline_target
+        # ._normalize_citation_markers`` at write time). The point is that a
+        # reader of the finished prose can see WHICH kind of thing was cited
+        # without joining to the citation list.
+        f"    cite as [{ordinal}] — or, to say so in the prose, "
+        f"{prior_read_ref(ordinal)}",
     ]
     # The note renders ONLY when the body actually carries a defused marker, so
     # a marker-free prior read (the common case) stays byte-identical to the
@@ -634,11 +647,26 @@ def _render_window_ledger(
 
 def _render_situations(situations: Sequence[Mapping[str, Any]], ordinal: int) -> list[str]:
     """The OPEN SITUATION REGISTER block — ONE ordinal for the whole register
-    (it is a single orienting index, not N pieces of evidence)."""
+    (it is a single orienting index, not N pieces of evidence).
+
+    H1 — THIS IS THE BLOCK THE REGISTER LOOP RAN THROUGH. At the round's T0 the
+    AR escalation desk cited ordinals ``[44][45]`` — past its own 43-signal slice
+    count, i.e. these grounding blocks — and wrote "The open-situation register
+    records a high intensity (59.1) and recent activity, indicating concrete
+    operational impact rather than mere rhetoric" at confidence 0.90, about a
+    strike that had ended three weeks earlier. So the desk-facing render carries
+    the same two repairs the composition's does, from the SAME source of truth:
+    :data:`~legba.data.analysts.window_ledger.REGISTER_SELF_CORROBORATION_RULE`
+    at the head of the block, and :func:`
+    ~legba.data.analysts.window_ledger._render_evidence_age` on every line. The
+    thin-adapter posture of :func:`_render_window_ledger` for the same reason —
+    one implementation, two marker languages, no drift.
+    """
     lines = [
         f"[{ordinal}] OPEN SITUATION REGISTER — {len(situations)} open frame(s) "
         "on this desk, highest-intensity first (the platform's CLUSTERED "
         "situational picture, NOT operator-vetted ground truth):",
+        f"    {REGISTER_SELF_CORROBORATION_RULE}",
     ]
     for s in situations:
         lines.append(
@@ -646,6 +674,7 @@ def _render_situations(situations: Sequence[Mapping[str, Any]], ordinal: int) ->
             f"status={s.get('status')} intensity={_fmt(s.get('intensity_score'))} "
             f"events={_fmt_int(s.get('event_count'))} "
             f"last_event_at={s.get('last_event_at') or '(none)'} "
+            f"{_render_evidence_age(s)} "
             f"open_for={_fmt_days(s.get('age_days'))}"
         )
     return lines
@@ -767,6 +796,18 @@ def block_evidence_text(row: Mapping[str, Any], ordinal: int) -> str:
 # Citations — honest ref shapes, no fabricated anchors
 # ---------------------------------------------------------------------------
 
+#: Value of a grounding citation's ``marker_class`` — the discriminator that
+#: says this ordinal indexes a DESK GROUNDING block, not a slice row. The
+#: signal path carries no ``marker_class`` at all, so absence keeps every
+#: pre-existing citation byte-identical and the key is read as "grounding when
+#: present" rather than as a field every entry must now supply.
+_MARKER_CLASS_GROUNDING: str = "desk_grounding"
+
+#: Value of ``resolves_against`` — names the SET the ordinal is a position in.
+#: Spelled as data, not inferred from ``ref_kind``, because inferring it is
+#: exactly the step the 08-27 sweep skipped.
+_RESOLVES_AGAINST_GROUNDING: str = "data.citations"
+
 _BLOCK_TITLES = {
     GROUNDING_PRIOR_READ: "Prior read (this unit's previous verified read)",
     GROUNDING_WINDOW_LEDGER: "Window ledger (this unit's trailing 14-day record)",
@@ -813,6 +854,24 @@ def citation_for_block(row: Mapping[str, Any], ordinal: int) -> dict[str, Any] |
         "grounding": kind,
         "title": _BLOCK_TITLES.get(kind, kind),
         "evidence_text": evidence,
+        # 2026-08-29 (task #62) — the row says what its own ordinal MEANS.
+        # ``ref_kind`` already carried the answer, but only to a reader who
+        # knows ``provenance.kinds.GROUNDING_REF_KINDS``; the 08-27 DQ sweep
+        # did not, resolved every marker against ``analyst_traces
+        # .input_row_refs`` — a ``uuid[]`` of consumed SUBSTRATE rows that by
+        # construction cannot hold a grounding block — and published a 53.6%
+        # citation RED that sweep v2 then falsified (0 of 6,556 markers
+        # genuinely unresolved).
+        #
+        # TWO LIVE CONSUMERS DO GET IT WRONG, and these keys do NOT yet fix
+        # them, because both discriminate on ``signal_id`` / ``ref_id`` rather
+        # than on kind: ``export_api._stored_citations`` strips every grounding
+        # entry from an exported document, and the v3 UI's ``citationsModel``
+        # handles only ``situation_register`` — rendering the three id-less
+        # blocks as "Unresolved citation" chips and mis-typing ``prior_read`` as
+        # a signal. These keys are what a repair of either would key on instead.
+        "marker_class": _MARKER_CLASS_GROUNDING,
+        "resolves_against": _RESOLVES_AGAINST_GROUNDING,
     }
     if kind == GROUNDING_PRIOR_READ:
         ref_id = _coerce_uuid(row.get("id"))
@@ -938,7 +997,11 @@ UNIT_GROUNDING_CLAUSE: str = (
     "3 August morning read [N]' — a HUMAN calendar date taken from the block's "
     "produced_at, never the raw ISO/microsecond timestamp) rather than "
     "re-deriving the same "
-    "picture in different words; (4) describe a situation ONLY as the register "
+    "picture in different words. When the block you are citing IS the PRIOR "
+    "READ, you may write '(prior read ref N)' in place of the bare '[N]' — it "
+    "resolves identically, and it lets a reader of the finished prose see that "
+    "you cited your own previous read rather than a signal; "
+    "(4) describe a situation ONLY as the register "
     "states it — its own name and status — and never "
     "upgrade, downgrade, or re-date it beyond what the register shows. The "
     "register's intensity score and event_count are internal instrument "

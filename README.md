@@ -57,7 +57,7 @@ OpenAI-compatible vLLM plane, with local embeddings, Postgres, Qdrant,
 OpenSearch, NATS and SearxNG alongside it. No scheduled analytic work bills a
 third party. Two hosted endpoints *are* in the loop today and it would be
 dishonest to call the deployment SaaS-free: the cross-family **verify judge**
-runs on a hosted Gemma endpoint (Cerebras), and the operator-invoked
+runs on a hosted Nemotron endpoint (OpenRouter), and the operator-invoked
 **`consult` / `deep_consult`** analysts run on Anthropic — those two are the
 only sanctioned Anthropic users, enforced in the deps builder rather than by
 convention. Both are single config lines (`LEGBA_JUDGE_STACK_REF` and the
@@ -173,7 +173,16 @@ carries lineage (`derived_from`) plus a SHA-256 receipt chain, walkable via
   baseline, hits on operator-defined **watchlists**) fan out through a
   ledgered sink plane (webhook / ntfy push, operator-activated); every alert
   states its verification posture and links back to its receipt chain, and
-  cooldown-suppressed alerts coalesce rather than vanish.
+  cooldown-suppressed alerts coalesce rather than vanish. A steady-state
+  suppression guard plus a daily page budget with per-kind caps keep paging
+  scarce; everything suppressed is still recorded and inspectable.
+- **A standing external auditor** — a daily deterministic rotation samples
+  top-layer claims and checks them against live web search (the one plane
+  that grades the product against the world rather than against itself);
+  verdicts land as their own critique class, heartbeat-watched.
+- **Read receipts** — an append-only (trigger-enforced) ledger of what the
+  operator actually opened, drilled, and read, with a daily rollup — the
+  honesty instrument for whether the product is consumed, not just produced.
 - **An evidence archive** — signals cited by verified findings have their
   original bytes fetched and stored content-addressed (SHA-256), license-gated,
   so a citation resolves to a preserved copy rather than a rotting URL.
@@ -192,14 +201,17 @@ carries lineage (`derived_from`) plus a SHA-256 receipt chain, walkable via
 - **Measured experiments, labeled as such** — a prompt self-optimizer and an
   acute-forecast scoreboard exist behind honesty gates; neither claims skill it
   hasn't measured ([details](docs/STATUS.md)).
-- **Operator UI** — a composable panel workstation (feed, inspector, map,
-  scorecard, lineage, entity graph) — [guide](docs/UI.md).
+- **Operator UI** — a composable panel workstation opening on a Morning Read
+  landing, with six workspace presets (read / desk / investigate / trust /
+  gate / engine), a verb-folded panel catalog, and the classic feed /
+  inspector / map / scorecard / lineage / entity-graph panels —
+  [guide](docs/UI.md).
 
 ## AI models
 
 The analyst plane runs on a self-hosted **gpt-oss-120b** (vLLM, $0/token);
 consult uses **Claude Opus 4.8** (billed, sparingly); the faithfulness judge
-runs **cross-family** on a hosted Gemma endpoint (Cerebras) via the
+runs **cross-family** on a hosted Nemotron endpoint (OpenRouter) via the
 repointable judge route — the shipped descriptor default is same-model, and
 one config line points it back at the local plane. Enrichment: bge-m3
 embeddings, NLLB translation, spaCy/GLiREL NER. All hosted out-of-process and

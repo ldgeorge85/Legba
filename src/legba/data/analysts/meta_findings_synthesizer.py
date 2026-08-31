@@ -98,12 +98,14 @@ from .composition_window import (  # noqa: F401 — re-exported surface
     _stamp_horizon,
     age_suffix,
     build_coverage_ledger,
+    evidence_window_span,
     floor_fallback_suffix,
     head_ages_stamp,
     max_head_age_hours,
     read_floor_fallback_heads,
     read_periphery_findings,
     render_coverage_ledger_block,
+    render_evidence_window_directive,
     select_floor_fallback,
     units_missing_from_basis,
 )
@@ -1510,12 +1512,25 @@ async def read_prior_composition_head(
 # which situations are live. Ordered worst-first (intensity, then recency) and
 # capped, because the register is an ORIENTING index, not a second evidence
 # slice.
+#
+# H1 — ``last_corroborated_at`` rides along from the ``data`` payload
+# ``situation_clustering`` stamps: the frame's EVIDENCE age, not its
+# BOOKKEEPING age (``last_event_at``) — the register loop (CORRECTNESS-R2 M-1)
+# read the second and called it the first. Projected from jsonb rather than
+# joined from ``situation_events``: one writer computes it on the 20-minute
+# cadence, every reader gets it free.
 _SITUATION_REGISTER_SQL_TEMPLATE = """
     SELECT s.id, s.name, s.status, s.category, s.intensity_score, s.event_count,
            s.last_event_at, s.target_id,
+           s.data->>'last_corroborated_at' AS last_corroborated_at,
+           s.data->>'corroboration_count'  AS corroboration_count,
            COALESCE(s.valid_from, s.created_at) AS opened_at,
            EXTRACT(EPOCH FROM (NOW() - COALESCE(s.valid_from, s.created_at)))
-               / 86400.0 AS age_days
+               / 86400.0 AS age_days,
+           EXTRACT(EPOCH FROM (NOW() - COALESCE(
+               (s.data->>'evidence_anchor_at')::timestamptz,
+               s.valid_from, s.created_at
+           ))) / 86400.0 AS evidence_age_days
       FROM situations s
      WHERE s.superseded_by IS NULL
        AND (s.valid_until IS NULL OR s.valid_until > NOW())
@@ -1577,6 +1592,15 @@ async def read_open_situations(
                 "last_event_at": _iso_text(r.get("last_event_at")),
                 "opened_at": _iso_text(r.get("opened_at")),
                 "age_days": _as_float(r.get("age_days")),
+                # H1 — the EVIDENCE clock. ``last_corroborated_at`` is None for a
+                # frame the ledger never moved; renders say so rather than
+                # substituting ``last_event_at`` (the substitution that made the
+                # register loop possible). ``evidence_age_days`` is ALWAYS
+                # present — falls back to the frame's opening, so a 73-day-old
+                # never-corroborated frame can't hide behind a missing field.
+                "last_corroborated_at": _iso_text(r.get("last_corroborated_at")),
+                "evidence_age_days": _as_float(r.get("evidence_age_days")),
+                "corroboration_count": _as_int(r.get("corroboration_count")),
                 "target_id": (
                     str(r["target_id"]) if r.get("target_id") is not None else None
                 ),
@@ -1756,135 +1780,18 @@ async def _gather_continuity_rows(
 # ---------------------------------------------------------------------------
 # Helpers — output coercion
 # ---------------------------------------------------------------------------
+#
+# EXTRACTED 2026-08-29 (the JSON-envelope leak) to
+# ``data/analysts/composition_coercion.py`` — the size-gate seam: this file sat
+# two lines under its ceiling, and the fix for the world-composition leak lands
+# entirely inside this unit. Imported ONE WAY and re-exported, so
+# ``synth._coerce_finding`` and ``synth._looks_like_resolvable_evidence``
+# resolve exactly as before.
 
-_EVIDENCE_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
-
-
-def _looks_like_resolvable_evidence(item: str) -> bool:
-    """True when ``item`` is a genuinely resolvable evidence identifier: an
-    absolute http(s) URL or a UUID.
-
-    P2 gallery finding #3 (evidence-field contamination): a composition
-    finding cites structurally via ``[[ref:N]]`` markers IN THE BODY, resolved
-    to ``data.citations`` by the CITE step in :func:`_run` — the ``evidence``
-    array is a legacy per-unit-analyst field the model tends to fill by
-    echoing its OWN citation markers back (bare ints like ``"2"``/``"14"``,
-    bracket-style ``"[1]"``, or composition-tier ``"ref:1"`` / ``"[[ref:16]]"``
-    strings — see the live captures in the P2 gallery: three different
-    schemes, all meaningless once detached from the tier that emitted them).
-    None of that is resolvable on its own; a genuine URL or UUID is. Used by
-    :func:`_coerce_finding` to filter the model's own ``evidence`` list so a
-    composition's stored ``evidence`` never becomes scheme soup a LATER,
-    higher tier then renders as if it meant something (the SAME contamination
-    :func:`_defuse_child_ref_markers` defuses on the render side for
-    ``[[ref:N]]``-shaped body/evidence text already in the wild).
-    """
-    text = item.strip()
-    if not text:
-        return False
-    if _EVIDENCE_URL_RE.match(text):
-        return True
-    try:
-        UUID(text)
-    except (ValueError, AttributeError, TypeError):
-        return False
-    return True
-
-
-def _coerce_finding(
-    raw: str,
-    *,
-    fallback_title: str,
-    contributing_analysts: Sequence[str],
-) -> FindingPayload:
-    """Parse the LLM JSON response into a :class:`FindingPayload`.
-
-    Always stamps ``data.meta = True`` and ``data.contributing_analysts``
-    so downstream filters can find meta-findings without joining lineage.
-    Fail-safe parsing mirrors the sibling kinds: malformed JSON degrades
-    to a low-confidence finding carrying the raw body, leaving the actor's
-    output-row landing to the iglu-schema validator (which routes truly
-    malformed payloads to the DLQ at write time).
-    """
-    meta_marks = {
-        "meta": True,
-        "contributing_analysts": list(contributing_analysts),
-    }
-
-    parsed: Any
-    try:
-        candidate = raw.strip()
-        if candidate.startswith("```"):
-            candidate = candidate.strip("`")
-            if candidate.lower().startswith("json"):
-                candidate = candidate[4:]
-            candidate = candidate.strip()
-        if candidate.startswith("{"):
-            depth = 0
-            end = len(candidate)
-            for i, c in enumerate(candidate):
-                if c == "{":
-                    depth += 1
-                elif c == "}":
-                    depth -= 1
-                    if depth == 0:
-                        end = i + 1
-                        break
-            candidate = candidate[:end]
-        parsed = json.loads(candidate)
-    except (json.JSONDecodeError, ValueError) as exc:
-        logger.warning("meta_findings_synthesizer.finding.parse_failed err=%s", exc)
-        return FindingPayload(
-            title=fallback_title[:200],
-            body=raw[:32000],
-            confidence=0.3,
-            tags=["unstructured", "meta"],
-            data={**meta_marks, "raw_llm_response": raw[:8000]},
-        )
-
-    if not isinstance(parsed, dict):
-        return FindingPayload(
-            title=fallback_title[:200],
-            body=str(parsed)[:32000],
-            confidence=0.3,
-            tags=["unstructured", "meta"],
-            data={**meta_marks, "raw_llm_response": raw[:8000]},
-        )
-
-    try:
-        tags_in = [str(t) for t in (parsed.get("tags") or [])][:50]
-        # Stamp the meta tag idempotently so downstream filters can match
-        # without parsing the JSONB data column.
-        if "meta" not in tags_in:
-            tags_in.append("meta")
-        # P2 gallery finding #3: keep only GENUINELY RESOLVABLE evidence
-        # identifiers (a URL or a UUID) — never the model's own bare-int /
-        # bracket / [[ref:N]] citation-scheme echo, which means nothing once
-        # this composition's `evidence` array is copied forward and rendered
-        # by a HIGHER tier (see :func:`_looks_like_resolvable_evidence`). An
-        # evidence list with nothing resolvable stays EMPTY rather than
-        # carrying scheme soup.
-        evidence_in = [
-            str(e) for e in (parsed.get("evidence") or [])
-            if _looks_like_resolvable_evidence(str(e))
-        ][:50]
-        return FindingPayload(
-            title=str(parsed.get("title") or fallback_title)[:2048],
-            body=str(parsed.get("body") or "")[:65536],
-            confidence=float(parsed.get("confidence", 0.5)),
-            evidence=evidence_in,
-            tags=tags_in,
-            data={**meta_marks, "raw_llm_response": raw[:8000]},
-        )
-    except Exception as exc:
-        logger.warning("meta_findings_synthesizer.finding.coerce_failed err=%s", exc)
-        return FindingPayload(
-            title=fallback_title[:200],
-            body=raw[:32000],
-            confidence=0.3,
-            tags=["coerce_failed", "meta"],
-            data={**meta_marks, "raw_llm_response": raw[:8000]},
-        )
+from .composition_coercion import (  # noqa: E402,F401 — re-exported surface
+    _coerce_finding,
+    _looks_like_resolvable_evidence,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -3626,6 +3533,21 @@ async def _run(
         position=_BLOCK_APPEND,
         separator="\n",
     )
+    # H4 — the EVIDENCE WINDOW: the real oldest/newest dates among the heads
+    # consumed (``sliced``), computed once and reused below to stamp
+    # ``data.evidence_window`` — one source of truth for prompt and envelope.
+    # A DIRECTIVE like ``head_window`` above: the model COPIES the two dates
+    # rather than deriving them by scanning every block (the arithmetic that
+    # produced the self-inconsistent "01:40 UTC" stamp against heads produced
+    # 16-17 UTC).
+    _evidence_window = evidence_window_span(sliced) if is_composition else None
+    _blocks.add(
+        "evidence_window",
+        lambda: render_evidence_window_directive(_evidence_window),
+        when=is_composition and _evidence_window,
+        position=_BLOCK_APPEND,
+        separator="\n",
+    )
     # S-2b: PREPEND the salience-lead directive (composition only) so the model
     # leads by CONSEQUENCE, not by which matter more blocks happen to mention.
     # Prepended BEFORE the freshness block below, so the final order is
@@ -4142,6 +4064,12 @@ async def _run(
                 "max_h": _head_ages.get("max_h"),
                 "horizon_h": _head_ages.get("horizon_h"),
             })
+        # H4 — the EVIDENCE WINDOW stamp: the SAME ``_evidence_window`` value
+        # shown to the model, so a downstream reader (the §6 gauge, a grading
+        # packet, the render tests) reads the TRUE span off the envelope
+        # instead of parsing the model's prose — checkable, not trusted.
+        if _evidence_window is not None:
+            finding.data["evidence_window"] = _evidence_window
 
     # --- FORWARD CONSUMPTION (KW-1, migration 0106) ---------------------
     # The consumption points, captured exactly where they were decided:

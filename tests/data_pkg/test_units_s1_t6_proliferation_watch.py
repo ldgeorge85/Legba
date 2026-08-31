@@ -141,11 +141,20 @@ def test_prompt_contract_severity_and_citation():
 
 def test_grounding_block_on_scoped_and_rag_off():
     """Grounding on + target-scoped, and — RAG rolled back platform-wide (#176) —
-    the sources carry NO vector:world_context (ships RAG-off like the others)."""
+    the sources carry NO vector:world_context (ships RAG-off like the others).
+
+    REGISTER-1g (2026-08-29) — `situations` LEFT this set, deliberately. This
+    unit is `kind: inline_target`, so `actor_substrate_slice` already hands it the
+    desk's OPEN SITUATION REGISTER as a citable [N] block carrying the full H1
+    render repair (evidence age, NEVER/STALE labels, the self-corroboration
+    rule). The `situations` source produced a SECOND, UNGUARDED copy of the same
+    frames in the same context window. The register is still grounded here — by
+    the kind, not by the descriptor — so this is a replacement, not a loss.
+    """
     g = _raw_body(_UNIT_FILE)["grounding"]
     assert g["enabled"] is True
     assert g["scope"] == ["target_geo", "slice_entities"]
-    assert set(g["sources"]) == {"substrate", "situations", "graph_structure"}
+    assert set(g["sources"]) == {"substrate", "graph_structure"}
     assert not any(str(s).startswith("vector:") for s in g["sources"])
 
 

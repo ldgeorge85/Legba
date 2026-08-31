@@ -142,6 +142,9 @@ def test_country_scorecard_empty_defaults_are_honest() -> None:
     assert card.composition == {}
     # B0-5: the reconciled state is an EMPTY list by default — never fabricated.
     assert card.disagreements == []
+    # H3: absent stamps default to None, never a guessed contract.
+    assert card.banding_semantics is None
+    assert card.damping_semantics is None
 
 
 # ---------------------------------------------------------------------------
@@ -310,8 +313,28 @@ def _endpoint(conn: _StubConn) -> Any:
     ).endpoint
 
 
-def _scorecard_row(target_id: str, dims: dict[str, Any]) -> dict[str, Any]:
-    """One kind='scorecard' head row as the route's first query returns it."""
+def _scorecard_row(
+    target_id: str,
+    dims: dict[str, Any],
+    *,
+    semantics: tuple[str | None, str | None] | None = None,
+) -> dict[str, Any]:
+    """One kind='scorecard' head row as the route's first query returns it.
+
+    ``semantics`` (H3) is ``(banding_semantics, damping_semantics)``; omitted
+    (the default) reproduces a PRE-H3 card exactly — no ``banding_semantics``
+    / ``damping_semantics`` keys at all, matching what every existing caller
+    of this fixture already builds.
+    """
+    bands: dict[str, Any] = {
+        "target_id": target_id,
+        "generated_at": "2026-07-10T00:00:00+00:00",
+        "floors": {"faith_floor": 0.50},
+        "dimensions": dims,
+        "composition": {"present": True, "basis": [str(uuid4())]},
+    }
+    if semantics is not None:
+        bands["banding_semantics"], bands["damping_semantics"] = semantics
     return {
         "target_id": target_id,
         "id": str(uuid4()),
@@ -320,13 +343,7 @@ def _scorecard_row(target_id: str, dims: dict[str, Any]) -> dict[str, Any]:
             "title": "t", "body": "b",
             "data": {
                 "sub_handler": "scorecard_producer",
-                "bands": {
-                    "target_id": target_id,
-                    "generated_at": "2026-07-10T00:00:00+00:00",
-                    "floors": {"faith_floor": 0.50},
-                    "dimensions": dims,
-                    "composition": {"present": True, "basis": [str(uuid4())]},
-                },
+                "bands": bands,
             },
         },
     }
@@ -377,6 +394,41 @@ def test_route_emits_disagreement_over_live_verified_jsonb_shapes() -> None:
         ("leadership_transition", excluded_id, "cited",
          "excluded:low-faithfulness"),
     ]
+
+
+# ---------------------------------------------------------------------------
+# H3 — banding_semantics / damping_semantics projection (the deferral this
+# train also pays for: GET /v3/eval/country_scorecard did not project either
+# stamp).
+# ---------------------------------------------------------------------------
+
+
+def test_route_projects_semantics_stamps_verbatim() -> None:
+    """The route's REAL response (through the registered endpoint, not the
+    model in isolation) carries the card's own semantics stamps verbatim —
+    no re-deriving, no guessed value."""
+    conn = _StubConn([
+        [_scorecard_row("country_g20_us", _dims(), semantics=("standing", "off"))],
+        [],  # composition heads: none for this target
+    ])
+    cards = asyncio.run(_endpoint(conn)(target_id=None, principal="test"))
+    assert len(cards) == 1
+    assert cards[0].banding_semantics == "standing"
+    assert cards[0].damping_semantics == "off"
+
+
+def test_route_semantics_stamps_absent_on_a_pre_h3_card() -> None:
+    """A card written before H3 (no stamps at all in its persisted `bands`)
+    projects `None` for both — an honest absence, never a fabricated
+    'standing'/'off' backfilled onto history."""
+    conn = _StubConn([
+        [_scorecard_row("country_g20_us", _dims())],  # no `semantics=` given
+        [],
+    ])
+    cards = asyncio.run(_endpoint(conn)(target_id=None, principal="test"))
+    assert len(cards) == 1
+    assert cards[0].banding_semantics is None
+    assert cards[0].damping_semantics is None
 
 
 def test_route_reconciliation_failure_degrades_to_empty_at_200() -> None:

@@ -49,6 +49,22 @@ logger = logging.getLogger(__name__)
 # syntax cannot silently desync the screen.
 _CITATION_MARKER_STRIP_RE = re.compile(r"\[\[ref:\d+\]\]|\[\d+\]")
 
+#: Unicode hyphens the producers emit inside compound terms ("energy-security").
+#: Every ASCII matcher in this module — token regexes AND the ``[-\s]`` compound
+#: vocabularies — is blind to them, so an unfolded U+2011 either splits a
+#: compound into two terms (manufacturing overlap that is not there) or hides a
+#: compound phrase from a matcher entirely.
+#:
+#: HOISTED HERE 2026-08-29 (LRF, V-J1 ACTIVATION). It used to sit ~430 lines
+#: down, beside the one screen that remembered to call it, and the omission cost
+#: exactly what a shared primitive filed as a local helper always costs:
+#: ``hedged_conflict_disclosure`` — the whole V-J1 guard — never fired once in
+#: production, because 58.2% of graded claims carry U+2011 and its weakness
+#: vocabulary is spelled ``weakly[-\s]+supported``. It lives with the other
+#: shared normalization primitives now so the next matcher added to this module
+#: finds it before it ships.
+_UNICODE_HYPHENS = str.maketrans({"‐": "-", "‑": "-", "‒": "-", "–": "-"})
+
 
 # ABSENCE / negative-finding markers — a clause asserting something was NOT
 # observed cannot cite a (non-existent) signal; you cite signals that EXIST, not
@@ -616,8 +632,9 @@ async def load_absence_slice_rows(conn: Any, run_id: Any) -> list[SliceRow] | No
     Resolves both substrate conventions: a UNIT slice's rows are ``signals``
     (screened by TITLE **and BODY** — the 2026-08-21 rider; the signal leg used
     to hardcode ``'' AS body`` and so screened the one surface the evidence is
-    usually not on), a composition's are ``analyst_outputs`` (screened by BODY —
-    W1(b)). Bounded by :data:`_ABSENCE_SLICE_TITLE_CAP`. Never raises.
+    usually not on — and by the RENDER title, the 2026-08-25 rider below), a
+    composition's are ``analyst_outputs`` (screened by BODY — W1(b)). Bounded
+    by :data:`_ABSENCE_SLICE_TITLE_CAP`. Never raises.
     """
     if conn is None or run_id is None:
         return None
@@ -631,7 +648,18 @@ async def load_absence_slice_rows(conn: Any, run_id: Any) -> list[SliceRow] | No
         if not refs:
             return []
         rows = await conn.fetch(
-            "SELECT COALESCE(payload->>'title', '') AS title, "
+            # TITLE-PARITY rider (2026-08-25, #58) — the signal leg projected
+            # bare ``payload->>'title'``, while the RENDERER
+            # (``inline_target._signal_title``, T-1b/M13) prefers the stored
+            # English translation ``payload->>'title_en'`` first. On a
+            # translated (non-Latin) source the two disagreed: the V-B screen
+            # (and the stage-2 judge prompt, which is SHOWN this same text)
+            # read the raw transliterated title while the desk the analyst
+            # actually worked from read English. Same COALESCE/NULLIF shape as
+            # the body precedence just below, mirroring the render precedence
+            # exactly so the screen and the desk see ONE title.
+            "SELECT COALESCE(NULLIF(payload->>'title_en', ''), payload->>'title', '') "
+            "       AS title, "
             # SALIENCE-rider (2026-08-21) — the SIGNAL leg used to hardcode
             # ``'' AS body``, so this screen read TITLES ONLY: the one surface
             # the evidence is usually not on. Measured on `pro_ir_0817`, the
@@ -864,6 +892,186 @@ _ABSENCE_ROUTE_SUBORDINATE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ---------------------------------------------------------------------------
+# V-J1 (2026-08-28) — THE DISCLOSED-AND-DOWNWEIGHTED CONFLICT.
+#
+# The 08-27 hard-fail step-change check (planning/HARDFAIL_STEPCHANGE_CHECK_
+# 2026-08-27.md §5) adjudicated 13 of the 24 live ``absence_slice_contradicted``
+# hard fails on the 2026-08-25/1 stamp and found ONE template THREE times —
+# density enough in a 13-item sample to name:
+#
+#   "The narrative-coordination desk's VERIFIED find of a coordinated [X] story
+#    CONFLICTS WITH a WEAKLY-SUPPORTED report claiming NO COORDINATED
+#    narrative ..."                                    (country_g20_fr, twice)
+#   "A WEAKLY-SUPPORTED report indicates NO NEW evidence of a shift in Mexico's
+#    military posture, which CONFLICTS WITH the VERIFIED FINDING of an advancing
+#    UAV procurement pact; the former is BELOW THE VERIFICATION FLOOR and
+#    therefore less reliable"                                 (country_g20_mx)
+#
+# and, sampled separately and unprompted on the GENERIC ``judge_contradicted``
+# route, a fourth of the same shape — so this is a CROSS-ROUTE classifier
+# weakness, not an artifact of the absence screen or of any one stamp.
+#
+# WHAT THE COMPOSITION DID IS CORRECT. It found two conflicting inputs, named
+# both, and said which one it believes. What the check then did was resolve a
+# "violating" row back to THE SAME WEAK SIDE the sentence had already named and
+# already cited — and hard-fail the sentence for not believing the thing it
+# explicitly said it does not believe. ``_is_absence_claim`` is a substring test
+# over the whole span, so the embedded phrase ("no new evidence", "no
+# coordinated narrative") trips the absence grammar even though it is a QUOTED
+# DESCRIPTION of the side the sentence is rejecting.
+#
+# WHY THIS ONE IS DETERMINISTIC. The sentence carries its own answer, in exactly
+# the shape ``composition_integrity.direction_conflict``'s AMBIVALENCE GUARD and
+# V-D's earned-detail rule already use: BOTH POLES ARE NAMED and one of them is
+# marked WEAK. Three conjunctive, purely lexical conditions:
+#
+#   1. a VERIFICATION-STATUS weakness marker ("weakly-supported", "unverified",
+#      "below the verification floor", ...) PRECEDING the claim's first absence
+#      idiom with no clause boundary and no conflict connective between them —
+#      i.e. the negative belongs to the WEAK side. POSITIONAL for the same
+#      reason W1(e)'s continuity test is: a weakness marker that trails the
+#      negative, or sits across a ';' or a 'but', is downweighting the OTHER
+#      side, and then the negative IS the sentence's own assertion and must stay
+#      on the route.
+#   2. a STRENGTH marker bound to a FINDING NOUN ("the verified finding", "a
+#      corroborated read"). Requiring the noun is what keeps "no CONFIRMED
+#      reports of X" — a claim about the WORLD — from reading as the strong pole
+#      of a claim about two INPUTS.
+#   3. a CONFLICT connective SEPARATING the two, in whichever order the sentence
+#      puts them (France names the strong pole first, Mexico and Mali last).
+#      Separating, not merely present: two poles means two SIDES, and without
+#      the betweenness test an epistemic qualifier sitting INSIDE the negative
+#      ("no CONFIRMED FINDINGS of coordination") reads as the other pole while
+#      the sentence in fact has only one.
+#
+# Checked against the same document's FIVE confirmed genuine catches (the Canada
+# 2027 auto tariffs, the Israel/UNRWA reinforcement, the Houthi missiles on
+# Mocha, the UK Foreign Office strike, the Italy self-contradicted composition):
+# not one carries a weakness marker OR a conflict connective, so none is
+# reachable here. Narrow by construction and conservative in the documented
+# direction — every miss leaves the claim on the route it has today.
+# ---------------------------------------------------------------------------
+
+#: VERIFICATION-STATUS vocabulary marking a side as the weak one. Status words
+#: only: these say what the platform knows about a read, not what the read says.
+_HEDGED_WEAK_MARKER_RE = re.compile(
+    r"(?<![\w-])(?:"
+    r"weakly[-\s]+supported|poorly[-\s]+supported|thinly[-\s]+(?:sourced|supported)"
+    r"|unverified|unconfirmed|uncorroborated|unsubstantiated|unsupported"
+    r"|single[-\s]+source[ds]?|low[-\s]+confidence|periphery[-\s]+tier"
+    r"|below[-\s]+(?:the\s+)?(?:verification\s+)?floor"
+    r")(?![\w-])",
+    re.IGNORECASE,
+)
+
+#: The connectives that put two reads AGAINST each other. Without one of these
+#: the sentence is hedging a single claim, which is not this shape.
+_HEDGED_CONFLICT_RE = re.compile(
+    r"(?<![\w-])(?:conflict(?:s|ed|ing)?\s+with|in\s+conflict\s+with"
+    r"|contradict(?:s|ed|ing)?|at\s+odds\s+with|runs?\s+counter\s+to"
+    r"|running\s+counter\s+to|in\s+tension\s+with|inconsistent\s+with"
+    r"|disagrees?\s+with|diverges?\s+from|cannot\s+both\s+be)(?![\w-])",
+    re.IGNORECASE,
+)
+
+#: A STRENGTH marker bound to a FINDING NOUN — the strong pole, named as one.
+_HEDGED_STRONG_SIDE_RE = re.compile(
+    r"(?<![\w-])(?:verified|corroborated|confirmed|well[-\s]+supported"
+    r"|high(?:er)?[-\s]+confidence|core[-\s]+tier"
+    r"|above[-\s]+(?:the\s+)?(?:verification\s+)?floor)(?![\w-])"
+    r"\s+(?:\w+[-\s]+){0,2}?"
+    r"(?:find|finding|findings|report|reports|reporting|read|reads|assessment"
+    r"|assessments|claim|claims|analysis|conclusion|conclusions|record|records"
+    r"|result|results|item|items|desk|evidence|signal|signals)(?![\w-])",
+    re.IGNORECASE,
+)
+
+#: What ends the weak side's clause. A weakness marker on the far side of any of
+#: these is not the one governing the negative.
+_HEDGED_CLAUSE_BREAK_RE = re.compile(
+    r"[;.]|(?<![\w-])(?:but|however|whereas|while|although|though|yet)(?![\w-])",
+    re.IGNORECASE,
+)
+
+#: How far a weakness marker may sit from the negative it governs (one clause).
+_HEDGED_SAME_CLAUSE_CHARS = 160
+#: How much of the disclosed negative the detail quotes back, past the idiom.
+_HEDGED_POLE_CHARS = 90
+
+
+def hedged_conflict_disclosure(claim: str) -> str | None:
+    """V-J1 — why this claim's negative is DISCLOSED, not asserted, or ``None``.
+
+    Returns the detail naming BOTH POLES VERBATIM (the V-D rule: a verdict must
+    point at the thing it decides on), so the demotion is auditable from the
+    ledger row alone without re-deriving it from claim text. Pure, total, and
+    never raises — anything that is not the three-condition shape returns
+    ``None`` and keeps the route and the severity it has today.
+    """
+    if not isinstance(claim, str) or not claim.strip():
+        return None
+    core = re.sub(r"[*_`]+", " ", claim.strip().lstrip("#-*> ").strip())
+    core = _CITATION_MARKER_STRIP_RE.sub(" ", core)
+    # V-J1 ACTIVATION (2026-08-29). This guard shipped 08-28 and fired ZERO times
+    # in production — 0 of 573 graded claims on the stamp — because its weakness
+    # and strength vocabularies are spelled ``weakly[-\s]+supported`` /
+    # ``well[-\s]+supported`` in ASCII while 58.2% of graded claims carry U+2011
+    # NON-BREAKING HYPHEN. The module's own fold was sitting 430 lines below,
+    # filed as a local helper of the enumeration screen, and this function simply
+    # did not call it. R3's archived census (planning/PROOF_ROUND_2026-08-29/mech/
+    # hedged_conflict_livefire.json) replays seven live specimens: 0 of 7 fire as
+    # shipped, 4 of 7 fire with the fold applied. The translate is length- and
+    # index-preserving (a 1:1 character map), so every offset this function
+    # computes against ``core`` — the weak/strong/conflict spans, the quoted
+    # poles in the detail — is unchanged.
+    core = core.translate(_UNICODE_HYPHENS)
+    low = core.lower()
+    absence_pos = _first_absence_marker_pos(low)
+    if absence_pos < 0:
+        return None
+    if _HEDGED_CONFLICT_RE.search(low) is None:
+        return None
+    for weak in _HEDGED_WEAK_MARKER_RE.finditer(low):
+        if weak.end() > absence_pos:
+            break
+        between = low[weak.end():absence_pos]
+        if len(between) > _HEDGED_SAME_CLAUSE_CHARS:
+            continue
+        if _HEDGED_CLAUSE_BREAK_RE.search(between) or _HEDGED_CONFLICT_RE.search(
+            between
+        ):
+            continue
+        for strong in _HEDGED_STRONG_SIDE_RE.finditer(low):
+            # TWO POLES MEANS TWO SIDES, and the connective is what separates
+            # them: it must sit strictly BETWEEN the weakness marker and the
+            # strong finding, in whichever order the sentence puts them (the
+            # census carries both — France names the strong pole first, Mexico
+            # and Mali name it last). Without this an epistemic qualifier
+            # INSIDE the negative — "no CONFIRMED FINDINGS of coordination" —
+            # reads as the other pole, and the sentence has only one side.
+            if strong.start() < weak.start():
+                lo, hi = strong.end(), weak.start()
+            else:
+                lo, hi = weak.end(), strong.start()
+            conflict = (
+                _HEDGED_CONFLICT_RE.search(low, lo, hi) if lo < hi else None
+            )
+            if conflict is None:
+                continue
+            weak_span = re.sub(
+                r"\s+", " ", core[weak.start(): absence_pos + _HEDGED_POLE_CHARS]
+            ).strip(" .,;:")
+            return (
+                f"the claim NAMES BOTH POLES and marks this one weak — "
+                f"{weak_span!r} — against the pole it prefers, "
+                f"{core[strong.start():strong.end()].strip()!r} "
+                f"({core[conflict.start():conflict.end()].strip()!r}); the "
+                f"negative is DISCLOSED AND DOWNWEIGHTED, not asserted, so the "
+                f"weak side it already rejected cannot be what refutes it"
+            )
+    return None
+
 
 def _first_absence_marker_pos(low: str) -> int:
     """Character offset of the claim's first absence idiom, or ``-1``."""
@@ -914,6 +1122,15 @@ def _absence_route_exclusion(claim: str) -> str | None:
         # A leading concessive/conditional frame whose MAIN clause follows the
         # comma — the negative is a premise, not the assertion under test.
         return "subordinate"
+    # V-J1: the negative belongs to a side the sentence itself named WEAK and
+    # rejected. LAST, by the same rule V-G2 landed under — an older, more
+    # specific diagnosis keeps its label when both fire, and the outcome is the
+    # same either way (off the route). The judge path does NOT read this class:
+    # it calls ``hedged_conflict_disclosure`` directly, because that question is
+    # about the sentence rather than about what KIND of read it is, and it must
+    # be answerable on a claim carrying no scope qualifier at all.
+    if hedged_conflict_disclosure(claim) is not None:
+        return "hedged_conflict"
     return None
 
 
@@ -1133,7 +1350,7 @@ _ABSENCE_SLICE_JUDGE_SYSTEM = (
     "- contradicted: a listed row plainly REPORTS the very thing, at the very "
     "scale, the claim says did not happen.\n"
     "- unsupported: the rows are too thin to tell either way.\n"
-    "Two rules that override everything above:\n"
+    "Three rules that override everything above:\n"
     "(1) CARVE-OUTS — when a claim EXEMPTS something ('beyond the existing "
     "measures', 'other than X', 'except for Y', 'given the below-floor "
     "signals'), a row reporting the EXEMPTED thing does NOT violate it. The "
@@ -1143,6 +1360,24 @@ _ABSENCE_SLICE_JUDGE_SYSTEM = (
     "below the verification floor, a proposal, a bill under consideration, a "
     "threat, or a plan. Only a row reporting the thing as HAVING HAPPENED "
     "violates such a claim.\n"
+    # V-J2 (2026-08-28) — the two OVER-FIRE families the 08-27 census
+    # itemized (§4 rows 6 and 7), as negatives, in the house few-shot idiom
+    # ("a prose failure record with its example quoted inline"). Both are the
+    # same mechanism: a shared WORD across two different subject matters. They
+    # are stated to the judge rather than fenced in code because deciding what
+    # a headline is ABOUT is the thing no lexical test can do — which is
+    # exactly the split V-J1's deterministic arm is drawn on.
+    "(3) DOMAIN COLLISION — a row that shares a WORD with the claim but belongs "
+    "to a different subject matter is NOT a violation. Two live misreads, both "
+    "from the 2026-08-27 census: 'Indonesia sanctions 6 firms after 1,511 "
+    "hectares burn in Kalimantan' — a domestic environmental penalty on logging "
+    "firms — was read as violating 'no new SANCTIONS designations, export "
+    "controls, or secondary sanctions', which is about geopolitical trade "
+    "coercion; and 'Second EPR site authorised for site preparations' — a "
+    "CIVILIAN nuclear power station — was read as violating 'no confirmed "
+    "capability, deployment, exercise, PROCUREMENT, or doctrine change', which "
+    "is about the military. Read what the row is ABOUT, not which words it "
+    "shares with the claim.\n"
     "Be conservative: when in doubt answer supported. A row is only a violation "
     "if a reader of that row alone would say the claim is false.\n"
     'Output strict JSON only: {"verdicts": ["supported"|"contradicted"|'
@@ -1213,11 +1448,6 @@ _ABSENCE_SLICE_JUDGE_SYSTEM = (
 # Conservative in the documented direction throughout: every miss leaves the hard
 # fail standing.
 # ---------------------------------------------------------------------------
-
-#: Unicode hyphens the producers emit inside compound terms ("energy-security").
-#: The screen's token regex is ASCII, so an unfolded U+2011 silently splits a
-#: compound into two terms and manufactures overlap that is not there.
-_UNICODE_HYPHENS = str.maketrans({"‐": "-", "‑": "-", "‒": "-", "–": "-"})
 
 #: Where the denied span ENDS. Past any of these the sentence has stopped listing.
 _DENIAL_SPAN_END_RE = re.compile(

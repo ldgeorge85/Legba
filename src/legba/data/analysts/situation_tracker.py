@@ -38,9 +38,12 @@ THE THREE BINDING LESSONS, WHERE THEY BITE
   delta is structurally unable to exist without new evidence
   (:class:`~legba.data.situations.trajectory.TrajectoryEvent` rejects it, and so
   does the CHECK in migration 0184).
-* **Temporal collapse.** ``occurred_at`` on every ledger row is the
-  ``produced_at`` of the newest CITED item — evidence time, never run time. The
-  prompt is given each situation's real dates and told to anchor on them.
+* **Temporal collapse.** ``occurred_at`` on every EVIDENCE-BEARING ledger row is
+  the ``produced_at`` of the newest CITED item — evidence time, never run time.
+  The prompt is given each situation's real dates and told to anchor on them.
+  The one row that cites nothing, the dormancy checkpoint, is dated at
+  observation time and names the date it is dormant SINCE inside its ``why``;
+  see :func:`build_update` for why any other choice makes the verdict unstable.
 
 DEGRADE-NOT-FABRICATE
 ---------------------
@@ -55,6 +58,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -73,7 +77,9 @@ from ..situations.trajectory import (
     STATE_DORMANT,
     TrajectoryEvent,
     TrajectoryTransitionError,
+    evidence_anchor,
     next_state,
+    read_corroboration,
     read_current_states,
 )
 from ._tradecraft import with_preamble
@@ -95,6 +101,57 @@ OUTPUT_KIND: Any = OutputKind.SITUATION_UPDATE
 WATERMARK_CLASS: str = "situation_tracker"
 
 DEFAULT_MAX_SITUATIONS = 12     # open situations examined per tick
+
+#: REGISTER-1f — what SHARE of the tick's budget is reserved for the STALENESS
+#: leg (least-recently / never adjudicated) rather than won on intensity. A
+#: RATIO, not a count, so the split survives a budget change: at the standing
+#: budget of 12 it is 8 by intensity + 4 by staleness, and at a post-#64 budget
+#: of 60 it is 40 + 20 with no second dial to remember.
+#:
+#: THE ABSORBING STATE THIS BREAKS, measured on the live register 2026-08-29
+#: (n=49 open frames, split at the tracker's own cut):
+#:
+#:   | band            | frames | never adjudicated | mean persistence |
+#:   | top-12 window   |     12 |                 0 |            0.956 |
+#:   | below the cut   |     37 |                21 |            0.296 |
+#:
+#: The two populations are cleanly separated WITH A GAP — no frame sits between
+#: intensity 49.83 and 54.41 — which is the signature of an absorbing state, not
+#: of a world arranged that way. H1 made ``persistence`` (and therefore
+#: ``intensity_score``) a function of the tracker's own adjudications while the
+#: tracker's attention was allocated by ``intensity_score``: adjudicate → write
+#: deltas → wind the corroboration clock → raise persistence → raise intensity →
+#: get adjudicated again. A frame below the cut is never adjudicated, so it is
+#: never corroborated, so it decays, so it falls FURTHER from the cut. 21 of 49
+#: open frames (43%) hold zero ledger rows of any kind — a class the 08-27 DQ
+#: sweep reported as "dispositioned" and which regenerated because nothing routes
+#: attention to it.
+#:
+#: A THIRD, not the lot: the intensity ordering is a REAL signal about what
+#: deserves attention and this is a relief valve on it, not a replacement.
+DEFAULT_STALENESS_FRACTION = 1.0 / 3.0
+
+#: Env override for the tick budget — ``LEGBA_SITUATION_TRACKER_MAX_SITUATIONS``.
+#:
+#: WHY THIS IS A DIAL AND NOT A CONSTANT. The #64 mega-frame split
+#: (migration 0188) re-keys ``sig:country_*`` frames — 33 frames holding 94.7% of
+#: all members — into per-desk/per-event frames, and multiplies the OPEN frame
+#: population by an expected 4–6×. A budget frozen at 12 would turn a 49-frame
+#: register into a ~250-frame one adjudicated 12 at a time, which re-creates
+#: exactly the absorbing state this item exists to break, one population size up.
+#: The operator has to be able to raise it when 0188 runs, from the environment,
+#: without a train — so the number is read per deps build and the env value WINS
+#: over the descriptor option (see :func:`max_situations_budget` for why that
+#: precedence, and not the other way round). Unset ⇒ the descriptor's value ⇒
+#: :data:`DEFAULT_MAX_SITUATIONS`, so today's behaviour is unchanged until
+#: someone sets it.
+_MAX_SITUATIONS_ENV = "LEGBA_SITUATION_TRACKER_MAX_SITUATIONS"
+
+#: Hard ceiling on the env dial. Not a policy number — a runaway guard: the tick
+#: fans every selected frame out to a batched LLM call and an accidental
+#: ``=100000`` would spend the day's token budget in one cycle.
+MAX_SITUATIONS_CEILING = 500
+
 DEFAULT_MAX_EVIDENCE = 6        # new items shown per situation
 DEFAULT_BATCH = 4               # situations per LLM call
 DEFAULT_MAX_TOKENS = 1600
@@ -171,6 +228,24 @@ class SituationCandidate:
     opened_at: datetime | None
     state: str
     evidence: list[EvidenceItem] = field(default_factory=list)
+    #: #64 — THE EVIDENCE CLOCK. The newest moment evidence is KNOWN to have
+    #: touched this frame: its last significant ledger delta, or failing that its
+    #: own opening. Chosen by the shared
+    #: :func:`~legba.data.situations.trajectory.evidence_anchor`, so the tracker's
+    #: dormancy test and the register's forgetting curve read the same clock.
+    #: ``None`` only for a frame with neither, where no dormancy claim is
+    #: possible.
+    evidence_anchor_at: datetime | None = None
+    #: Whether :attr:`evidence_anchor_at` is a real corroboration or the frame's
+    #: opening standing in for one. It changes what the checkpoint SAYS, never
+    #: whether it fires.
+    corroborated: bool = False
+    #: REGISTER-1f — this frame came in on the STALENESS leg of the mixed budget
+    #: (least-recently / never adjudicated), not on intensity. Carried so the
+    #: run receipt can report how many slots the relief valve actually used: a
+    #: counter that sits at 0 tick after tick means the backlog has drained (or
+    #: that the slice is misconfigured to zero), and both are worth seeing.
+    selected_by_staleness: bool = False
 
 
 @dataclass
@@ -199,16 +274,65 @@ class Verdict:
 # Substrate reads
 # ---------------------------------------------------------------------------
 
+# REGISTER-1f — THE MIXED BUDGET. Two legs over ONE open-frame scan, $1 slots
+# won on intensity and $2 slots reserved for the frames the tracker has looked at
+# LEAST RECENTLY (never-adjudicated frames sort first, on a NULL anchor).
+#
+# The pure ``ORDER BY intensity_score DESC LIMIT 12`` this replaces is what made
+# the top-12 window an ABSORBING state — see :data:`DEFAULT_STALENESS_FRACTION`
+# for the measured split. The loop it closes is specifically H1's: intensity now
+# depends on the tracker's output, and the tracker's attention was allocated by
+# intensity, so selection could only ever re-select. The staleness leg is a
+# selection input the tracker CANNOT wind, because adjudicating a frame moves it
+# to the BACK of that queue — the one ordering whose feedback sign is negative.
+#
+# ``last_adjudicated_at`` is ``max(situation_events.created_at)`` — WRITE time,
+# deliberately, not ``occurred_at``. The question this leg asks is "when did we
+# last LOOK at this frame", which is a fact about the tracker; ``occurred_at`` is
+# the corroboration clock (the cited evidence's ``produced_at``) and keying
+# attention on it would put the same self-referential number back in the
+# selector under a different name. Migration 0184's own comment draws exactly
+# this line: "``created_at`` is when the tracker wrote the row".
+#
+# The staleness leg EXCLUDES the intensity leg's picks rather than deduping
+# after the fact, so the two legs can never collide and the tick always examines
+# the full budget when the substrate can fill it.
 _OPEN_SITUATIONS_SQL = """
-    SELECT s.id, s.name, s.status, s.category, s.intensity_score,
-           s.event_count, s.last_event_at, s.target_id, s.derived_from,
-           COALESCE(s.valid_from, s.created_at) AS opened_at
-      FROM situations s
-     WHERE s.superseded_by IS NULL
-       AND (s.valid_until IS NULL OR s.valid_until > now())
-       AND s.status <> 'closed'
-     ORDER BY s.intensity_score DESC, s.last_event_at DESC NULLS LAST, s.id DESC
-     LIMIT $1
+    WITH open_frames AS (
+        SELECT s.id, s.name, s.status, s.category, s.intensity_score,
+               s.event_count, s.last_event_at, s.target_id, s.derived_from,
+               COALESCE(s.valid_from, s.created_at) AS opened_at,
+               (SELECT max(e.created_at)
+                  FROM situation_events e
+                 WHERE e.situation_id = s.id) AS last_adjudicated_at
+          FROM situations s
+         WHERE s.superseded_by IS NULL
+           AND (s.valid_until IS NULL OR s.valid_until > now())
+           AND s.status <> 'closed'
+    ),
+    by_intensity AS (
+        SELECT * FROM open_frames
+         ORDER BY intensity_score DESC, last_event_at DESC NULLS LAST, id DESC
+         LIMIT $1
+    ),
+    by_staleness AS (
+        SELECT * FROM open_frames
+         WHERE id NOT IN (SELECT id FROM by_intensity)
+         ORDER BY last_adjudicated_at ASC NULLS FIRST,
+                  intensity_score DESC, id DESC
+         LIMIT $2
+    )
+    SELECT id, name, status, category, intensity_score, event_count,
+           last_event_at, target_id, derived_from, opened_at,
+           last_adjudicated_at, TRUE  AS by_intensity
+      FROM by_intensity
+     UNION ALL
+    SELECT id, name, status, category, intensity_score, event_count,
+           last_event_at, target_id, derived_from, opened_at,
+           last_adjudicated_at, FALSE AS by_intensity
+      FROM by_staleness
+     ORDER BY by_intensity DESC, intensity_score DESC,
+              last_event_at DESC NULLS LAST, id DESC
 """
 
 # The NEW attached evidence, gated at the SAME verified bar the rest of the
@@ -253,6 +377,57 @@ _NEW_EVIDENCE_SQL = """
 # in order and loses nothing; taking the newest N would strand the rest.
 
 
+def max_situations_budget(descriptor_value: Any = None) -> int:
+    """The tick's TOTAL adjudication budget (REGISTER-1f).
+
+    Precedence: ``LEGBA_SITUATION_TRACKER_MAX_SITUATIONS`` beats the descriptor
+    option, which beats :data:`DEFAULT_MAX_SITUATIONS`. The env wins because the
+    reason this dial exists is a POPULATION change the operator has to answer on
+    the day it lands (#64's migration 0188 multiplies the open-frame count 4–6×)
+    — a descriptor edit is a registry write and a redeploy, and the whole point
+    is that this one should not need either.
+
+    Clamped to ``[1, MAX_SITUATIONS_CEILING]``. A malformed value logs and falls
+    through to the descriptor/default rather than raising: a tracker that
+    refuses to run because an env var has a typo in it stops adjudicating
+    entirely, which is strictly worse than adjudicating at the old budget.
+    """
+    fallback = DEFAULT_MAX_SITUATIONS
+    if descriptor_value is not None:
+        try:
+            fallback = int(descriptor_value)
+        except (TypeError, ValueError):
+            fallback = DEFAULT_MAX_SITUATIONS
+    raw = os.getenv(_MAX_SITUATIONS_ENV)
+    if raw and raw.strip():
+        try:
+            return max(1, min(int(raw.strip()), MAX_SITUATIONS_CEILING))
+        except (TypeError, ValueError):
+            logger.warning(
+                "situation_tracker.max_situations.bad_env %s=%r — ignoring, "
+                "using %d", _MAX_SITUATIONS_ENV, raw, fallback,
+            )
+    return max(1, min(fallback, MAX_SITUATIONS_CEILING))
+
+
+def staleness_slots(budget: int, fraction: float = DEFAULT_STALENESS_FRACTION) -> int:
+    """How many of ``budget`` slots the STALENESS leg gets (REGISTER-1f).
+
+    A PROPORTION of the budget, rounded down, so raising the budget after the
+    #64 split widens both legs together instead of silently returning the tick
+    to a pure intensity top-N with a fixed four-slot garnish.
+
+    Floors at ONE whenever the budget has room for two and the fraction is
+    positive: ``int(3 * 1/3) == 1`` is fine, but a budget of 2 would floor to 0
+    and quietly restore the absorbing state. Caps at ``budget - 1`` for the
+    mirror-image reason — the intensity leg must never be starved to nothing.
+    """
+    budget = max(int(budget), 0)
+    if budget <= 1 or fraction <= 0.0:
+        return 0
+    return max(1, min(int(budget * float(fraction)), budget - 1))
+
+
 def _coerce_uuid(raw: Any) -> UUID | None:
     if isinstance(raw, UUID):
         return raw
@@ -287,6 +462,7 @@ async def gather_candidates(
     max_evidence: int,
     window_hours: int,
     floor: float,
+    staleness_fraction: float = DEFAULT_STALENESS_FRACTION,
 ) -> tuple[list[SituationCandidate], int]:
     """The open situations worth a look this tick, newest-evidence-first.
 
@@ -299,8 +475,18 @@ async def gather_candidates(
     situation with none (never tracked, or brand new) falls back to a bounded
     ``window_hours`` lookback rather than its whole history, so first contact is
     a normal-sized turn instead of a replay of everything.
+
+    REGISTER-1f — the ``max_situations`` budget is MIXED, not a pure intensity
+    top-N: a ``staleness_fraction`` SHARE of its slots goes to the frames
+    adjudicated least recently (never-adjudicated first). The total is whatever
+    the caller was given, so a tick costs exactly the LLM budget the operator
+    configured, and the split is a proportion so raising that budget after the
+    #64 split widens both legs (see :func:`staleness_slots`).
     """
-    rows = await conn.fetch(_OPEN_SITUATIONS_SQL, int(max_situations))
+    budget = max(int(max_situations), 0)
+    stale_n = staleness_slots(budget, staleness_fraction)
+    intensity_n = budget - stale_n
+    rows = await conn.fetch(_OPEN_SITUATIONS_SQL, intensity_n, stale_n)
     backstop = now - timedelta(hours=int(window_hours))
     candidates: list[SituationCandidate] = []
     ordinal = 0
@@ -353,11 +539,22 @@ async def gather_candidates(
             opened_at=_aware(row["opened_at"]),
             state=INITIAL_STATE,
             evidence=evidence,
+            selected_by_staleness=not bool(row["by_intensity"]),
         ))
 
-    states = await read_current_states(conn, [c.situation_id for c in candidates])
+    ids = [c.situation_id for c in candidates]
+    states = await read_current_states(conn, ids)
+    # #64 — ONE grouped read for the batch's evidence clock, alongside the state
+    # read it mirrors (a per-situation fan-out inside an hourly sweep is how a
+    # cheap derivation becomes a latency regression — the `read_trajectories`
+    # reason). A frame the ledger has never MOVED is absent from this mapping and
+    # falls back to its opening, which is the whole 24-frame class.
+    corroboration = await read_corroboration(conn, ids)
     for cand in candidates:
         cand.state = states.get(str(cand.situation_id), INITIAL_STATE)
+        cand.evidence_anchor_at, cand.corroborated = evidence_anchor(
+            corroboration.get(str(cand.situation_id)), cand.opened_at,
+        )
     # Count what was actually INSPECTED, not what the query returned: a row with
     # an unresolvable id is skipped above, and a receipt counter that includes it
     # would overstate the sweep's coverage.
@@ -501,21 +698,90 @@ def _dormancy_verdict(
     (plan D4), it settles into dormancy and waits for the next attachment.
     A quiet-but-inside-the-horizon situation gets NO row: the ledger records
     what happened, not that a cron ran.
+
+    THE RE-KEY (#64). This test used to read ``cand.last_event_at`` —
+    ``situations.last_event_at``, the newest MEMBER FINDING's ``produced_at``,
+    which is the last time a DESK WROTE about the frame and not the last time the
+    world moved it. Seven dimensions write into a country frame several times a
+    day, so ``now - last_event_at`` was never a fortnight and **the checkpoint
+    was structurally unreachable for any frame whose desks were still running**.
+    The 2026-08-27 DQ sweep is the receipt: 22 non-closed situations with ZERO
+    ledger rows of any kind, still rendering ``active`` at intensity up to 60.9,
+    because they never carried new verified evidence (so they never reached the
+    LLM) and could never go quiet by this test either. Dormancy was a mechanism
+    that could only fire for a frame the pipeline had already abandoned.
+
+    It now reads :attr:`SituationCandidate.evidence_anchor_at` — the clock H1
+    established and the register already decays on, chosen by the shared
+    :func:`~legba.data.situations.trajectory.evidence_anchor`: the frame's newest
+    SIGNIFICANT ledger delta, or its OPENING if the ledger has never moved it. A
+    significant delta cannot exist without cited evidence, so that clock is one
+    the product cannot wind by looking. The register and the tracker now answer
+    "has the world touched this frame lately" the same way, which they did not
+    between H1 and here.
+
+    WHY THE CALLER STILL SKIPS A FRAME WITH NEW EVIDENCE. Dormancy is a statement
+    about silence, and a frame that has just picked up new verified evidence is
+    not silent — it is being adjudicated this very tick, and D4's "re-open on new
+    attachment" would be contradicted by a dormancy row written beside it. Such a
+    frame simply converges a tick later: its watermark advances, no new evidence
+    arrives, and if its evidence clock is still stale it goes dormant then.
+
+    WHAT THIS ACTUALLY BUYS, MEASURED RATHER THAN HOPED (register premise review,
+    2026-08-29, live reads). The evidence clock has two branches and they are not
+    worth the same:
+
+    * The CORROBORATION branch is windable at pipeline time and was measured so:
+      931 of 957 significant deltas carry an ``occurred_at`` byte-equal to the
+      ``produced_at`` of the desk finding they cite, the median gap between ticks
+      on a rendered frame is 0.38 days, and only 2 of 580 gaps clear even the
+      register's 3.0-day demotion bar. A fortnight-long gap is rarer still. So an
+      ADJUDICATED frame will essentially never go dormant by this test, and this
+      change should not be sold as though it would. Making that branch stall
+      needs a world anchor — the newest signal NEW TO THE FRAME, a set difference
+      re-citing cannot wind — which is a separate, larger change.
+    * The NEVER-CORROBORATED branch is unwindable BY CONSTRUCTION and is where
+      every predicted row comes from. Its anchor is the frame's own opening, and
+      ``situations.valid_from`` only ever moves EARLIER (the upsert writes
+      ``LEAST(stored, min(members))``), so no amount of desk activity can make
+      such a frame look younger. 21 of 49 open frames — 43% — have zero ledger
+      rows of any kind and run from 27.7 to 77.8 days old. Every one clears the
+      horizon the moment it is examined.
+
+    "The moment it is EXAMINED" is the load-bearing caveat and it is not this
+    function's to fix: ``_OPEN_SITUATIONS_SQL`` selects the twelve
+    highest-intensity open frames, and the never-corroborated class sits
+    ENTIRELY below that cut (its band tops out at 49.83 against a window floor of
+    54.41). Until candidate selection also routes by unadjudicated staleness,
+    this repair makes dormancy REACHABLE without making it REACHED. The reach is
+    tracked separately; what is fixed here is that the horizon is no longer
+    measured on a clock the desks rewind by looking.
+
+    ``None`` when there is no clock at all (neither ledger nor opening): a
+    dormancy claim needs a date to be dormant SINCE, and manufacturing one is the
+    temporal-collapse failure this analyst is built against.
     """
     if cand.state in (STATE_DORMANT, STATE_CLOSED):
         return None
-    last = cand.last_event_at
-    if last is None or (now - last) < timedelta(days=int(dormancy_days)):
+    anchor = cand.evidence_anchor_at
+    if anchor is None or (now - anchor) < timedelta(days=int(dormancy_days)):
         return None
-    quiet_days = int((now - last).total_seconds() // 86400)
+    quiet_days = int((now - anchor).total_seconds() // 86400)
+    why = (
+        f"No evidence has moved this situation since {_day(anchor)} "
+        f"({quiet_days} days); marking the thread dormant pending a new "
+        f"attachment."
+        if cand.corroborated
+        else (
+            f"This situation has never been corroborated by an evidence-bearing "
+            f"delta; it has stood open since {_day(anchor)} ({quiet_days} days). "
+            f"Marking the thread dormant pending a new attachment."
+        )
+    )
     return Verdict(
         candidate=cand,
         delta=DELTA_UNCHANGED_CHECKPOINT,
-        why=(
-            f"No evidence has attached to this situation since "
-            f"{_day(last)} ({quiet_days} days); marking the thread dormant "
-            f"pending a new attachment."
-        ),
+        why=why,
         cited=[],
         resolution=False,
         dormant=True,
@@ -606,11 +872,29 @@ def build_update(
                 resolution_grounded=verdict.resolution,
                 dormant=verdict.dormant,
             )
-            occurred_at = (
-                max(item.produced_at for item in verdict.cited)
-                if verdict.cited
-                else (cand.last_event_at or now)
-            )
+            if verdict.cited:
+                occurred_at = max(item.produced_at for item in verdict.cited)
+            elif verdict.dormant:
+                # #64 — A DORMANCY ROW IS DATED NOW, and that is what makes the
+                # verdict stable. `read_current_states` takes the ledger's newest
+                # row by `occurred_at DESC`; dating a dormancy checkpoint at
+                # `last_event_at` (which the horizon guarantees is at least a
+                # fortnight old, and older than any recent checkpoint) would file
+                # it BEHIND rows already on the ledger, so the frame's current
+                # state would never read `dormant`, `_dormancy_verdict` would fire
+                # again on the next tick, and an append-only table would collect
+                # one identical row an hour forever. Latent while the horizon was
+                # unreachable; live the moment it is re-keyed.
+                #
+                # It is also the honest date. `occurred_at` is evidence time for a
+                # row that rests on evidence; a checkpoint rests on none and
+                # asserts nothing about the world, and what this one records is an
+                # OBSERVATION — that as of now, nothing has moved this frame since
+                # the date named in `why`. That date is in the sentence, where a
+                # reader sees it.
+                occurred_at = now
+            else:
+                occurred_at = cand.last_event_at or now
             event = TrajectoryEvent(
                 situation_id=cand.situation_id,
                 occurred_at=occurred_at,
@@ -722,6 +1006,9 @@ class SituationTrackerDeps:
     pg_pool: Any = None
     budget: _BudgetLike | None = None
     max_situations: int = DEFAULT_MAX_SITUATIONS
+    #: REGISTER-1f — SHARE of ``max_situations`` reserved for the staleness leg.
+    #: 0.0 restores the pure intensity top-N (and the absorbing state).
+    staleness_fraction: float = DEFAULT_STALENESS_FRACTION
     max_evidence: int = DEFAULT_MAX_EVIDENCE
     batch_size: int = DEFAULT_BATCH
     window_hours: int = DEFAULT_WINDOW_HOURS
@@ -792,6 +1079,7 @@ async def run_method(
                 max_evidence=deps.max_evidence,
                 window_hours=deps.window_hours,
                 floor=deps.floor,
+                staleness_fraction=deps.staleness_fraction,
             )
             # FIRST RUN seeds silently (the alert plane's discipline): record
             # where every open situation stands and emit NOTHING, so the tracker
@@ -859,6 +1147,12 @@ async def run_method(
 
     payload.data["counters"] = {
         "situations_checked": examined,
+        # REGISTER-1f — how many of the checked frames the STALENESS leg supplied
+        # rather than the intensity ranking. This is the counter that says
+        # whether the relief valve is doing anything.
+        "situations_from_staleness_leg": sum(
+            1 for c in candidates if c.selected_by_staleness
+        ),
         "situations_with_news": len(with_news),
         "situations_updated": len(events),
         "situations_deferred": deferred + refused,
@@ -940,6 +1234,11 @@ async def adjudicate(
 
 __all__ = [
     "KIND_NAME", "OUTPUT_KIND", "HANDLER_VERSION", "WATERMARK_CLASS",
+    # REGISTER-1f — the budget dial. ``max_situations_budget`` is imported by
+    # ``analyst_deps_builder._build_situation_tracker``; the other two are the
+    # numbers an operator reads when deciding what to set the env var to.
+    "DEFAULT_MAX_SITUATIONS", "DEFAULT_STALENESS_FRACTION",
+    "MAX_SITUATIONS_CEILING", "max_situations_budget", "staleness_slots",
     "EvidenceItem", "SituationCandidate", "Verdict", "SituationTrackerDeps",
     "adjudicate", "build_prompt", "build_update", "gather_candidates",
     "parse_verdicts", "run_method",

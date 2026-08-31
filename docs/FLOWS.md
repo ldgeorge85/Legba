@@ -1762,8 +1762,9 @@ reads cross-desk under a correlation guard.
 (`sub_handler=scorecard_producer`), the 12th OutputKind `scorecard` — writes ONE banded
 row per active desk (any target tagged g20/watch — all 25 today) by running
 high-precision RULES over the ALREADY-verified claims (no LLM, pure SQL, $0), so every
-band is a legible, demote-never-promote function of a `severity:<level>` tag and the
-folded `effective_confidence`, and every band NAMES the verified-claim id it rests on.
+band is a legible function of a `severity:<level>` tag ADMITTED by the folded
+`effective_confidence` — never demoted, never promoted, never hand-weighted — and
+every band NAMES the verified-claim id it rests on.
 
 1. **One global sweep, deterministic.** No `subscription.targets` → one global run per
    tick that ENUMERATES every active target tagged g20/watch (all 32 country desks), reading
@@ -1773,14 +1774,14 @@ folded `effective_confidence`, and every band NAMES the verified-claim id it res
    (`DEFAULT_LOOKBACK_HOURS = 24*14`, `scorecard_banding.py:379`), staggered AFTER the
    units + composition + verify + calibration so fresh verified claims exist in-window.
 
-2. **The banding rules (high-precision, demote-only).** For each of four fixed
-   dimensions the engine bands from the finding's `severity:<level>` tag (mapped via
+2. **The banding rules (high-precision, admission-only).** For each fixed
+   dimension the engine bands from the finding's `severity:<level>` tag (mapped via
    `SEVERITY_TO_BAND` onto the ladder `low → watch → elevated → high → critical`) and
    its folded `effective_confidence = min(confidence, faithfulness_score)`. A claim below
-   the confidence floor does NOT band; between the floor and a higher threshold the band
-   is DEMOTED one rung; a per-claim faithfulness below a dedicated floor demotes to
-   `low-faithfulness` (a distinct, legible reason). The rules never PROMOTE and never
-   hand-weight a number into a fabricated overall band.
+   the confidence floor does NOT band; a per-claim faithfulness below a dedicated floor
+   reads `low-faithfulness` (a distinct, legible reason). The floors decide ADMISSION;
+   they do not decide the rung. The rules never PROMOTE and never hand-weight a number
+   into a fabricated overall band.
 
    **What that severity tag means (FRAME-3, 2026-08-21).** It is the dimension's
    STANDING STATE — where it stands on the desk today — not the severity of what
@@ -1788,18 +1789,56 @@ folded `effective_confidence`, and every band NAMES the verified-claim id it res
    on a quiet week and the dimension banded `low` off it; the movement now rides a
    separate `severity_delta:<rose|fell|steady|new>` tag, is carried on the verdict
    beside the band, and NO rule reads it (letting movement move a band would decay a
-   "steady" war a rung a cycle). Damping is untouched. Each verdict stamps
-   `banding_semantics` (`"standing"`) so cards written under the two contracts are
-   comparable; a head with no delta reads `null`, never `steady`.
+   "steady" war a rung a cycle). Each verdict stamps `banding_semantics`
+   (`"standing"`) so cards written under the two contracts are comparable; a head
+   with no delta reads `null`, never `steady`.
+
+   **The damper is RETIRED (H3, 2026-08-27).** A band between the confidence floor
+   and the `CONF_CONFIDENT` knee used to ship one rung DOWN. Under severity-as-state
+   that subtraction demotes a STANDING LEVEL rather than a slice delta, and
+   CORRECTNESS-R2 measured it net-negative across six independent lanes — 22 of 49
+   banded dimensions damped, 12 losing a real rung, with CD `internal_stability`
+   shipping `low` while carrying `severity:moderate` + `severity_delta:rose` and IR
+   `escalation` shipping `watch` in month six of a shooting war. The band is now the
+   severity tag's band; the weak-confidence case is NAMED (`reason:
+   qualified-low-confidence`) rather than subtracted, and each row records
+   `damped_would_have_been` — the rung the retired damper would have shipped — so the
+   change is auditable per row. `damping_semantics` (`"off"`) is stamped beside
+   `banding_semantics` for the same reason: a `watch` means something different
+   either side of the change. An R2 replay of the ten graded countries under the new
+   rule moved the mean rung distance to the graders' blind reference bands from
+   **1.449 → 1.245** over the 49-slot scored population, with exact matches 6 → 8.
 
 3. **Insufficient-evidence is a first-class outcome (honesty).** A dimension with no
    qualifying verified claim reads `band = "insufficient-evidence"` with an
    EMPTY-but-explicit basis and a machine `reason` (`below-floor` / `verify-failed` /
-   no severity tag) — NEVER a fabricated band (`scorecard_banding.py:15-17`,
-   `INSUFFICIENT` at `:113`). A country with NO qualifying claim still emits an
-   all-insufficient row (never omitted), so the read route returns exactly one honest
-   card per active desk (g20/watch). The row's `derived_from` NAMES the verified basis
-   findings, and a lineage walk resolves them with zero dangling.
+   no severity tag) — NEVER a fabricated band. A country with NO qualifying claim
+   still emits an all-insufficient row (never omitted), so the read route returns
+   exactly one honest card per active desk (g20/watch). The row's `derived_from`
+   NAMES the verified findings the card banded or consulted, and a lineage walk
+   resolves them with zero dangling.
+
+   **But it may not abstain beside a composition that read the desk (H3 basis
+   alignment, 2026-08-27).** CORRECTNESS-R2 found the card and the prose admitting
+   rows under the same floors in the OPPOSITE ORDER: the composition puts the floor
+   in the `WHERE` and the head-fold in the `DISTINCT ON` (newest head that CLEARS
+   the floor), the card folds heads first and applies floors after (newest head,
+   full stop). Result: **21 of 21** product-`insufficient-evidence` slots in the
+   round sat beside a composition that had consumed a verified head for that desk,
+   20 of them clearing the composition's own 0.50 bar — BF `energy_security` at eff
+   **0.90**, published `insufficient-evidence` beside prose asserting all seven
+   desks produced verified reads. The card now resolves the composition head's
+   `derived_from` — the rows the prose actually rests on — and, where it would
+   otherwise abstain, bands the newest of them that passes the SAME unchanged
+   guards. No guard is relaxed: a consumed head that fails one is still refused, and
+   the dimension then abstains with the consumed ids and the refusing rule NAMED
+   (`basis_alignment.state = consumed-unbandable`), never a silent null. Every
+   dimension carries one of six `basis_alignment` states covering both directions,
+   including `banded-unconsumed` for the reverse case (the card bands a row the
+   prose never cited). The R2 replay recovered **20 of the 21** abstentions.
+   Complementary to B0-5's read-time `disagreements` (`scorecard_reconcile`), which
+   still reports what the card cannot reach from inside itself — above all the
+   scheduling race, where 30 of 31 targets compose AFTER their card freezes.
 
 4. **Read it.** `GET /api/v1/v3/eval/scorecard` returns the per-country banded verdict
    (`src/legba/data/registry/v3_api.py:1073`).

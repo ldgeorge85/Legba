@@ -1519,3 +1519,93 @@ async def test_list_sources_sql_executes(port):
             active_only=False, silent_only=True, silent_hours=24,
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# REGISTER-1h — ``new_situations`` counts NEW frames, not the clustering cron
+# ---------------------------------------------------------------------------
+
+
+async def _insert_situation(
+    pg_pool, *, name: str, created_at: datetime, updated_at: datetime,
+) -> UUID:
+    """One ``situations`` row with its two clocks set INDEPENDENTLY.
+
+    That independence is the whole point of the fixture: on the live substrate
+    ``situation_clustering`` re-UPSERTs an existing frame every 20 minutes with
+    ``updated_at=NOW()`` and never touches ``created_at``, so a frame opened
+    weeks ago carries a fresh ``updated_at`` forever. The seed reproduces that
+    shape directly rather than simulating the cron.
+    """
+    sid = uuid4()
+    async with pg_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO situations (id, data, name, status, category, "
+            "  event_count, intensity_score, analyst_id, produced_at, "
+            "  derived_from, schema_uri, created_at, updated_at) "
+            "VALUES ($1,'{}'::jsonb,$2,'active','test_register_1h',1,1.0,"
+            "  'situation_clustering',$3,'{}'::uuid[],'u',$3,$4)",
+            sid, name, created_at, updated_at,
+        )
+    return sid
+
+
+@pytest.mark.asyncio
+async def test_journal_delta_new_situations_counts_created_not_updated(
+    pg_pool, port,
+):
+    """REGISTER-1h. The journal desks' "what changed since I last wrote" prompt
+    carries ``delta.new_situations``. It read ``updated_at``, which on a MUTABLE
+    row re-UPSERTed every 20 minutes is a count of the CRON: measured live on
+    2026-08-29, 44 of 89 frames had an ``updated_at`` inside the last 20 minutes
+    — the same 44 for the last hour and for the last 24 hours — while frames
+    actually created in the last 24 hours numbered ZERO. The desk was told 44
+    when the answer was 0.
+
+    DISCRIMINATING BY CONSTRUCTION, and deliberately measured as a DIFFERENCE
+    against a live baseline rather than as an absolute: the session DB is shared,
+    so an absolute count would pin this file to its neighbours' rows. Insert the
+    cron-shaped frame (old ``created_at``, fresh ``updated_at``) and the counter
+    must not move; insert a genuinely new frame and it must move by exactly one.
+    Under the old ``updated_at`` predicate the first assertion fails — the
+    cron-shaped row is precisely the row that predicate counted.
+    """
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(hours=24)).isoformat()
+
+    baseline = (await port.get_journal_delta(since=since))["delta"]
+    assert "new_situations" in baseline
+
+    # (1) THE CRON ROW — opened a week ago, re-upserted one minute ago. This is
+    # the live shape of 44 of 89 frames and it is NOT news.
+    await _insert_situation(
+        pg_pool,
+        name="register-1h stale frame, freshly re-upserted",
+        created_at=now - timedelta(days=7),
+        updated_at=now - timedelta(minutes=1),
+    )
+    after_cron = (await port.get_journal_delta(since=since))["delta"]
+    assert after_cron["new_situations"] == baseline["new_situations"], (
+        "a frame merely RE-UPSERTED inside the window is not a new situation; "
+        "counting it is counting the 20-minute clustering cadence"
+    )
+
+    # (2) THE GENUINELY NEW ROW — created inside the window. This is news.
+    await _insert_situation(
+        pg_pool,
+        name="register-1h frame opened inside the window",
+        created_at=now - timedelta(hours=1),
+        updated_at=now - timedelta(minutes=1),
+    )
+    after_new = (await port.get_journal_delta(since=since))["delta"]
+    assert after_new["new_situations"] == baseline["new_situations"] + 1, (
+        "a frame CREATED inside the window must count exactly once"
+    )
+
+    # (3) The window still moves: widen the cursor past the cron row's opening
+    # and it becomes a legitimately new frame for THAT window.
+    wide = (now - timedelta(days=14)).isoformat()
+    assert (
+        (await port.get_journal_delta(since=wide))["delta"]["new_situations"]
+        >= after_new["new_situations"] + 1
+    )

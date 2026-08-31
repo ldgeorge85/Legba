@@ -53,11 +53,26 @@ export interface CountryVerdict {
 /** Fill colour per confidence band — the choropleth ramp. `unassessed` gets a
  *  muted slate so a verified-but-unfaithful read is visually distinct from a
  *  never-verified one. */
+/**
+ * CHANNEL B · CONFIDENCE (UI_HOLISTIC_DESIGN_2026-08-24 §5.2/§5.3) — one hue,
+ * sequential, plus a cartographic "no data" neutral. Mirrors the `--conf-*`
+ * tokens; kept as literals because the choropleth feeds them straight into a
+ * MapLibre paint expression, which cannot read a CSS variable.
+ *
+ * THE RE-KEY: this ramp used to be emerald / amber / ROSE / slate, which put a
+ * confidence band on the same red-amber-green hues severity already owned — so
+ * red meant "critical severity" AND "low confidence", and green meant "LOW
+ * severity" (nothing wrong) AND "high confidence". Three questions, one set of
+ * hues, three mappings. Confidence is now deliberately desaturated blue: it
+ * never competes with a severity mark and never borrows its meaning. The
+ * choropleth legend, the Wall's band grid and the sidebar's desk chips all read
+ * this same map, so no two surfaces can disagree.
+ */
 export const CONFIDENCE_FILL: Record<ConfidenceLevel, string> = {
-  high: '#34d399', // emerald-400 — faithful, corroborated
-  moderate: '#fbbf24', // amber-400
-  low: '#fb7185', // rose-400 — verified but low faithfulness
-  unassessed: '#64748b', // slate-500 — no verify pass
+  high: '#79c0ff', // faithful, corroborated
+  moderate: '#4493f8',
+  low: '#1f6feb', // verified but low faithfulness
+  unassessed: '#30363d', // no verify pass — cartographic "no data"
 }
 
 /** The choropleth legend, high→low (mirrors CONFIDENCE_FILL). */

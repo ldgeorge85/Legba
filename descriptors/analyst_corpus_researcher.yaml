@@ -98,7 +98,7 @@ method:
   # judge_sample_always list here overrides that default (an explicit []
   # clears it).
   options:
-    judge_sample_rate: 0.10
+    judge_sample_rate: 1.0
   # Autonomous-research prompt. It (1) PICKS a research question live from the
   # substrate via tools, (2) INVESTIGATES it over the full-text corpus, (3) emits
   # ONE STRICT-JSON FindingPayload with cite-the-prose [N] markers so the verify

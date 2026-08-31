@@ -51,7 +51,7 @@ import { attachFitOnResize, useVisibleSize } from '@/lib/cytoscapeFit'
 import { selectRow, useSelection, type Selection } from '@/state/selection'
 import { cn } from '@/lib/cn'
 import { ArrowRight, Clock, Route, Share2 } from 'lucide-react'
-import { extractCitations, type Citation } from '@/lib/citationsModel'
+import { citationDrill, extractCitations, type Citation } from '@/lib/citationsModel'
 import {
   signalGeoPoints,
   type GeoPoint,
@@ -658,13 +658,18 @@ export function ReadGraphLens({ read, citations }: { read: LensRead; citations: 
     }
     const seen = new Set<string>()
     for (const c of citations) {
-      if (seen.has(c.refId)) continue
-      seen.add(c.refId)
-      const lbl = c.title && c.title.trim() ? c.title : c.marker
       // Kind-aware evidence node: a composition cites a FINDING (sub-claim), a unit
-      // cites a SIGNAL. Drill to the right record kind — never a phantom signal for
-      // a finding-ref (the id prefix + selKind follow c.refKind).
-      const nodeId = `${c.refKind === 'finding' ? 'finding' : 'sig'}:${c.refId}`
+      // cites a SIGNAL, and a `prior_read` grounding block cites the previous
+      // read — also a FINDING. The four SYNTHETIC grounding blocks name no
+      // single record, so they get no node rather than an empty-id one
+      // (`sig:` with selId '' — a node that brushes nothing and drills
+      // nowhere). `citationDrill` is the one definition of that distinction.
+      const drill = citationDrill(c)
+      if (!drill) continue
+      if (seen.has(drill.id)) continue
+      seen.add(drill.id)
+      const lbl = c.title && c.title.trim() ? c.title : c.marker
+      const nodeId = `${drill.kind === 'finding' ? 'finding' : 'sig'}:${drill.id}`
       nodes.push({
         group: 'nodes',
         data: {
@@ -672,15 +677,15 @@ export function ReadGraphLens({ read, citations }: { read: LensRead; citations: 
           label: clip(lbl, 36),
           color: LENS_NODE_COLOR.signal,
           size: 24,
-          selKind: c.refKind,
-          selId: c.refId,
-          name: c.title ?? c.refId,
+          selKind: drill.kind,
+          selId: drill.id,
+          name: c.title ?? drill.id,
         },
       })
       edges.push({
         group: 'edges',
         data: {
-          id: `e-${c.refId}`,
+          id: `e-${drill.id}`,
           source: `read:${read.id}`,
           target: nodeId,
           w: 2,
@@ -931,7 +936,13 @@ export function ReadLenses({ selection }: { selection?: Selection | null }) {
   const resolved = resolveQ.data ?? null
   const targetId = resolved?.targetId ?? null
   const citations = useMemo(() => resolved?.citations ?? [], [resolved])
-  const evidenceIds = useMemo(() => new Set(citations.map((c) => c.refId)), [citations])
+  // Only citations that name a real record brush the other rooms — the four
+  // synthetic desk grounding blocks carry no id, and an empty string in this
+  // set would match nothing while looking like a member.
+  const evidenceIds = useMemo(
+    () => new Set(citations.map((c) => citationDrill(c)?.id).filter((id): id is string => !!id)),
+    [citations],
+  )
 
   const poolQ = useQuery<EvidencePool>({
     enabled: !!targetId,
@@ -959,7 +970,13 @@ export function ReadLenses({ selection }: { selection?: Selection | null }) {
       id: read.id,
       targetId,
       label: read.label,
-      signalIds: citations.map((c) => c.refId),
+      // SIGNAL ids only — the World map brushes signals with these. A
+      // sub-claim/prior-read finding id or an id-less grounding block put
+      // through here brushes nothing at best and a wrong row at worst.
+      signalIds: citations
+        .map((c) => citationDrill(c))
+        .filter((d): d is { kind: 'signal'; id: string } => d?.kind === 'signal')
+        .map((d) => d.id),
     })
     return () => setReadScope(null)
   }, [read, resolved, targetId, citations, setReadScope])

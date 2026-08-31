@@ -9,6 +9,7 @@ import {
   PANEL_ID_TO_KIND,
   SINGLETON_PANELS,
 } from './registry'
+import { resolveKind, resolveRetiredPanelId } from './aliases'
 import type { PanelKind } from '@/types'
 
 describe('PANEL_REGISTRY', () => {
@@ -82,62 +83,78 @@ describe('PANEL_REGISTRY', () => {
 })
 
 /**
- * Layout-compat (COHERENCE_WAVES_PLAN_2026-07-28 §1.9 / §U-3 acceptance):
- * merging panels must keep every OLD panel id resolving — a saved Dockview
- * layout (or the `legba_nav_collapsed` sidebar state) that references a
- * pre-merge kind must still render something real, not an
- * UnboundPanelPlaceholder / `unknown_panel_id`.
+ * Layout-compat (COHERENCE_WAVES_PLAN_2026-07-28 §1.9 / §U-3 acceptance,
+ * re-expressed for the ALIAS mechanism — UI_HOLISTIC_DESIGN_2026-08-24 §4.4).
  *
- * The alias mechanism is the SAME `HIDDEN_KINDS` set the codebase already
- * used for the S7-T2 consolidation (registry.ts): a merged-away kind stays a
- * full row in `PANEL_REGISTRY` — same panelId, same Component (its ORIGINAL,
- * unmodified one) — with only `definition.hidden = true` flipped, so it drops
- * out of the sidebar (`SINGLETON_PANELS`) but `PANEL_ID_TO_KIND` and
- * `resolvePanel` (panel-registry/loader.ts) still resolve it exactly as
- * before. ⌘K also still lists it (CommandPalette's `panelEntries` iterates
- * `PANEL_REGISTRY`, not `SINGLETON_PANELS`).
+ * The requirement is unchanged and permanent: a saved Dockview layout, a ⌘K
+ * deep-link or a `ui_panel_registrations` row that names a PRE-MERGE kind must
+ * still render something real, never an `unknown_panel_id` placeholder.
+ *
+ * What changed is the price. Until this train the mechanism was `HIDDEN_KINDS`:
+ * the merged-away kind stayed a FULL registry row — component import and all —
+ * with `hidden = true`. Twelve of those rows existed only to be invisible.
+ * They are now twelve lines in `panel-registry/aliases.ts`, and the assertions
+ * below moved with them: the kind must be GONE from the registry, and it must
+ * RESOLVE through the alias table onto the survivor that renders it, on the
+ * tab that IS the retired surface. See `aliases.test.ts` for the exhaustive
+ * table-level bar (every retired id resolves, no alias points at another
+ * alias, every tab names a real tab, the fromJSON pre-pass collapses
+ * duplicates).
  */
-describe('U-3 layout-compat — old panel ids still resolve after the merges', () => {
-  // Every kind U-3 folded away behind a merged/tabbed survivor, per
-  // COHERENCE_WAVES_PLAN_2026-07-28 §U-3's five merge sets.
-  const MERGED_AWAY_KINDS: PanelKind[] = [
+describe('U-3 layout-compat — old panel ids resolve through the alias table', () => {
+  // Every kind U-3/GLASS-2 folded away behind a merged/tabbed survivor.
+  const MERGED_AWAY_KINDS = [
     'v4.timeline', // → Timeline's "Events" mode (survivor: system.timeline)
     'v4.why', // → Provenance's "Why" tab (survivor: system.provenance)
     'system.lineage', // → Provenance's "Lineage" tab
     'v4.flow', // → Provenance's "Flow" tab
-    'system.alert_center', // → Alerts & Watches' "Triggers" tab (survivor: system.alerts_watches)
+    'system.situations', // → Provenance's "Trajectory" tab
+    'system.narratives', // → Provenance's "Narratives" tab
+    'system.alert_center', // → Alerts & Watches' "Triggers" tab
     'system.watchlist', // → Alerts & Watches' "Watches" tab
     'system.escalations', // → Alerts & Watches' "Deliveries" tab
-    'system.deep_consult', // → Consult's depth toggle (survivor: system.consult, unchanged id)
-    'system.entity_graph', // → Entities' "Graph" tab (survivor: system.entities, unchanged id)
+    'system.deep_consult', // → Consult's "Deep" depth
+    'system.entity_graph', // → Entities' "Graph" tab
     'system.notable_structure', // → Entities' "Structure" tab
   ]
 
-  it('every merged-away kind is still a full registry row — hidden, not deleted', () => {
+  it('every merged-away kind is GONE from the registry — retired, not hidden', () => {
     for (const kind of MERGED_AWAY_KINDS) {
-      const entry = PANEL_REGISTRY[kind]
-      expect(entry, `${kind} must still exist in PANEL_REGISTRY`).toBeDefined()
-      expect(entry.definition.hidden, `${kind} must be hidden from the sidebar`).toBe(true)
-      expect(entry.Component, `${kind} must still have a real Component`).toBeDefined()
-      // Hidden ≠ gone: it must NOT be in SINGLETON_PANELS (the sidebar's list)…
-      expect(SINGLETON_PANELS).not.toContain(kind)
+      expect(
+        PANEL_REGISTRY[kind as PanelKind],
+        `${kind} should no longer cost a registry row`,
+      ).toBeUndefined()
+      expect(SINGLETON_PANELS as string[]).not.toContain(kind)
     }
   })
 
-  it("every merged-away kind's panel_id still round-trips through PANEL_ID_TO_KIND (what a saved layout / registration actually persists)", () => {
+  it('every merged-away kind still RESOLVES, onto a live survivor', () => {
     for (const kind of MERGED_AWAY_KINDS) {
-      const panelId = PANEL_REGISTRY[kind].definition.panelId
-      expect(PANEL_ID_TO_KIND[panelId], `panel_id "${panelId}" → ${kind}`).toBe(kind)
+      const alias = resolveKind(kind)
+      expect(alias, `${kind} must resolve`).toBeDefined()
+      expect(PANEL_REGISTRY[alias!.kind], `${kind} → ${alias!.kind}`).toBeDefined()
     }
   })
 
-  it('the five new merged/survivor kinds exist, are visible, and are non-binding singletons', () => {
+  it("every merged-away kind's panel_id still resolves (what a registration row actually persists)", () => {
+    // `<kind>` → `<panel_id>` is the historical snake_case form; the loader
+    // resolves it through PANEL_ID_ALIASES now that PANEL_ID_TO_KIND cannot.
+    for (const kind of MERGED_AWAY_KINDS) {
+      const panelId = kind.replace(/[.]/g, '_')
+      expect(PANEL_ID_TO_KIND[panelId], `${panelId} must not be a live kind`).toBeUndefined()
+      const alias = resolveRetiredPanelId(panelId)
+      expect(alias, `panel_id "${panelId}" must resolve`).toBeDefined()
+      expect(PANEL_REGISTRY[alias!.kind]).toBeDefined()
+    }
+  })
+
+  it('the five merged/survivor kinds exist, are visible, and are non-binding singletons', () => {
     const survivors: PanelKind[] = [
-      'system.timeline', // Timeline (unchanged id — now the merged wrapper)
-      'system.provenance', // Provenance (new kind)
-      'system.alerts_watches', // Alerts & Watches (new kind)
-      'system.consult', // Consult (unchanged id — now with the depth toggle)
-      'system.entities', // Entities (unchanged id — now with Graph/Structure tabs)
+      'system.timeline', // Timeline (Events / Validity)
+      'system.provenance', // Provenance (Why / Lineage / Flow / Trajectory / Narratives)
+      'system.alerts_watches', // Alerts & Watches (Watches / Triggers / Deliveries)
+      'system.consult', // Consult (Chat / Deep)
+      'system.entities', // Entities (List / Graph / Structure)
     ]
     for (const kind of survivors) {
       const entry = PANEL_REGISTRY[kind]
@@ -149,15 +166,10 @@ describe('U-3 layout-compat — old panel ids still resolve after the merges', (
     }
   })
 
-  it('simulates resolving a saved-layout singleton panel by its OLD kind (mirrors App.tsx LegbaPanelComponent\'s singletonKind lookup)', () => {
-    // A saved custom layout persists Dockview's own serialized panel params,
-    // which for a singleton carry `{ singletonKind: <PanelKind> }` verbatim
-    // (see App.tsx addSingleton / LegbaPanelComponent). Restoring it just
-    // looks the kind up in PANEL_REGISTRY — reproduce that lookup here for
-    // every merged-away kind.
+  it('no survivor was itself retired (an alias must never point at an alias)', () => {
     for (const kind of MERGED_AWAY_KINDS) {
-      const entry = PANEL_REGISTRY[kind]
-      expect(entry, `singletonKind "${kind}" from an old saved layout must still resolve`).toBeDefined()
+      const alias = resolveKind(kind)!
+      expect(resolveKind(alias.kind)!.kind).toBe(alias.kind)
     }
   })
 })
@@ -204,15 +216,15 @@ describe('U-4 — system.wall_movers is registered, hidden, and still fully reac
 /**
  * GLASS-2 — the three API surfaces that shipped with no consumer now have one.
  *
- * Two of the three land as TABS of the merged Provenance panel rather than as
- * sidebar rows (the ≤23-visible-row budget in navGroups.test.ts is spent to the
- * last row, and that test's own terms are "earn it, fold into a tab, or hide").
- * They use the same registered-but-hidden alias mechanism as the U-3 merges, so
- * ⌘K and any saved layout still resolve them standalone.
+ * Two of the three (`system.situations`, `system.narratives`) landed as TABS of
+ * the merged Provenance panel. They used to be registered-but-hidden rows for
+ * exactly the reason the design diagnosed — the ≤23-visible-row budget was
+ * spent, and "fold into a tab or hide" was the documented escape hatch. They
+ * are now alias rows: the surfaces still render (Provenance's Trajectory and
+ * Narratives tabs, unmodified), and a deep-link to either id still lands on its
+ * tab, without either costing a catalog row.
  */
 describe('GLASS-2 — the unconsumed-API consumers', () => {
-  const TAB_MOUNTED: PanelKind[] = ['system.situations', 'system.narratives']
-
   it('the journal gate is a real, VISIBLE, non-binding singleton', () => {
     const entry = PANEL_REGISTRY['system.journal_gate']
     expect(entry).toBeDefined()
@@ -227,26 +239,63 @@ describe('GLASS-2 — the unconsumed-API consumers', () => {
     expect(PANEL_REGISTRY['system.journal_gate'].definition.modes).toEqual(['personal'])
   })
 
-  it('the two tab-mounted surfaces are registered, hidden, and keep a real Component', () => {
-    for (const kind of TAB_MOUNTED) {
-      const entry = PANEL_REGISTRY[kind]
-      expect(entry, `${kind} must exist in PANEL_REGISTRY`).toBeDefined()
-      expect(entry.Component, `${kind} must have a real Component`).toBeDefined()
-      expect(entry.definition.hidden, `${kind} is mounted as a Provenance tab`).toBe(true)
-      expect(SINGLETON_PANELS).not.toContain(kind)
-    }
-  })
-
-  it('every GLASS-2 panel_id round-trips (⌘K + saved layouts resolve them)', () => {
-    for (const kind of [...TAB_MOUNTED, 'system.journal_gate' as PanelKind]) {
-      const panelId = PANEL_REGISTRY[kind].definition.panelId
-      expect(PANEL_ID_TO_KIND[panelId], `panel_id "${panelId}" → ${kind}`).toBe(kind)
-    }
+  it('the two tab-mounted surfaces resolve onto Provenance, on their own tabs', () => {
+    expect(resolveKind('system.situations')).toEqual({
+      kind: 'system.provenance',
+      tab: 'trajectory',
+    })
+    expect(resolveKind('system.narratives')).toEqual({
+      kind: 'system.provenance',
+      tab: 'narratives',
+    })
   })
 
   it('folding the two tabs in did not hide their host (system.provenance)', () => {
     const host = PANEL_REGISTRY['system.provenance'].definition
     expect(host.hidden).not.toBe(true)
     expect(host.requiresBinding).toBe(false)
+  })
+})
+
+/**
+ * The catalog after the retirement (UI_HOLISTIC_DESIGN_2026-08-24 §4.3).
+ *
+ * A ratchet in the direction the design pushes: the registry may not grow back
+ * the rows the alias table just removed. It is deliberately a CEILING, not an
+ * equality — the merge trains that follow shrink it further, and each one is
+ * expected to lower this number, never raise it.
+ */
+describe('registry size ratchet', () => {
+  it('stays at or under the post-alias count', () => {
+    // 55 → 56: ONE documented exception, D2e (the read-telemetry train).
+    //
+    // The ratchet exists because the operator's verdict on the panel program
+    // was "why are we just continuing to add more damn panels", and
+    // PREMISE_REASON_TO_EXIST §4 puts "further Engine-Room observability
+    // panels for an engine room with no visitor" on the kill-list. A new kind
+    // therefore has to answer for itself, loudly, here.
+    //
+    // `system.read_scoreboard` answers: it is the ONLY panel that measures
+    // whether the other 55 are read at all. It is the instrument of the
+    // 90-day oracle wager (§5 Option 1), which is the thing that will decide
+    // whether the panel program continues or is cut — so it is the one
+    // addition whose purpose is to make deletions defensible rather than to
+    // postpone them. Folding it into an existing engine panel was considered
+    // and rejected: burying the wager's scoreboard inside a surface nobody
+    // visits reproduces the exact failure mode under study.
+    //
+    // The ratchet is re-armed at 56 and the same rule applies to the next
+    // one. If the wager returns a negative verdict at day 90, this row goes
+    // with the rest of the deck.
+    expect(Object.keys(PANEL_REGISTRY).length).toBeLessThanOrEqual(56)
+  })
+
+  it('hidden-but-registered rows are the exception, not the mechanism', () => {
+    // Eighteen kinds were hidden before this train — 27% of the catalog. What
+    // remains is the set with no survivor to alias onto yet (each named, with
+    // its reason, in registry.ts). If this number grows, a retirement was
+    // hidden instead of aliased.
+    const hidden = Object.values(PANEL_REGISTRY).filter((e) => e.definition.hidden === true)
+    expect(hidden.length).toBeLessThanOrEqual(6)
   })
 })

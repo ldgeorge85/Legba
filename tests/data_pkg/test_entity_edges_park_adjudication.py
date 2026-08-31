@@ -116,13 +116,33 @@ async def test_a_pair_that_merged_into_one_entity_is_drained_not_minted(pg_pool)
             loser, keeper)
         pid = await _park(conn, f"Pks K {tag}", f"Pks L {tag}")
 
-        before = await conn.fetchval("SELECT count(*) FROM entity_edges")
         await _run(conn)
-        after = await conn.fetchval("SELECT count(*) FROM entity_edges")
         still = await _parked(conn, pid)
+        # NOT a table-wide `entity_edges` count (2026-08-27 shuffled nightly:
+        # `_run` re-adjudicates the WHOLE shared entity_edges_unresolved table
+        # by design — that is its actual job, "a park row becomes resolvable
+        # the moment an entity is created or merged under its name" per
+        # 0182's own docstring — so a global count is order-dependent on
+        # whatever ELSE any sibling across the session-shared Postgres left
+        # sitting in the park. write_nexus is the one dual-write chokepoint
+        # every producer funnels through (relationship_reifier,
+        # proposed_edge_governance, the seed adapters incl.
+        # seed.world_baseline, manual_batch, graph_mining) and parks ~2.75%
+        # of endpoints as ordinary, non-error residue; a sibling's park row
+        # that becomes resolvable earlier in the session but is never itself
+        # adjudicated gets swept into THIS test's `_run()` and inflates the
+        # count for a reason that has nothing to do with this row — proven
+        # standalone with the real write_nexus + 0182 path (before=0, after=1
+        # from an unrelated sibling's park row, with this test's own
+        # self-merge pair correctly contributing zero either way). What this
+        # test actually owns is whether ITS OWN park row minted an edge,
+        # checked directly via the migration's own provenance marker.
+        minted_from_this_row = await conn.fetchval(
+            "SELECT count(*) FROM entity_edges "
+            "WHERE evidence_set->>'recovered_from_park' = $1", str(pid))
 
     assert still == 0
-    assert after == before, "an entity is not related to itself"
+    assert minted_from_this_row == 0, "an entity is not related to itself"
 
 
 @pytest.mark.integration

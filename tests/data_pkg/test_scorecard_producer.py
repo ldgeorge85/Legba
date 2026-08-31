@@ -268,10 +268,15 @@ class _AcquireCtx:
 
 
 class _FakeConn:
-    def __init__(self, targets, eval_row, gather_by_target):
+    def __init__(self, targets, eval_row, gather_by_target,
+                 consumed_by_target=None):
         self._targets = targets
         self._eval_row = eval_row
         self._gather_by_target = gather_by_target
+        # H3: the consumed-basis lookup, keyed by target. Absent by default, so
+        # every pre-H3 test keeps exercising the ONE-query path (a composition
+        # row with no ``derived_from`` never triggers the second statement).
+        self._consumed_by_target = consumed_by_target or {}
 
     async def fetchrow(self, sql, *args):
         # Only the per-unit eval read uses fetchrow.
@@ -284,6 +289,9 @@ class _FakeConn:
         if "DISTINCT ON (f.analyst_id)" in sql:
             # scorecard_banding._GATHER_SQL — args[0] is the target id.
             return self._gather_by_target.get(args[0], [])
+        if "f.id = ANY($1::UUID[])" in sql:
+            # scorecard_banding._CONSUMED_SQL — args[1] is the target id.
+            return self._consumed_by_target.get(args[1], [])
         raise AssertionError(f"unexpected fetch SQL: {sql[:60]}")
 
     async def execute(self, sql, *args):
@@ -293,14 +301,17 @@ class _FakeConn:
 
 
 class _FakePool:
-    def __init__(self, targets, eval_row, gather_by_target):
+    def __init__(self, targets, eval_row, gather_by_target,
+                 consumed_by_target=None):
         self._targets = targets
         self._eval_row = eval_row
         self._gather_by_target = gather_by_target
+        self._consumed_by_target = consumed_by_target
 
     def acquire(self):
         return _AcquireCtx(
-            _FakeConn(self._targets, self._eval_row, self._gather_by_target)
+            _FakeConn(self._targets, self._eval_row, self._gather_by_target,
+                      self._consumed_by_target)
         )
 
 
@@ -396,6 +407,132 @@ async def test_handle_sweeps_g20_and_side_writes_one_scorecard_per_country(
     # The returned summary is the receipt.
     assert result.finding.data["written"] == 2
     assert result.finding.data["all_insufficient_countries"] == 1
+
+
+@pytest.mark.asyncio
+async def test_the_full_card_path_realigns_a_dimension_to_the_consumed_basis(
+    monkeypatch,
+):
+    """H3 end-to-end through the PRODUCED ARTEFACT, not just the rule engine:
+    handle → gather_and_band (both statements) → eval fold → payload → the
+    persisted row's ``derived_from``.
+
+    The shape is BF ``energy_security`` from CORRECTNESS-R2: the freshest head
+    was conf 0.20 (below floor) and the composition had already consumed a 0.90
+    head tagged ``severity:moderate``. The card shipped ``insufficient-evidence``
+    beside prose asserting the desk had produced a verified read.
+    """
+    weak, strong, comp = str(uuid4()), str(uuid4()), str(uuid4())
+    comp_row = _gather_row("country_composition", comp, 0.8, 0.8,
+                           ["severity:high"])
+    comp_row["derived_from"] = [weak, strong]
+    gather_by_target = {
+        "country_watch_bf": [
+            _gather_row("energy_security", weak, 0.20, 1.0, ["severity:low"]),
+            comp_row,
+        ],
+    }
+    consumed_by_target = {
+        "country_watch_bf": [
+            _gather_row("energy_security", weak, 0.20, 1.0, ["severity:low"]),
+            _gather_row("energy_security", strong, 0.90, 1.0,
+                        ["severity:moderate"]),
+        ],
+    }
+    pool = _FakePool(["country_watch_bf"], None, gather_by_target,
+                     consumed_by_target)
+
+    captured: list[dict] = []
+
+    async def _fake_write(conn, *, analyst_ctx, kind, output_payload,
+                          derived_from, **kw):
+        captured.append({
+            "payload": output_payload, "derived_from": list(derived_from),
+        })
+        return object(), None
+
+    monkeypatch.setattr(sp, "write_analyst_output", _fake_write)
+
+    result = await sp.handle(
+        [], {"analyst_id": "scorecard_producer", "analyst_version": "0" * 16,
+             "run_id": str(uuid4())},
+        _Deps(pool),
+    )
+
+    assert len(captured) == 1
+    payload = captured[0]["payload"]
+    bands = payload.data["bands"]
+    dim = bands["dimensions"]["energy_security"]
+
+    # The band is the one the prose rests on, from the row the prose used.
+    assert dim["band"] == "watch"
+    assert dim["basis"] == [strong]
+    assert dim["basis_alignment"]["state"] == sb.BASIS_CONSUMED
+    assert dim["basis_alignment"]["newer_head"]["finding_id"] == weak
+    # The retired damper would have shipped this at eff 0.90? No — it only fired
+    # below the knee, so a realigned CONFIDENT row records nothing.
+    assert dim["damped"] is False and dim["damped_would_have_been"] is None
+    # The card is self-describing about which contract produced it.
+    assert bands["damping_semantics"] == "off"
+    assert bands["basis_alignment"]["realigned"] == 1
+    # The country is no longer an all-insufficient card.
+    assert "scorecard_all_insufficient" not in payload.tags
+    assert result.finding.data["all_insufficient_countries"] == 0
+
+    # Lineage: the banded row, the consulted row, and the composition — all real
+    # ids, zero dangling.
+    from uuid import UUID
+    assert set(captured[0]["derived_from"]) == {
+        UUID(strong), UUID(weak), UUID(comp),
+    }
+
+
+@pytest.mark.asyncio
+async def test_derived_from_reaches_a_consumed_head_the_card_could_not_band(
+    monkeypatch,
+):
+    """The ``consumed-unbandable`` residue must be REACHABLE. The dimension
+    honestly abstains, so nothing enters ``basis`` — and if the lineage stopped
+    there, the one abstention a reader most needs to check would be the one with
+    no thread to pull. ``derived_from`` names the consulted row instead."""
+    weak, junk, comp = str(uuid4()), str(uuid4()), str(uuid4())
+    comp_row = _gather_row("country_composition", comp, 0.8, 0.8,
+                           ["severity:high"])
+    comp_row["derived_from"] = [junk]
+    pool = _FakePool(
+        ["country_watch_il"], None,
+        {"country_watch_il": [
+            _gather_row("energy_security", weak, 0.10, 0.9, ["severity:high"]),
+            comp_row,
+        ]},
+        # conf .20 / faith .00 — the composition took it through its periphery
+        # tier; the card's guards refuse it, as they refuse any such row.
+        {"country_watch_il": [
+            _gather_row("energy_security", junk, 0.20, 0.0, ["severity:low"]),
+        ]},
+    )
+
+    captured: list[dict] = []
+
+    async def _fake_write(conn, *, analyst_ctx, kind, output_payload,
+                          derived_from, **kw):
+        captured.append({
+            "payload": output_payload, "derived_from": list(derived_from),
+        })
+        return object(), None
+
+    monkeypatch.setattr(sp, "write_analyst_output", _fake_write)
+    await sp.handle([], {"analyst_id": "scorecard_producer",
+                         "analyst_version": "0" * 16, "run_id": str(uuid4())},
+                    _Deps(pool))
+
+    dim = captured[0]["payload"].data["bands"]["dimensions"]["energy_security"]
+    assert dim["band"] == sb.INSUFFICIENT
+    assert dim["basis"] == []                       # no band ⇒ no basis
+    assert dim["basis_alignment"]["state"] == sb.BASIS_CONSUMED_UNBANDABLE
+    assert dim["basis_alignment"]["reason"] == "low-faithfulness"
+    from uuid import UUID
+    assert UUID(junk) in captured[0]["derived_from"]
 
 
 @pytest.mark.asyncio

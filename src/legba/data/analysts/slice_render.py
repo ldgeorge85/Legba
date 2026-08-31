@@ -4,16 +4,21 @@
 (2026-08-05, the W1-D x v-voice x r-smalls merge pushed inline_target past its
 ceiling; each branch fit alone, the sum did not).
 
-Owns the per-row signal render, the Phase-V dated header, and the R9 CAMEO
-marking. ``inline_target`` re-exports every name, so callers and tests are
-untouched. ``_signal_title`` / ``_signal_body`` stay in ``inline_target`` (they
-serve non-render paths too) and are imported back here — one direction only at
-call time, no import cycle at module load.
+Owns the per-row signal render, the Phase-V dated header, the R9 CAMEO marking,
+the wire-pair ``carried_by`` annotation, and the per-clean render RECEIPT
+(``_slice_render_stats`` — every counter it emits is a statement about what the
+render did to a row, so it belongs beside the render, not beside the caller).
+``inline_target`` re-exports every name, so callers and tests are untouched.
+``_signal_title`` / ``_signal_body`` stay in ``inline_target`` (they serve
+non-render paths too) and are imported back here — one direction only at call
+time, no import cycle at module load.
 """
 from __future__ import annotations
 
 import datetime
 from typing import Any, Mapping
+
+from .wire_pair_collapse import WIRE_COLLAPSE_ROW_KEY, carried_by_line
 
 
 def _it():
@@ -67,6 +72,13 @@ def _render_signal(idx: int, row: Mapping[str, Any]) -> str:
 
     Shared by the user-prompt renderer and the ORIENT token-budget estimator so
     the token accounting matches the bytes actually sent to the LLM.
+
+    A row that SURVIVED a wire-pair collapse (``_orient`` folded one syndicated
+    story's several mastheads into this single numbered signal) also carries a
+    ``carried_by=`` line between its provenance and its snippet — the count of
+    mastheads that ran it, and the explicit statement that this is reach rather
+    than independent corroboration. Because the estimator renders through this
+    same function, that line is inside the INPUT-token budget like any other.
     """
     data = row.get("data")
     title = (_it()._signal_title(row) or "(untitled)")[:_it()._MAX_TITLE_CHARS]
@@ -85,11 +97,72 @@ def _render_signal(idx: int, row: Mapping[str, Any]) -> str:
     # verify judge's WORKING text is byte-identical to what the analyst read.
     snippet = _it()._signal_body(row).text
     published_str = f" published={published_at}" if published_at else ""
-    return (
-        f"[{idx}] {title}\n"
-        f"    ingested={produced_at}{published_str} source={source}\n"
-        f"    snippet={snippet}"
-    )
+    lines = [
+        f"[{idx}] {title}",
+        f"    ingested={produced_at}{published_str} source={source}",
+    ]
+    marker = row.get(WIRE_COLLAPSE_ROW_KEY)
+    if isinstance(marker, Mapping):
+        lines.append(carried_by_line(marker))
+    lines.append(f"    snippet={snippet}")
+    return "\n".join(lines)
+
+
+def _slice_render_stats(sliced: list[Mapping[str, Any]]) -> dict[str, int]:
+    """Per-clean receipt for the rows that actually reached the prompt.
+
+    Lives HERE, next to the render it describes: every counter is a statement
+    about what :func:`_render_signal` did to a row, and reading them off the
+    body-kind resolver is the same walk the renderer makes.
+
+    One counter per QW1-A render clean, so an operator reading an
+    ``analyst_traces`` ORIENT step can see what the renderer did to this slice
+    instead of inferring it from prompt bytes:
+
+      ``gdelt_prosed``          CAMEO records rendered as one prose line
+                                instead of a stringified 61-column dict.
+      ``untranslated_marked``   non-Latin bodies replaced by the honest
+                                ``[body untranslated: <lang>]`` marker.
+      ``full_body_rows``        rows rendering a SUBSTANTIVE body (distilled /
+                                translated / message / archived / raw) — the
+                                content the teaser used to crowd out.
+      ``teaser_rows``           rows still on the thin summary/description tail.
+      ``empty_body_rows``       rows kept for their headline alone (a real
+                                title with no body is evidence, not a dead row).
+      ``structures_collapsed``  duplicate graph-structure pseudo-signals folded
+                                away by the slice reader (see
+                                ``actor_substrate_slice._collapse_structure_items``).
+
+    ``dropped_dead_rows`` and ``wire_copies_collapsed`` are stamped by
+    ``inline_target._orient`` itself — both count rows that never made it into
+    ``sliced``, so neither can be recovered by walking the rows that did.
+    """
+    counts: dict[str, int] = {
+        "gdelt_prosed": 0,
+        "untranslated_marked": 0,
+        "full_body_rows": 0,
+        "teaser_rows": 0,
+        "empty_body_rows": 0,
+        "structures_collapsed": 0,
+    }
+    for row in sliced:
+        kind = _it()._signal_body(row).kind
+        if kind == "gdelt_prose":
+            counts["gdelt_prosed"] += 1
+        elif kind == "untranslated":
+            counts["untranslated_marked"] += 1
+        elif kind == "empty":
+            counts["empty_body_rows"] += 1
+        if kind in _it()._FULL_BODY_KINDS:
+            counts["full_body_rows"] += 1
+        elif kind == "teaser":
+            counts["teaser_rows"] += 1
+        data = row.get("data")
+        if isinstance(data, Mapping):
+            collapsed = data.get("duplicates_collapsed")
+            if isinstance(collapsed, int) and collapsed > 0:
+                counts["structures_collapsed"] += collapsed
+    return counts
 
 
 def _format_window(hours: int | None) -> str | None:

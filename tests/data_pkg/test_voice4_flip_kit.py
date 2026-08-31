@@ -402,4 +402,30 @@ def test_only_the_prompt_changed_against_the_pre_flip_descriptor(unit: str) -> N
         # the live head's escalate_finding grant — the one structural drift the
         # flip train reported. That catch-up is the fix, not a regression.
         before["action_packs"] = [{"pack_id": "escalate_finding"}]
+    # REGISTER-1g (2026-08-29, post-flip): every unit in this kit is
+    # ``kind: inline_target``, so ``actor_substrate_slice`` already hands it the
+    # desk's OPEN SITUATION REGISTER as a citable [N] block carrying the H1
+    # render repair (evidence age, NEVER/STALE labels, the self-corroboration
+    # rule). The ``situations`` grounding SOURCE produced a SECOND, UNGUARDED
+    # copy of the same frames in the same context window — no evidence age, no
+    # labels, no rule — which is the M-1 render H1 was built to close, ten
+    # prompts wide. Dropping the source is a DEDUPE: the register still reaches
+    # every one of these desks, by the kind rather than by the descriptor.
+    #
+    # Normalized on the BEFORE side, the same way the disruption_status
+    # action-pack catch-up above is, so this pin keeps asserting "nothing ELSE
+    # moved" instead of being weakened to ignore grounding.
+    _pre_flip_sources = before.get("grounding", {}).get("sources")
+    if isinstance(_pre_flip_sources, list) and "situations" in _pre_flip_sources:
+        before["grounding"]["sources"] = [
+            s for s in _pre_flip_sources if s != "situations"
+        ]
+    # D4a (2026-08-30, post-flip): judge_sample_rate 0.10 -> 1.0 fleet-wide —
+    # the 0.10 was a budget-era artifact; the sampling hash was gating
+    # composition input 7.6x by coin flip (R3 mech census) and the judge plane
+    # measured idle. Normalized on the BEFORE side like the two carve-outs
+    # above, so this pin keeps asserting "nothing ELSE moved".
+    _pre_flip_opts = before.get("method", {}).get("options")
+    if isinstance(_pre_flip_opts, dict) and _pre_flip_opts.get("judge_sample_rate") == 0.10:
+        _pre_flip_opts["judge_sample_rate"] = 1.0
     assert before == after

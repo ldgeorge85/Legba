@@ -685,6 +685,194 @@ def test_salvage_envelope_body_returns_none_for_non_envelope():
     assert _salvage_envelope_body("") is None
 
 
+# ---------------------------------------------------------------------------
+# #77 — inline_target residual: bare TOOL-CALL JSON leaking into the answer
+# channel (WORLD_READ_JSON_LEAK.md §2 sub-class B). The census found 5 live
+# rows in the last 30 days (cross_doc_corroborator x4, corpus_researcher x1)
+# where the REASON+ACT synthesis reply was a tool-call-shaped object instead
+# of the {title, body} contract. Every one carries a leading GATHER-style plan
+# sentence, which defeats the PRIMARY offset-0 parse; ``parse_finding_envelope``
+# correctly declines the recovered dict (no title/body key) and hands it to
+# ``_unstructured_finding``, whose ``_salvage_envelope_body`` ALSO correctly
+# declines it (no "body" key to find) — but the fallback then ran
+# ``is_unusable_output`` on the RAW tool-call text, and a tool call's ARGUMENT
+# VALUES (a search query, a filter) are real words, so the punctuation-only
+# scaffold check read them as content and published the blob verbatim as the
+# finding body, with a JSON key:value line as its "title".
+#
+# Fixed by consulting ``output_contract.salvage_json_envelope`` — the SAME
+# primitive the composition path already uses for its own "tool-call JSON, no
+# body key" case (pinned in test_output_contract.py) — on that fallback branch
+# too. One doctrine, one implementation, now wired to both write paths.
+# ---------------------------------------------------------------------------
+
+
+def test_coerce_finding_bare_tool_call_after_preamble_fails_loud():
+    """Live specimen ``c8d19cbb-0209-434e-a66a-e3272a4b5274``
+    (cross_doc_corroborator, 2026-08-05 — still `superseded_by IS NULL` at
+    census time). The live body column was exactly this tool-call object,
+    quoted-query and all; the model's own search terms read as prose to the
+    old scaffold check, so it published. Now raises."""
+    from legba.data.analysts.output_contract import OutputContractError
+
+    raw = (
+        "Let me search the corpus for this.\n"
+        "{\n"
+        '  "action": "search_corpus",\n'
+        '  "query": "\\"Trump\\" \\"Hormuz\\" \\"very soon\\"",\n'
+        '  "filters": {},\n'
+        '  "size": 5\n'
+        "}"
+    )
+    with pytest.raises(OutputContractError):
+        _coerce_finding(raw, fallback_title="ph")
+
+
+def test_coerce_finding_nested_tool_call_arguments_after_preamble_fails_loud():
+    """Live specimen ``1c1d9c49-7e15-4897-8c1b-56aba7566d7f``
+    (cross_doc_corroborator, 2026-08-18): a nested "arguments" object rather
+    than flat args — the shape varies, the missing ``body`` key does not."""
+    from legba.data.analysts.output_contract import OutputContractError
+
+    raw = (
+        "I'll search using this query.\n"
+        "{\n"
+        '  "action": "vector_search",\n'
+        '  "arguments": {\n'
+        '    "query": "unknown projectile struck vessel Strait of Hormuz"\n'
+        "  }\n"
+        "}"
+    )
+    with pytest.raises(OutputContractError):
+        _coerce_finding(raw, fallback_title="ph")
+
+
+def test_coerce_finding_tool_call_type_key_variant_after_preamble_fails_loud():
+    """Live specimen ``e4818886-05b0-4056-a5d0-fffabd475fa9``
+    (cross_doc_corroborator, 2026-08-17): the model used ``"type"`` instead of
+    ``"action"`` — the fix does not key off a specific tool-call field name,
+    only off "JSON-shaped, no body key"."""
+    from legba.data.analysts.output_contract import OutputContractError
+
+    raw = (
+        "First, I need to check the corpus.\n"
+        "{\n"
+        '  "type": "search_corpus",\n'
+        '  "query": "Trump orders Pentagon to scale back South Korea drills'
+        ' August 2026",\n'
+        '  "filters": {},\n'
+        '  "size": 5\n'
+        "}"
+    )
+    with pytest.raises(OutputContractError):
+        _coerce_finding(raw, fallback_title="ph")
+
+
+def test_coerce_finding_corpus_researcher_tool_call_after_preamble_fails_loud():
+    """Live specimen ``0649a856-9912-4127-bf18-2fc5b823e867`` (corpus_researcher,
+    2026-08-13) — the ``gather_only`` autonomous researcher hit the same
+    residual as the fan-out ``cross_doc_corroborator`` runs."""
+    from legba.data.analysts.output_contract import OutputContractError
+
+    raw = (
+        "We will use search_corpus.\n"
+        "{\n"
+        '  "action": "search_corpus",\n'
+        '  "query": "China missile launchers Iran",\n'
+        '  "size": 5\n'
+        "}"
+    )
+    with pytest.raises(OutputContractError):
+        _coerce_finding(raw, fallback_title="ph")
+
+
+def test_coerce_finding_nested_parameters_tool_call_after_preamble_fails_loud():
+    """Live specimen ``abc31565-a229-4a70-abc4-0f6619d442fd``
+    (cross_doc_corroborator, 2026-08-08): args nested under "parameters"
+    instead of "arguments" — a third naming variant, same missing key."""
+    from legba.data.analysts.output_contract import OutputContractError
+
+    raw = (
+        "Let's check the corpus first.\n"
+        "{\n"
+        '  "action": "search_corpus",\n'
+        '  "parameters": {\n'
+        '    "query": "Astra OpenAI model critical cybersecurity risk",\n'
+        '    "filters": null,\n'
+        '    "size": 5\n'
+        "  }\n"
+        "}"
+    )
+    with pytest.raises(OutputContractError):
+        _coerce_finding(raw, fallback_title="ph")
+
+
+def test_coerce_finding_well_formed_tool_call_json_with_no_preamble_also_fails_loud():
+    """The preamble is not load-bearing for the fix: a tool-call object with NO
+    preceding plan sentence parses cleanly on the PRIMARY attempt and lands in
+    the successful dict-parse branch instead of ``_unstructured_finding`` — and
+    THAT branch already raised before this train, via its own
+    ``is_unusable_output`` check on the empty unwrapped body. Pinned here so the
+    two entry paths (primary parse vs. the ``_unstructured_finding`` fallback
+    this train fixes) are proven to agree on the same outcome."""
+    from legba.data.analysts.output_contract import OutputContractError
+
+    raw = json.dumps(
+        {"action": "search_corpus", "query": "China missile launchers Iran", "size": 5}
+    )
+    with pytest.raises(OutputContractError):
+        _coerce_finding(raw, fallback_title="ph")
+
+
+def test_coerce_finding_truncated_tool_call_after_preamble_fails_loud():
+    """Ambiguous variant: the tool-call object itself is TRUNCATED (the stream
+    cut off mid-argument), so ``_scan_top_level_strings`` cannot even close the
+    object — this raises via the "does not close" branch rather than the "no
+    body key" branch. Both outcomes are RAISE; neither publishes."""
+    from legba.data.analysts.output_contract import OutputContractError
+
+    raw = (
+        "Let me search the corpus for this.\n"
+        '{\n  "action": "search_corpus",\n  "query": "Trump Hormuz very soon'
+    )  # NOTE: truncated — no closing quote / brace.
+    with pytest.raises(OutputContractError):
+        _coerce_finding(raw, fallback_title="ph")
+
+
+def test_coerce_finding_healthy_agentic_finding_after_preamble_byte_unchanged():
+    """The fix must not touch the case that MATTERS: a real {title, body}
+    contract behind a tool-plan preamble sentence still lands cleanly,
+    byte-for-byte — this is the exact shape V-N1 was ORIGINALLY built to save
+    (live finding ``16f6a460``, cited in this module's docstring)."""
+    raw = (
+        "We will use search_corpus.\n"
+        '{"title": "Corroborating reports on the Hormuz incident", '
+        '"body": "## Assessment\\nMultiple independent reports corroborate [1].", '
+        '"confidence": 0.6, "evidence": ["1"], "tags": ["corroboration"]}'
+    )
+    finding = _coerce_finding(raw, fallback_title="ph")
+    assert finding.title == "Corroborating reports on the Hormuz incident"
+    assert finding.body == (
+        "## Assessment\nMultiple independent reports corroborate [1]."
+    )
+    assert finding.confidence == 0.6
+    assert "unstructured" not in finding.tags
+
+
+def test_coerce_finding_prose_after_preamble_still_lands_unstructured():
+    """A model that narrates a plan and then answers in PROSE (not JSON at
+    all) is untouched by this fix — ``salvage_json_envelope`` returns ``{}``
+    for text that is not JSON-shaped, and the D27 fallback runs exactly as it
+    did before this train."""
+    raw = (
+        "Let me check the corpus for corroborating reports.\n"
+        "Multiple independent sources corroborate the Hormuz incident report."
+    )
+    finding = _coerce_finding(raw, fallback_title="Default Title")
+    assert "unstructured" in finding.tags
+    assert "Multiple independent sources corroborate" in finding.body
+
+
 def test_build_citation_index_captures_snippet():
     """#116(e): the render-time index captures a compact evidence snippet from the
     signal's data so the verify judge sees content, not just the headline."""
@@ -1750,6 +1938,63 @@ def test_normalize_rewrites_range_citations_in_variant_brackets():
     assert _normalize_citation_markers("survey 【1-120】") == "survey [1-120]"
     assert _normalize_citation_markers("survey 【1‑92】") == "survey [1-92]"
     assert _normalize_citation_markers("survey ［10–18］") == "survey [10-18]"
+
+
+def test_normalize_rewrites_the_prior_read_reference():
+    """2026-08-29 (task #62) — ``(prior read ref N)`` is the licensed prose
+    spelling of a desk citing its own PRIOR READ block, and it resolves exactly
+    like the bare ``[N]`` it replaces. Tolerant of the separator and the case the
+    same way the annotation allowlist is, because the corpus spells everything
+    three ways.
+    """
+    assert _normalize_citation_markers(
+        "No material change since the last cycle (prior read ref 121)."
+    ) == "No material change since the last cycle [121]."
+    assert _normalize_citation_markers("per [prior read ref 12] nothing moved") == (
+        "per [12] nothing moved"
+    )
+    for variant in ("prior_read ref 7", "prior-read reference 7", "Prior Read 7"):
+        assert _normalize_citation_markers(f"x ({variant})") == "x [7]"
+
+
+def test_prior_read_reference_never_rearms_the_defused_marker():
+    """THE ONE THING THIS RULE MUST NOT DO. An embedded prior-read body has its
+    own ``[N]`` markers rewritten to ``[prior:N]``
+    (``unit_grounding._defuse_prior_read_markers``) precisely so LAST cycle's
+    ordinals resolve NOWHERE in THIS run. A rule that matched them would hand
+    this run's evidence map to the previous run's numbering — the exact V-2
+    renderer defect the defuse exists to close. The required "read" token is what
+    keeps the two apart.
+    """
+    raw = "body with [prior:15] and [prior:2] defused markers"
+    assert _normalize_citation_markers(raw) == raw
+    from legba.data.provenance.citation_markers import _normalize_verify_markers
+
+    assert _normalize_verify_markers(raw) == raw
+
+
+def test_prior_read_reference_leaves_ordinary_prose_alone():
+    """Both the WRAPPER and the words "prior read" are required, so the rule
+    cannot reach prose that merely talks about reading."""
+    for raw in (
+        "she gave a prior reading of 12 pages",
+        "the prior read [121] said otherwise",
+        "prior read ref 12 without a bracket",
+    ):
+        assert _normalize_citation_markers(raw) == raw
+
+
+def test_prior_read_reference_has_exactly_one_definition():
+    """The write-time and verify-time normalizers are MIRRORED copies by
+    necessity (verify.py stays stdlib-only and must not import the analysts
+    package) — but this syntax was born after that constraint was already paid
+    for in the other direction: analysts MAY import provenance. So it is
+    IMPORTED, and a drift guard is unnecessary because there is nothing to
+    drift. This pins that it stays that way."""
+    from legba.data.analysts import inline_target
+    from legba.data.provenance import citation_markers
+
+    assert inline_target._PRIOR_READ_REF_RE is citation_markers._PRIOR_READ_REF_RE
 
 
 def test_normalize_annotation_allowlist_is_not_a_catch_all():

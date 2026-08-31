@@ -968,6 +968,117 @@ def test_the_register_prints_a_trajectory_date_the_prose_may_actually_copy():
     assert "(undated)" in undated[-1]
 
 
+def test_a_rendered_checkpoint_shows_its_date_and_never_its_prose():
+    """REGISTER-1c (2026-08-29) — THE LOOP'S SENTENCE, cut at the render.
+
+    H1 exempted ``unchanged_checkpoint`` from the evidence requirement because
+    "a checkpoint asserts nothing about the world". True of the delta TYPE and
+    false of the ROW: the row carries ``why``, free model prose written under a
+    prompt whose own instruction is "situations mostly continue", and this
+    render printed it verbatim. Of the fleet's 1,095 checkpoint rows, 375 (34%)
+    carry currency language and 53 carry CORROBORATION language; of the ones
+    actually RENDERED (one per frame, UNWINDOWED, mean age 3.7d, max 17.3d)
+    HALF asserted currency or confirmation.
+
+    The negative below is the LIVE sentence, verbatim from the AR frame's
+    rendered checkpoint dated 23 August — still in the desk prompt 24 days after
+    the maritime pilots' strike ended, beside ``trajectory=escalating``.
+
+    THE ASYMMETRY IS THE POINT and both halves are asserted here: a SIGNIFICANT
+    delta keeps its ``why`` (it cannot be written without cited evidence and it
+    is windowed to the read's own fortnight, so its prose is a dated,
+    evidence-backed statement of what moved), while the checkpoint keeps only
+    the fact its exemption actually claims for it — "we looked on <date> and
+    nothing had changed".
+    """
+    ar_sentence = (
+        "No material change was observed; the maritime pilot strike continues "
+        "with port operations disrupted"
+    )
+    lines = wl._render_situation_register_lines(
+        [
+            {
+                "name": "AR frame", "status": "active", "intensity_score": 59.1,
+                "event_count": 377, "last_event_at": "2026-08-20T13:31:42+00:00",
+                "age_days": 30.1, "trajectory_state": "escalating",
+                "trajectory": [
+                    {"delta": "escalates",
+                     "occurred_at": "2026-08-09T03:15:01+00:00",
+                     "why": "new financial sanctions on an Ecuadorian gang"},
+                    {"delta": tj.DELTA_UNCHANGED_CHECKPOINT,
+                     "occurred_at": "2026-08-23T09:00:00+00:00",
+                     "why": ar_sentence},
+                ],
+            }
+        ],
+        7,
+    )
+    block = "\n".join(lines)
+
+    # The checkpoint's PROSE is gone — the whole sentence and every word in it
+    # that made the sentence an assertion about the world.
+    assert ar_sentence not in block
+    assert "maritime pilot strike" not in block
+    assert "continues" not in block
+    assert "No material change" not in block
+
+    # Its FACT survives: the checkpoint line is still rendered, still dated, and
+    # still named. Dropping the line outright would tell a frame with real
+    # August escalations and nothing since that it is still moving.
+    checkpoint_line = lines[-1]
+    assert tj.DELTA_UNCHANGED_CHECKPOINT in checkpoint_line
+    assert "23 August 2026" in checkpoint_line
+    assert "2026-08-23T09:00:00+00:00" in checkpoint_line
+
+    # The SIGNIFICANT delta above it is untouched — evidence-backed, windowed
+    # prose is exactly what this block exists to carry.
+    assert "new financial sanctions on an Ecuadorian gang" in block
+
+    # An undated checkpoint still renders, and still without its prose.
+    undated_cp = wl._render_situation_register_lines(
+        [{"name": "f", "status": "active",
+          "trajectory": [{"delta": tj.DELTA_UNCHANGED_CHECKPOINT,
+                          "occurred_at": None,
+                          "why": "the blockade remains in force"}]}],
+        7,
+    )
+    assert "(undated)" in undated_cp[-1]
+    assert "remains in force" not in "\n".join(undated_cp)
+
+
+def test_the_register_citation_grades_against_the_deprosed_checkpoint():
+    """The captured ``evidence_text`` IS the rendered block, so REGISTER-1c has
+    to reach the judge's copy too — otherwise the model is shown one register
+    and graded against another.
+
+    It does, and the coupling is a shared FUNCTION, not a second copy of the
+    render: the synth citation branch calls the very object asserted identical
+    below (``meta_findings_synthesizer`` imports it by name from
+    ``window_ledger``). Pinning the identity is what makes the render assertion
+    that follows a statement about the judge's copy as well as the model's — if
+    a future change re-implements the capture, this line fails first.
+    """
+    assert synth._render_situation_register_lines is (
+        wl._render_situation_register_lines
+    )
+    register = [
+        {
+            "situation_id": str(uuid4()),
+            "name": "AR frame", "status": "active", "intensity_score": 59.1,
+            "event_count": 377, "age_days": 30.1,
+            "trajectory_state": "escalating",
+            "trajectory": [
+                {"delta": tj.DELTA_UNCHANGED_CHECKPOINT,
+                 "occurred_at": "2026-08-23T09:00:00+00:00",
+                 "why": "the maritime pilot strike continues"},
+            ],
+        }
+    ]
+    evidence_text = "\n".join(wl._render_situation_register_lines(register, 4))
+    assert "maritime pilot strike continues" not in evidence_text
+    assert tj.DELTA_UNCHANGED_CHECKPOINT in evidence_text
+
+
 @pytest.mark.asyncio
 async def test_trajectory_read_refuses_the_query_when_nothing_is_asked_for():
     conn = _TrajectoryConn()
@@ -1077,3 +1188,129 @@ def test_the_cluster_read_projects_severity_so_the_name_can_use_it():
 
     source = inspect.getsource(sc._resolve_pool)
     assert "severity" in source.split("FROM analyst_outputs", 1)[0]
+
+
+# ---------------------------------------------------------------------------
+# H1 — THE REGISTER RENDER: evidence age beside bookkeeping age, and the rule
+# that forbids citing the register as corroboration (CORRECTNESS-R2 M-1).
+# ---------------------------------------------------------------------------
+
+
+def _h1_frame(**over):
+    """The AR frame as it stood at the round's T0, minus whatever the case under
+    test overrides. Numbers are the live-DB values (396 members, intensity
+    59.34, last desk write an hour before T0)."""
+    frame = {
+        "name": "Argentina – maritime pilot strike sustains escalation risk",
+        "status": "dormant",
+        "intensity_score": 22.45,
+        "event_count": 396,
+        "last_event_at": "2026-08-25T17:01:16+00:00",
+        "age_days": 30.0,
+        "last_corroborated_at": "2026-08-21T14:01:09+00:00",
+        "evidence_age_days": 4.21,
+        "corroboration_count": 4,
+        "trajectory_state": "escalating",
+    }
+    frame.update(over)
+    return frame
+
+
+def test_register_line_carries_the_evidence_clock_beside_the_bookkeeping_clock():
+    """Both dates, on the same line, always. The register already printed
+    ``last_event_at`` and a desk read it as a world date — "the latest event
+    timestamp on 20 August 2026" — for a strike that ended on 5 August."""
+    lines = wl._render_situation_register_lines([_h1_frame()], 7)
+    frame_line = next(ln for ln in lines if "::" in ln)
+    assert "last_event_at=2026-08-25T17:01:16+00:00" in frame_line
+    assert "last_corroborated_at=2026-08-21T14:01:09+00:00" in frame_line
+    assert "evidence_age=4.2d" in frame_line
+
+
+def test_a_frame_past_the_horizon_is_labelled_stale():
+    """Past the desk's own 72h slice the frame carries the loud label — the
+    reader-facing half of 'never renders as active intensity'."""
+    line = next(
+        ln for ln in wl._render_situation_register_lines([_h1_frame()], 7)
+        if "::" in ln
+    )
+    assert wl.REGISTER_STALE_LABEL in line
+    assert "status=dormant" in line
+    assert wl.is_stale_frame(_h1_frame()) is True
+
+
+def test_a_freshly_corroborated_frame_is_not_labelled():
+    fresh = _h1_frame(status="active", evidence_age_days=0.4,
+                      last_corroborated_at="2026-08-25T06:00:00+00:00")
+    line = next(
+        ln for ln in wl._render_situation_register_lines([fresh], 7) if "::" in ln
+    )
+    assert wl.REGISTER_STALE_LABEL not in line
+    assert "evidence_age=0.4d" in line
+    assert wl.is_stale_frame(fresh) is False
+
+
+def test_never_corroborated_renders_as_never_not_as_a_borrowed_date():
+    """The honesty line the whole mechanism turns on: a frame the ledger has
+    never moved must NOT borrow ``last_event_at`` for its evidence date. It says
+    NEVER-CORROBORATED, in words.
+
+    This is the fleet's largest class — the 2026-08-27 DQ sweep found 24 of 50
+    non-closed frames here, 22 with no ledger rows at all, all rendering
+    ``active`` at intensity up to 60.9."""
+    old = _h1_frame(last_corroborated_at=None, evidence_age_days=73.0,
+                    corroboration_count=0)
+    line = next(
+        ln for ln in wl._render_situation_register_lines([old], 7) if "::" in ln
+    )
+    assert f"last_corroborated_at={wl.REGISTER_NO_CORROBORATION}" in line
+    assert "2026-08-25T17:01:16" not in line.split("last_corroborated_at=")[1]
+    # OLD and never corroborated is the WORST case, not an exempt one — the
+    # 73-day Saudi frame from the sweep. It carries the stale label too.
+    assert "evidence_age=73.0d" in line
+    assert wl.REGISTER_STALE_LABEL in line
+    assert wl.is_stale_frame(old) is True
+
+
+def test_a_brand_new_frame_is_never_labelled_stale():
+    """The counterweight: a frame materialized an hour ago has not been
+    adjudicated because the tracker runs hourly, not because it is dead. Its
+    evidence anchor is its own opening, so it reads fresh."""
+    fresh = _h1_frame(status="active", last_corroborated_at=None,
+                      evidence_age_days=0.04, corroboration_count=0,
+                      age_days=0.04)
+    line = next(
+        ln for ln in wl._render_situation_register_lines([fresh], 7) if "::" in ln
+    )
+    assert wl.REGISTER_NO_CORROBORATION in line
+    assert wl.REGISTER_STALE_LABEL not in line
+    assert wl.is_stale_frame(fresh) is False
+
+
+def test_the_block_states_the_anti_self_corroboration_rule():
+    """The register is [[ref:N]]-citable, so the standing 'no claim may rest on
+    orientation alone' clause does not reach it. The rule therefore ships INSIDE
+    the block, above the frames it governs."""
+    text = "\n".join(wl._render_situation_register_lines([_h1_frame()], 7))
+    assert wl.REGISTER_SELF_CORROBORATION_RULE in text
+    low = text.lower()
+    assert "never be your evidence that an event is ongoing" in low
+    assert "'confirms'" in low and "'corroborates'" in low
+    assert "product's own bookkeeping" in low
+    # It precedes the frames — a rule printed after the data it governs is a
+    # footnote, and the defect happened in a BLUF.
+    assert text.index(wl.REGISTER_SELF_CORROBORATION_RULE) < text.index("  - Argentina")
+
+
+def test_the_desk_facing_block_carries_the_identical_repair():
+    """The AR escalation desk cited [44][45] — these grounding blocks, not the
+    wire. The unit render is a thin adapter over the SAME helper and the SAME
+    rule constant, so the two surfaces cannot drift."""
+    lines = ug._render_situations([_h1_frame()], 44)
+    text = "\n".join(lines)
+    assert text.startswith("[44] OPEN SITUATION REGISTER")
+    assert wl.REGISTER_SELF_CORROBORATION_RULE in text
+    frame_line = next(ln for ln in lines if "::" in ln)
+    assert "last_corroborated_at=2026-08-21T14:01:09+00:00" in frame_line
+    assert "evidence_age=4.2d" in frame_line
+    assert wl.REGISTER_STALE_LABEL in frame_line

@@ -11,6 +11,8 @@
  *   3 = situation        (situation lifecycle — open → last_event)
  */
 
+import { SEVERITY_COLOR as SEVERITY_RAMP } from '@/v4/world/types'
+
 export interface TLSignal {
   id: string
   title: string
@@ -74,13 +76,14 @@ export interface TimelinePoint {
   severity?: string | null
 }
 
-/** Severity → finding-mark color (matches the Map overlay palette). */
-export const SEVERITY_COLOR: Record<string, string> = {
-  critical: '#ef4444',
-  high: '#f59e0b',
-  medium: '#3b82f6',
-  low: '#10b981',
-}
+/**
+ * Severity → finding-mark color. Re-exported from the ONE severity ramp
+ * (v4/world/types.ts) rather than kept as a fourth private copy — this map had
+ * drifted onto the `accent.*` ramp, where "medium" was blue and "low" was
+ * green, so the same severity read differently on the timeline than on the map
+ * (UI_HOLISTIC_DESIGN_2026-08-24 §5.1).
+ */
+export const SEVERITY_COLOR: Record<string, string> = SEVERITY_RAMP
 
 /** Color for a finding mark — its severity color, else the finding default. */
 export function findingMarkColor(severity: string | null | undefined): string {

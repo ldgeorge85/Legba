@@ -85,7 +85,8 @@ for f in sorted(glob.glob("descriptors/*.yaml")):
             yaml.safe_load(fh)
     except Exception as exc:
         print(f"  DESCRIPTOR PARSE FAIL {f}: {exc}"); bad += 1
-print(f"  validated {len(glob.glob(\"descriptors/*.yaml\"))} descriptors, {bad} bad")
+total = len(glob.glob("descriptors/*.yaml"))
+print(f"  validated {total} descriptors, {bad} bad")
 sys.exit(1 if bad else 0)
 ' 2>&1 | tee -a "${LOG}"; then
     die "descriptor validation"

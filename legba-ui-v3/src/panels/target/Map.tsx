@@ -36,6 +36,7 @@ import { useMapResize } from '@/lib/useMapResize'
 import { useDockviewTileRedraw } from '@/components/useTileRedraw'
 import type { PanelProps } from '@/types'
 import { selectRow, useSelection } from '@/state/selection'
+import { SEVERITY_COLOR as SEVERITY_RAMP } from '@/v4/world/types'
 import {
   buildEntityGeoPoints,
   buildGeoPoints,
@@ -84,13 +85,13 @@ const CLUSTER_LAYER = 'legba-clusters'
 const CLUSTER_COUNT_LAYER = 'legba-cluster-count'
 const POINT_LAYER = 'legba-points-unclustered'
 
-/** Severity → marker color (analyst-output overlay). */
-const SEVERITY_COLOR: Record<string, string> = {
-  critical: '#ef4444', // accent.critical
-  high: '#f59e0b', // accent.warning
-  medium: '#3b82f6', // accent.info
-  low: '#10b981', // accent.ok
-}
+/**
+ * Severity → marker color (analyst-output overlay). The ONE severity ramp
+ * (v4/world/types.ts): this copy had drifted onto the `accent.*` state ramp,
+ * so a "medium" finding plotted blue here and amber on the world map
+ * (UI_HOLISTIC_DESIGN_2026-08-24 §5.1 — one meaning, one channel, one ramp).
+ */
+const SEVERITY_COLOR: Record<string, string> = SEVERITY_RAMP
 const SIGNAL_COLOR = '#60a5fa' // blue-400
 const FINDING_DEFAULT = '#fbbf24' // amber-400
 const ENTITY_COLOR = '#10b981' // emerald-500 (location-class entities)

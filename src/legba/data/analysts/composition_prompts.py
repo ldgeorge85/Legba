@@ -71,6 +71,17 @@ Respond with strict JSON, nothing else: {"title": "...", "body": "...", "confide
 #: on every shown block, so the as-of is taken from the newest of those. Same
 #: zero-new-facts property as the unit form: the date is a copy of rendered
 #: text, never a read of the wall clock.
+#:
+#: H4 — the as-of line used to ask the model to DERIVE its own date/time by
+#: scanning every rendered block for the newest ``produced_at``, and that
+#: arithmetic drifted: an IR read claimed "latest 01:40 UTC" against heads the
+#: render actually showed produced at 16-17 UTC
+#: (``planning/PROOF_ROUND_2026-08-25/VERDICT_DRAFT.md``). The rule now
+#: prefers the deterministic ``EVIDENCE WINDOW`` block
+#: (``composition_window.render_evidence_window_directive``, computed from the
+#: SAME consumed rows) when it is shown — a COPY, never a re-derivation — and
+#: only falls back to the old scan-the-blocks wording when that block is
+#: absent (an unmeasured window: no consumed row carried a parsable date).
 def _composition_as_of(read_noun: str) -> str:
     """The composition AS-OF rule, worded for ONE variant's block noun.
 
@@ -83,11 +94,16 @@ def _composition_as_of(read_noun: str) -> str:
     """
     return as_of_rule(
         f"'*As of <date>; composed from <N> {read_noun} reads, "
-        "latest <time>.*'. Take the date and time from the MOST RECENT "
+        "latest <time>.*'. When an EVIDENCE WINDOW block is shown below, its "
+        "<date> and <time> ARE your as-of line's <date> and <time> — copy "
+        "them verbatim, never recompute them; that block also states the "
+        "TRUE span your consumed reads cover, so when it names a span longer "
+        "than one day, say so in the same line exactly as stated there "
+        "('reads span 1-3 August'), never a span you derive yourself. When NO "
+        "EVIDENCE WINDOW block is shown, fall back to the MOST RECENT "
         "produced_at printed on a shown block — rendered as a human calendar "
-        "date and time, never as the raw ISO/microsecond value — and take the "
-        "count from the blocks actually shown. If the shown blocks span more "
-        "than a day, say so in the same line ('reads span 1-3 August')."
+        "date and time, never as the raw ISO/microsecond value. Either way, "
+        "take the <N> count from the blocks actually shown."
     )
 
 
@@ -137,7 +153,25 @@ def _continuity_rule(letter: str, *, read_noun: str) -> str:
         "and never upgrade, downgrade, or re-date it beyond what the register "
         "shows. The register's intensity score and event_count are internal "
         "instrument readings: USE them to decide, never PRINT them, and never "
-        "promote a NEGATIVE finding into a named 'situation frame'. NEVER assert "
+        "promote a NEGATIVE finding into a named 'situation frame'. "
+        # H1 — the anti-self-corroboration rule. The register block states it
+        # too (REGISTER_SELF_CORROBORATION_RULE, rendered at the head of the
+        # block itself); it is repeated in the OBLIGATIONS because the round's
+        # worst read broke it in the BLUF, where a model is furthest from the
+        # block and closest to its own summary voice. The register is
+        # [[ref:N]]-citable, so the standing "no claim may rest on orientation
+        # alone" clause does not reach it — that exemption IS the bug this
+        # sentence closes.
+        "The register is the SYSTEM'S OWN BOOKKEEPING and is NEVER "
+        "corroboration for a claim about the world: you may cite it for what "
+        "the system currently holds, but a register frame — its intensity, its "
+        "event count, its last_event_at, or its mere presence — may NEVER be "
+        "your evidence that an event is ongoing, current, or confirmed. Do not "
+        "write that the register 'confirms' or 'corroborates' anything. A frame "
+        "whose last_corroborated_at is stale, or marked "
+        "STALE-NO-NEW-EVIDENCE, is a standing QUESTION and not a live event; "
+        "if you lead on it you must say in the same sentence how old its last "
+        "corroborating evidence is. NEVER assert "
         "continuity of ANY kind — an escalation, a "
         "de-escalation, a trend, an 'ongoing'/'longstanding' framing, or that "
         "something has 'been building' — unless it is grounded in the cited PRIOR "

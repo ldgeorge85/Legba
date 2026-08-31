@@ -1,0 +1,285 @@
+# Legba release manifest
+# Generated: 2026-08-30T20:47:56Z
+# Git commit: f55310e9
+# Git tag:    (untagged)
+
+## image digests (resolved sha256; '<not-pulled>' = image absent locally)
+apache/age@sha256:4241e2d8bb86a6b2ea44e9ad06c73856e12b209de295124603a599dd7feb70eb  apache/age@sha256:4241e2d8bb86a6b2ea44e9ad06c73856e12b209de295124603a599dd7feb70eb
+binwiederhier/ntfy:latest  binwiederhier/ntfy@sha256:081b53dbb20674fcfe05fdb4eb8af9036a2645ef979543d16f7f80803af467b1
+busybox:latest  busybox@sha256:fd8d9aa63ba2f0982b5304e1ee8d3b90a210bc1ffb5314d980eb6962f1a9715d
+caddy:2-alpine  caddy@sha256:fce4f15aad23222c0ac78a1220adf63bae7b94355d5ea28eee53910624acedfa
+daprio/dapr:1.17.9  daprio/dapr@sha256:5723fe7dfed9b98b2e42996abb5748a94bac95ec71465e7326abcfd070ff7c4d
+diygod/rsshub:latest  diygod/rsshub@sha256:258778e333004ec7e5dce066d24e9ffb0236a9c0b76ebd2549382427d6b8a2a2
+legba/legba-dapr-workflow-worker:latest  legba/legba-dapr-workflow-worker@sha256:581295bcf5974786b88f9bad5c4782bbfb964282f5d7d171fa807bac8435288e
+legba/legba-mcp:latest  legba/legba-mcp@sha256:7f395ad2bd5b60e2c2e6e0d02af6a87da8887892084bb1accc9fea1c3b9054ec
+legba/legba-media:latest  <not-pulled>
+legba/legba-registry:latest  legba/legba-registry@sha256:dddb7a18e30b83170fc5355439f8bc157d3fd7114c583d57f69c5b9141d3d083
+legba/legba-runtime-dapr:latest  legba/legba-runtime-dapr@sha256:819606e5588a235985d0ce10d12af6810f4c85e5e0f4b9eb1866033dcb910cbf
+legba/legba-ui-build:latest  legba/legba-ui-build@sha256:ed558be77695cc9da2e1b99a6da4dc0384ea6e764f4446135f9505b0c69df92f
+nats:2-alpine  nats@sha256:31c6ed3b2da61645aaa3ad9217b5a52b34b6ebd555ecb71259cd7723c59ae1ea
+opensearchproject/opensearch:2.19.4  opensearchproject/opensearch@sha256:9e0b3b3b6805811bd63d9b9503ffe34a58ba33d03cc346000e318c6ff5c05bd9
+postgres:16-alpine  postgres@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
+qdrant/qdrant:v1.16.3  qdrant/qdrant@sha256:0425e3e03e7fd9b3dc95c4214546afe19de2eb2e28ca621441a56663ac6e1f46
+redis:7-alpine  redis@sha256:02f2cc4882f8bf87c79a220ac958f58c700bdec0dfb9b9ea61b62fb0e8f1bfcf
+searxng/searxng:latest  searxng/searxng@sha256:d0aaeb14880e6e92bde1518fcc7261e995783367d63d95203383607bef9c6516
+
+## pip freeze (from legba/legba-runtime-dapr:latest)
+adagio==0.2.6
+aiobotocore==3.9.0
+aiohappyeyeballs==2.7.1
+aiohttp==3.14.3
+aioitertools==0.13.0
+aiosignal==1.4.0
+annotated-doc==0.0.5
+annotated-types==0.8.0
+antlr4-python3-runtime==4.13.2
+anyio==4.14.2
+asyncpg==0.31.0
+attrs==26.1.0
+babel==2.18.0
+botocore==1.43.56
+certifi==2026.7.22
+cffi==2.1.1
+charset-normalizer==3.5.1
+click==8.4.2
+cloudpickle==3.1.2
+contourpy==1.3.3
+coreforecast==0.0.18
+courlan==1.4.0
+croniter==6.2.4
+cryptography==50.0.0
+cycler==0.12.1
+dapr==1.18.3
+dapr-ext-fastapi==1.18.3
+dapr-ext-workflow==1.18.3
+dateparser==1.4.2
+Events==0.5
+fastapi==0.141.1
+feedparser==6.0.14
+feedparser-sgmllib==2.1.0
+fonttools==4.63.0
+frozenlist==1.8.0
+fsspec==2026.7.0
+fugue==0.9.7
+geographiclib==2.1
+geopy==2.5.0
+googleapis-common-protos==1.75.2
+grpcio==1.83.0
+grpcio-status==1.83.0
+h11==0.16.0
+h2==4.4.1
+hiredis==3.4.1
+hpack==4.2.0
+htmldate==1.10.0
+httpcore==1.0.9
+httpcore2==2.12.0
+httptools==0.8.0
+httpx==0.28.1
+httpx2==2.12.0
+hyperframe==6.1.0
+idna==3.19
+Jinja2==3.1.6
+jmespath==1.1.0
+joblib==1.5.3
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+jusText==3.0.2
+kiwisolver==1.5.0
+langdetect==1.0.9
+legba @ file:///build
+llvmlite==0.49.0
+lxml==6.1.2
+lxml_html_clean==0.4.5
+MarkupSafe==3.0.3
+matplotlib==3.11.1
+mcp==2.1.1
+mcp-types==2.1.1
+multidict==6.7.1
+narwhals==2.25.0
+nats-py==2.15.0
+networkx==3.6.1
+numba==0.67.0
+numpy==2.4.6
+opensearch-protobufs==1.2.0
+opensearch-py==3.2.0
+opentelemetry-api==1.44.0
+packaging==26.3
+pandas==2.3.3
+patsy==1.0.2
+pillow==12.3.0
+portalocker==3.2.0
+propcache==0.5.2
+protobuf==7.36.0
+pyaes==1.6.1
+pyarrow==25.0.1
+pyasn1==0.6.4
+pycountry==26.2.16
+pycparser==3.0
+pydantic==2.13.4
+pydantic_core==2.46.4
+PyJWT==2.13.0
+PyNaCl==1.6.2
+pyod==3.6.5
+pyparsing==3.3.2
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.3
+python-multipart==0.0.32
+pytz==2026.3.post1
+PyYAML==6.0.3
+qdrant-client==1.19.0
+redis==8.1.0
+referencing==0.37.0
+regex==2026.7.19
+requests==2.34.2
+rpds-py==2026.6.3
+rsa==4.9.1
+scikit-learn==1.9.0
+scipy==1.17.1
+simplejson==4.1.1
+six==1.17.0
+sse-starlette==3.4.8
+starlark-pyo3==2026.1.1
+starlette==1.6.0
+statsforecast==2.1.1
+statsmodels==0.14.6
+stix2==3.0.2
+stix2-patterns==2.1.2
+Telethon==1.44.0
+threadpoolctl==3.6.0
+tld==0.13.2
+tqdm==4.70.0
+trafilatura==2.2.0
+triad==1.0.2
+truststore==0.10.4
+typing_extensions==4.16.0
+typing-inspection==0.4.4
+tzdata==2026.3
+tzlocal==5.4.4
+urllib3==2.7.0
+utilsforecast==0.2.16
+uvicorn==0.52.4
+uvloop==0.22.1
+warcio==1.8.1
+watchfiles==1.2.0
+websockets==17.0.1
+wrapt==2.3.0
+yarl==1.24.5
+
+## UI lockfile baseline (package-lock.json sha256)
+cd936be49bfc73767efce3e62391bc7c6895c5b9aba024c275f88d9c6eef3429  legba-ui-v3/package-lock.json
+
+## migration baseline (data-migration files; ledger HEAD is verified at deploy)
+0001_baseline.sql
+0032_facts_decay_columns.sql
+0033_nexuses.sql
+0034_seed_batches.sql
+0035_entity_profiles_composite_key.sql
+0036_signals_retention.sql
+0037_age_output_label.sql
+0038_hypotheses_resolved_outcome.sql
+0039_consult_sessions.sql
+0040_situations_first_class.sql
+0041_situations_valid_from_repair.sql
+0042_situations_target_id_backfill.sql
+0043_ingestion_conf1_backfill.sql
+0044_purge_ingestion_leader_junk.sql
+0045_backfill_demonym_nexuses.sql
+0046_source_poll_outcomes.sql
+0047_acute_forecasts.sql
+0048_journal.sql
+0049_facts_collapse_dup_open.sql
+0050_receipt_chain_fork_tombstone.sql
+0051_prune_dangling_derived_from.sql
+0052_remediation_data_cleanup.sql
+0053_retire_template_junk_sources.sql
+0054_facts_source_credibility.sql
+0055_fact_contention.sql
+0056_prune_dangling_derived_from_v2.sql
+0057_unit_reference_labels.sql
+0058_composition_supersession_fold.sql
+0059_critique_analyzed_output_id_index.sql
+0060_fold_null_target_composition_heads.sql
+0061_channel_delivery_audit.sql
+0062_strip_publisher_origin_geo.sql
+0063_entity_merge.sql
+0064_close_stale_seed_leaders.sql
+0065_close_junk_ingestion_facts.sql
+0066_recompute_manufactured_confidence.sql
+0067_close_sports_crime_hostile_nexuses.sql
+0068_close_contaminated_leadership_nexuses.sql
+0069_normalize_reltype_casing.sql
+0070_close_mistyped_vendor_entity_rows.sql
+0071_dormant_steady_state_situations.sql
+0072_close_null_target_snapshot_situations.sql
+0073_align_resolved_active_hypotheses.sql
+0074_world_head_signature_repair.sql
+0075_void_pre_clamp_acute_forecasts.sql
+0076_entity_refold_and_junk.sql
+0077_close_semantic_junk_facts.sql
+0078_nexus_junk_and_canonicalize.sql
+0079_cross_correlator_stale_sweep.sql
+0080_state_media_credibility_and_cross_target_mislabel.sql
+0081_signal_summarized_marker.sql
+0082_signal_indexed_marker.sql
+0083_reindex_summarized_signals.sql
+0084_signal_embedding_marker.sql
+0085_signal_reenriched_marker.sql
+0086_entity_researcher_schema.sql
+0087_close_resistance_snsc_fragment_nexuses.sql
+0088_entity_blocking_infra.sql
+0089_signal_salience_schema.sql
+0090_journal_entries_data_column.sql
+0091_alert_trigger_watermarks.sql
+0092_source_poll_newest_entry_ts.sql
+0093_band_calibration_claims.sql
+0094_source_assurance_ledger.sql
+0096_correctness_labels.sql
+0097_contention_surfacing.sql
+0098_fact_decay_states.sql
+0099_source_track_records.sql
+0101_analyst_traces_retention.sql
+0102_narratives.sql
+0103_desk_baselines.sql
+0104_evidence_archive.sql
+0105_watchlist.sql
+0106_output_consumption.sql
+0107_review_flags_bearing_edges.sql
+0108_entity_block_key_leading_articles.sql
+0109_retention_policies.sql
+0112_retrieval_origin.sql
+0113_collection_requirements.sql
+0114_source_poll_outcome_success.sql
+0115_source_quality_ledger.sql
+0116_bearing_edges_data.sql
+0117_soft_close_prefix_relational_facts.sql
+0118_strip_telegram_widget_archived_text.sql
+0119_drop_entity_alias.sql
+0120_soft_close_poisoned_journal_rows.sql
+0121_retire_gdelt_doc_api.sql
+0122_band_calibration_judge_pipeline_version.sql
+0130_quarantine_subfloor_embeddings.sql
+0140_signal_last_seen_at.sql
+0141_backfill_frozen_apnews_fetched_at.sql
+0142_backfill_gdelt_fips_geo.sql
+0143_entity_edges.sql
+0144_backfill_entity_edges_from_nexuses.sql
+0145_backfill_entity_edges_from_promoted_edges.sql
+0150_drop_age_smoke_fixtures.sql
+0160_retire_below_bar_proposed_edges.sql
+0165_entity_person_phonetic_index.sql
+0170_correctness_axis_promotion.sql
+0175_corpus_tombstones.sql
+0176_soft_close_capital_metonymy_facts.sql
+0180_backfill_entity_edges_from_facts.sql
+0182_adjudicate_parked_edge_endpoints.sql
+0184_situation_events.sql
+0185_repoint_proposed_edges_onto_merge_keepers.sql
+0186_analyst_traces_prompt_sha256.sql
+0187_band_calibration_semantics_migration.sql
+0188_situation_mega_frame_split.sql
+0189_read_events.sql
+# Ledger table: legba_data_migrations  (verify applied set per RUNBOOK §3)
+
+## smoke verification
+# Re-verify a deployed stack against this manifest with:
+#   bash scripts/release_smoke.sh

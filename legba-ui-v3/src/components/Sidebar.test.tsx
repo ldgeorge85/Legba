@@ -313,6 +313,53 @@ describe('Sidebar — raw Targets/Analysts nest inside Engine Room (U-3 §2)', (
   })
 })
 
+describe('Sidebar — the catalog is FOLDED (UI_HOLISTIC_DESIGN_2026-08-24)', () => {
+  it('opens as five verb rows, all collapsed — not a thirty-six-row catalog', async () => {
+    renderSidebar()
+    await screen.findByTestId('nav-desk-BR')
+    for (const id of ['awareness', 'investigation', 'analysis', 'products', 'operations']) {
+      expect(screen.getByTestId(`nav-group-${id}`), id).toHaveAttribute('aria-expanded', 'false')
+    }
+    // Nothing from the panel catalog is in the DOM until a row is opened.
+    expect(screen.queryByText('Live Feed')).not.toBeInTheDocument()
+    expect(screen.queryByText('The Wall')).not.toBeInTheDocument()
+  })
+
+  it('Desks stays open — the one content-shaped section is the keystone, not a catalog', async () => {
+    renderSidebar()
+    await screen.findByTestId('nav-desk-BR')
+    expect(screen.getByTestId('nav-group-desks')).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('each folded row says how much is behind it', async () => {
+    renderSidebar()
+    await screen.findByTestId('nav-desk-BR')
+    // The count is the fold's honesty: a collapsed row that hides an unknown
+    // number of surfaces is how the catalog got unusable in the first place.
+    expect(screen.getByTestId('nav-group-awareness').textContent).toMatch(/Awareness \(\d+\)/)
+    expect(screen.getByTestId('nav-group-operations').textContent).toMatch(/Engine Room \(\d+\)/)
+  })
+
+  it('one click opens a verb row and every one of its panels is still reachable', async () => {
+    renderSidebar()
+    await screen.findByTestId('nav-desk-BR')
+    fireEvent.click(screen.getByTestId('nav-group-awareness'))
+    expect(screen.getByTestId('nav-group-awareness')).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Live Feed')).toBeInTheDocument()
+    expect(screen.getByText('The Wall')).toBeInTheDocument()
+    expect(screen.getByText('Inspector')).toBeInTheDocument()
+  })
+
+  it('the fold is a DEFAULT, not a forced state — a saved collapse list still wins', async () => {
+    // An operator who had Awareness open before this change keeps it open.
+    localStorage.setItem(COLLAPSE_KEY, JSON.stringify(['operations']))
+    renderSidebar()
+    await screen.findByTestId('nav-desk-BR')
+    expect(screen.getByTestId('nav-group-awareness')).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByTestId('nav-group-operations')).toHaveAttribute('aria-expanded', 'false')
+  })
+})
+
 describe('Sidebar — legba_nav_collapsed persistence survives the new group', () => {
   it('a fresh install (no saved state) boots with Desks expanded', async () => {
     renderSidebar()

@@ -274,6 +274,18 @@ def create_app(
     from .judge_stats_api import build_judge_stats_router
     app.include_router(build_judge_stats_router(deps), prefix="/api/v1/v3")
 
+    # D5 — the STANDING EXTERNAL AUDIT. The judge-stats route above measures how
+    # well we grade OURSELVES; this one is the only surface reporting a check
+    # against the world outside the substrate. Two things live here that live
+    # nowhere else: the auditor's own heartbeat (a run can end
+    # `status='success'` having audited nothing, so `analyst_traces` cannot say
+    # whether the auditor is actually working — the judge-outage shape), and the
+    # CONTRADICTED verdicts, named individually because they are rare by
+    # construction and each one is an operator event. Read-only over
+    # `analyst_outputs` critiques + the 0091 watermark row; no migration.
+    from .external_audit_api import build_external_audit_router
+    app.include_router(build_external_audit_router(deps), prefix="/api/v1/v3")
+
     # Continuity P2 — the situation TRAJECTORY ledger read. Additive route, no
     # panel (the UI is Phase 3); it is what the situation_escalation alert links
     # to, and what makes "how did this frame get here" answerable without
@@ -430,6 +442,16 @@ def create_app(
     from .deep_consult_api import build_deep_consult_router
     app.include_router(
         build_deep_consult_router(deps), prefix="/api/v1",
+    )
+
+    # Read telemetry (D2e) — the ONE plane that receipts a READ rather than a
+    # write. Ingest (POST /read-events) is append-only into migration 0189 and
+    # deliberately joins nothing; the rollup (GET /read-events/rollup) is the
+    # oracle wager's scoreboard. See read_events_api.py and
+    # planning/CAMPAIGN_2026-08-29/PREMISE_REASON_TO_EXIST.md §5 Option 1.
+    from .read_events_api import build_read_events_router
+    app.include_router(
+        build_read_events_router(deps), prefix="/api/v1",
     )
 
     # Prometheus /metrics exposition (resilience P2). App-level, no prefix

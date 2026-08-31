@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Mapping
 from uuid import UUID, uuid4
 
@@ -52,6 +53,7 @@ from legba.data.analysts.meta_findings_synthesizer import (
     read_other_analyst_findings,
     run_method,
 )
+from legba.data.analysts.output_contract import OutputContractError
 from legba.data.config import PostgresConfig
 from legba.data.provenance import (
     AnalystContext,
@@ -432,6 +434,153 @@ def test_coerce_finding_evidence_keeps_only_resolvable_identifiers():
     })
     f = _coerce_finding(raw, fallback_title="fb", contributing_analysts=["a"])
     assert f.evidence == ["https://www.aa.com.tr/en/middle-east/mapping-sudan", str(fid)]
+
+
+# ---------------------------------------------------------------------------
+# THE JSON-ENVELOPE LEAK (2026-08-29), on the REAL binding path.
+#
+# The world composition of 2026-08-29 12:00Z
+# (analyst_outputs 823ff9dd-89b9-47f9-9c7e-8c9cc631e31d) published a body that
+# WAS its JSON wrapper — `{ "title": "Russia mobilization heightens European
+# escalation risk…", "body": "*As of 29 August 2026;…` — because the model
+# invented an unrequested `body_additional_sections` key and emitted it
+# malformed. json.loads raised on the sixth key and the fail-safe branch stored
+# `body=raw`. Downstream, the faithfulness judge segmented the blob into 2
+# checkable claims against the healthy 00:00Z run's 13, and the finding shipped
+# at confidence 0.30.
+#
+# These assert through `_coerce_finding` — the function `_run` actually calls at
+# REFLECT, imported from `meta_findings_synthesizer` (its real binding surface,
+# re-exported from `composition_coercion`) — so a regression that re-anchors the
+# degrade on `body=raw` is a red test.
+# ---------------------------------------------------------------------------
+
+_ENVELOPE_LEAK_FIXTURES = (
+    Path(__file__).parent / "fixtures" / "json_envelope_leak"
+)
+
+#: The exact raw completion behind 823ff9dd, byte-for-byte from the live row.
+_LEAKED_RAW = (
+    _ENVELOPE_LEAK_FIXTURES / "world_assessor_823ff9dd__leaked.txt"
+).read_text(encoding="utf-8")
+
+#: The 00:00Z run's contract, rebuilt from the healthy row it produced.
+_HEALTHY_RAW = (
+    _ENVELOPE_LEAK_FIXTURES / "world_assessor_6c217274__healthy.json"
+).read_text(encoding="utf-8")
+
+
+def test_live_envelope_leak_coerces_to_markdown_not_the_wrapper():
+    """The exact 823ff9dd completion, replayed through the render path: the body
+    is the model's MARKDOWN and the title is its real headline — never the
+    `{ "title": …` wrapper that actually shipped."""
+    expected_body = (
+        _ENVELOPE_LEAK_FIXTURES / "world_assessor_823ff9dd__unwrapped.md"
+    ).read_text(encoding="utf-8")
+
+    f = _coerce_finding(
+        _LEAKED_RAW,
+        fallback_title="Synthesis across 2 analyst(s)",
+        contributing_analysts=["region_composition", "escalation_composition"],
+    )
+
+    assert f.body == expected_body
+    assert f.title == (
+        "Russia mobilization heightens European escalation risk amid global hotspots"
+    )
+    # The exact shipped symptom, now impossible.
+    assert not f.body.lstrip().startswith("{")
+    assert '"body":' not in f.body
+    assert f.title != "Synthesis across 2 analyst(s)"
+    # The judge's segmentation markers survive the unwrap.
+    assert f.body.count("[[ref:") >= 5
+
+
+def test_live_envelope_leak_stays_a_degrade_so_downstream_filters_do_not_move():
+    """A salvaged finding is still a DEGRADE. It keeps the `unstructured` tag and
+    the 0.30 confidence, so every predicate keyed on
+    `data->'tags' ?| array['unstructured','coerce_failed']` — the composition
+    admissibility floor, the window ledger, the tiered-evidence periphery — sees
+    the population it saw before the fix. Only the BODY changes."""
+    f = _coerce_finding(
+        _LEAKED_RAW,
+        fallback_title="Synthesis across 2 analyst(s)",
+        contributing_analysts=["region_composition"],
+    )
+    assert "unstructured" in f.tags
+    assert "meta" in f.tags
+    assert f.confidence == 0.3
+    # The salvage is RECORDED, without moving any of those predicates.
+    assert "envelope_salvaged" in f.tags
+    assert f.data.get("envelope_salvaged") is True
+    # The trace still carries what the model actually said.
+    assert f.data["raw_llm_response"].startswith("{")
+    assert f.data.get("meta") is True
+
+
+def test_healthy_run_shape_is_byte_unchanged_by_the_fix():
+    """The 00:00Z-shaped response — a well-formed envelope — takes the ordinary
+    json.loads path and is untouched: same body, title, confidence and tags, and
+    none of the degrade markers. The fix must not cost the healthy path a byte."""
+    contract = json.loads(_HEALTHY_RAW)
+
+    f = _coerce_finding(
+        _HEALTHY_RAW,
+        fallback_title="Synthesis across 2 analyst(s)",
+        contributing_analysts=["region_composition"],
+    )
+
+    assert f.body == contract["body"]
+    assert f.title == contract["title"]
+    assert f.confidence == contract["confidence"]
+    assert f.tags == [*contract["tags"], "meta"]
+    assert "unstructured" not in f.tags
+    assert "coerce_failed" not in f.tags
+    assert "envelope_salvaged" not in f.tags
+    assert f.data.get("envelope_salvaged") is None
+
+
+@pytest.mark.parametrize(
+    "raw,label",
+    [
+        (_LEAKED_RAW[:1200], "truncated mid-body string"),
+        ('{\n  "title": "T",\n  "body": "a complete world read",\n  "tags": ["esc',
+         "object never closes"),
+        ('{\n  "action": "search_corpus",\n  "query": "Hormuz",\n  "size": 5\n}',
+         "tool-call JSON, no finding in it"),
+    ],
+)
+def test_ambiguous_envelope_fails_loud_rather_than_publishing_or_dropping(raw, label):
+    """No silent publish of raw JSON, and no silent drop of a cycle either:
+    OutputContractError propagates out of `_coerce_finding` (and out of `_run`,
+    which does not catch it) into the actor's kind_contracts §7 classification,
+    where the cycle lands in the DLQ and a human sees it."""
+    with pytest.raises(OutputContractError):
+        _coerce_finding(
+            raw,
+            fallback_title="Synthesis across 2 analyst(s)",
+            contributing_analysts=["region_composition"],
+        )
+
+
+def test_prose_completion_still_degrades_to_a_finding_unchanged():
+    """D27's plain-markdown path is preserved exactly: a model that answers in
+    prose instead of JSON is a formatting miss over real analysis, and prose IS
+    content. It must never be turned into a failure by the envelope rule."""
+    prose = (
+        "*As of 29 August 2026.*\n\n**BLUF:** Myanmar's repression continues "
+        "[[ref:1]].\n\n## The picture\nNothing material changed [[ref:1]]."
+    )
+    f = _coerce_finding(
+        prose,
+        fallback_title="fb-title",
+        contributing_analysts=["analyst.x"],
+    )
+    assert f.body == prose
+    assert f.title == "fb-title"
+    assert "unstructured" in f.tags
+    assert "envelope_salvaged" not in f.tags
+    assert f.confidence == 0.3
 
 
 # ---------------------------------------------------------------------------

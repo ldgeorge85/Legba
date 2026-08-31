@@ -150,10 +150,39 @@ async def api_app(migrated_pg: PostgresConfig):
     app.state.registry_deps = deps
     app.include_router(build_router(deps), prefix="/api/v1/registry")
 
-    yield app, deps, pg_store
+    # SCOPED TEARDOWN (2026-08-30 release-gate train). The tests below REGISTER
+    # source descriptors into the session-shared DB and used to leave them
+    # there. `collection_requirements._match_candidate_sources` reads
+    # `source_descriptors` GLOBALLY — every `is_head` row whose
+    # `scope.source_class` is a wanted class joins its candidate set — so those
+    # leftovers put all 11 tests in `test_collection_requirements.py` into
+    # setup-ERROR against that file's own foreign-head tripwire (the 08-29
+    # shuffle train's guard, which names the leaked descriptor_ids rather than
+    # wiping them: an unscoped delete THERE would only move the pollution).
+    # This is the retire-where-it-is-written half of that contract.
+    #
+    # Snapshot-and-diff rather than a `WHERE owner = 'lewis@local'` predicate:
+    # a dozen other files share that owner string, so an owner-scoped delete
+    # would itself be an unscoped wipe. This removes exactly the descriptor_ids
+    # that appeared while this test ran, whatever they were named.
+    async with pg_store.acquire() as conn:
+        before = {
+            r["descriptor_id"]
+            for r in await conn.fetch("SELECT descriptor_id FROM source_descriptors")
+        }
 
-    await descriptor_registry.stop()
-    await pg_store.close()
+    try:
+        yield app, deps, pg_store
+    finally:
+        try:
+            async with pg_store.acquire() as conn:
+                await conn.execute(
+                    "DELETE FROM source_descriptors WHERE descriptor_id <> ALL($1)",
+                    list(before),
+                )
+        finally:
+            await descriptor_registry.stop()
+            await pg_store.close()
 
 
 @pytest_asyncio.fixture

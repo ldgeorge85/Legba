@@ -136,10 +136,19 @@ def test_prompt_contract_severity_and_citation():
 
 
 def test_grounding_block_on_and_scoped():
+    """REGISTER-1g (2026-08-29) — `situations` LEFT this set, deliberately.
+
+    This unit is `kind: inline_target`, so `actor_substrate_slice` already hands
+    it the desk's OPEN SITUATION REGISTER as a citable [N] block carrying the H1
+    render repair (evidence age, NEVER/STALE labels, the self-corroboration
+    rule). The `situations` SOURCE produced a SECOND, UNGUARDED copy of the same
+    frames in the same context window. The register still reaches this desk — by
+    the kind, not by the descriptor — so this is a dedupe, not a loss.
+    """
     g = _raw_body(_UNIT_FILE)["grounding"]
     assert g["enabled"] is True
     assert g["scope"] == ["target_geo", "slice_entities"]
-    assert set(g["sources"]) == {"substrate", "situations", "graph_structure"}
+    assert set(g["sources"]) == {"substrate", "graph_structure"}
 
 
 def test_broad_unit_runs_on_blanket_predicate():

@@ -702,6 +702,21 @@ def test_composition_prompt_states_the_as_of_rule(name: str, prompt: str) -> Non
     assert "ZERO NEW FACTS" in prompt, name
 
 
+@pytest.mark.parametrize("name,prompt", COMPOSITION_PROMPTS)
+def test_composition_prompt_prefers_the_evidence_window_directive(
+    name: str, prompt: str,
+) -> None:
+    """H4 — the as-of line's date/time is COPIED from the deterministic
+    EVIDENCE WINDOW block when one is shown, never re-derived by scanning
+    every rendered block (the arithmetic step that produced a self-
+    inconsistent stamp — a claimed "latest 01:40 UTC" against heads the render
+    actually showed produced at 16-17 UTC). The old scan-the-blocks wording
+    survives ONLY as the fallback for an unmeasured window."""
+    assert "EVIDENCE WINDOW" in prompt, name
+    assert "copy them verbatim, never recompute them" in prompt, name
+    assert "When NO EVIDENCE WINDOW block is shown" in prompt, name
+
+
 # ---------------------------------------------------------------------------
 # The verify seam — two sections the new shape adds on EVERY finding
 # ---------------------------------------------------------------------------

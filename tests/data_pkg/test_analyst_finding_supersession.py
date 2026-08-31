@@ -60,19 +60,69 @@ def test_derive_signature_explicit_id_wins():
 
 
 def test_derive_signature_topic_level_and_order_invariant():
-    # Signatures are TOPIC-LEVEL (entity K=0) so findings about the same
-    # evolving event cluster even as their entity tails churn — the lifecycle
-    # decay then makes the situation breathe. Still entity-gated + case-folded.
+    # Signatures are TOPIC-LEVEL WITHIN A DIMENSION (entity K=0) so findings
+    # about the same evolving event cluster even as their entity tails churn —
+    # the lifecycle decay then makes the situation breathe. Still entity-gated +
+    # case-folded. The `#dim:` tail is #64: the topic no longer names the frame
+    # on its own, the topic PLUS the producing dimension does.
     a = finding_supersession.derive_signature(
-        {"category": "Conflict", "actors": ["Russia", "Ukraine"]})
+        {"category": "Conflict", "actors": ["Russia", "Ukraine"]},
+        analyst_id="military_posture")
     b = finding_supersession.derive_signature(
-        {"category": "conflict", "actors": ["ukraine", "RUSSIA"]})
-    assert a == b == "sig:conflict"
-    # Different entity lists, SAME topic → SAME signature (the loosening that
-    # makes situations actually form, vs the old full-entity-set key).
+        {"category": "conflict", "actors": ["ukraine", "RUSSIA"]},
+        analyst_id="military_posture")
+    assert a == b == "sig:conflict#dim:military_posture"
+    # Different entity lists, SAME topic + SAME dimension → SAME signature (the
+    # loosening that makes situations actually form, vs the old full-entity-set
+    # key).
     c = finding_supersession.derive_signature(
-        {"category": "conflict", "actors": ["NATO", "Poland"]})
-    assert c == "sig:conflict"
+        {"category": "conflict", "actors": ["NATO", "Poland"]},
+        analyst_id="military_posture")
+    assert c == "sig:conflict#dim:military_posture"
+
+
+def test_derive_signature_separates_the_dimensions_of_one_desk():
+    """THE #64 REPAIR, at its source. Two of a desk's units, same country
+    category, same entities — one frame each, not one frame between them.
+
+    The pre-#64 key collapsed them, and because ``situations`` is keyed
+    ``(signature, analyst_id)`` on the CLUSTERING handler's id (one value
+    fleet-wide), the collapse reached all the way to the stored frame: every desk
+    fleet-wide had exactly one open situation."""
+    payload = {"category": "country_g20_ar", "actors": ["Argentina"]}
+    posture = finding_supersession.derive_signature(
+        payload, analyst_id="military_posture")
+    stability = finding_supersession.derive_signature(
+        payload, analyst_id="internal_stability")
+    assert posture == "sig:country_g20_ar#dim:military_posture"
+    assert stability == "sig:country_g20_ar#dim:internal_stability"
+    assert posture != stability
+    # The topic — and therefore the country home `_target_for_category` resolves
+    # `situations.target_id` from — survives the re-key intact.
+    assert finding_supersession.strip_dimension(posture) == "sig:country_g20_ar"
+    assert finding_supersession.signature_dimension(posture) == "military_posture"
+
+
+def test_dimension_helpers_are_idempotent_and_leave_explicit_keys_alone():
+    """`with_dimension` runs on stored keys of unknown vintage on every live
+    tick, so applying it twice must not build `#dim:a#dim:b`; and an explicit
+    `sit:` key belongs to its producer already and is never dimensioned."""
+    once = finding_supersession.with_dimension("sig:conflict", "narrative")
+    assert finding_supersession.with_dimension(once, "military_posture") == once
+    explicit = "sit:composition:country_composition:country_g20_ar"
+    assert finding_supersession.with_dimension(explicit, "narrative") == explicit
+    assert finding_supersession.signature_dimension(explicit) is None
+    assert finding_supersession.strip_dimension(explicit) == explicit
+    # A producer we were not told about is UNATTRIBUTED — a real bucket, not a
+    # silent fold into somebody else's dimension.
+    assert finding_supersession.with_dimension("sig:x", None) == (
+        f"sig:x#dim:{finding_supersession.UNATTRIBUTED_DIMENSION}"
+    )
+    # The token can never counterfeit either separator, so a signature always
+    # round-trips.
+    hostile = finding_supersession.with_dimension("sig:x", "  Weird#Dim|Name  ")
+    assert finding_supersession.signature_dimension(hostile) == "weird_dim_name"
+    assert finding_supersession.strip_dimension(hostile) == "sig:x"
 
 
 def test_derive_signature_none_without_entities():
@@ -111,11 +161,13 @@ def test_narrate_lifts_entities_enabling_signature():
     # payload.model_dump) to derive_signature — the nested-read finds the inner
     # entities and the previously-None signature now derives.
     dump = narrated.model_dump(mode="python")
-    sig = finding_supersession.derive_signature(dump)
+    sig = finding_supersession.derive_signature(dump, analyst_id="country_assessor")
     assert sig is not None
     # Topic-level signature (entity K=0) — keyed on the assessor's category
-    # (= target_id), so successive Argentina findings cluster as one situation.
-    assert sig == "sig:country_g20_ar"
+    # (= target_id) AND its producing dimension (#64), so successive Argentina
+    # findings from THIS unit cluster as one situation while a sibling unit's
+    # Argentina findings form their own.
+    assert sig == "sig:country_g20_ar#dim:country_assessor"
 
     # Scoping guard: a deterministic METRICS finding (inner = counts only) must
     # still NOT cluster — its inner dict has no entity keys.

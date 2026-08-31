@@ -28,6 +28,7 @@ import type { WorldAssessment as WorldAssessmentT } from '@/v4/why/types'
 import CitedAssessment from '@/components/inspector/CitedAssessment'
 import { extractCitations, type Citation } from '@/lib/citationsModel'
 import { downloadReportMarkdown, printReportPdf, type ReportDoc } from '@/lib/reportDownload'
+import { SEVERITY_COLOR } from '@/v4/world/types'
 
 // Re-export the shared markdown map from its own module so existing importers of
 // `MD_COMPONENTS` from this path keep working (it moved to break an import cycle).
@@ -60,14 +61,18 @@ interface FindingsResponse {
   data: FindingRow[]
 }
 
-/** Severity → hex from the v4 ramp (tailwind.config severity.*). */
+/**
+ * Severity → hex. CHANNEL A, the one warm ramp (v4/world/types.ts), with the
+ * two extra rungs the unit severities use mapped onto it — same re-key as
+ * `CountryUnitsAssessment` (UI_HOLISTIC_DESIGN_2026-08-24 §5.4 #1).
+ */
 const SEVERITY_HEX: Record<string, string> = {
-  critical: '#ff5555',
-  high: '#ff9955',
-  elevated: '#ffbb55',
-  moderate: '#ffdd55',
-  medium: '#ffdd55',
-  low: '#55ff55',
+  critical: SEVERITY_COLOR.critical,
+  high: SEVERITY_COLOR.high,
+  elevated: '#cf8324', // the interpolated rung between high and medium
+  moderate: SEVERITY_COLOR.medium,
+  medium: SEVERITY_COLOR.medium,
+  low: SEVERITY_COLOR.low,
 }
 
 /** Coerce the finding's payload into a plain object. */

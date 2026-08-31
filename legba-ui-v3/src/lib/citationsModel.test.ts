@@ -17,6 +17,12 @@ import {
   evidenceAnchorId,
   normalizeMarker,
   splitProse,
+  tokenizeProse,
+  citationAnchorId,
+  citationDrill,
+  citationKindLabel,
+  isGroundingCitation,
+  MARKER_CLASS_GROUNDING,
 } from './citationsModel'
 
 // A trimmed-down replica of a real `country_g20_us` unit finding's merged body.
@@ -240,5 +246,192 @@ describe('splitProse', () => {
   it('returns a single text token for prose with no markers', () => {
     const tokens = splitProse('plain prose', unitByMarker)
     expect(tokens).toEqual([{ kind: 'text', text: 'plain prose' }])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// DESK GROUNDING blocks (2026-08-30 consumer repair).
+//
+// Five block kinds; the model handled exactly ONE (`situation_register`), and
+// this file had coverage for NONE of them — not even the one it handled — so
+// nothing guarded the gap when FRAME-2's `window_ledger` landed after
+// `situation_register` had been special-cased.
+// ---------------------------------------------------------------------------
+
+const PRIOR_READ_ID = 'eeeeeeee-5555-4555-8555-eeeeeeeeeeee'
+
+/** One entry per grounding kind, in the shape `citation_for_block` writes. */
+const GROUNDING_BODY = {
+  body: 'Prior [1], ledger [2], register [3], baseline [4], questions [5].',
+  data: {
+    citations: [
+      {
+        marker: '[1]',
+        ref_kind: 'prior_read',
+        ref_id: PRIOR_READ_ID,
+        grounding: 'prior_read',
+        title: 'Ruritania — morning read',
+        evidence_text: 'BLUF: flat.',
+        marker_class: 'desk_grounding',
+        resolves_against: 'data.citations',
+      },
+      {
+        marker: '[2]',
+        ref_kind: 'window_ledger',
+        grounding: 'window_ledger',
+        title: 'Window ledger',
+        evidence_text: '16 July — elevated',
+        marker_class: 'desk_grounding',
+        resolves_against: 'data.citations',
+      },
+      {
+        marker: '[3]',
+        ref_kind: 'situation_register',
+        grounding: 'situation_register',
+        evidence_text: 'open frame — active',
+        marker_class: 'desk_grounding',
+        resolves_against: 'data.citations',
+      },
+      {
+        marker: '[4]',
+        ref_kind: 'desk_baseline',
+        grounding: 'desk_baseline',
+        title: 'Desk baseline',
+        evidence_text: 'expected 41.2',
+        marker_class: 'desk_grounding',
+        resolves_against: 'data.citations',
+      },
+      {
+        marker: '[5]',
+        ref_kind: 'open_questions',
+        grounding: 'open_questions',
+        title: 'Standing open questions',
+        evidence_text: 'Who holds Route 9?',
+        marker_class: 'desk_grounding',
+        resolves_against: 'data.citations',
+      },
+    ],
+  },
+}
+
+/** The same five without the structural marks — every row written before the
+ *  `2026-08-30/1` stamp. */
+const PRE_STAMP_GROUNDING = {
+  body: GROUNDING_BODY.body,
+  data: {
+    citations: GROUNDING_BODY.data.citations.map(
+      ({ marker_class: _mc, resolves_against: _ra, ...rest }) => rest,
+    ),
+  },
+}
+
+describe('extractCitations — desk grounding blocks', () => {
+  it('keeps ALL FIVE kinds, the id-less ones included', () => {
+    const cites = extractCitations(GROUNDING_BODY)
+    expect(cites).toHaveLength(5)
+    expect(cites.map((c) => c.refKind)).toEqual([
+      'prior_read',
+      'window_ledger',
+      'situation_register',
+      'desk_baseline',
+      'open_questions',
+    ])
+  })
+
+  it('carries the structural marks through instead of re-deriving them', () => {
+    for (const c of extractCitations(GROUNDING_BODY)) {
+      expect(c.markerClass).toBe(MARKER_CLASS_GROUNDING)
+      expect(c.resolvesAgainst).toBe('data.citations')
+      expect(isGroundingCitation(c)).toBe(true)
+    }
+  })
+
+  it('resolves a PRE-STAMP row (no marker_class) off the registered ref_kind', () => {
+    const cites = extractCitations(PRE_STAMP_GROUNDING)
+    expect(cites).toHaveLength(5)
+    expect(cites.every((c) => isGroundingCitation(c))).toBe(true)
+    // Nothing is invented for a row that never carried the mark.
+    expect(cites.every((c) => c.markerClass === undefined)).toBe(true)
+    expect(cites.every((c) => c.resolvesAgainst === undefined)).toBe(true)
+  })
+
+  it('the prior read drills to a FINDING; the other four drill nowhere', () => {
+    const [prior, ...synthetic] = extractCitations(GROUNDING_BODY)
+    expect(citationDrill(prior)).toEqual({ kind: 'finding', id: PRIOR_READ_ID })
+    // It used to fall through to refKind 'signal' — a chip labelled "signal"
+    // drilling to a signal row that has never existed.
+    expect(prior.refKind).not.toBe('signal')
+    expect(prior.signalId).toBe('')
+    for (const c of synthetic) {
+      expect(citationDrill(c)).toBeNull()
+      expect(c.refId).toBe('')
+    }
+  })
+
+  it('every kind has an honest label — none reads "Unresolved"', () => {
+    expect(extractCitations(GROUNDING_BODY).map(citationKindLabel)).toEqual([
+      'prior read',
+      'window ledger',
+      'situation register',
+      'desk baseline',
+      'open questions',
+    ])
+  })
+
+  it('falls back to a per-kind title when the entry carries none', () => {
+    expect(extractCitations(GROUNDING_BODY)[2].title).toBe('Open-situation register')
+  })
+
+  it('every grounding marker resolves in the tokenizer (no unresolved token)', () => {
+    const byMarker = citationsByMarker(extractCitations(GROUNDING_BODY))
+    const tokens = tokenizeProse(GROUNDING_BODY.body, byMarker)
+    expect(tokens.filter((t) => t.kind === 'unresolved')).toHaveLength(0)
+    expect(tokens.filter((t) => t.kind === 'marker')).toHaveLength(5)
+  })
+
+  it('id-less blocks get DISTINCT anchors (a shared `evidence-` id collided)', () => {
+    const cites = extractCitations(GROUNDING_BODY)
+    const anchors = cites.map(citationAnchorId)
+    expect(new Set(anchors).size).toBe(5)
+    expect(anchors[0]).toBe(`evidence-${PRIOR_READ_ID}`)
+  })
+
+  it('a SIXTH kind this bundle predates is carried verbatim, never guessed', () => {
+    // Marked as grounding, `ref_kind` not in the registry, and carrying an id.
+    // Defaulting it to `prior_read` would render a drill link to that id —
+    // `prior_read` is the ONE grounding kind that drills, so it is the worst
+    // possible guess. It must be labeled by its own kind and drill nowhere.
+    const [c] = extractCitations({
+      body: 'A claim [1].',
+      data: {
+        citations: [{
+          marker: '[1]',
+          ref_kind: 'future_block',
+          ref_id: 'ffffffff-6666-4666-8666-ffffffffffff',
+          marker_class: 'desk_grounding',
+          resolves_against: 'data.citations',
+          evidence_text: 'something new',
+        }],
+      },
+    })
+    expect(isGroundingCitation(c)).toBe(true)
+    expect(c.refKind).toBe('future_block')
+    expect(citationKindLabel(c)).toBe('future_block')
+    expect(citationDrill(c)).toBeNull()
+    expect(c.refId).toBe('')
+    expect(c.title).toBe('Desk grounding block')
+  })
+
+  it('signal and sub-claim refs are untouched by the grounding branch', () => {
+    for (const c of extractCitations(LIVE_BODY)) {
+      expect(isGroundingCitation(c)).toBe(false)
+      expect(citationKindLabel(c)).toBe('signal')
+      expect(citationDrill(c)).toEqual({ kind: 'signal', id: c.refId })
+    }
+    for (const c of extractCitations(COMPOSITION_BODY)) {
+      expect(isGroundingCitation(c)).toBe(false)
+      expect(citationKindLabel(c)).toBe('sub-claim')
+      expect(citationDrill(c)).toEqual({ kind: 'finding', id: c.refId })
+    }
   })
 })

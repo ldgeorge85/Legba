@@ -47,11 +47,18 @@ const CHIP =
   'inline-flex items-center gap-1 rounded border border-line bg-surf-2 px-1.5 py-0.5 text-[10px] leading-none text-ink-2'
 
 /** Muted tonal accent per confidence level (a thin dot only — no filled chip,
- *  so it never reads as a severity color). `unassessed` gets a hollow ring. */
+ *  so it never reads as a severity color). `unassessed` gets a hollow ring.
+ *
+ *  Re-keyed onto CHANNEL B, the one confidence ramp
+ *  (UI_HOLISTIC_DESIGN_2026-08-24 §5.1): this dot used to be emerald / sky /
+ *  AMBER, so a "low confidence" chip and a "high severity" badge wore the same
+ *  amber, and the same finding's confidence read green here and rose on the
+ *  map. One meaning, one channel, one ramp — the dot now steps down the same
+ *  blue the choropleth uses. */
 const CONFIDENCE_DOT: Record<ConfidenceLevel, string> = {
-  high: 'bg-emerald-400/80',
-  moderate: 'bg-sky-400/80',
-  low: 'bg-amber-400/80',
+  high: 'bg-confidence-high/80',
+  moderate: 'bg-confidence-moderate/80',
+  low: 'bg-confidence-low/80',
   unassessed: 'border border-line-strong bg-transparent',
 }
 
@@ -141,7 +148,7 @@ export function VerdictBadge({
       >
         <span
           className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-            structuralVerified ? 'bg-emerald-400/80' : CONFIDENCE_DOT[v.confidence]
+            structuralVerified ? 'bg-accent-ok/80' : CONFIDENCE_DOT[v.confidence]
           }`}
           aria-hidden
         />

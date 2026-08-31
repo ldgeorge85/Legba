@@ -154,6 +154,14 @@ async def test_run_method_each_real_sub_handler_returns_method_result():
             # without reading the substrate"); exercised with a real pool in
             # test_claim_watch.py.
             "claim_watch",
+            # D5: same refuse-loud contract ("never report a clean external
+            # audit without reading the tower"). Note the deliberate asymmetry
+            # inside that handler — a missing POOL raises, but a missing LLM or
+            # search binding DEGRADES to a heartbeat that names the gap, because
+            # an auditor that dies is invisible while one that reports "I ran
+            # and audited nothing" is actionable. Both paths are exercised with
+            # a real pool in test_standing_auditor.py.
+            "standing_auditor",
         ):
             # These REFUSE LOUD without a live pg_pool by design — they must never
             # emit a zeroed clean finding without actually running their checks
