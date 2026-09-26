@@ -1,5 +1,9 @@
 <!-- SPDX-FileCopyrightText: 2026 Lewis George
      SPDX-License-Identifier: AGPL-3.0-or-later -->
+<p align="center">
+  <img src="logo_small.png" alt="Legba" width="400">
+</p>
+
 # Legba
 
 **An intelligence service you define in YAML, and that measures its own correctness.**
