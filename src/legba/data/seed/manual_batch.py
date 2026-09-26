@@ -99,6 +99,7 @@ from ..provenance import (
     write_fact,
     write_nexus,
 )
+from ..provenance.origin import origin_class_clause
 from ..provenance.writes import _canonical_rel_type, _source_tier_rank
 from ..sources._contract import InMemoryStateStore, Signal, SourceContext
 from ..sources.baseline import run_baseline
@@ -117,6 +118,11 @@ from .manual_schema import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: P7/7g-1 — the origin-class leg on the prior-fact read (SEAMS #57 sweep).
+#: A manual seed batch supersedes the LIVE open row for a triple; a loaded
+#: historical row is not a prior belief for it to close.
+_LIVE_FACTS = origin_class_clause("")
 
 # The knowledge-layer lanes this loader writes. The signals lane (S4-T4) rides
 # the NORMAL signal contract (see the SIGNALS section below); the vector-docs
@@ -513,12 +519,13 @@ class ManualBatchReport:
 
 async def _open_prior_facts(conn: Any, subject: str, predicate: str) -> list[PriorFact]:
     rows = await conn.fetch(
-        """
+        f"""
         SELECT value, source_type FROM facts
          WHERE lower(subject)   = lower($1)
            AND lower(predicate) = lower($2)
            AND valid_until IS NULL
            AND superseded_by IS NULL
+           AND {_LIVE_FACTS}
         """,
         subject,
         predicate,

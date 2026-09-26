@@ -34,6 +34,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 import legba.data.analysts.meta_findings_synthesizer as M
+from legba.data.analysts import assembly_payload as AP
 from legba.data.analysts._llm_budget import (
     CHARS_PER_TOKEN,
     DEFAULT_INPUT_TOKEN_BUDGET,
@@ -42,6 +43,7 @@ from legba.data.analysts._llm_budget import (
     estimate_tokens,
     input_token_budget,
 )
+from legba.data.provenance import assembly_arms as AA
 from legba.data.provenance import verify as V
 
 # ---------------------------------------------------------------------------
@@ -156,8 +158,24 @@ def test_the_findings_block_stays_inside_its_share_of_the_budget(
 
 
 def test_the_composition_citation_carries_the_unit_evidence_window() -> None:
-    """The composed clause is graded against the same width a unit clause is."""
-    assert M.MAX_EVIDENCE_TEXT_CHARS == V._EVIDENCE_TOTAL_CHARS
+    """The composed clause is graded against AT LEAST the width it was captured
+    at — the judge's window may never be the narrower of the two.
+
+    This was an ``==`` until 2026-09-20/1, which is the wrong pin for what the
+    P0c defect actually was. That defect was DIRECTIONAL: the capture
+    (``MAX_EVIDENCE_TEXT_CHARS``, then 4,000) was WIDER than the judge's window
+    (``_EVIDENCE_TOTAL_CHARS``, then 3,600), so the tail of a body the composer
+    had shown the model was invisible to the grader and a faithful clause about
+    it was false-demoted. Equality closed that gap by coincidence of the numbers;
+    the INVARIANT is the inequality. Widening the judge's window can only ever
+    let it read more of what was captured, and pinning it to the capture would
+    have forced a producer-side prompt widening — a token-budget change — as the
+    price of letting the grader read a longer SOURCE article on the unit path,
+    which is a different window entirely (``judge_evidence`` applies the total
+    cap only to the ``source_text`` branch). A capture that ever grows PAST the
+    judge's window still breaks here, which is the direction that hurt.
+    """
+    assert V._EVIDENCE_TOTAL_CHARS >= M.MAX_EVIDENCE_TEXT_CHARS
 
 
 def test_a_cited_sub_claims_body_survives_past_its_bluf(monkeypatch) -> None:
@@ -185,3 +203,67 @@ def test_the_evidence_capture_is_still_bounded() -> None:
     )
     assert citation is not None
     assert len(citation["evidence_text"]) == M.MAX_EVIDENCE_TEXT_CHARS
+
+
+# ---------------------------------------------------------------------------
+# P0c — the 400-char blind window (INSTRUMENT_PLAN B1). The renderer showed an
+# input body up to MAX_FULL_BODY_CHARS while the citation captured only
+# MAX_EVIDENCE_TEXT_CHARS, so a body between 3,600 and 4,000 chars was SHOWN to
+# the model and ABSENT from what the judge graded — a span cut from that gap
+# passed construction (it is byte-identical to the real body) but hard-failed
+# D-3's independent, DB-free ARM 1 audit as ``quote_origin_truncated``. G2 quote
+# fidelity is an invariant, so that one span was a MISS.
+# ---------------------------------------------------------------------------
+
+
+def test_the_capture_ceiling_cannot_drift_from_the_render_ceiling() -> None:
+    """The pin: these are ONE decision, not two. Anything the model is SHOWN
+    and the judge cannot see is a blind window, and this is what closes it."""
+    assert M.MAX_EVIDENCE_TEXT_CHARS == M.MAX_FULL_BODY_CHARS
+
+
+def test_p0c_a_body_inside_the_old_blind_window_now_passes_quote_fidelity() -> None:
+    """End to end, real producers: a 3,800-char origin body — inside the old
+    3,600-4,000 gap — carries a BLUF far enough in that the assembled lead span
+    cuts bytes past the old 3,600 cap. Before this fix the citation's
+    ``evidence_text`` stopped at 3,600 (before the BLUF even started) and D-3's
+    ARM 1 would have hard-failed the span as ``quote_origin_truncated``. After
+    the fix the capture carries the body whole and the span passes.
+    """
+    far_quote = (
+        "Refinery throughput fell 11% week-on-week after the Ryazan strike, "
+        "and the loss has not reversed this window."
+    )
+    filler = ("Filler sentence about the desk's window. " * 200)[:3700]
+    body = f"{filler}\n\n**BLUF:** {far_quote}\n"
+    assert 3600 < len(body) < 4000, "fixture must sit inside the old blind window"
+
+    head_id = str(uuid4())
+    row = {
+        "id": head_id,
+        "analyst_id": "energy_security",
+        "target_id": "country_watch_ru",
+        "title": "Russia — energy security",
+        "body": body,
+        "severity": "elevated",
+        "produced_at": "2026-09-03T12:00:00+00:00",
+    }
+    payload = AP.build_assembly(
+        tier=AP.TIER_COUNTRY,
+        as_of="2026-09-03T12:00:00+00:00",
+        candidates=[row],
+        carried=[row],
+    )
+    span = payload["blocks"][0]["spans"][0]
+    assert span["origin"]["end"] > 3600, "the span must actually cross the old cap"
+
+    citation = M._build_composition_citation(1, row)
+    assert citation is not None
+    # THE FIX: the capture carries the body WHOLE — nothing the render showed
+    # is absent from what the judge grades.
+    assert citation["evidence_text"] == body
+
+    result = AA.audit(payload, [citation])
+    reasons = {f.reason for f in result.findings}
+    assert AA.QUOTE_ORIGIN_TRUNCATED not in reasons, reasons
+    assert AA.quote_fidelity_score(result) == 1.0

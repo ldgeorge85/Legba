@@ -98,9 +98,16 @@ from uuid import UUID, uuid4
 
 from ....runtime.analyst_method import AnalystMethodResult
 from ...provenance.models import FindingPayload
+from ...provenance.origin import origin_class_clause
 from . import alert_trigger_scan as ats
 
 logger = logging.getLogger(__name__)
+
+#: P7/7g-1 — the origin-class leg on the 24h bucket vector (SEAMS #57 sweep;
+#: `surge_detection` in the collection firewall). This vector IS the sigma
+#: baseline the edge detector measures a desk against; one backfilled bucket
+#: would move both the mean and the sigma, and every later reading with it.
+_LIVE_SIGNALS = origin_class_clause("")
 
 SUB_HANDLER_NAME = "desk_baseline"
 
@@ -129,6 +136,32 @@ _MAX_DESKS = 200
 
 #: How many top deviating desks the summary enumerates.
 _SUMMARY_TOP_N = 12
+
+#: H12 — the instrument revision every baseline row was computed under
+#: (docs/ANALYSIS.md §10.9), stamped ``desk_baselines.method_version`` on the
+#: persisted row and ``data.method_version`` on the summary receipt. Covers the
+#: estimator (trailing mean, the median readout, the ``sqrt(mean)`` Poisson
+#: floor under ``robust_sigma``), ``MIN_ACTIVE_DAYS`` and the imported trigger
+#: constants (``DEFAULT_BASELINE_DAYS``, ``DEFAULT_N_SIGMA``,
+#: ``MIN_CURRENT_*``). Bump it when any of them moves, so a deviation diff
+#: across the change reads as an instrument revision, not a desk waking up.
+METHOD_VERSION = "desk_baseline/2026-09.1"
+
+#: K3 — the SCALE ``expected`` / ``current`` / the band / ``deviation_sigma``
+#: are read ON (docs/ANALYSIS.md §10.9). The quantity is a COUNT PER 24h BUCKET
+#: and a distance from its trailing mean in robust sigmas, so the bucket shape
+#: and what is counted into it ARE the scale: ``signal_volume_24h`` counts
+#: ``signals`` whose ``geo`` overlaps the desk scope, ``high_sev_findings_24h``
+#: counts high/critical findings on the desk, both on the SAME 24h buckets the
+#: P1-3 trigger uses.
+#:
+#: ``2026-07`` is the era the P3-7 recipe opened (2026-07-27). Change what a
+#: metric counts, or the bucket width, and a ``current`` of 40 before and after
+#: are two different measurements — the number would look like a desk moving
+#: when only the ruler moved. A σ-distance is comparable ACROSS desks only
+#: within one scale era, which is the whole reason the deviation is readable at
+#: all.
+SCALE_VERSION = "desk_deviation/2026-07"
 
 #: The honesty frame carried on every summary finding + the eval route.
 NO_FORECAST_NOTE = (
@@ -447,12 +480,13 @@ _DESKS_SQL = """
 
 # Zero-filled 24h buckets as an ORDERED vector (index 0 = current window,
 # 1..N = trailing baseline). Same WHERE clause as the trigger's signal buckets.
-_SIGNAL_BUCKET_VECTOR_SQL = """
+_SIGNAL_BUCKET_VECTOR_SQL = f"""
     WITH hits AS (
         SELECT floor(extract(epoch FROM (now() - fetched_at)) / 86400.0)::int
                  AS bucket
           FROM signals
          WHERE geo && $1::text[]
+           AND {_LIVE_SIGNALS}
            AND fetched_at > now() - make_interval(days => $2 + 1)
     ), counts AS (
         SELECT gs.n AS bucket, count(h.bucket) AS c
@@ -512,13 +546,15 @@ INSERT INTO desk_baselines (
     expected, center_median, robust_sigma, band_low, band_high,
     current, deviation, deviation_sigma, min_current_floor,
     sample_days, active_days, insufficient_history,
-    spillover_current, features, computed_at
+    spillover_current, features, computed_at,
+    method_version, scale_version
 ) VALUES (
     $1,$2,$3::jsonb,$4,$5,
     $6,$7,$8,$9,$10,
     $11,$12,$13,$14,
     $15,$16,$17,
-    $18,$19::jsonb,$20
+    $18,$19::jsonb,$20,
+    $21,$22
 )
 ON CONFLICT (desk_id, metric) DO UPDATE SET
     geo                  = EXCLUDED.geo,
@@ -538,7 +574,9 @@ ON CONFLICT (desk_id, metric) DO UPDATE SET
     insufficient_history = EXCLUDED.insufficient_history,
     spillover_current    = EXCLUDED.spillover_current,
     features             = EXCLUDED.features,
-    computed_at          = EXCLUDED.computed_at
+    computed_at          = EXCLUDED.computed_at,
+    method_version       = EXCLUDED.method_version,
+    scale_version        = EXCLUDED.scale_version
 """
 
 #: Prune (desk, metric) rows no longer in the current set (wholesale refresh).
@@ -579,6 +617,11 @@ async def store_baselines(conn: Any, records: Sequence[DeskBaseline]) -> None:
                 float(rec.spillover_current),
                 json.dumps(rec.features, separators=(",", ":"), default=str),
                 rec.computed_at,
+                # H12/K3 — which code computed this row and which scale its
+                # counts are on. A wholesale refresh re-stamps every row, so a
+                # NULL here means a row written before the stamps existed.
+                METHOD_VERSION,
+                SCALE_VERSION,
             )
             seen.append(rec.key)
         await conn.execute(_PRUNE_SQL, seen)
@@ -673,6 +716,10 @@ def build_summary(
         tags=["deterministic", SUB_HANDLER_NAME],
         data={
             "sub_handler": SUB_HANDLER_NAME,
+            # H12/K3 — the revision and the scale, on the summary receipt as
+            # well as on every persisted baseline row.
+            "method_version": METHOD_VERSION,
+            "scale_version": SCALE_VERSION,
             "not_a_forecast": True,
             "honesty_note": NO_FORECAST_NOTE,
             "baseline_days": baseline_days,
@@ -872,6 +919,8 @@ async def handle(
 
 __all__ = [
     "SUB_HANDLER_NAME",
+    "METHOD_VERSION",
+    "SCALE_VERSION",
     "METRIC_SIGNAL_VOLUME",
     "METRIC_HIGH_SEV_FINDINGS",
     "DEFAULT_BASELINE_DAYS",

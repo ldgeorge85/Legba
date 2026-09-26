@@ -57,6 +57,16 @@ export const FEED_COMPOSITION_IDS: readonly string[] = [
   'country_composition',
   'region_composition',
   'escalation_composition',
+  // D-6 — the Assessment channel (spec §2.1b). The explicit entry is REQUIRED:
+  // `COMPOSITION_RE` matches `_composition$` and `world_assessment` does not end
+  // in it, so without this line the one interpretive read on the platform would
+  // render under "Other producers" beside the sweeps and the optimizers.
+  'world_assessment',
+  // Program 3 lane C — the same channel at country grain, listed for the same
+  // reason: it ends in neither `_composition` nor anything `COMPOSITION_RE`
+  // matches, and an interpretive read filed beside the sweeps is the defect the
+  // line above exists to prevent.
+  'country_assessment',
 ]
 
 /** A producer's class — the three groups the dropdown renders. */

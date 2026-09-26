@@ -995,8 +995,9 @@ async def test_acceptance_forecast_resolution_never_drains_is_caught(pool, blank
                 """
                 INSERT INTO acute_forecasts
                     (region, event_class, window_start, window_end, p, p_base,
-                     method, issued_at)
-                VALUES ($1, 'hazard_severe', $2, $3, 0.2, 0.1, 'poisson', $2)
+                     method, issued_at, resolution_test)
+                VALUES ($1, 'hazard_severe', $2, $3, 0.2, 0.1, 'poisson', $2,
+                        'retro: test-seeded')
                 """,
                 f"country_test_{i}",
                 now - timedelta(days=35),
@@ -1031,8 +1032,9 @@ async def test_forecast_backlog_clears_once_one_resolves(pool, blank):
             """
             INSERT INTO acute_forecasts
                 (region, event_class, window_start, window_end, p, p_base,
-                 method, issued_at)
-            VALUES ('r_open', 'hazard_severe', $1, $2, 0.2, 0.1, 'poisson', $1)
+                 method, issued_at, resolution_test)
+            VALUES ('r_open', 'hazard_severe', $1, $2, 0.2, 0.1, 'poisson', $1,
+                    'retro: test-seeded')
             """,
             now - timedelta(days=35),
             now - timedelta(days=28),
@@ -1041,9 +1043,10 @@ async def test_forecast_backlog_clears_once_one_resolves(pool, blank):
             """
             INSERT INTO acute_forecasts
                 (region, event_class, window_start, window_end, p, p_base,
-                 method, issued_at, resolved_outcome, resolved_at, resolved_by)
+                 method, issued_at, resolved_outcome, resolved_at, resolved_by,
+                 resolution_test)
             VALUES ('r_done', 'hazard_severe', $1, $2, 0.2, 0.1, 'poisson', $1,
-                    0, $3, 'forecast_scoreboard')
+                    0, $3, 'forecast_scoreboard', 'retro: test-seeded')
             """,
             now - timedelta(days=35),
             now - timedelta(days=28),

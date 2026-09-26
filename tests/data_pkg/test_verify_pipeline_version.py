@@ -33,13 +33,165 @@ from legba.data.provenance.verify import (
 
 
 def test_version_value_and_shape() -> None:
-    """ONE bump per train, ``<train date>/<n>`` — the [N+1] TRANSPARENCY train
-    shipping WITH its consumer repair (tasks #62 + #78).
+    """ONE bump per train, ``<train date>/<n>`` — G3, THE WEIGHTED-COMPARISON
+    LICENCE: the record's own ranking, relayed rather than re-judged.
 
-    Bumped from ``2026-08-29/1`` (LRF) for a change whose EXPECTED SHIFT IS
-    NONE — the only such entry in the lineage, and the reason the stamp is worth
-    spending anyway is that "nothing moved" is a claim someone has to be able to
-    check.
+    Bumped from ``2026-09-05/1`` (the verify-regime fix) one day later for ONE
+    graded-behaviour change, on ONE claim kind, on ONE population — the
+    ASSESSMENT family's ``citation_support`` branch, which is that channel's
+    ``fidelity_to_spine`` and the number the G3 bar is about.
+
+    THE DEFECT IS A GRADER DEFECT AND IT WAS MEASURED. D-6's N=5 clause replay
+    showed the prompt clause working on its target (INSTRUMENT failures 7 of 11
+    → 3 of 8) and the failures REDISTRIBUTING, with CROSS-BLOCK WEIGHTING rising
+    1 → 3 to become the leading residual. The channel's own voice contract asks
+    for that sentence — ``THREADS, WEIGHTED, UNCROWNED`` says carry two to four
+    threads and "say how they weigh against each other" — while the composition
+    rubric grades each claim against the ONE sub-claim its marker names, and no
+    bounded block states a comparison across blocks. The contract and the grader
+    were in direct tension and no prompt clause could resolve it.
+
+    THE LICENCE RESTS ON A PUBLISHED FACT. The assembly performs exactly one
+    cross-block ranking and prints it twice — the ORDER (``blocks[].ordinal``
+    follows the ``cited_mass.v1`` ranking by construction) and the EARNED-LEAD
+    VERDICT (``lead.test``, rendered verbatim into the arithmetic block P1 put
+    behind every citation). ``assessment_weighting`` grants supported-by-
+    construction to three shapes and nothing else (``order`` — a weighing naming
+    two or more cited ordinals; ``earned_lead`` — a crowning of the record's own
+    lead ordinals or of ordinal 1; ``refusal`` — a negated weighing on a record
+    whose arithmetic says concentration was NOT earned), and FOUR gates withhold
+    it, each with its own counter: no arithmetic in the map (the population
+    fence), an instrument term the evidence does not carry, a number the
+    arithmetic does not carry, and a crowning the order does not put first. The
+    live 2026-09-06 specimen — "this high-mass (9.10) and well-verified (0.85)
+    read outweighs … (cited mass 5.05, verify 0.60)" — is denied twice over and
+    still fails, which is the whole test of whether the licence is honest.
+
+    THE SECOND HALF IS A PRODUCER CHANGE and moves no verdict by itself: the
+    mandated ``## What this reading misses`` section had no vocabulary, so the
+    voice guessed names ("no coverage of Central Asia", 2 of arm B's 8 failures).
+    ``declared_aperture`` now publishes the drop ledger's own desks, targets and
+    head titles plus D-2b's ``coverage_roster`` — into the prompt AND into every
+    citation's evidence map, which is what makes a blind-spot sentence gradeable
+    at all — and ``aperture_unrostered`` is the sixth deterministic marker class
+    fencing the section to it. ``assessment_prompt.v3`` / ``unsupported.v3``.
+
+    EXPECTED SHIFT: the ASSESSMENT family moves on all three; ASSEMBLY and DESK
+    cannot move at all, and mechanically rather than statistically — the licence
+    routes off ONE predicate (does a cited entry carry
+    ``--- THE RECORD THIS BLOCK SITS IN ---``) and only
+    ``assessment_channel.assessment_evidence_text`` has ever written it.
+    ``faithfulness_score`` moves UPWARD only and carries
+    ``branch_scores["citation_support"]`` with it — the first override stage in
+    this plane to claim a branch, because that branch is the published fidelity
+    number and a stale partition key beside a moved headline is the defect this
+    stamp exists to prevent. ``severity_split`` moves: a relayed refusal to crown
+    was a ``judge_contradicted``, so a licence can retire a HARD fail
+    (``weighted_comparison_licensed_hard`` sizes it separately).
+    ``reason_census`` moves on the Assessment population only.
+
+    NO REASON CODE MOVES. ``_FAIL_CLASS_BY_REASON`` is byte-identical across this
+    bump and both exhaustive pins are re-asserted unchanged; the seven additions
+    are COUNTERS (``weighted_comparison_seen``, ``weighted_comparison_licensed``,
+    ``weighted_comparison_licensed_hard`` and four
+    ``weighted_comparison_denied_*``).
+
+    THE LEGACY HALF IS PROVEN INERT, not asserted, the same way D-3's was: the 40
+    live pre-cutover ``regime: "legacy"`` critiques re-graded through the real
+    pass on both trees are 40/40 BYTE-IDENTICAL verification dicts.
+
+    PRIOR STAMP, kept because the boundary is what makes it legible — THE
+    VERIFY-REGIME FIX (``2026-09-05/1``): the three defects the demotion's first
+    live cycle exposed in how this plane GRADES an assembly-regime row.
+
+    Bumped from ``2026-09-03/1`` (D-3, the assembly arms) two days later because
+    the arms shipped correct and the number published off them did not. THREE
+    graded-behaviour changes land together, all of them scoped to the ASSEMBLY
+    population and each measured on the live rows of 2026-09-05:
+
+      * ARM 2's ``scope_widened`` VERIFIES THE DECLARED TOKEN WITH THE PREDICATE
+        THAT OWNS IT (``has_collection_denominator_scope``), not with a literal
+        substring test. ``scope_tokens`` is an IDENTIFIER list —
+        ``["collection_denominator"]``, written by ``assembly_spans.py:286`` and
+        pinned by ``test_composition_assembly_d2.py:189`` — so a substring test
+        looked for that word inside desk prose and fired on every
+        collection-scoped span in the fleet. **26 fires across 35 rows, every one
+        false, on reads whose quote fidelity was 1.000; zero after.** D-3's own
+        fixture declared the PHRASE ``["this desk"]``, which is why both sides
+        passed their tests and the pair was still wrong; the fixture now carries
+        the live shape.
+      * FOR AN ASSEMBLY-REGIME ROW THE ARMS ARE THE GRADER OF THE HEADLINE
+        (``assembly_arms.regrade_to_arms``). The legacy ``citation_support`` /
+        ``synthesis`` branches ask whether an AUTHORED sentence follows from its
+        evidence, and an assembly row authors nothing — it quotes. They returned
+        0.18 on rows whose ``assembly`` branch read 1.000 in the same payload,
+        and because every tier is verify-floored on its inputs at 0.50 that
+        **floored 31 of 32 byte-correct country assemblies out of the world
+        read**, which published one block of a possible thirty-four. Published
+        overall on the 35 rows: 0.3524 mean → 0.8528 mean; admission 2/35 → 35/35.
+        Nothing is deleted — every judge verdict and branch sub-score stays on
+        the row as telemetry; it is no longer the score.
+      * THE ASSESSMENT'S EVIDENCE MAP IS THE RECORD. ``world_assessment``'s
+        fidelity-to-spine is ``citation_support`` over the spine's words, and the
+        map carried only ONE of the THREE things the prompt hands the voice — the
+        rendered blocks, not the record's own arithmetic, which the prompt
+        introduces as "facts about the record … you may quote them". Truthmaker
+        coverage on the live row: 1 of 7 claims → 6 of 7. The seventh stays
+        unsupportable and correctly so.
+
+    THE LEGACY HALF IS PROVEN INERT, not asserted: 40 live pre-flip
+    ``regime: "legacy"`` critiques — country, region, world and thematic —
+    re-graded through the real pass on both trees are **40/40 BYTE-IDENTICAL**
+    verification dicts, field for field.
+
+    NO REASON CODE MOVES. ``_FAIL_CLASS_BY_REASON`` is byte-identical across this
+    bump and both exhaustive pins are re-asserted unchanged; the two additions are
+    COUNTERS (``assembly_scope_token_unknown``,
+    ``assembly_headline_regraded_to_arms``).
+
+    PRIOR STAMP, kept because the boundary is what makes it legible — D-3, THE
+    ASSEMBLY ARMS plus the shared fold. Bumped from ``2026-08-30/1`` (the [N+1]
+    transparency train) because TWO
+    graded-behaviour changes land together and neither can be read through the
+    other:
+
+      * FOUR DETERMINISTIC ARMS enter over the ``assembly.v1`` payload — quote
+        fidelity, scope preservation, attribution equality, selection honesty —
+        with SIXTEEN new reason codes, ALL HARD. They are AUDITORS, not a gate
+        (ratified F-12): verify runs post-persist and there is no withhold seam
+        anywhere in the tree, so the real enforcement stays at ASSEMBLE time and
+        these arms are counted, hard-labelled and LOUD. The gate — the score
+        cap, the persisted tally, the suppression seam — is D-3b, and the
+        lineage entry says so in words rather than in a comment.
+      * ``_absence_content_terms`` IS RE-POINTED at the new shared fold
+        (``text_fold.normalize_for_match``), which changes the term set on a
+        measured **4,272 of 7,562 absence claims (56.5%)** in the archived audit
+        and **186 of 357 (52.1%)** re-measured live on a 70-row corpus for this
+        train — and closes a sharper defect underneath it: the function returned
+        DIFFERENT TERM SETS
+        DEPENDING ON THE CALLER (V-B and the six ``judge_quote_rules`` sites
+        passed unfolded text, ``denied_enumeration`` and
+        ``composition_integrity`` passed folded).
+
+    EXPECTED SHIFT: ALL THREE FAMILIES MOVE, and pooling would lie in a
+    specific way worth naming — the composition tier's faithfulness number
+    changes MEANING (the graded body became a quotation, so it rises
+    mechanically toward 1.0 and that is a construction invariant, NOT a quality
+    gain) while the absence population moves in BOTH directions under the
+    re-point. Two arms, opposite signs, one number.
+
+    THE HALF THAT IS PROVEN INERT, and it is the arms' half: a 70-row live
+    replay (30 compositions, 40 unit desk heads, none carrying an assembly
+    block; 477 checkable claims, 206 spans) is 70/70 BYTE-IDENTICAL to the base
+    tree — same scores, same claim set, same reason census, zero
+    ``assembly_*`` counters. An arm that cannot route is byte-identical for
+    every caller — the H2 precedent, held.
+
+    PRIOR STAMP, kept because the boundary is what makes it legible — the [N+1]
+    TRANSPARENCY train (``2026-08-30/1``), shipping WITH its consumer repair
+    (tasks #62 + #78), for a change whose EXPECTED SHIFT IS NONE: the only such
+    entry in the lineage, and the reason the stamp was worth spending anyway is
+    that "nothing moved" is a claim someone has to be able to check.
 
     THE STAMP WAS REASSIGNED, and the pin says so rather than quietly holding a
     different number than the branch it was proven on. This train was built and
@@ -151,8 +303,30 @@ def test_version_value_and_shape() -> None:
     are disjoint by construction, and a rise there means the two have started
     double-charging one span. See ``judge_pipeline_version.py``'s full lineage
     entry for the reasoning this split key exists to keep legible.
+
+    ``2026-09-25/1`` — H3-MEASURE, persisting HOW H3 aligned. H3
+    (``2026-09-24/1``) named every verdict's claim and aligned by id with a
+    positional fallback, but the alignment MODE itself was never persisted —
+    the ledger wrote an id-salvaged pass exactly as a fully positional one
+    would, so H3's own effect was unmeasurable from the row it produced. This
+    train is a pure READOUT wire: every ``claim_verdicts`` entry a judge call
+    produced now carries ``aligned_by`` (``"claim_index"`` | ``"positional"``,
+    absent — never null — off the judge path); the verification block gains
+    four rolled-up counters (signed ``miscount_claims``, ``aligned_by_id``,
+    ``aligned_positionally``, ``unmatched_claims``); and the judge-stats route
+    exposes ``positional_share`` / ``miscount_rate`` so the before/after is
+    one GET. ``align_verdicts`` itself is unchanged — this train reads a THIRD
+    return value added alongside the two it already returned, a pure widening.
+
+    EXPECTED SHIFT: NONE, on all three families — the SECOND all-``SHIFT_NONE``
+    entry in the lineage (the first, ``2026-08-30/1``, called itself "the
+    ONLY" when written). ``aligned_by`` is read off the SAME branch
+    ``align_verdicts`` already took to build the slots it always returned, so
+    it names the branch rather than deciding one and can never disagree with
+    the verdict on the row. No reason is added, renamed or reclassed; no score
+    arithmetic, judge model, route, prompt or vocabulary moves.
     """
-    assert JUDGE_PIPELINE_VERSION == "2026-08-30/1"
+    assert JUDGE_PIPELINE_VERSION == "2026-09-25/1"
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}/\d+", JUDGE_PIPELINE_VERSION)
 
 
@@ -453,9 +627,9 @@ def test_real_lineage_pooling_yield_for_the_score_family() -> None:
     """THE REAL-LINEAGE ANSWER, and it is a NEGATIVE RESULT worth stating.
 
     Computed over the actual lineage for ``faithfulness_score`` — the family
-    band calibration and the correctness scorer both measure — the 14 live
-    stamps collapse into 12 populations. Exactly two boundaries in the entire
-    lineage are declared score-neutral, and both are historical:
+    band calibration and the correctness scorer both measure — the 22 live
+    stamps collapse into 18 populations. Three boundaries in the entire
+    lineage are declared score-neutral:
 
       * ``2026-08-10/1`` (V-I1 guard 6) joins ``2026-08-09/1`` — a withdraw-only
         confirmation guard whose only declared shift is hard-fail COUNT, and a
@@ -463,15 +637,31 @@ def test_real_lineage_pooling_yield_for_the_score_family() -> None:
       * ``2026-08-20/1`` (RUST-1) joins ``2026-08-15/1`` — "Mean faithfulness is
         UNCHANGED by construction (the demotion train never moves the score,
         only the severity label)".
+      * ``2026-09-25/1`` (H3-MEASURE) joins ``2026-09-24/1`` (H3) — a pure
+        readout wire over an unchanged ``align_verdicts``, proven narrower than
+        the [N+1] proof below: the new value is read off the SAME branch that
+        already decided the row's verdict, so it can never disagree with it.
 
-    THE HEAD NOW POOLS ONE STEP — the update this pin's own last paragraph
-    predicted. ``2026-08-30/1`` (the [N+1] transparency train, 201/201
-    byte-identical equivalence proof) is the lineage's first all-none entry,
-    so the head pool is ``{2026-08-29/1, 2026-08-30/1}``. Below LRF the
-    boundary stays hard — 08-28/1, 08-27/1, 08-25/1, 08-21/1 all declare real
-    score shifts — so band calibration's ``n_scored`` still does not move off
-    zero for any window older than LRF: the residual defect remains stamp
-    CADENCE, not reader design.
+    THE HEAD POOLS AGAIN, for the first time since ``2026-08-30/1`` (the [N+1]
+    transparency train, 201/201 byte-identical) — which pooled backward with
+    LRF into ``{2026-08-29/1, 2026-08-30/1}`` and was, until this stamp, the
+    lineage's only all-none entry. Below it, D-3 (``2026-09-03/1``) declares
+    ``moves`` on every family — sixteen new HARD reasons AND a comparator
+    re-point sized at 56.5% of absence claims; the VERIFY-REGIME FIX
+    (``2026-09-05/1``) declares ``moves`` on every family too; G3
+    (``2026-09-06/1``) and PARTITION-PRESERVE (``2026-09-08/1``) make a third
+    and fourth consecutive singleton; H3 (``2026-09-24/1``) a fifth — none of
+    those five assembly/judge-era stamps pool with each other, and G3's
+    provable inertness on the assembly/legacy populations (40/40
+    byte-identical) still does not buy it a ``none``: this registry keys on
+    the STAMP, one boundary for the whole fleet, and the Assessment rows carry
+    it too. The 08-29/08-30 pair survives below all of them, unchanged: a
+    later moving boundary never retracts an earlier declared-none one.
+
+    Below LRF the boundary stays hard — 08-28/1, 08-27/1, 08-25/1, 08-21/1 all
+    declare real score shifts — so band calibration's ``n_scored`` still does
+    not move off zero for any window older than LRF: the residual defect remains
+    stamp CADENCE, not reader design.
 
     This pin is EXPECTED to change again the next time a score-neutral train
     ships — the population widens by itself, and updating this list is how
@@ -501,23 +691,36 @@ def test_real_lineage_pooling_yield_for_the_score_family() -> None:
         ("2026-08-27/1",),
         ("2026-08-28/1",),
         ("2026-08-29/1", "2026-08-30/1"),
+        ("2026-09-03/1",),
+        ("2026-09-05/1",),
+        ("2026-09-06/1",),
+        ("2026-09-08/1",),
+        ("2026-09-20/1",),
+        ("2026-09-24/1", "2026-09-25/1"),
     ]
-    # 15 stamps -> 12 populations.
-    assert len(STAMP_LINEAGE) == 15 and len(pools) == 12
+    # 22 stamps -> 18 populations (H3-MEASURE joins H3's pool, not a new one).
+    assert len(STAMP_LINEAGE) == 22 and len(pools) == 18
 
-    # THE HEAD WIDENS BY EXACTLY ONE: the transparency train pools with LRF
-    # and with nothing older.
+    # THE HEAD POOLS BACKWARD ONE STAMP: H3-MEASURE is a pure readout wire
+    # (persisting HOW H3 aligned, never re-deciding a verdict), so the
+    # boundary it opens is SHIFT_NONE and it joins H3's own population rather
+    # than opening a nineteenth. H3 itself does NOT pool further back — its own
+    # named-claim contract declares ``moves`` on every family — so the pair
+    # stops there.
     assert poolable_stamps(JUDGE_PIPELINE_VERSION, METRIC_FAITHFULNESS_SCORE) == (
-        "2026-08-29/1",
+        "2026-09-24/1",
         JUDGE_PIPELINE_VERSION,
     )
 
 
 def test_severity_and_census_families_pool_nothing_on_the_real_lineage() -> None:
     """Score-neutrality is family-specific and this proves the split is real:
-    the two boundaries poolable for ``faithfulness_score`` are exactly the ones
-    that MOVE the hard/soft split and the reason census, so a panel reading
-    severity gets no pooling from them at all. One table, three answers."""
+    the ``2026-08-10/1`` / ``2026-08-20/1`` boundaries poolable for
+    ``faithfulness_score`` alone are exactly the ones that MOVE the hard/soft
+    split and the reason census, so a panel reading severity gets no pooling
+    from either. ``2026-08-29/1``-``2026-08-30/1`` and ``2026-09-24/1``-
+    ``2026-09-25/1`` pool on EVERY family (both are all-``SHIFT_NONE`` entries,
+    not score-only ones) — one table, three answers."""
     from legba.data.provenance.judge_pipeline_version import (
         METRIC_REASON_CENSUS,
         METRIC_SEVERITY_SPLIT,
@@ -525,15 +728,17 @@ def test_severity_and_census_families_pool_nothing_on_the_real_lineage() -> None
         poolable_stamps,
     )
 
+    all_none_pairs = [
+        ("2026-08-29/1", "2026-08-30/1"),
+        ("2026-09-24/1", "2026-09-25/1"),
+    ]
+    stamp_to_pair = {s: pair for pair in all_none_pairs for s in pair}
     for family in (METRIC_SEVERITY_SPLIT, METRIC_REASON_CENSUS):
         for s in STAMP_LINEAGE:
-            expected = (
-                ("2026-08-29/1", "2026-08-30/1")
-                if s in ("2026-08-29/1", "2026-08-30/1")
-                else (s,)
-            )
-            # The one exception is the head pair: the [N+1] transparency train
-            # (2026-08-30/1) declares NONE on every family — no reason strings,
-            # no severity behavior, 201/201 byte-identical verdicts — so it
-            # pools with LRF for severity/census too. Everything else is alone.
+            expected = stamp_to_pair.get(s, (s,))
+            # The two exceptions are the all-``SHIFT_NONE`` entries: the [N+1]
+            # transparency train (2026-08-30/1, pools with LRF) and H3-MEASURE
+            # (2026-09-25/1, pools with H3) — neither declares a reason string
+            # or a severity-behavior change on ANY family. Everything else is
+            # alone, including the score-only pair (08-10/1, 08-20/1) above.
             assert poolable_stamps(s, family) == expected, (s, family)

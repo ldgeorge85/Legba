@@ -198,11 +198,12 @@ def test_absence_rewrite_did_not_leak_onto_the_other_routes() -> None:
     assert VERDICT_NOT_A_PROPOSITION not in _NULL_RESULT_JUDGE_SYSTEM
 
 
-async def test_absence_partition_sends_the_v4_rubric_through_the_real_entry(
+async def test_absence_partition_sends_the_v5_rubric_through_the_real_entry(
     monkeypatch,
 ) -> None:
-    """REAL BINDING PATH: the pipeline entry routes an absence span to the v4
-    rubric and every other span to the untouched generic prompt, in one run."""
+    """REAL BINDING PATH: the pipeline entry routes an absence span to the
+    absence rubric (v4 doctrine + the H3 claim_index contract, v5) and every
+    other span to the untouched generic prompt, in one run."""
     monkeypatch.setenv("LEGBA_VERIFY_LLM_JUDGE", "1")
     body, citations = _fact_rich_with_absence(str(uuid4()))
     judge = _RouteJudge(
@@ -218,7 +219,7 @@ async def test_absence_partition_sends_the_v4_rubric_through_the_real_entry(
     assert _ABSENCE_JUDGE_SYSTEM in judge.systems
     assert _GENERIC_JUDGE_SYSTEM in judge.systems
     payload = build_faithfulness_critique_payload(rep, analyzed_output_id=uuid4())
-    assert payload["data"]["verification"]["branch_versions"]["absence"] == "absence.v4"
+    assert payload["data"]["verification"]["branch_versions"]["absence"] == "absence.v5"
 
 
 # ---------------------------------------------------------------------------

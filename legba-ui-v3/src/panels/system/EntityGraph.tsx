@@ -40,6 +40,7 @@ import {
 } from '@/lib/graphModel'
 import type { PanelProps } from '@/types'
 import { useSelection } from '@/state/selection'
+import { useScope } from '@/state/scope'
 
 interface GNode {
   id: string
@@ -171,16 +172,36 @@ export default function EntityGraphPanel({ registration }: PanelProps) {
     if (selection?.kind === 'entity') setCenter(selection.id)
   }, [selection])
 
+  // SCOPE re-roots the ego net (design §3.1). Focus still centers — a click is
+  // a click — but a scope is the standing answer to "whose neighbourhood is
+  // this", so it wins on arrival and survives every subsequent row click.
+  const wallScope = useScope((s) => s.scope)
+  useEffect(() => {
+    if (wallScope?.kind === 'entity') setCenter(wallScope.id)
+  }, [wallScope])
+
+  /**
+   * EGO DEPTH — 2 when the scope names the entity, 1 otherwise.
+   *
+   * v2 drew depth 2 on the selected entity, and it could not be reproduced
+   * client-side at any cost: `_EGO_GRAPH_SQL` was a single-hop query, so the
+   * second ring's edges were never fetched. `depth` (decision 5) is that one
+   * backend param. It is spent only on a scoped entity — a depth-2 net on an
+   * incidental row click is a lot of graph for a glance, and the fetch is
+   * `depth × limit` bounded rather than free.
+   */
+  const depth = wallScope?.kind === 'entity' && wallScope.id === center ? 2 : 1
+
   // #90 — disconnect the resize observer on unmount (the cytoscape canvas is
   // unmounted whenever the element set empties during a re-center re-query, and
   // when the panel tab closes), so a pending tick never touches a destroyed cy.
   useEffect(() => () => fitCleanup.current?.(), [])
 
   const graphQ = useQuery<GraphResp>({
-    queryKey: ['entity-graph', center],
+    queryKey: ['entity-graph', center, depth],
     queryFn: async () => {
       const g = await apiGet<GraphResp>(
-        `/entities/graph?limit=80${center ? `&center=${encodeURIComponent(center)}` : ''}`,
+        `/entities/graph?limit=80${center ? `&center=${encodeURIComponent(center)}&depth=${depth}` : ''}`,
       )
       // #6 — de-junk at the fetch so the counts downstream stay honest.
       return filterGraphJunk(g, center)

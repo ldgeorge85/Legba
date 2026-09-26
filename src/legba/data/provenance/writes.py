@@ -59,9 +59,11 @@ from .kinds import (
     OutputKindSpec,
     spec_for_kind,
 )
+from ..events import _writes as _event_writes
 from .models import (
     AlertPayload,
     CritiquePayload,
+    EventPayload,
     FactPayload,
     FindingPayload,
     HypothesisPayload,
@@ -71,6 +73,21 @@ from .models import (
     PredictionPayload,
     SituationPayload,
     severity_from_tags,
+)
+# The open-row supersession cluster (the tier table, the contention flag and
+# the facts/nexuses close-writers) lives in the sibling module — extracted
+# 2026-09 for the module-size gate. Re-exported so ``writes.<name>`` and the
+# ``provenance.__init__`` re-export resolve exactly as before.
+from .writes_supersession import (  # noqa: F401
+    _DEFAULT_SOURCE_TIER_RANK,
+    _FACT_CONTENTION_ENV,
+    _SOURCE_TIER_RANK,
+    _fact_contention_enabled,
+    _source_tier_rank,
+    collapse_open_triple,
+    supersede_prior_facts,
+    supersede_prior_functional_role_facts,
+    supersede_prior_nexuses,
 )
 
 
@@ -82,46 +99,6 @@ NatsPublishFn = Callable[[str, bytes], Awaitable[None]]
 
 # Pluggable AGE hook (L-204) — gets the new row id + parent row ids.
 AgeEdgeHook = Callable[[UUID, list[UUID]], Awaitable[None]]
-
-
-# ---------------------------------------------------------------------------
-# Source-tier precedence (Holes-A A1 — confidence-tier-aware supersession)
-# ---------------------------------------------------------------------------
-#
-# A fact's ``source_type`` is its provenance class. For auto-supersession we
-# rank those classes on a TOTAL ORDER of authority: an AUTHORITATIVE fact (a
-# human-curated seed) must NOT be closed by a lower-authority MACHINE-extracted
-# one (an ingestion-NER hit or an analyst LLM emission). Within the SAME tier
-# recency still wins — a NEW leader fact supersedes the OLD leader fact of the
-# same tier exactly as before.
-#
-# Total order (higher int = more authoritative):
-#   seed     == curated   -> 2   (AUTHORITATIVE: human/operator-owned ground truth)
-#   ingestion == agent    -> 1   (MACHINE-EXTRACTED: NER hit / LLM emission)
-#   <anything else / None>-> 1   (unknown class is treated as machine-extracted)
-#
-# ``seed`` and ``curated`` are deliberately the SAME rank (neither outranks the
-# other — both are operator-blessed); likewise ``ingestion`` and ``agent``. The
-# guard blocks ONLY a STRICT downgrade (incoming tier < prior row's tier), so
-# same-tier and upgrades pass through untouched.
-_SOURCE_TIER_RANK: dict[str, int] = {
-    "seed": 2,
-    "curated": 2,
-    "ingestion": 1,
-    "agent": 1,
-}
-_DEFAULT_SOURCE_TIER_RANK = 1
-
-
-def _source_tier_rank(source_type: str | None) -> int:
-    """Map a fact ``source_type`` onto its authority rank (see the table above).
-
-    An unknown / ``None`` class falls back to the MACHINE-extracted rank (1) so
-    an unrecognised producer can never masquerade as authoritative.
-    """
-    if not source_type:
-        return _DEFAULT_SOURCE_TIER_RANK
-    return _SOURCE_TIER_RANK.get(source_type.strip().lower(), _DEFAULT_SOURCE_TIER_RANK)
 
 
 # ---------------------------------------------------------------------------
@@ -207,28 +184,22 @@ async def resolve_fact_source_credibility(
     return source_tier_credibility(source_type)
 
 
-# ---------------------------------------------------------------------------
-# Contested-claims coexistence (Holes-B Wave 4 — #101, decision #1)
-# ---------------------------------------------------------------------------
-#
-# The ONE behavioral change of the contested-claims feature, gated OFF by
-# default behind ``LEGBA_FACT_CONTENTION``. When ON, a SAME-TIER open prior
-# whose value is FUZZY-DISTINCT from the incoming value is NOT closed — both
-# rows COEXIST open so the detect-only ``fact_contention_arbiter`` opens a
-# contention group on its next cadence (decision #1: coexist + surface a
-# winner, never destroy the loser). Everything else closes exactly as before.
-_FACT_CONTENTION_ENV = "LEGBA_FACT_CONTENTION"
+
+_EVENTS_ENV = "LEGBA_EVENTS"
 
 
-def _fact_contention_enabled() -> bool:
-    """Honor ``LEGBA_FACT_CONTENTION`` (default OFF).
+def events_enabled() -> bool:
+    """Honor ``LEGBA_EVENTS`` (default OFF) — the V3/P0 event write-path flag.
 
-    Only "1"/"true"/"yes"/"on" enable the write-path coexistence behavior;
-    unset/empty/anything-else keeps it off, so :func:`supersede_prior_facts`
-    runs the single blind UPDATE byte-for-byte as before (zero extra queries on
-    the hot path).
+    The ONE read site (the ``LEGBA_AGE_DERIVED_FROM`` /
+    ``_age_derived_from_enabled`` pattern): every event write routes through
+    :func:`_insert_event`, which refuses while the flag is off, so the flag's
+    off state is structural — an unflagged write cannot land an events row,
+    a signal_event_links row, or an 'opened' ledger row by accident. Only
+    "1"/"true"/"yes"/"on" enable it; unset/empty/anything-else keeps it off.
+    P1's clustering handler reads the same helper for its gate.
     """
-    raw = os.environ.get(_FACT_CONTENTION_ENV, "0").strip().lower()
+    raw = os.environ.get(_EVENTS_ENV, "0").strip().lower()
     return raw in {"1", "true", "yes", "on"}
 
 
@@ -308,6 +279,7 @@ async def write_analyst_output(
     source_type: str | None = None,
     seed_batch_id: UUID | None = None,
     source_signal_ids: Sequence[UUID] | None = None,
+    origin_class: str | None = None,
 ) -> tuple[OutputRow | None, OutputDeadLetterEntry | None]:
     """Generic analyst-output writer.
 
@@ -331,6 +303,12 @@ async def write_analyst_output(
     (``'agent'``) and a NULL ``seed_batch_id``. A seed write passes
     ``source_type='seed'`` + the batch id so the row is stamped + selectively
     refreshable/purgeable.
+
+    ``origin_class`` (V3/P7) is honored ONLY by the ``facts`` route: the
+    closed six-class provenance vocabulary (migration 0209). ``None`` leaves
+    ``_insert_fact``'s default — ``'seed'`` when a ``seed_batch_id`` rides,
+    else ``'live'`` — and a value outside the vocabulary fails at the
+    ``facts_origin_class_vocab`` CHECK, loudly.
 
     ``source_signal_ids`` (D15) is honored ONLY by the ``nexuses`` route: the
     originating signal/fact UUIDs the nexus was reified from. The ``nexuses``
@@ -386,6 +364,7 @@ async def write_analyst_output(
         source_type=source_type,
         seed_batch_id=seed_batch_id,
         source_signal_ids=source_signal_ids,
+        origin_class=origin_class,
     )
 
     # 4) Best-effort NATS publish.
@@ -470,6 +449,29 @@ async def write_situation(
         conn,
         analyst_ctx=analyst_ctx,
         kind=OutputKind.SITUATION,
+        output_payload=payload,
+        derived_from=derived_from,
+        **kwargs,
+    )
+
+
+async def write_event(
+    conn: asyncpg.Connection,
+    *,
+    analyst_ctx: AnalystContext,
+    payload: EventPayload | dict[str, Any],
+    derived_from: Sequence[UUID],
+    **kwargs: Any,
+) -> tuple[OutputRow | None, OutputDeadLetterEntry | None]:
+    """Route an event write through the standard chokepoint (V3/P0).
+
+    Same contract as every specialized writer — the LEGBA_EVENTS gate lives
+    inside ``_insert_event``, so an unflagged call raises there, not here.
+    """
+    return await write_analyst_output(
+        conn,
+        analyst_ctx=analyst_ctx,
+        kind=OutputKind.EVENT,
         output_payload=payload,
         derived_from=derived_from,
         **kwargs,
@@ -709,6 +711,7 @@ async def _insert_for_spec(
     source_type: str | None = None,
     seed_batch_id: UUID | None = None,
     source_signal_ids: Sequence[UUID] | None = None,
+    origin_class: str | None = None,
 ) -> None:
     """Dispatch INSERT based on the spec's target table.
 
@@ -755,6 +758,7 @@ async def _insert_for_spec(
             effective_schema_uri=effective_schema_uri,
             source_type=source_type,
             seed_batch_id=seed_batch_id,
+            origin_class=origin_class,
         )
     elif table == "nexuses":
         await _insert_nexus(
@@ -774,6 +778,15 @@ async def _insert_for_spec(
         # append. derived_from is forced empty here regardless of what was
         # passed — the off-chain invariant (§3.5).
         await _insert_journal_entry(
+            conn,
+            row_id=row_id,
+            payload=payload,
+            prov=prov,
+            produced_at=produced_at,
+            effective_schema_uri=effective_schema_uri,
+        )
+    elif table == "events":
+        await _insert_event(
             conn,
             row_id=row_id,
             payload=payload,
@@ -955,6 +968,175 @@ async def _insert_situation(
     )
 
 
+async def _insert_event(
+    conn: asyncpg.Connection,
+    *,
+    row_id: UUID,
+    payload: BaseModel,
+    prov: ProvenanceFields,
+    produced_at: datetime,
+    effective_schema_uri: str,
+) -> None:
+    """Write an ``events`` row + its link rows + the 'opened' ledger row (V3/P0).
+
+    Gated on ``LEGBA_EVENTS`` (:func:`events_enabled`): while the flag is off
+    this raises rather than writing — the flag's off state is structural, so
+    no unflagged caller can land an events row by accident.
+
+    The upsert key is ``(event_signature, analyst_id)`` — NOT NULL on both, so
+    a NULL analyst_id would silently duplicate instead of upserting (the
+    situations guard, made structural in 0202; the ValueError here is the
+    readable version of the same refusal). A re-emitted signature UPDATES the
+    row in place: hot columns refresh, ``derived_from`` unions, the earliest
+    ``valid_from`` keeps, and ``lifecycle_state`` / ``lifecycle_changed_at`` /
+    ``source_method`` are deliberately NOT touched — the ledger owns the state,
+    and the row's origin producer class is fixed at birth.
+
+    On INSERT (``xmax = 0``) the 'opened' row lands in the same transaction:
+    every event opens its ledger or no event lands. ``linked_at`` is required
+    evidence time; the lifecycle columns and 'opened' row use the newest link
+    timestamp when links exist, never the write's wall-clock ``produced_at``.
+    """
+    if not events_enabled():
+        raise RuntimeError(
+            "LEGBA_EVENTS is off — the event write path is gated (spec §7.5); "
+            "set LEGBA_EVENTS=1 to enable event writes"
+        )
+    p = payload                                          # type: ignore[assignment]
+    data_payload = p.model_dump(mode="json")
+    sig = getattr(p, "event_signature", None)
+    if not sig:
+        raise ValueError(
+            "write_event: an event requires an event_signature "
+            "(the upsert key is (event_signature, analyst_id))"
+        )
+    if not prov.analyst_id:
+        raise ValueError(
+            "write_event: an event requires an analyst_id — the upsert key is "
+            "(event_signature, analyst_id) and a NULL analyst_id would "
+            "duplicate instead of upsert"
+        )
+    # An event is "one occurrence, evidenced by one or more signals" — the
+    # 'opened' ledger row REQUIRES derived_from non-empty (resolved is the only
+    # evidence-free transition), so an event with no lineage cannot open. Fail
+    # here with a readable message rather than at the CHECK.
+    if not prov.derived_from and not getattr(p, "signals", None):
+        raise ValueError(
+            "write_event: an event cannot open without evidence — "
+            "derived_from is empty and the 'opened' ledger row requires it"
+        )
+    link_times = [
+        link.linked_at for link in (getattr(p, "signals", None) or ())
+        if getattr(link, "linked_at", None) is not None
+    ]
+    lifecycle_stamp = max(link_times) if link_times else produced_at
+    # V3/P1 — geo_lat/geo_lon are ALWAYS server-derived from the member
+    # signals, never trusted off the payload (spec §2.7): the point from the
+    # majority country's earliest geocoded member — never a country
+    # centroid, never invented, NULL when no member carries one. The
+    # ``geo`` text[] column itself is left exactly as the caller supplied it
+    # (unchanged behavior) — only the point was ever NULL-on-every-row; the
+    # country array is already populated by the caller's own (broader,
+    # entity/text-gazetteer-informed) derivation.
+    #
+    # The point derivation runs over the FULL member set, not just this
+    # write's ``p.signals`` — a re-materialization's candidate is a fresh
+    # cluster over the current slice window and can legitimately omit an
+    # older member that already scrolled out of it (the same reason
+    # ``_event_payload`` re-unions ``matched['geo']`` in Python), so a write
+    # that only looked at ``p.signals`` could flicker a previously-derived
+    # point back to NULL. Look up whatever is already linked to this
+    # (event_signature, analyst_id) identity — empty on a fresh mint — and
+    # union it with this write's own links before deriving.
+    _existing_event_id = await conn.fetchval(
+        "SELECT id FROM events WHERE event_signature = $1 AND analyst_id = $2",
+        sig, prov.analyst_id,
+    )
+    _existing_signal_ids: list[UUID] = []
+    if _existing_event_id is not None:
+        _existing_signal_ids = [
+            r["signal_id"] for r in await conn.fetch(
+                "SELECT signal_id FROM signal_event_links WHERE event_id = $1",
+                _existing_event_id,
+            )
+        ]
+    member_signal_ids = list({
+        *(
+            link.signal_id
+            for link in (getattr(p, "signals", None) or ())
+        ),
+        *_existing_signal_ids,
+    })
+    _derived_geo_country, derived_geo_lat, derived_geo_lon = (
+        await _event_writes.derive_event_geo(conn, member_signal_ids)
+    )
+    geo_list = list(p.geo)                                  # type: ignore[attr-defined]
+    geo_lat = p.geo_lat if p.geo_lat is not None else derived_geo_lat  # type: ignore[attr-defined]
+    geo_lon = p.geo_lon if p.geo_lon is not None else derived_geo_lon  # type: ignore[attr-defined]
+    row = await conn.fetchrow(
+        _event_writes.EVENT_INSERT_SQL,
+        row_id,
+        sig,
+        prov.analyst_id,
+        p.title,                                         # type: ignore[attr-defined]
+        p.summary,                                       # type: ignore[attr-defined]
+        p.category,                                      # type: ignore[attr-defined]
+        p.event_type,                                    # type: ignore[attr-defined]
+        p.severity,                                      # type: ignore[attr-defined]
+        lifecycle_stamp,                                 # lifecycle_changed_at
+        p.time_start,                                    # type: ignore[attr-defined]
+        p.time_end,                                      # type: ignore[attr-defined]
+        geo_list,
+        geo_lat,
+        geo_lon,
+        list(p.locations),                               # type: ignore[attr-defined]
+        float(p.confidence),                             # type: ignore[attr-defined]
+        int(p.signal_count),                             # type: ignore[attr-defined]
+        int(p.distinct_source_count),                    # type: ignore[attr-defined]
+        bool(p.oversized),                               # type: ignore[attr-defined]
+        p.valid_from,                                    # type: ignore[attr-defined]
+        p.valid_until,                                   # type: ignore[attr-defined]
+        p.source_method,                                 # type: ignore[attr-defined]
+        getattr(p, "source_type", None) or "agent",
+        list(prov.derived_from),
+        prov.target_id,
+        prov.target_version,
+        prov.analyst_version,
+        prov.run_id,
+        effective_schema_uri,
+        json.dumps(data_payload.get("data", {}), default=_json_default),
+        produced_at,
+    )
+    event_id = row["id"]
+    await _event_writes.insert_event_links(
+        conn, event_id, p, produced_at=produced_at
+    )
+    # The two membership rollups are the LINK TABLE's, never the payload's:
+    # ``signal_count`` counted ``prior_signals | candidate.signal_ids`` while
+    # only members carrying a ``fetched_at`` become link rows, and the upsert
+    # above persists whatever number the payload carried. Reconcile from the
+    # links themselves, in this transaction, after they land — one bounded
+    # statement per written event, so every write path through ``write_event``
+    # (mint, reattach, the clustering front leg, the tower leg) leaves the two
+    # columns equal to the membership a reader would count.
+    await _event_writes.reconcile_event_rollups(conn, event_id)
+    if row["inserted"]:
+        # Every event opens its ledger — the same transaction, so the row and
+        # its 'opened' land or neither does. Evidence falls back to the link
+        # signal ids when the write carried no derived_from; the guard above
+        # already refused the both-empty case.
+        await _event_writes.insert_event_opened(
+            conn,
+            event_id,
+            title=str(p.title),                          # type: ignore[attr-defined]
+            occurred_at=lifecycle_stamp,
+            evidence=list(prov.derived_from) or [
+                link.signal_id for link in getattr(p, "signals", None) or ()
+            ],
+            prov=prov,
+        )
+
+
 async def _insert_hypothesis(
     conn: asyncpg.Connection,
     *,
@@ -1001,463 +1183,6 @@ async def _insert_hypothesis(
     )
 
 
-async def supersede_prior_facts(
-    conn: asyncpg.Connection,
-    *,
-    subject: str,
-    predicate: str,
-    value: str,
-    new_fact_id: UUID,
-    incoming_source_type: str | None = None,
-) -> int:
-    """Close any open fact(s) for ``(lower(subject), lower(predicate))`` whose
-    VALUE differs from the incoming ``value``, pointing them at ``new_fact_id``
-    — UNLESS the prior row outranks the incoming fact on source authority
-    (Holes-A A1 — confidence-tier-aware supersession).
-
-    This is the altitude-0 auto-supersession the old system had (PIECE B —
-    temporal-fact hardening): the canonical "what is true now" for a
-    subject+predicate is the single open row (``valid_until IS NULL AND
-    superseded_by IS NULL``). When a new fact asserts a DIFFERENT value for the
-    same subject+predicate, the prior open row(s) are closed:
-    ``valid_until = now()`` + ``superseded_by = <new id>``. The new row is then
-    inserted open by the caller (``_insert_fact`` / ``_insert_ingestion_fact``).
-
-    Contract / safety:
-      * **source-tier guard (A1)** — an incoming MACHINE-extracted fact
-        (``ingestion``/``agent``) does NOT close an open AUTHORITATIVE fact
-        (``seed``/``curated``) for the same subject+predicate. Authority ranks
-        on the total order in :data:`_SOURCE_TIER_RANK`
-        (``seed == curated > ingestion == agent``); the UPDATE skips any prior
-        row whose tier is STRICTLY higher than the incoming one. WITHIN the same
-        tier recency still wins, so a NEW leader fact supersedes the OLD leader
-        fact of the same tier exactly as before — the guard blocks only the
-        downgrade direction. When ``incoming_source_type`` is ``None`` (e.g. the
-        operator journal-correction caller, which is maximally authoritative) NO
-        tier filtering is applied and the historical behavior is preserved.
-      * **value-differs only** — a re-assert of the SAME value is NOT a
-        supersession; that path stays the ``idx_facts_temporal_triple_open``
-        ``ON CONFLICT`` upsert (confidence lift + lineage union). The
-        ``lower(value) <> lower($3)`` predicate guarantees the identical-triple
-        row is never closed by its own re-ingest.
-      * **idempotent** — only rows still open
-        (``valid_until IS NULL AND superseded_by IS NULL``) are touched; a
-        replay closes nothing new once the prior is already superseded.
-      * **same connection** — the caller runs this immediately before the
-        insert on the same ``conn`` so the close + open are one logical step
-        (the dapr write path acquires one connection per output).
-
-    **Contested-claims coexistence (Holes-B Wave 4, ``LEGBA_FACT_CONTENTION``).**
-    When the flag is ON one extra rule joins the close set: a SAME-TIER prior
-    open row whose value is FUZZY-DISTINCT from the incoming value is NOT closed
-    — both rows COEXIST open so the detect-only ``fact_contention_arbiter`` opens
-    a contention group next cadence (decision #1 — coexist + surface a winner,
-    never destroy the loser). "Same-tier" is equal ``_source_tier_rank``;
-    "fuzzy-distinct" is ``cluster_values([incoming, prior_value])`` yielding more
-    than one cluster (so e.g. same-tier "Russian" vs "Russia" is fuzzy-SAME and
-    still closes as today). Lower-tier priors (the incoming outranks) and
-    higher-tier priors (already A1-skipped) are unaffected. With the flag OFF
-    (the default) this function is byte-for-byte the single blind UPDATE below —
-    ZERO extra queries on the hot path.
-
-    Returns the number of prior rows closed (0 when this is the first
-    assertion of the subject+predicate, a same-value re-assert, every
-    differing-value prior row outranks the incoming fact on authority, or — with
-    the flag ON — every differing-value same-tier prior is a fuzzy-distinct
-    coexistence and nothing is left to close).
-    """
-    if _fact_contention_enabled():
-        # Flag ON — the ONE behavioral change. Fetch the candidate open
-        # differing-value priors, decide per-row in Python (A1 tier guard PLUS
-        # the same-tier fuzzy-distinct coexistence carve-out), then close only
-        # the surviving set in a single UPDATE ... WHERE id = ANY($ids). Same
-        # connection, idempotent (only open rows are fetched / closed).
-        return await _supersede_prior_facts_coexist(
-            conn,
-            subject=subject,
-            predicate=predicate,
-            value=value,
-            new_fact_id=new_fact_id,
-            incoming_source_type=incoming_source_type,
-        )
-
-    # Flag OFF (default) — the single blind UPDATE, unchanged.
-    #
-    # A1 — source-tier precedence. When the caller declares the incoming fact's
-    # source_type we forbid closing any prior row whose authority rank is
-    # STRICTLY higher (an ingestion/agent fact must not retire a seed/curated
-    # one). A NULL incoming rank disables the filter (historical / operator
-    # correction path stays unconditional). The guard is `source_type IS NULL`
-    # tolerant — a legacy untyped row is treated as the machine-extracted rank,
-    # so it can never silently outrank and block a legitimate supersession.
-    incoming_rank = (
-        None if incoming_source_type is None
-        else _source_tier_rank(incoming_source_type)
-    )
-    result = await conn.execute(
-        """
-        UPDATE facts
-           SET valid_until   = now(),
-               superseded_by = $4,
-               updated_at    = now()
-         WHERE lower(subject)   = lower($1)
-           AND lower(predicate) = lower($2)
-           AND lower(value)    <> lower($3)
-           AND valid_until IS NULL
-           AND superseded_by IS NULL
-           AND id <> $4
-           AND (
-                 $5::int IS NULL
-                 OR CASE lower(coalesce(source_type, ''))
-                        WHEN 'seed'      THEN 2
-                        WHEN 'curated'   THEN 2
-                        WHEN 'ingestion' THEN 1
-                        WHEN 'agent'     THEN 1
-                        ELSE 1
-                    END <= $5::int
-               )
-        """,
-        subject,
-        predicate,
-        value,
-        new_fact_id,
-        incoming_rank,
-    )
-    try:
-        return int(result.split()[-1]) if result else 0
-    except (ValueError, IndexError):                     # pragma: no cover
-        return 0
-
-
-async def _supersede_prior_facts_coexist(
-    conn: asyncpg.Connection,
-    *,
-    subject: str,
-    predicate: str,
-    value: str,
-    new_fact_id: UUID,
-    incoming_source_type: str | None,
-) -> int:
-    """Contention-aware variant of :func:`supersede_prior_facts` (flag ON).
-
-    Replaces the single blind UPDATE with a FETCH → decide-per-row → close-set
-    UPDATE so a same-tier fuzzy-distinct prior can COEXIST instead of being
-    closed (Holes-B Wave 4, decision #1). The close set is computed in Python:
-    a differing-value open prior closes iff it passes the A1 source-tier guard
-    AND is NOT (same-tier AND fuzzy-distinct from the incoming value). Lower-tier
-    priors still close (the incoming outranks them); higher-tier priors are
-    A1-skipped; same-tier fuzzy-SAME priors ("Russian" vs "Russia") still close
-    as today; only same-tier fuzzy-DISTINCT priors are spared to coexist.
-
-    Runs on the caller's connection (the close + the subsequent insert are one
-    logical step) and is idempotent: only rows still open are fetched, and a
-    replay re-fetches an already-closed prior as gone. Returns the number of
-    prior rows actually closed.
-    """
-    # Lazy import — the fuzzy clusterer is a sibling module (Wave 2); importing
-    # it only inside the ON branch keeps the OFF hot path and module import free
-    # of the dependency, and lets a test substitute it via monkeypatch.
-    from .value_clustering import cluster_values
-
-    incoming_rank = (
-        None if incoming_source_type is None
-        else _source_tier_rank(incoming_source_type)
-    )
-    # FETCH the candidate open differing-value priors (the SAME selection the
-    # OFF UPDATE's WHERE encodes, minus the tier guard — we apply A1 in Python so
-    # the fuzzy carve-out can sit alongside it). `id <> new_fact_id` keeps the
-    # just-inserting row out (mirrors the UPDATE's `id <> $4`).
-    rows = await conn.fetch(
-        """
-        SELECT id, value, source_type
-          FROM facts
-         WHERE lower(subject)   = lower($1)
-           AND lower(predicate) = lower($2)
-           AND lower(value)    <> lower($3)
-           AND valid_until IS NULL
-           AND superseded_by IS NULL
-           AND id <> $4
-        """,
-        subject,
-        predicate,
-        value,
-        new_fact_id,
-    )
-
-    to_close: list[UUID] = []
-    for row in rows:
-        prior_rank = _source_tier_rank(row["source_type"])
-        # A NULL incoming rank is the operator-correction caller — maximally
-        # authoritative, NO tier guard and NO coexistence carve-out: it closes
-        # every differing-value prior unconditionally, exactly as the OFF path's
-        # `$5::int IS NULL` short-circuit does. Only a producer that declared a
-        # source_type is subject to A1 + coexistence.
-        if incoming_rank is not None:
-            # A1 — never close a STRICTLY higher-authority prior (an
-            # ingestion/agent fact must not retire a seed/curated one).
-            if prior_rank > incoming_rank:
-                continue
-            # Coexistence carve-out — a SAME-TIER prior whose value is
-            # FUZZY-DISTINCT from the incoming one stays OPEN so the detect-only
-            # arbiter groups the two next cadence. Fuzzy-SAME ("Russian" vs
-            # "Russia" → ONE cluster) is NOT contention; it closes as today.
-            if prior_rank == incoming_rank:
-                fuzzy_distinct = len(cluster_values([value, row["value"]])) > 1
-                if fuzzy_distinct:
-                    continue  # COEXIST — leave the prior open.
-        to_close.append(row["id"])
-
-    if not to_close:
-        return 0
-
-    result = await conn.execute(
-        """
-        UPDATE facts
-           SET valid_until   = now(),
-               superseded_by = $1,
-               updated_at    = now()
-         WHERE id = ANY($2::uuid[])
-           AND valid_until IS NULL
-           AND superseded_by IS NULL
-        """,
-        new_fact_id,
-        to_close,
-    )
-    try:
-        return int(result.split()[-1]) if result else 0
-    except (ValueError, IndexError):                     # pragma: no cover
-        return 0
-
-
-# ---------------------------------------------------------------------------
-# FU3 — office-keyed supersession for FUNCTIONAL-ROLE facts (P5 durable
-# stale-leader fix)
-# ---------------------------------------------------------------------------
-#
-# supersede_prior_facts keys on (subject, predicate). For a FUNCTIONAL ROLE the
-# canonical "current holder" is keyed on the COUNTRY, not the person:
-#   * a person-subject 'leader of <country>' fact carries the country in VALUE;
-#   * a country-subject 'head of state' / 'head of government' fact carries it
-#     in SUBJECT (its office IS the predicate).
-# So a re-seed of a NEW office-holder (a DIFFERENT person subject) never closed
-# the prior 'leader of <country>' row — the P5 both-open stale-leader
-# contradiction migration 0064 had to clean by hand (Biden/Scholz/…). This closes
-# every OTHER open row of the same functional role for the SAME country, keyed on
-# the country side, regardless of person. The caller scopes it to the
-# authoritative seed/curated tier so ingestion contention COEXISTENCE is
-# untouched, and — for the person-subject 'leader of' shape — it is role-aware
-# (``data->>'role'``) so a dual-office country (Iran supreme leader vs president,
-# both 'leader of Iran') is NOT collapsed into one holder.
-
-#: Which column names the COUNTRY for each functional-role predicate (normalized).
-_FUNCTIONAL_ROLE_COUNTRY_SIDE: dict[str, str] = {
-    "leader of": "value",          # subject=person, value=country
-    "head of state": "subject",    # subject=country, value=person
-    "head of government": "subject",
-}
-
-#: Reused SQL tier-rank CASE (mirrors supersede_prior_facts's A1 guard exactly).
-_FUNCTIONAL_ROLE_TIER_CASE = """
-        CASE lower(coalesce(source_type, ''))
-            WHEN 'seed'      THEN 2
-            WHEN 'curated'   THEN 2
-            WHEN 'ingestion' THEN 1
-            WHEN 'agent'     THEN 1
-            ELSE 1
-        END
-"""
-
-
-async def supersede_prior_functional_role_facts(
-    conn: asyncpg.Connection,
-    *,
-    subject: str,
-    predicate: str,
-    value: str,
-    role: str | None,
-    new_fact_id: UUID,
-    incoming_source_type: str | None = None,
-) -> int:
-    """Office-keyed supersession for a FUNCTIONAL-ROLE fact (FU3 / P5).
-
-    ``predicate`` MUST already be canonical (``normalize_predicate``). Closes
-    every OTHER open row of the SAME functional role for the SAME COUNTRY
-    (whichever column holds it), pointing them at ``new_fact_id``:
-
-      * 'leader of' — country is VALUE, person is SUBJECT: close prior open
-        'leader of <country>' rows with a DIFFERENT person of the SAME office
-        (``data->>'role'``, matched CASE-INSENSITIVELY so 'President' vs
-        'president' casing drift between re-seeds still closes the prior holder).
-        A role-less incoming fact can't safely role-split a dual-office country,
-        so it takes NO office-keyed close (the plain (subject, predicate)
-        supersession the caller already ran still applies).
-      * 'head of state' / 'head of government' — country is SUBJECT, person is
-        VALUE, office is the predicate: close prior open rows for the SAME country
-        with a DIFFERENT person. (A no-op on the OFF path — supersede_prior_facts
-        already closed them — but completes the fold when contention coexistence
-        spared a fuzzy-distinct same-tier prior.)
-
-    A1 source-tier guard applies (never closes a STRICTLY higher-authority prior).
-    Idempotent (only open rows touched). ``id <> new_fact_id`` plus the person-side
-    inequality exclude the just-inserted / collapsed-into row. Returns #closed.
-    """
-    side = _FUNCTIONAL_ROLE_COUNTRY_SIDE.get(predicate)
-    if side is None or not new_fact_id:
-        return 0
-    incoming_rank = (
-        None if incoming_source_type is None
-        else _source_tier_rank(incoming_source_type)
-    )
-    if side == "value":
-        # 'leader of' — country=value, person=subject. Role-split guard: only
-        # close within the SAME office/role, and only when a role is known.
-        if not role:
-            return 0
-        result = await conn.execute(
-            f"""
-            UPDATE facts
-               SET valid_until   = now(),
-                   superseded_by = $1,
-                   updated_at    = now()
-             WHERE lower(predicate) = $2
-               AND lower(value)     = lower($3)
-               AND lower(subject)  <> lower($4)
-               AND lower(coalesce(data->>'role', '')) = lower($5)
-               AND valid_until IS NULL
-               AND superseded_by IS NULL
-               AND id <> $1
-               AND ($6::int IS NULL OR {_FUNCTIONAL_ROLE_TIER_CASE} <= $6::int)
-            """,
-            new_fact_id, predicate, value, subject, role, incoming_rank,
-        )
-    else:
-        # 'head of state' / 'head of government' — country=subject, person=value.
-        result = await conn.execute(
-            f"""
-            UPDATE facts
-               SET valid_until   = now(),
-                   superseded_by = $1,
-                   updated_at    = now()
-             WHERE lower(predicate) = $2
-               AND lower(subject)   = lower($3)
-               AND lower(value)    <> lower($4)
-               AND valid_until IS NULL
-               AND superseded_by IS NULL
-               AND id <> $1
-               AND ($5::int IS NULL OR {_FUNCTIONAL_ROLE_TIER_CASE} <= $5::int)
-            """,
-            new_fact_id, predicate, subject, value, incoming_rank,
-        )
-    try:
-        return int(result.split()[-1]) if result else 0
-    except (ValueError, IndexError):                     # pragma: no cover
-        return 0
-
-
-async def collapse_open_triple(
-    conn: asyncpg.Connection,
-    *,
-    subject: str,
-    predicate: str,
-    value: str,
-    new_fact_id: UUID,
-    confidence: float,
-    derived_from: Sequence[UUID],
-    valid_from: datetime | None = None,
-    source_credibility: float | None = None,
-) -> UUID | None:
-    """Collapse a standing fact triple onto ONE open row regardless of
-    ``valid_from`` drift (D17 — full-triple supersession leaked open duplicates
-    via per-cycle valid_from drift).
-
-    The ``idx_facts_temporal_triple_open`` partial-unique index keys on the FULL
-    quad INCLUDING ``COALESCE(valid_from, '1970-01-01')``, so the SAME
-    ``(subject, predicate, value)`` re-asserted from N cycles with N distinct
-    event-times accumulates N OPEN rows — the live "Russia located in UK" ×8
-    noise the ON CONFLICT upsert never catches (its conflict target carries the
-    valid_from dimension, so a drifted valid_from is a NEW conflict key, not a
-    hit).
-
-    This helper closes that dimension for SAME-value OPEN rows BEFORE the
-    insert: if an open row for ``(lower(subject), lower(predicate),
-    lower(value))`` already exists (ANY valid_from), it is refreshed in place
-    (confidence → noisy-OR combine capped at 0.99 per A2, lineage unioned,
-    EARLIEST valid_from kept) and its id is
-    returned so the caller SKIPS the insert. Returns ``None`` when no open row
-    exists (the caller proceeds to insert the fresh open row).
-
-    Contract / safety:
-      * **same-value only** — the match is on ``lower(value) = lower($3)``; a
-        DIFFERENT value is NOT collapsed here (that path is
-        :func:`supersede_prior_facts`, which the caller runs first).
-      * **open-only** — only rows still open (``valid_until IS NULL AND
-        superseded_by IS NULL``) are touched; a closed/superseded row is never
-        resurrected (matches the partial index's WHERE).
-      * **confidence aggregation on agreement (A2)** — a replay of the same
-        triple is CORROBORATION from another source, so confidence is combined
-        with a bounded noisy-OR (``1 - (1-existing)*(1-incoming)``, clamped to
-        ``<= 0.99``) rather than lifted to the plain max. N agreeing sources
-        therefore raise confidence ABOVE any single one yet never reach
-        certainty. Before this was ``GREATEST`` (max), which never rose above
-        the single most-confident source. Lineage is still unioned; the row
-        count is unchanged (idempotent in row terms, monotone-increasing in
-        confidence toward the 0.99 cap).
-      * **deterministic pick** — when (legacy data) more than one open row for
-        the triple exists, the EARLIEST (``valid_from ASC, created_at ASC``) is
-        refreshed; the caller's :func:`supersede_prior_facts` already collapsed
-        differing-value rows, and future writes converge on this one open row.
-
-    Runs on the caller's connection so the collapse + insert are one logical
-    step. Shared by BOTH fact producers (the analyst ``_insert_fact`` path and
-    the ingest ``fact_extractor._insert_ingestion_fact`` path) so a standing
-    triple keeps ONE open row across producers.
-    """
-    existing_id = await conn.fetchval(
-        """
-        UPDATE facts
-           -- A2: bounded noisy-OR combine of agreeing confidences, capped at
-           -- 0.99 so corroboration raises belief above any single source but
-           -- never reaches certainty (was GREATEST/max).
-           SET confidence   = LEAST(
-                                 0.99,
-                                 1.0 - (1.0 - facts.confidence) * (1.0 - $4)
-                               ),
-               derived_from = COALESCE((SELECT array_agg(DISTINCT e)
-                               FROM unnest(facts.derived_from || $5::uuid[]) e),
-                              '{}'::uuid[]),
-               -- LEAST/GREATEST skip NULL args in Postgres (NULL only if ALL
-               -- are NULL), so this keeps the EARLIEST known valid_from and is
-               -- a no-op when either side is NULL — matches the ingest path.
-               valid_from   = LEAST(facts.valid_from, $6),
-               -- Holes-B Wave 0: a corroborating re-assert keeps the MOST
-               -- credible backing source. GREATEST skips NULLs, so an unscored
-               -- side never lowers a known credibility; NULL only if both NULL.
-               source_credibility = GREATEST(facts.source_credibility, $8),
-               updated_at   = now()
-         WHERE id = (
-                 SELECT id FROM facts
-                  WHERE lower(subject)   = lower($1)
-                    AND lower(predicate) = lower($2)
-                    AND lower(value)     = lower($3)
-                    AND valid_until IS NULL
-                    AND superseded_by IS NULL
-                    AND id <> $7
-                  ORDER BY valid_from ASC, created_at ASC
-                  LIMIT 1
-               )
-        RETURNING id
-        """,
-        subject,
-        predicate,
-        value,
-        float(confidence),
-        list(derived_from),
-        valid_from,
-        new_fact_id,
-        source_credibility,
-    )
-    return existing_id
-
 
 async def _insert_fact(
     conn: asyncpg.Connection,
@@ -1469,6 +1194,8 @@ async def _insert_fact(
     effective_schema_uri: str,
     source_type: str | None = None,
     seed_batch_id: UUID | None = None,
+    origin_class: str | None = None,
+    collection_id: str | None = None,
 ) -> None:
     """Insert (or upsert) one ``facts`` row.
 
@@ -1478,6 +1205,11 @@ async def _insert_fact(
     ``seed_batch_id`` stamps the row's owning seed batch (NULL for non-seed
     writes). On a same-triple upsert the marker is left untouched — a re-import
     is a no-op, an original live row is never re-stamped as seed.
+    ``origin_class`` (V3/P7, migration 0209) is the row's closed-vocabulary
+    provenance class; ``None`` resolves to ``'seed'`` when ``seed_batch_id``
+    is set else ``'live'``, and the upsert leaves it untouched for the same
+    reason. ``collection_id`` is the Program-7 collection pointer — NULL
+    today (the collections table does not exist yet).
 
     The ``facts`` table carries the ``idx_facts_temporal_triple_open``
     PARTIAL UNIQUE index on ``(lower(subject), lower(predicate),
@@ -1588,13 +1320,13 @@ async def _insert_fact(
             source_cycle, valid_from, valid_until, geo_lat, geo_lon, data,
             evidence_set, target_id, target_version, analyst_id,
             analyst_version, produced_at, derived_from, schema_uri, run_id,
-            seed_batch_id, source_credibility
+            origin_class, collection_id, seed_batch_id, source_credibility
         ) VALUES (
             $1, $2, $3, $4, $5, $6,
             $7, $8, $9, $10, $11, $12::jsonb,
             $13::jsonb, $14, $15, $16,
             $17, $18, $19, $20, $21,
-            $22, $23
+            $22, $23, $24, $25
         )
         ON CONFLICT (lower(subject), lower(predicate), lower(value),
                      COALESCE(valid_from, '1970-01-01 00:00:00+00'::timestamptz))
@@ -1648,75 +1380,16 @@ async def _insert_fact(
         list(prov.derived_from),
         effective_schema_uri,
         prov.run_id,
+        # V3/P7 — the origin class is fixed at birth like source_type: a
+        # same-triple upsert never re-stamps it (DO UPDATE leaves it out).
+        # 'seed' derives from the batch marker when not passed explicitly.
+        # (column order keeps seed_batch_id/source_credibility LAST — tests
+        # index the parameter tail positionally)
+        origin_class or ("seed" if seed_batch_id is not None else "live"),
+        collection_id,
         seed_batch_id,
         source_credibility,
     )
-
-
-async def supersede_prior_nexuses(
-    conn: asyncpg.Connection,
-    *,
-    subject: str,
-    intermediary: str | None,
-    object_: str,
-    rel_type: str,
-    polarity: int,
-    label: str,
-    new_nexus_id: UUID,
-) -> int:
-    """Close any open nexus(es) for the typed triple
-    ``(lower(subject), lower(COALESCE(intermediary,'')), lower(object),
-    lower(rel_type))`` whose VALUE (polarity OR label) differs from the
-    incoming one, pointing them at ``new_nexus_id`` (PIECE A — mirrors
-    :func:`supersede_prior_facts`).
-
-    The canonical "what holds now" for a reified relationship is the single
-    open row (``valid_until IS NULL AND superseded_by IS NULL``). When the
-    reifier re-types the SAME triple with a DIFFERENT polarity sign or label,
-    the prior open row(s) are closed (``valid_until = now()`` +
-    ``superseded_by = <new id>``) and the new row is inserted open by the
-    caller.
-
-    Contract / safety (identical to facts):
-      * **value-differs only** — a re-assert of the SAME polarity AND label is
-        NOT a supersession; that path stays the ``idx_nexuses_triple_open``
-        ``ON CONFLICT`` upsert (confidence lift + lineage union). The
-        ``(polarity <> $5 OR lower(label) <> lower($6))`` predicate guarantees
-        the identical row is never closed by its own re-ingest.
-      * **idempotent** — only OPEN rows are touched; a replay closes nothing
-        new once the prior is already superseded.
-      * **same connection** — the caller runs this immediately before the
-        insert on the same ``conn`` so close + open are one logical step.
-
-    Returns the number of prior rows closed.
-    """
-    result = await conn.execute(
-        """
-        UPDATE nexuses
-           SET valid_until   = now(),
-               superseded_by = $7,
-               updated_at    = now()
-         WHERE lower(subject)                  = lower($1)
-           AND lower(COALESCE(intermediary,'')) = lower(COALESCE($2, ''))
-           AND lower(object)                   = lower($3)
-           AND lower(rel_type)                 = lower($4)
-           AND (polarity <> $5 OR lower(label) <> lower($6))
-           AND valid_until IS NULL
-           AND superseded_by IS NULL
-           AND id <> $7
-        """,
-        subject,
-        intermediary,
-        object_,
-        rel_type,
-        int(polarity),
-        label,
-        new_nexus_id,
-    )
-    try:
-        return int(result.split()[-1]) if result else 0
-    except (ValueError, IndexError):                     # pragma: no cover
-        return 0
 
 
 async def _insert_nexus(

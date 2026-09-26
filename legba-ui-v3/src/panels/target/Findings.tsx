@@ -27,6 +27,7 @@ import { selectRow } from '@/state/selection'
 import CitedProse from '@/components/CitedProse'
 import { extractCitations } from '@/lib/citationsModel'
 import { humanizeAnalystId } from '@/lib/analystNames'
+import { GapStrip } from '@/panels/target/GapStrip'
 
 interface FindingRow {
   id: string
@@ -152,6 +153,7 @@ export default function TargetFindingsPanel({ registration, scope }: PanelProps)
       actions={actions}
       onRefresh={() => refetch()}
     >
+      <GapStrip targetId={target_id} />
       {isLoading && <div className="text-xs text-slate-400">Loading findings…</div>}
       {error && (
         <div className="text-xs text-accent-critical">

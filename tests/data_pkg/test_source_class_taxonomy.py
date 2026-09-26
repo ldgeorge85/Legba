@@ -139,6 +139,34 @@ EXPECTED_YAML_CLASS: dict[str, str] = {
     "source_studiokalangou.yaml": "reporting",
     "source_sahel_intelligence.yaml": "reporting",
     "source_france24_afrique.yaml": "reporting",
+    # 2026-09-07 batch — Burkina Faso / Mali domestic-press coverage pass
+    # (country_watch_bf / country_watch_ml). AIB and AMAP are each country's
+    # own national state press agency (Ukrinform/IRNA treatment, not
+    # `official` — that vocabulary slot is for a government body's own
+    # primary-source statements, e.g. source_kremlin.yaml); LeFaso.net and
+    # Malijet are independent commercial outlets; Studio Yafa and Studio
+    # Tamani are Fondation Hirondelle non-profit newsrooms (the
+    # source_studiokalangou.yaml treatment).
+    "source_aib_burkina.yaml": "state_media",
+    "source_amap_mali.yaml": "state_media",
+    "source_lefaso_net.yaml": "reporting",
+    "source_malijet.yaml": "reporting",
+    "source_studioyafa.yaml": "reporting",
+    "source_studiotamani.yaml": "reporting",
+    # sources_wave_2 batch (2026-09-07) — closes reviewer-flagged coverage gaps:
+    # planning/COVERAGE_VS_SELECTION_AUDIT_2026-09-07.md. OHCHR (stale/non-news
+    # RSS), Kyiv Post and Sudan Tribune (site blocked this fetcher on every path)
+    # were researched and NOT registered — see the sources-wave-2 report.
+    "source_un_news_africa.yaml": "official",
+    "source_un_news_middle_east.yaml": "official",
+    "source_un_news_peace_security.yaml": "official",
+    "source_kyiv_independent.yaml": "reporting",
+    "source_groundup.yaml": "reporting",
+    "source_dailymaverick.yaml": "reporting",
+    "source_dabangasudan.yaml": "reporting",
+    "source_sudanwarmonitor.yaml": "analysis",
+    "source_scmp_china.yaml": "reporting",
+    "source_rbi_press.yaml": "official",
 }
 
 # 2026-07-29 Ansar Allah decision — source_telegram_ansarallah.yaml (a
@@ -317,9 +345,13 @@ def test_new_state_media_descriptor_is_registration_ready(fname: str):
     desc = _load_descriptor(fname)
     assert desc.identity.kind == "rss"
     assert desc.scope.source_class == "state_media"
-    # Activation-ready keyless RSS: active + a cadence schedule (the model
-    # validator requires a schedule for an active poll source).
-    assert desc.identity.state.value == "active"
+    # Activation-ready keyless RSS: a cadence schedule is present (the model
+    # validator requires one for an active poll source) — the CURRENT state is
+    # the operator's call, not this test's: source.presstv.english has been
+    # `paused` on the live head since its initial registration (2026-07-03),
+    # and the tree was reconciled to that on 2026-09-06 so a re-register cannot
+    # silently re-activate it.
+    assert desc.identity.state.value in ("active", "paused")
     assert desc.acquisition == "poll"
     assert desc.cadence is not None and desc.cadence.schedule is not None
     # Config binds through the PRODUCTION unwrap + the real RSS handler schema —

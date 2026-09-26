@@ -88,6 +88,21 @@ from .source import (
     Subscription,
 )
 
+from .collection import (
+    CollectionDescriptor,
+    CollectionIdentity,
+    CollectionState,
+    COLLECTION_SCHEMA_URI,
+    COLLECTION_TRANSITIONS,
+    FENCED_SURFACES,
+    FirewallBlock,
+    LoaderBlock,
+    ManifestBlock,
+    OPT_IN_READERS,
+    SeriesEntry,
+    SubjectEntry,
+)
+
 from .action_pack import (
     ActionPack,
     ActionPackIdentity,
@@ -172,6 +187,12 @@ __all__ = [
     "SourceDescriptor", "SourceIdentity", "SourceScope", "SourceDeps",
     "SourceOutput", "SourceDiscoveryBlock", "ProvisionBlock",
     "SourceRef", "SourceSelector", "Subscription",
+    # Collection (Program 7g — bounded holdings of the past)
+    "CollectionDescriptor", "CollectionIdentity", "CollectionState",
+    "COLLECTION_SCHEMA_URI", "COLLECTION_TRANSITIONS",
+    "FENCED_SURFACES", "OPT_IN_READERS",
+    "FirewallBlock", "LoaderBlock", "ManifestBlock", "SeriesEntry",
+    "SubjectEntry",
     # Action packs (pivot)
     "ActionPack", "ActionPackIdentity", "ActionPackRef",
     "ToolSpec", "Channel", "PackGovernor",

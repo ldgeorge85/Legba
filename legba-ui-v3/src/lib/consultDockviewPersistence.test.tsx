@@ -187,6 +187,13 @@ function stubFetch(handlers: {
 }) {
   const mock = vi.fn(async (url: string) => {
     const u = String(url)
+    if (u.includes('/consult/runs/')) {
+      // The detached-run status endpoint. These tests are about a turn the
+      // RELOAD orphaned, so the run is always already gone from the registry's
+      // memory — 404, as it would be — and the panel falls back to the durable
+      // record (the session's turns). See `consult_runs.py`.
+      return { ok: false, status: 404, text: async () => 'no live run' }
+    }
     if (u.includes('/consult/sessions/')) {
       return { ok: true, json: async () => handlers.session?.() ?? sessionDetail([]) }
     }

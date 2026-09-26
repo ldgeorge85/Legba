@@ -93,9 +93,25 @@ async def test_relay_yields_steps_then_stops_on_final(nats_store, monkeypatch):
                 subject,
                 json.dumps({"type": "step", "round": i}).encode("utf-8"),
             )
+        # The ACTOR's bare final — it says the run ended but carries no answer,
+        # so the relay must NOT close on it (D-7). It opens the grace window.
         await nats_store.nc.publish(
             subject,
             json.dumps({"type": "final", "request_id": request_id}).encode("utf-8"),
+        )
+        # The REGISTRY's terminal frame — this one carries the answer, and this
+        # is what closes the stream.
+        await nats_store.nc.publish(
+            subject,
+            json.dumps(
+                {
+                    "type": "final",
+                    "final_source": "registry",
+                    "request_id": request_id,
+                    "status": "complete",
+                    "response": {"answer": "the answer"},
+                }
+            ).encode("utf-8"),
         )
         await nats_store.nc.flush()
 
@@ -103,12 +119,19 @@ async def test_relay_yields_steps_then_stops_on_final(nats_store, monkeypatch):
     frames = await asyncio.wait_for(_drain(gen), timeout=10.0)
     await pub
 
-    # 3 step frames + 1 final = 4 data frames; the generator stopped after
-    # final (it didn't keep yielding).
+    # 3 step frames + the actor's final + the registry's final = 5 data frames;
+    # the generator stopped after the REGISTRY frame, not the actor's.
     data_frames = [f for f in frames if f.startswith(b"data: ")]
-    assert len(data_frames) == 4
-    # Last frame is the final marker.
-    assert b'"type": "final"' in data_frames[-1] or b'"type":"final"' in data_frames[-1]
+    assert len(data_frames) == 5
+    assert b'"final_source": "registry"' in data_frames[-1]
+    assert b'"answer"' in data_frames[-1], (
+        "the terminal frame must carry the answer — a browser that only learns "
+        "the run ENDED still has to fetch the text from somewhere, which is "
+        "exactly the dependency the 504 severed"
+    )
+    # The actor's bare final was relayed (the panel shows 'synthesising') but
+    # did not terminate the stream.
+    assert b"final_source" not in data_frames[-2]
 
 
 @pytest.mark.asyncio

@@ -33,6 +33,60 @@ export interface WorldFinding {
 
 export type SituationLifecycle = 'active' | 'escalating' | 'resolved'
 
+/**
+ * V3/P6 — the event five-state lifecycle (migration 0202 CHECK). An unknown
+ * value coerces to `active` (an event the ledger stamped is live unless it
+ * says resolved).
+ */
+export type EventLifecycle =
+  | 'emerging'
+  | 'developing'
+  | 'active'
+  | 'evolving'
+  | 'resolved'
+
+/**
+ * The event lifecycle → badge color. THE SINGLE definition (same rule as
+ * `SEVERITY_COLOR`): `lib/timelinePoints`, `lib/timelineWindows` and both
+ * World-map renderers read it so an event reads identically on every
+ * timeline and the map. `resolved` recedes to the quiet grey — the same
+ * "low recedes" principle as the severity ramp.
+ */
+export const EVENT_LIFECYCLE_COLOR: Record<EventLifecycle, string> = {
+  emerging: '#60a5fa', // blue-400
+  developing: '#d29922', // amber
+  active: '#fb7185', // rose-400
+  evolving: '#a78bfa', // violet-400
+  resolved: '#6e7681', // quiet grey
+}
+
+/** deck.gl/MapLibre need a lookup keyed on a plain string — widen the type
+ *  at the edge (a row carrying an unmapped lifecycle falls back to the
+ *  `active` color in mapData). */
+export function eventLifecycleColor(v: string): string {
+  return (EVENT_LIFECYCLE_COLOR as Record<string, string>)[v] ?? EVENT_LIFECYCLE_COLOR.active
+}
+
+/**
+ * V3/P6 — a bounded real-world occurrence on the World map. `lat`/`lon`
+ * come from `events.geo_lat`/`geo_lon` ONLY — an event with no stamped
+ * coordinate does NOT place (the spec's explicit point: no country-centroid
+ * fallback, which would claim a precision the event never asserted).
+ */
+export interface WorldEvent {
+  id: string
+  lat: number
+  lon: number
+  /** ISO2 codes from events.geo[]. */
+  countries: string[]
+  severity: Severity
+  lifecycle: EventLifecycle
+  targetId: string | null
+  /** epoch ms — occurrence anchor (time_start, produced_at fallback). */
+  ts: number
+  title: string
+}
+
 export interface WorldSituation {
   id: string
   title: string

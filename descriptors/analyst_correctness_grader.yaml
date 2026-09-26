@@ -1,0 +1,248 @@
+# G1 — THE CORRECTNESS GRADER (LEDGER_RESET_2026-09-16 §3, Program 2).
+#
+# THE GAP. ~84% of this fleet's LLM calls are the system grading itself:
+# faithfulness judges scoring our prose against our own citations, calibration
+# trackers scoring our own bands, lineage sweeps walking our own derived_from.
+# Every one is a CONSISTENCY check and not one can see a tower that is
+# internally immaculate and FACTUALLY WRONG about the world. The spine's own
+# words: "Verified is only as good as the verifier"; correctness needs a
+# labeled reference per unit, and without one the verify pass measures
+# groundedness, not truth.
+#
+# WHAT THIS IS. Program 1's instrument, ported into the platform. On 2026-09-16
+# it was run BY HAND over Israel — 8 desk heads + the composition, 54 claims, an
+# independent reference built blind to the substrate, three grader families
+# reading ANNEX C v4 — and it found TWO false claims the platform had published
+# that day: a desk asserting a "deadlock over list submissions" on a day the
+# lists were filed, and a composition asserting "no price spikes" while crude
+# was over $100. The desk had hedged the second; the composition un-hedged it.
+# That is the laundering hazard the spine names, caught by measurement.
+#
+# THE THREE-LABEL RUBRIC, and why three. R4's five-label rubric with its tiers
+# and its precedence ladder produced pooled three-family agreement of 0.42
+# against a 0.75 bar: the verdict was instrument-limited, not a finding about
+# the reads. ANNEX C v4 removes the tiers and the ladder and asks ONE question
+# with THREE answers — contains / contradicts / silent — and measured 0.8444 on
+# a fresh 30-atom draw, every pair above the 0.70 floor (VERDICT_P1v4.md). The
+# rubric ships as a DATA FILE in the tree
+# (src/legba/data/analysts/rubrics/ANNEX_C_v4.md, sha256 1b51d7f5…) whose digest
+# is checked at import, because that sha is the identity of every number written
+# under it.
+#
+# TWO NUMBERS, NEVER ONE. Per unit:
+#   correctness_share = contains / (contains + contradicts)   ... over the
+#                       claims the reference BEARS ON
+#   coverage_share    = (contains + contradicts) / n          ... how much of
+#                       what the unit said the reference bears on AT ALL
+# A correctness share of 1.0 at a coverage of 0.05 is one claim confirmed and
+# nineteen the reference never touched. Publishing either alone is how a
+# vacuous number gets believed, so the schema makes both NULLABLE (never 0.0 on
+# an empty denominator) and the handler writes them together.
+#
+# THREE FAMILIES, one of them free. F0 = the $0 self-hosted core plane
+# (llm.primary.openai_compat, gpt-oss-120b) — DISCLOSED as the PRODUCER family:
+# the model that writes the reads grades them here. PREREG_P1 §4 registered that
+# disclosure and VERDICT_P1v4 measured F0 not to be the outlier (F0xF3 = 0.90,
+# the strongest pair). F2 = Meta Llama-3.3-70B, F3 = Mistral Large 3, both on
+# OpenRouter, both passed through the external-grader fence (never Anthropic,
+# never the writer's family, never the live judge's, never each other's).
+#
+# THE COST TRIAGE. F2/F3 grade ONLY the claims F0 did not call `silent`. A
+# silent claim sits in the coverage denominator and in NEITHER share's
+# numerator, so a second opinion on it cannot move the correctness number and
+# would only spend money confirming an absence. The stated consequence: a
+# `silent` claim carries ONE family's label. Every such claim is written
+# single_family=true and counted in unit_correctness.n_single_family.
+#
+# THE CEILING IS AN ENV VAR, NOT A KNOB HERE, and that is deliberate.
+# LEGBA_GRADER_DAILY_CEILING_USD defaults to 0, at which F2 and F3 are NEVER
+# CALLED — not resolved, not attempted, not estimated — and the whole instrument
+# runs on the $0 core plane with every claim flagged single_family. A descriptor
+# PUT is an API call any holder of the registry token can make; raising the
+# amount of the operator's money this job may spend is not that kind of
+# decision. It takes an env change and a recreate, which is a deploy step with a
+# human at the other end.
+#
+# THE CALIBRATION INTERLOCK (G3). The handler REFUSES to grade unless a
+# `grader_calibrations` row exists that names this rubric sha, covers every
+# model id the run will use, and says gate_pass. Coverage is a SUPERSET test: a
+# run may use a SUBSET of the calibrated families (F0 alone at a $0 ceiling is
+# inside what was measured); a model the gate never saw is outside it and stops
+# the grader dead. Repointing family_f2 or family_f3 at a different model is
+# therefore a re-gate trigger that is ENFORCED rather than remembered —
+# scripts/correctness_regate.py re-runs the calibration on a FRESH draw.
+#
+# WHY `deterministic` AND NOT AN LLM KIND — verbatim the standing auditor's own
+# ruling, and it binds harder here: the SAMPLE, the EXCLUSIONS, the PACKET, the
+# CEILING, the ADJUDICATION and the WRITES are code; the model is a bounded
+# instrument answering one question per call against a frozen rubric. A grader
+# whose sampling a model could influence is not a grader.
+#
+# WHAT IT CANNOT CLAIM. Correctness AGAINST ONE REFERENCE is not correctness
+# against the world: a true claim the reference never mentions reads `silent`,
+# which is why coverage travels with every share. It is correctness against a
+# reference OF SOME AGE, which is why `reference_age_days` is written on every
+# row and printed on every receipt. It cannot grade a unit whose reference does
+# not exist — track R2 owns the reference builder (docs/SEAMS.md #55) and this
+# job records `no_reference`, or `reference_stale` when a reference exists and
+# has aged past the grace, and grades nothing. It cannot break a split: where no
+# two families agree the claim is published `split`, counted in the coverage
+# denominator and in no numerator, never tie-broken.
+#
+# VERIFY-EXEMPT ON PURPOSE. correctness_grader joins
+# STRUCTURAL_VERIFY_EXEMPT_ANALYSTS. It is an INSTRUMENT; its receipt asserts
+# nothing about the world a faithfulness judge could grade, and routing it into
+# the verify population would be circular in the worst way — the pass that
+# measures groundedness scoring the output of the pass that exists because
+# groundedness is not truth.
+#
+# NOTHING PAGES AND NOTHING GATES FROM THIS TRAIN. The receipt is a
+# counting-not-repairing gauge. The read-surface number and the composition gate
+# ("compose only over units carrying a number >= threshold") are track G2, and
+# the threshold is the operator's.
+#
+# State: DRAFT in-tree. FLAG LEGBA_CORRECTNESS_GRADER_ENABLED defaults OFF; with
+# it off the handler writes nothing at all — no row, no LLM call, no spend.
+# DEPLOY ORDER (all operator steps, none of them this file's):
+#   1. migration 0196 applied (unit_references, unit_correctness,
+#      unit_correctness_claims, grader_calibrations);
+#   2. REGISTRY IMAGE REBUILT — a NEW deterministic sub-handler is compiled into
+#      the image and the registry validates descriptors against it; then the
+#      runtime recreate;
+#   3. scripts/load_unit_reference.py --seed-calibration (the v4 gate row) and
+#      scripts/load_unit_reference.py <ref.json> (at least one reference), or
+#      the sweep refuses / records no_reference;
+#   4. this descriptor registered and transitioned draft -> active;
+#   5. LEGBA_CORRECTNESS_GRADER_ENABLED=1, and only then, if the operator wants
+#      three families, LEGBA_GRADER_DAILY_CEILING_USD set above 0.
+
+identity:
+  id: correctness_grader
+  name: Per-Unit Correctness vs an Independent Reference
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: g1_correctness_instrument
+
+subscription:
+  # No `targets` block => META analyst: ONE global sweep per cadence tick. The
+  # handler reads its own population (the targets carrying a live
+  # unit_references row) directly via deps.pg_pool and IGNORES the materialized
+  # input slice — which is load-bearing, not incidental: the grader must grade
+  # the PUBLISHED head, not a fresh slice of the substrate.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: correctness_grader
+  # X-1 declared knobs (handler_options.HANDLER_OPTIONS['correctness_grader']).
+  # Values below are the in-source defaults, stated explicitly so this file
+  # documents the shipped volume rather than implying it. The SPEND ceiling is
+  # NOT here — see the banner.
+  options:
+    # EMPTY means "every target carrying a reference whose window contains the
+    # stamp", so the sweep widens on its own as track R2 lands references and
+    # grades nothing at all while unit_references is empty. Naming targets here
+    # bounds it to those.
+    grader_targets: []
+    # RAISED to 32 on 2026-09-20 as a stopgap, while the population query was
+    # `ORDER BY target_id` and `[:max_targets]` therefore handed the sweep the
+    # SAME five countries every night. That defect is fixed in the statement
+    # itself (`_TARGETS_WITH_REFERENCE_SQL` now orders LEAST RECENTLY GRADED
+    # first, never-graded ahead of everything), so a smaller cap now CYCLES the
+    # roster instead of starving it. 32 pays for all 32 countries every night;
+    # lowering it back toward 5 costs less and still reaches every country,
+    # just over more nights. That is an operator call about spend, so the
+    # number is left where the operator put it.
+    max_targets_per_run: 32
+    max_claims_per_unit: 40
+    max_claims_per_run: 2400
+    # R4's WINDOW_DAYS. A desk head produced longer ago than this is not the
+    # current read of the window the reference covers.
+    head_window_days: 14
+    # NOT SET HERE ON PURPOSE: `reference_grace_days` (default 7). A reference
+    # is built for a window ending at its own T0 and every read it grades lands
+    # AFTER that instant, so it stays CURRENT until window_end + grace or until
+    # a newer reference supersedes it; past the grace the target is named
+    # `reference_stale`, not `no_reference`. The knob is declared in
+    # handler_options and settable by a PUT, but LEGBA_GRADER_REFERENCE_GRACE_
+    # DAYS OVERRIDES it — how long a published number may rest on an ageing
+    # reference is a measurement-integrity decision, and the env is a deploy
+    # step with a human at the other end where a PUT is an API call. Leaving it
+    # out here keeps the shipped default without making this file's content
+    # hash (and therefore the actor id) move for a value nothing changes.
+  llm:
+    # A grader is not a writer; reproducibility wins. The handler sends
+    # temperature 0.0 itself and NEVER sends max_tokens — a HARD house rule for
+    # the core plane, and the calibration runs sent none to OpenRouter either,
+    # so sending one here would change the instrument.
+    temperature: 1.0
+    primary:
+      # F0 — the $0 self-hosted core plane. DISCLOSED as the producer family;
+      # see the banner. Resolved through the shared _wire_deterministic_llm, so
+      # the Anthropic hard-refuse applies: a SCHEDULED analyst may never route
+      # onto the billed plane.
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    family_f2:
+      # F2 — Meta Llama-3.3-70B. The model id the calibration was run against
+      # is meta-llama/llama-3.3-70b-instruct; repointing this at a component
+      # serving a DIFFERENT model fails the calibration coverage test and stops
+      # the grader until a re-gate lands.
+      factory_kind: stack_ref
+      raw: llm.audit.openrouter_llama33_70b.openai_compat
+      expected_family: llm_provider
+    family_f3:
+      # F3 — Mistral Large 3 (mistralai/mistral-large-2512). Same rule.
+      factory_kind: stack_ref
+      raw: llm.judge.openrouter_mistral_large.openai_compat
+      expected_family: llm_provider
+  # Per-day token cap (24h bucket). Sized for the measured shape: the Israel
+  # hand run was 54 claims x 3 families at ~7.4k input each (a live packet
+  # carries 33 developments per atom), i.e. ~1.2M input + ~0.07M output for ONE
+  # country. Five targets at the F0-only default is ~2M; three families across
+  # five targets under a raised ceiling is the number below.
+  budget_tokens_per_day: 0
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # Daily at 01:20 UTC. AFTER the 23:30 country_composition tick has settled
+  # (110 minutes) and after the 00:00 country_assessor desk tick (80 minutes),
+  # so the grader reads a settled head rather than racing one — the same
+  # reasoning desk_reference's 04:22 uses. Deliberately clear of
+  # desk_reference (04:22) and off minute :07, where the standing auditor
+  # fires hourly.
+  fallback_schedule: "20 1-9 * * *"   # H2 (2026-09-21/22): NINE hourly ticks under LEGBA_GRADER_PASS_BUDGET_SECONDS=600 (~4 targets each; 8 ticks measured 30/32 on 09-22) — the
+                                      # roster (32) still completes once a day, in short actor turns; the rotation has NO freshness gate, so an
+                                      # all-day hourly cadence would grade the roster three times and triple the spend — hence 1-8, not *.
+  # 22h — below the 24h interval, so an organic daily tick is never swallowed
+  # by its own cooldown (the alert_trigger_scan 0.8x ratio).
+  cooldown_seconds: 3600               # below the 1 h tick interval (was 79200 for the single nightly sweep)
+
+# NO ACTION PACKS. This analyst reaches nothing outside the substrate and the
+# three bound LLM components: no web search, no fetch, no ad-hoc HTTP anywhere
+# in its path. The REFERENCE is an input it reads from a table; building one is
+# track R2's job and deliberately not this analyst's, because a grader that
+# could also build its own reference could close the loop on itself.
+action_packs: []
+
+# No output bindings. The sweep's receipt finding is the run's own return value;
+# the NUMBERS are side-written to unit_correctness + unit_correctness_claims
+# (migration 0196). No outward fan-out from here — the read-surface number and
+# the composition gate are track G2.
+outputs: []

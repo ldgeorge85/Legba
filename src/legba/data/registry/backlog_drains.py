@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .. import critic_fold
+
 
 @dataclass(frozen=True)
 class BacklogDrain:
@@ -196,35 +198,43 @@ BACKLOG_DRAINS: tuple[BacklogDrain, ...] = (
         #     descriptor fires at :41 hourly), so a scan racing an in-flight
         #     cycle cannot report a self-resolving deficit.
         #   * a 30-day floor bounding the scan, mirroring the parity drain.
-        overdue_sql="""
+        # H17 — SET-BASED. `open_s` is the open register (the scan's own bound);
+        # `mem` unnests its members ONCE; the fold reads those members'
+        # critiques in ONE `DISTINCT ON` pass through the expression index
+        # instead of once per (situation, member) pair.
+        overdue_sql=f"""
+            WITH open_s AS MATERIALIZED (
+                SELECT s.id, s.derived_from
+                  FROM situations s
+                 WHERE s.superseded_by IS NULL
+                   AND (s.valid_until IS NULL OR s.valid_until > now())
+                   AND s.status <> 'closed'
+            ), mem AS MATERIALIZED (
+                SELECT open_s.id AS sid, f.id, f.confidence, f.produced_at
+                  FROM open_s
+                  JOIN analyst_outputs f ON f.id = ANY(open_s.derived_from)
+                 WHERE f.kind = 'finding'
+            ), {critic_fold.latest_critique_cte(
+                "c",
+                "(cr.data->>'overall_score')::real AS faith",
+                "SELECT id::text FROM mem",
+            )}, v AS MATERIALIZED (
+                SELECT mem.sid, max(mem.produced_at) AS newest_verified
+                  FROM mem
+                  JOIN c ON c.fid = mem.id::text
+                 WHERE LEAST(mem.confidence, c.faith) >= 0.50
+                 GROUP BY mem.sid
+            ), l AS MATERIALIZED (
+                SELECT e.situation_id AS sid, max(e.occurred_at) AS newest_delta
+                  FROM situation_events e
+                 WHERE e.situation_id IN (SELECT id FROM open_s)
+                 GROUP BY e.situation_id
+            )
             SELECT count(*)::int AS overdue, min(v.newest_verified) AS oldest_due_at
-              FROM situations s
-             CROSS JOIN LATERAL (
-                    SELECT max(e.occurred_at) AS newest_delta
-                      FROM situation_events e
-                     WHERE e.situation_id = s.id
-                  ) l
-             CROSS JOIN LATERAL (
-                    SELECT max(f.produced_at) AS newest_verified
-                      FROM analyst_outputs f
-                      JOIN LATERAL (
-                          SELECT (cr.data->>'overall_score')::real AS faith
-                            FROM analyst_outputs cr
-                           WHERE cr.kind = 'critique'
-                             AND cr.data->>'analyzed_output_id' = f.id::text
-                             AND cr.data->>'overall_score' IS NOT NULL
-                             AND cr.title LIKE 'Faithfulness verify%'
-                           ORDER BY cr.produced_at DESC, cr.id DESC
-                           LIMIT 1
-                      ) c ON TRUE
-                     WHERE f.id = ANY(s.derived_from)
-                       AND f.kind = 'finding'
-                       AND LEAST(f.confidence, c.faith) >= 0.50
-                  ) v
-             WHERE s.superseded_by IS NULL
-               AND (s.valid_until IS NULL OR s.valid_until > now())
-               AND s.status <> 'closed'
-               AND l.newest_delta IS NOT NULL
+              FROM open_s
+              JOIN l ON l.sid = open_s.id
+              JOIN v ON v.sid = open_s.id
+             WHERE l.newest_delta IS NOT NULL
                AND v.newest_verified IS NOT NULL
                AND v.newest_verified < now() - interval '1 hour'
                AND v.newest_verified > now() - interval '30 days'

@@ -67,6 +67,7 @@ __all__ = [
     "OutputContractError",
     "extract_json_object",
     "is_unusable_output",
+    "iter_json_objects",
     "repair_confidence_word_token",
     "salvage_json_envelope",
     "strip_tool_plan_preamble",
@@ -225,6 +226,70 @@ def repair_confidence_word_token(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+#: How many top-level objects :func:`parse_finding_envelope` will look at
+#: before giving up. The live shape puts the finding SECOND, behind one
+#: protocol object; the bound exists so a completion that is a list of
+#: hundreds of objects cannot make the scan quadratic.
+_MAX_SCANNED_OBJECTS = 8
+
+
+def iter_json_objects(text: str):
+    """Each TOP-LEVEL balanced JSON object in ``text``, in order.
+
+    ``extract_json_object`` returns the first and stops. That was right while
+    the only failure was garbage BEFORE the contract. The 2026-09-09 live shape
+    puts garbage before it that is itself a well-formed object::
+
+        {"tool": "web_evidence", "args": {...}}
+        {"title": "Palestine influences Israel's domestic politics …",
+         "body": "*As of 2026-09-08 …"}
+
+    — the model making its (unmade) call and then, on the same turn, writing
+    the finding. The first object parses, so every recovery path was skipped
+    and a complete, well-formed, fully-cited finding was thrown away in favour
+    of raising on the tool call's absent body.
+
+    String-aware and quote-aware exactly as ``extract_json_object`` is (it is
+    now this function's first item). Stops at the first UNTERMINATED object:
+    anything after it is inside it, and a truncated object is what
+    ``salvage_json_envelope`` exists to handle.
+    """
+    if not text:
+        return
+    pos = 0
+    while True:
+        start = text.find("{", pos)
+        if start == -1:
+            return
+        depth = 0
+        in_string = False
+        escaped = False
+        closed = -1
+        for idx in range(start, len(text)):
+            char = text[idx]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    closed = idx
+                    break
+        if closed == -1:
+            return
+        yield text[start:closed + 1]
+        pos = closed + 1
+
+
 def extract_json_object(text: str) -> str | None:
     """The first BALANCED JSON object in ``text``, at ANY offset, or ``None``.
 
@@ -243,45 +308,25 @@ def extract_json_object(text: str) -> str | None:
     one is not returned, because a truncated object is what
     ``_salvage_envelope_body`` exists to handle.
     """
-    if not text:
-        return None
-    start = text.find("{")
-    while start != -1:
-        depth = 0
-        in_string = False
-        escaped = False
-        for idx in range(start, len(text)):
-            char = text[idx]
-            if in_string:
-                if escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == '"':
-                    in_string = False
-                continue
-            if char == '"':
-                in_string = True
-            elif char == "{":
-                depth += 1
-            elif char == "}":
-                depth -= 1
-                if depth == 0:
-                    return text[start:idx + 1]
-        # Unbalanced from here on; there is no later object either, because any
-        # later '{' is nested inside this unterminated one.
-        return None
+    return next(iter_json_objects(text), None)
     return None
 
 
 def parse_finding_envelope(text: str) -> dict[str, Any] | None:
     """The model's finding contract as a dict, found anywhere in ``text``.
 
-    Fence-strips, then extracts the first balanced object and decodes it.
-    Returns ``None`` unless the result is a dict carrying at least one of the
+    Fence-strips, then walks the top-level balanced objects in order and
+    decodes each. Returns the FIRST that is a dict carrying at least one of the
     contract's own keys — ``title`` / ``body`` — so a stray JSON object the
     model quoted mid-prose (a tool call it echoed, a sample payload) is never
     mistaken for the finding itself.
+
+    WALKS, rather than looks at the first object only (2026-09-09): the live
+    ``corpus_researcher`` shape emits the tool call it wanted and then the
+    finding, in that order, in one completion. Rejecting the first object and
+    stopping threw the finding away. Bounded by
+    :data:`_MAX_SCANNED_OBJECTS`; byte-identical whenever the first object IS
+    the finding, which is every case that worked before.
     """
     if not text:
         return None
@@ -291,18 +336,18 @@ def parse_finding_envelope(text: str) -> dict[str, Any] | None:
         if candidate.lower().startswith("json"):
             candidate = candidate[4:]
         candidate = candidate.strip()
-    blob = extract_json_object(candidate)
-    if blob is None:
-        return None
-    try:
-        parsed = json.loads(blob)
-    except (json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    if "title" not in parsed and "body" not in parsed:
-        return None
-    return parsed
+    for n, blob in enumerate(iter_json_objects(candidate)):
+        if n >= _MAX_SCANNED_OBJECTS:
+            return None
+        try:
+            parsed = json.loads(blob)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        if "title" in parsed or "body" in parsed:
+            return parsed
+    return None
 
 
 # ---------------------------------------------------------------------------

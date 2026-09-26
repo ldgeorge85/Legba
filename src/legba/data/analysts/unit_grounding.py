@@ -27,7 +27,8 @@ because they are properties of the platform, not of the layer:
      and the clause anchors every temporal statement on those printed dates —
      never on run/fetch time.
 
-FIVE BLOCKS, all bounded, all absent-by-default:
+SIX BLOCKS, all bounded, all absent-by-default (the sixth also GRANT-gated —
+see :data:`GROUNDING_OPEN_EVENTS`):
 
   * PRIOR READ (:data:`GROUNDING_PRIOR_READ`) — THIS unit's own previous
     non-superseded, VERIFIED head for THIS target. Reuses the composition's
@@ -62,6 +63,24 @@ FIVE BLOCKS, all bounded, all absent-by-default:
     unit can answer against a number instead of a vibe. HONEST ABSENCE: rows with
     ``insufficient_history`` are NOT rendered — a band resting on thin history
     would read as authority it has not earned.
+  * OPEN EVENTS (:data:`GROUNDING_OPEN_EVENTS`) — V3/P2's missing half: the
+    desk's live ``events`` rows, reached THROUGH its open ``situations`` (the
+    same per-desk scope the register takes), each printed with its
+    ``event:<uuid>`` TOKEN so the unit can cite the event's underlying REPORTS.
+    P2 built the whole citation side — ``provenance.event_citations
+    .expand_event_citation`` + the ``inline_target._expand_event_refs`` splice
+    turn an ``event:<uuid>`` token in a finding body into fresh ``[K]`` markers
+    over the event's member signals — and nothing in the tree ever RENDERED an
+    event id into a prompt, so no model had ever emitted the token (59 receipts
+    since ``LEGBA_EVENT_CITATIONS=1``, every one ``event_citations: 0``). This
+    block is the OFFER. It is the only grounding block behind a descriptor
+    GRANT (``method.options.offer_events``, default False): the plan's
+    acceptance step is "ONE analyst granted event citations", and with the knob
+    absent every unit's rendered prompt is byte-identical to the five-block
+    render. The block cites like the register — ONE ordinal, no fabricated
+    ``ref_id``, the real ``event_ids`` carried — and the TOKENS inside it are
+    what the expansion resolves, never this block's own ordinal.
+
   * STANDING OPEN QUESTIONS (:data:`GROUNDING_QUESTIONS`) — the desk's open
     ``hypotheses`` rows (``status='open_question'``), newest-first. This closes a
     loop that was open end-to-end: every unit descriptor EMITS ``open_questions``
@@ -70,7 +89,17 @@ FIVE BLOCKS, all bounded, all absent-by-default:
 
 WHAT IS DELIBERATELY *NOT* HERE:
 
-  * NO new analyst kind, NO new table, NO migration. Four SELECTs and a render.
+  * NO new analyst kind, NO new table, NO migration. Five SELECTs and a render.
+  * NO event SUMMARY, anywhere. The OPEN EVENTS block prints an event's TITLE,
+    span, corroboration counts and lifecycle state — never ``events.summary``,
+    which DATA_MODEL_V3 §2.5 rules 1-2 declare is never evidence. The whole
+    point of the token is that the event expands into its member REPORTS.
+  * NO ``ref_kind='event'`` on the block's own citation, and ``'event'`` stays
+    out of ``provenance.kinds.GROUNDING_REF_KINDS``. The block is
+    ``ref_kind='open_events'`` (a grounding block, graded on its rendered
+    text); an EXPANDED event citation is an ordinary per-signal entry. Two
+    different things, two different kinds — conflating them is exactly how an
+    event would end up graded against its own summary.
   * NO fabricated anchor. The register / baseline / question blocks are not
     ``analyst_outputs`` rows and have NO single substrate id, so their citations
     carry the REAL underlying ids (``situation_ids`` / ``baseline_keys`` /
@@ -105,7 +134,16 @@ from typing import Any, Mapping, Sequence
 from uuid import UUID
 
 from ..provenance.citation_markers import prior_read_ref
-from ._tradecraft import RETRIEVED_CONTEXT_RULE, as_of_rule
+from ..provenance.origin import origin_class_clause
+from .history_grounding import (
+    GROUNDING_HISTORY,
+    HISTORY_SERIES_CAP,
+    HISTORY_SERIES_MAX_CAP,
+    history_block_lines,
+    observation_citations,
+    ordinal_span,
+    read_desk_history,
+)
 from .window_ledger import (
     LEDGER_UNIT_TOTAL_CAP,
     REGISTER_SELF_CORROBORATION_RULE,
@@ -114,7 +152,6 @@ from .window_ledger import (
     ledger_finding_ids,
     read_window_ledger,
     select_ledger_entries,
-    window_ledger_rule,
 )
 
 logger = logging.getLogger(__name__)
@@ -123,18 +160,26 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "GROUNDING_BASELINE",
     "GROUNDING_BLOCK_KINDS",
+    "GROUNDING_HISTORY",
+    "GROUNDING_OPEN_EVENTS",
     "GROUNDING_PRIOR_READ",
     "GROUNDING_QUESTIONS",
     "GROUNDING_RECEIPT_KEYS",
     "GROUNDING_SITUATIONS",
     "GROUNDING_WINDOW_LEDGER",
+    "OPEN_EVENTS_CAP",
+    "OPEN_EVENTS_CITE_RULE",
+    "OPEN_EVENTS_MAX_CAP",
     "UNIT_GROUNDING_CLAUSE",
     "UNIT_GROUNDING_ROW_KEY",
+    "block_ordinal_span",
     "citation_for_block",
     "gather_unit_grounding_rows",
+    "grounding_citations",
     "grounding_receipts",
     "partition_grounding_rows",
     "read_desk_baselines",
+    "read_desk_open_events",
     "read_desk_open_questions",
     "render_grounding_section",
     "with_grounding_clause",
@@ -166,6 +211,22 @@ grading the two layers' copies of the same block by two different rules."""
 GROUNDING_SITUATIONS: str = "situation_register"
 """Marker value: the synthetic OPEN-SITUATION REGISTER block."""
 
+GROUNDING_OPEN_EVENTS: str = "open_events"
+"""Marker value: the synthetic OPEN EVENTS block (V3/P2 — the OFFER).
+
+The ONE grounding block behind a descriptor GRANT
+(``method.options.offer_events``): every other block resolves for every unit
+with a desk, this one renders only where the descriptor asked for it, because
+the plan's acceptance step is "ONE analyst granted event citations" and a
+fleet-wide offer would put an un-piloted token in nine units' prompts at once.
+
+Deliberately NOT the token ``'event'``. ``'event'`` is the EXPANDED citation's
+``ref_kind`` (``provenance.event_citations``) and is kept out of
+``provenance.kinds.GROUNDING_REF_KINDS`` on purpose — an expanded entry carries
+a ``signal_id`` and is graded on the REPORT's raw source text. This block is a
+grounding block like the register: graded on its own rendered text, carrying
+the real ``event_ids`` and no ``ref_id``. One name per thing."""
+
 GROUNDING_BASELINE: str = "desk_baseline"
 """Marker value: the synthetic DESK BASELINE block."""
 
@@ -176,8 +237,10 @@ GROUNDING_BLOCK_KINDS: tuple[str, ...] = (
     GROUNDING_PRIOR_READ,
     GROUNDING_WINDOW_LEDGER,
     GROUNDING_SITUATIONS,
+    GROUNDING_OPEN_EVENTS,
     GROUNDING_BASELINE,
     GROUNDING_QUESTIONS,
+    GROUNDING_HISTORY,
 )
 """The block kinds IN RENDER ORDER — one step back, then the fortnight, then the
 open picture, then the statistical prior, then the standing debt. The ordinal a
@@ -188,7 +251,29 @@ resolved.
 The WINDOW LEDGER sits SECOND, beside the prior read, because both are MEMORY
 and a reader (human or model) meeting "what I said last cycle" immediately
 followed by "what I established this fortnight" reads one continuous account of
-before. The composition floor orders its own three blocks the same way."""
+before. The composition floor orders its own three blocks the same way.
+
+OPEN EVENTS sits FOURTH, immediately after the register, because it is the
+register's own contents one level down: the events it lists are reached THROUGH
+this desk's open situations, so frames-then-occurrences is the order a reader
+already holds in mind. Inserting it mid-sequence cannot renumber anything for
+an UNGRANTED unit — the row only exists where ``offer_events`` is set, and
+ordinals are positions among the blocks actually PRESENT.
+
+HISTORICAL SERIES sits LAST, and it is the only block that is not about this
+platform. The six before it are Legba's own memory — what this unit said, what
+this desk is watching, what is normal here; the seventh is what the WORLD
+measured, from a curated holding nothing schedules. A reader meets our account
+of before and then the record against which it can be checked, which is the
+order the two belong in. It is the second GRANTED block
+(``method.options.offer_history``, default False) and, like OPEN EVENTS, its
+absence renumbers nothing: with the knob unset the read does not fire, no row
+exists, and the rendered prompt is byte-identical to the six-block render.
+
+It is also the ONLY block that takes MORE THAN ONE ordinal — one per series
+line. See :mod:`legba.data.analysts.history_grounding` for why (each line is an
+independent number with its own period, and one ordinal over eleven of them is
+how a 2016 figure gets graded as a current claim)."""
 
 GROUNDING_PAYLOAD_KEY: str = "_grounding_payload"
 """Key on a SYNTHETIC grounding row carrying its rendered payload (the situation
@@ -199,8 +284,10 @@ GROUNDING_RECEIPT_KEYS: dict[str, str] = {
     GROUNDING_PRIOR_READ: "grounding_prior_ref",
     GROUNDING_WINDOW_LEDGER: "grounding_window_ledger_ref",
     GROUNDING_SITUATIONS: "grounding_situations_ref",
+    GROUNDING_OPEN_EVENTS: "grounding_open_events_ref",
     GROUNDING_BASELINE: "grounding_baseline_ref",
     GROUNDING_QUESTIONS: "grounding_questions_ref",
+    GROUNDING_HISTORY: "grounding_history_ref",
 }
 """Receipt key per block kind. Reported on the run's ``orient`` step (and its own
 ``grounding_blocks`` step) so "did this unit get its memory this cycle" is
@@ -243,6 +330,25 @@ metric, not for a survey."""
 
 QUESTION_CAP: int = 5
 """Max standing questions rendered, newest-first."""
+
+OPEN_EVENTS_CAP: int = 8
+"""Max events in the OPEN EVENTS block. Eight rather than the register's six
+because an event line is ONE line (the register's frames carry a trajectory
+tail), and because the point of the block is a CITABLE menu: a desk offered
+three tokens has effectively been offered the loudest three, which is the
+selection bias the offer exists to avoid. Live worst case is well inside it —
+33 desks carry an open event at all and the busiest (``country_g20_us``) holds
+7 (measured 2026-09-24)."""
+
+OPEN_EVENTS_MAX_CAP: int = 20
+"""Ceiling on the descriptor-settable ``open_events_limit``. A unit prompt is
+budgeted for an ORIENTING index, not a second evidence slice; twenty one-line
+events is already past where a reader is reading and comfortably past what any
+desk holds."""
+
+EVENT_TITLE_CHARS: int = 120
+"""Per-event title cap — an event title is a short occurrence LABEL, the same
+posture :data:`SITUATION_NAME_CHARS` takes for a frame."""
 
 QUESTION_TEXT_CHARS: int = 300
 """Per-question text cap. A question is one sentence; anything longer is a
@@ -382,14 +488,123 @@ async def read_desk_open_questions(
     return out
 
 
+# V3/P2 — the OPEN EVENTS read. The desk's events THROUGH its open situations,
+# which is the only per-desk scope that exists today: ``events.target_id`` is
+# NULL on 259 of the 317 live open events (measured 2026-09-24), so selecting
+# by it would silently hand most desks an empty block while their frames carry
+# dozens of occurrences. ``situations.target_id`` is the SAME scoping rule
+# ``read_open_situations`` takes, for the same reason (a desk must not see
+# another desk's frames), and ``idx_situations_target_id`` is what the plan
+# walks into.
+#
+# THE SHAPE, and why it is two stages rather than one. Stage one picks the <=N
+# events — a plain join, DISTINCT because one event can hang off several of a
+# desk's frames, ordered by ``updated_at DESC`` with ``id`` breaking the tie so
+# the block is stable between two runs that see the same rows. Stage two counts
+# each of those <=N events' member links. That count is NOT
+# ``events.signal_count``, and that is the load-bearing part of this reader:
+# ``signal_count`` READ wrong on 244 of the 317 live open events (73 correct;
+# worst 59,808 against 168 real ``signal_event_links`` rows — the lifecycle scan
+# counted (member x actor) PAIRS; fixed at the source, rows corrected by
+# migration 0218), ``distinct_source_count`` exact. Printing a report count 350x
+# the truth into a prompt is a fabrication about evidence weight, so the number
+# is DERIVED here. It is derived as a GROUPED AGGREGATE over the bounded <=N
+# driving set — never as a correlated per-row probe, the shape this repo's
+# review rules name as having failed four times — and it walks
+# ``idx_sel_event``. Live cost with the second stage: 9.6 ms on the widest desk
+# (``country_g20_ru``, 752 links walked); 5.6 ms without it.
+#: P7/7g-1 — the origin-class leg on the OPEN EVENTS read (SEAMS #57 sweep).
+#: `events` DOES carry origin_class (migration 0209); the live clustering lane
+#: stamps 'live' on every row it mints, so this is a no-op on today's data and
+#: a fence the day a history event exists.
+_LIVE_EVENTS = origin_class_clause("e")
+
+_OPEN_EVENTS_SQL = f"""
+    WITH desk_events AS (
+        SELECT DISTINCT
+               e.id, e.title, e.time_start, e.time_end,
+               e.distinct_source_count, e.lifecycle_state, e.updated_at
+          FROM situation_event_links sel
+          JOIN situations s ON s.id = sel.situation_id
+          JOIN events e ON e.id = sel.event_id
+         WHERE s.target_id = $1
+           AND s.status IS DISTINCT FROM 'closed'
+           AND e.lifecycle_state <> 'resolved'
+           AND e.superseded_by IS NULL
+           AND {_LIVE_EVENTS}
+         ORDER BY e.updated_at DESC, e.id
+         LIMIT $2
+    )
+    SELECT d.id, d.title, d.time_start, d.time_end,
+           d.distinct_source_count, d.lifecycle_state, d.updated_at,
+           EXTRACT(EPOCH FROM (NOW() - d.updated_at)) / 86400.0
+               AS updated_age_days,
+           count(l.signal_id) AS report_count
+      FROM desk_events d
+      LEFT JOIN signal_event_links l ON l.event_id = d.id
+     GROUP BY d.id, d.title, d.time_start, d.time_end,
+              d.distinct_source_count, d.lifecycle_state, d.updated_at
+     ORDER BY d.updated_at DESC, d.id
+"""
+
+
+async def read_desk_open_events(
+    conn,  # type: ignore[no-untyped-def]
+    *,
+    target_id: str,
+    limit: int = OPEN_EVENTS_CAP,
+) -> list[dict[str, Any]]:
+    """The desk's LIVE events, reached through its OPEN situation frames.
+
+    Returns compact, JSON-safe dicts, most recently updated first (``[]`` when
+    the desk has no open frame carrying a live event — the honest absence: no
+    block is rendered and the receipt reads 0). A row with no id or an empty
+    title is SKIPPED rather than padded: the block may only offer tokens that
+    resolve, and an unciteable line in a block whose whole purpose IS citation
+    is worse than a shorter block.
+
+    ``summary`` is deliberately not in the SELECT at all. It is never evidence
+    (DATA_MODEL_V3 §2.5), and a column that must never be rendered is better
+    kept out of the reader than trusted to a renderer not to print it.
+    """
+    if not target_id:
+        return []
+    rows = await conn.fetch(_OPEN_EVENTS_SQL, str(target_id), int(limit))
+    out: list[dict[str, Any]] = []
+    for raw in rows:
+        r = dict(raw)
+        eid = _coerce_uuid(r.get("id"))
+        title = r.get("title")
+        if eid is None or not isinstance(title, str) or not title.strip():
+            continue
+        out.append(
+            {
+                "event_id": str(eid),
+                "title": title.strip()[:EVENT_TITLE_CHARS],
+                "time_start": _iso_text(r.get("time_start")),
+                "time_end": _iso_text(r.get("time_end")),
+                "report_count": _as_int(r.get("report_count")),
+                "source_count": _as_int(r.get("distinct_source_count")),
+                "lifecycle_state": str(r.get("lifecycle_state") or "unknown"),
+                "updated_at": _iso_text(r.get("updated_at")),
+                "updated_age_days": _as_float(r.get("updated_age_days")),
+            }
+        )
+    return out
+
+
 async def gather_unit_grounding_rows(
     conn,  # type: ignore[no-untyped-def]
     *,
     analyst_id: str | None,
     target_filter: str | None,
     prior_lookback_hours: int = PRIOR_LOOKBACK_HOURS,
+    offer_events: bool = False,
+    open_events_limit: int = OPEN_EVENTS_CAP,
+    offer_history: bool = False,
+    history_series_limit: int = HISTORY_SERIES_CAP,
 ) -> list[dict[str, Any]]:
-    """Gather the (at most five) marked GROUNDING rows for one unit run.
+    """Gather the (at most seven) marked GROUNDING rows for one unit run.
 
     BEST-EFFORT by contract: this is ADDITIVE enrichment on top of an already
     complete slice, so ANY failure (a missing relation, a degraded read replica, a
@@ -403,6 +618,19 @@ async def gather_unit_grounding_rows(
     suppresses the PRIOR READ **and the WINDOW LEDGER** — both are scoped to THIS
     unit's own heads, and an unattributable "what I said before" is exactly the
     uncited prior this design refuses; the three desk-scoped blocks still resolve.
+
+    ``offer_events`` is the V3/P2 GRANT and defaults False, so every caller that
+    does not pass it gathers exactly the five blocks it gathered before — the
+    OPEN EVENTS read does not even fire. It is a parameter rather than an env
+    flag because the grant is PER ANALYST (the plan: "ONE analyst granted event
+    citations"), and per-analyst configuration on this platform is a descriptor
+    option, not a process-wide switch.
+
+    ``offer_history`` is 7g-2's GRANT and defaults False on the same terms, for
+    the same reason: the HISTORICAL SERIES block reads a curated holding rather
+    than this platform's own memory, and a fleet-wide offer would put ten-year-
+    old numbers in nine units' prompts at once. With it unset the read does not
+    fire and the rendered prompt is byte-identical to the six-block render.
     """
     if not target_filter:
         return []
@@ -483,6 +711,29 @@ async def gather_unit_grounding_rows(
     if situations:
         out.append(_synthetic_row(GROUNDING_SITUATIONS, situations))
 
+    # V3/P2 — the OFFER, behind its per-analyst GRANT. Gathered immediately
+    # after the register because it is the register's own frames one level
+    # down, and skipped ENTIRELY (no query, no row, no cost) for every unit
+    # whose descriptor did not ask: an ungranted run must not pay for a block
+    # it will not render, and must render byte-identically to the five-block
+    # prompt it rendered yesterday.
+    if offer_events:
+        try:
+            events = await read_desk_open_events(
+                conn,
+                target_id=str(target_filter),
+                limit=max(1, min(int(open_events_limit), OPEN_EVENTS_MAX_CAP)),
+            )
+        except Exception as exc:  # pragma: no cover — best-effort enrichment
+            logger.warning(
+                "unit_grounding.open_events.failed target_id=%s err=%s "
+                "— this run reads WITHOUT its citable events",
+                target_filter, exc,
+            )
+            events = []
+        if events:
+            out.append(_synthetic_row(GROUNDING_OPEN_EVENTS, events))
+
     try:
         baselines = await read_desk_baselines(conn, desk_id=str(target_filter))
     except Exception as exc:  # pragma: no cover — best-effort enrichment
@@ -502,6 +753,29 @@ async def gather_unit_grounding_rows(
         questions = []
     if questions:
         out.append(_synthetic_row(GROUNDING_QUESTIONS, questions))
+
+    # 7g-2 — HISTORICAL SERIES, behind its own per-analyst GRANT and skipped
+    # ENTIRELY (no query, no row, no cost) for every unit whose descriptor did
+    # not ask. The read reaches a table no other grounding block touches
+    # (`observations`, a curated holding), and it is the only block whose rows
+    # are not this platform's own memory — so it is offered per desk, never
+    # fleet-wide, exactly as the OPEN EVENTS grant is.
+    if offer_history:
+        try:
+            history = await read_desk_history(
+                conn,
+                target_id=str(target_filter),
+                limit=max(1, min(int(history_series_limit), HISTORY_SERIES_MAX_CAP)),
+            )
+        except Exception as exc:  # pragma: no cover — best-effort enrichment
+            logger.warning(
+                "unit_grounding.history.failed target_id=%s err=%s "
+                "— this run reads WITHOUT its historical series",
+                target_filter, exc,
+            )
+            history = []
+        if history:
+            out.append(_synthetic_row(GROUNDING_HISTORY, history))
 
     return out
 
@@ -552,7 +826,7 @@ def partition_grounding_rows(
 def grounding_receipts(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     """``{receipt_key: 0|1}`` for EVERY block kind — present AND absent.
 
-    Always reports all four keys: a silently-absent memory is exactly what this
+    Always reports EVERY key: a silently-absent memory is exactly what this
     receipt exists to make visible, and a key that only appears when the block
     resolved cannot distinguish "no prior read" from "the receipt changed shape".
     """
@@ -680,6 +954,98 @@ def _render_situations(situations: Sequence[Mapping[str, Any]], ordinal: int) ->
     return lines
 
 
+#: THE OFFER'S ONE INSTRUCTION, closing the OPEN EVENTS block.
+#:
+#: Everything V3/P2 built expands an ``event:<uuid>`` token a model has already
+#: written. This sentence is the only place in the tree that tells a model the
+#: token exists — and it has to do three things at once, because a half-stated
+#: offer is worse than none: name the EXACT spelling (the expansion's
+#: ``_EVENT_BODY_REF_RE`` accepts the bare token and the bracketed forms, so
+#: "exactly as shown" is the instruction that cannot go wrong), name both
+#: POSITIONS the splice reads (the body and the ``evidence`` list), and say
+#: what the token BUYS — the event's member reports as ordinary ``[N]``
+#: citations, which is the difference between citing an event and citing the
+#: platform's prose about one.
+#:
+#: The last clause is the load-bearing one. ``events.summary`` is never
+#: evidence (DATA_MODEL_V3 §2.5 rules 1-2) and this block never prints it; the
+#: sentence says so anyway, because a desk that inferred it could cite the
+#: event for what the summary WOULD have said is the rubber-stamp the whole
+#: expansion design exists to prevent.
+OPEN_EVENTS_CITE_RULE: str = (
+    "To cite an event's underlying reports, write its token exactly as "
+    "shown — event:<uuid> — inline in the body or as an evidence entry; the "
+    "platform expands it into the event's member reports as ordinary [N] "
+    "citations. The event's own summary is never evidence."
+)
+
+
+def _render_event_span(event: Mapping[str, Any]) -> str:
+    """The event's VALIDITY span, printed from its own two columns.
+
+    ``start..end`` when the occurrence is bounded, the bare start when it is
+    still open-ended, and the honest ``(no span)`` when the cluster never
+    carried one — never a fabricated "ongoing", which is precisely the
+    continuity claim the grounding clause forbids a unit to invent.
+    """
+    start = event.get("time_start")
+    end = event.get("time_end")
+    if start and end:
+        return f"{start}..{end}"
+    if start:
+        return str(start)
+    if end:
+        return f"..{end}"
+    return "(no span)"
+
+
+def _render_open_events(events: Sequence[Mapping[str, Any]], ordinal: int) -> list[str]:
+    """The OPEN EVENTS block — ONE ordinal, N citable TOKENS.
+
+    The block is a single orienting index like the register, so it takes ONE
+    ``[N]`` handle for the whole list. What makes it different from every other
+    grounding block is that its LINES carry their own ref: each prints the
+    event's ``event:<uuid>`` token, and THAT is what
+    ``inline_target._expand_event_refs`` resolves — into fresh ``[K]`` markers
+    over the event's member signals, with the event's raw reports as the text
+    the judge grades. Citing ``[N]`` cites this block (the menu); writing the
+    token cites the event's REPORTS. Both are honest; they are different acts,
+    and the closing rule states which is which.
+
+    NOT PRINTED, deliberately: ``events.summary`` (never evidence, §2.5) and
+    ``events.signal_count`` (it read wrong on 244 of 317 — see the reader's
+    note; the ``reports=`` number here is derived from the real
+    ``signal_event_links`` membership, which is that column's definition,
+    so the derivation needs no trust in a rollup). ``sources=`` is
+    ``distinct_source_count``, which IS exact live, and it is the number that
+    answers "how many independent outlets" — the corroboration question a desk
+    should be asking of a cluster.
+    """
+    lines = [
+        f"[{ordinal}] OPEN EVENTS — {len(events)} event(s) linked to this "
+        "desk's open situations, most recently updated first (clustered from "
+        "reports; NOT operator-vetted):",
+    ]
+    for e in events:
+        age = e.get("updated_age_days")
+        age_part = (
+            f" updated_age={float(age):.1f}d"
+            if isinstance(age, (int, float)) and not isinstance(age, bool)
+            else ""
+        )
+        lines.append(
+            f"    - event:{e.get('event_id')} :: "
+            f"{str(e.get('title') or '')[:EVENT_TITLE_CHARS]} | "
+            f"{_render_event_span(e)} | "
+            f"reports={_fmt_int(e.get('report_count'))} "
+            f"sources={_fmt_int(e.get('source_count'))} | "
+            f"state={e.get('lifecycle_state')} | "
+            f"updated_at={e.get('updated_at') or '(unknown)'}{age_part}"
+        )
+    lines.append(f"    {OPEN_EVENTS_CITE_RULE}")
+    return lines
+
+
 def _render_baselines(baselines: Sequence[Mapping[str, Any]], ordinal: int) -> list[str]:
     """The DESK BASELINE block — what is NORMAL here, as a falsifiable number.
 
@@ -730,13 +1096,36 @@ _RENDERERS = {
     GROUNDING_PRIOR_READ: _render_prior_read,
     GROUNDING_WINDOW_LEDGER: _render_window_ledger,
     GROUNDING_SITUATIONS: _render_situations,
+    GROUNDING_OPEN_EVENTS: _render_open_events,
     GROUNDING_BASELINE: _render_baselines,
     GROUNDING_QUESTIONS: _render_questions,
+    # 7g-2 — a thin adapter, the same posture ``_render_window_ledger`` takes:
+    # the render lives beside the block in ``history_grounding`` so the block,
+    # its `stale_tense` marker and its citation cannot drift apart. The
+    # ``ordinal`` this one receives is the ordinal of its FIRST line.
+    GROUNDING_HISTORY: history_block_lines,
 }
 
 
+def block_ordinal_span(row: Mapping[str, Any]) -> int:
+    """How many ``[N]`` ordinals ONE grounding row consumes.
+
+    One for every block but HISTORICAL SERIES, which takes one per series LINE
+    (see :mod:`legba.data.analysts.history_grounding`). Spelled as a function
+    rather than assumed to be 1 so the section renderer reserves the right run
+    and the ordinal space stays contiguous and collision-free.
+    """
+    if row.get(UNIT_GROUNDING_ROW_KEY) != GROUNDING_HISTORY:
+        return 1
+    payload = row.get(GROUNDING_PAYLOAD_KEY)
+    return ordinal_span(payload) if isinstance(payload, (list, tuple)) else 0
+
+
 def _render_block(row: Mapping[str, Any], ordinal: int) -> list[str]:
-    """Render ONE grounding block at ``ordinal`` (``[]`` for an unknown kind)."""
+    """Render ONE grounding block at ``ordinal`` (``[]`` for an unknown kind).
+
+    For HISTORICAL SERIES, ``ordinal`` is the ordinal of its FIRST line.
+    """
     kind = row.get(UNIT_GROUNDING_ROW_KEY)
     renderer = _RENDERERS.get(str(kind))
     if renderer is None:
@@ -777,7 +1166,10 @@ def render_grounding_section(
             body.append("")
         body.extend(lines)
         stamped.append((ordinal, row))
-        ordinal += 1
+        # 7g-2: advance by what the block actually CLAIMED, not by one. Every
+        # block but HISTORICAL SERIES claims exactly one, so this is the
+        # pre-7g-2 arithmetic for all of them.
+        ordinal += max(1, block_ordinal_span(row))
     if not stamped:
         return "", []
     return "\n".join([_SECTION_HEADER, ""] + body), stamped
@@ -812,8 +1204,10 @@ _BLOCK_TITLES = {
     GROUNDING_PRIOR_READ: "Prior read (this unit's previous verified read)",
     GROUNDING_WINDOW_LEDGER: "Window ledger (this unit's trailing 14-day record)",
     GROUNDING_SITUATIONS: "Open-situation register",
+    GROUNDING_OPEN_EVENTS: "Open events on this desk's open frames",
     GROUNDING_BASELINE: "Desk baseline",
     GROUNDING_QUESTIONS: "Standing open questions",
+    GROUNDING_HISTORY: "Historical series held for this desk",
 }
 
 
@@ -828,10 +1222,10 @@ def citation_for_block(row: Mapping[str, Any], ordinal: int) -> dict[str, Any] |
       (``verify._uses_subclaim_convention``) and would route the whole unit
       finding to the sub-claim floor. It carries NO ``effective_confidence`` and
       NO ``derived_from`` — the prior read is MEMORY, not corroboration.
-    * WINDOW LEDGER / REGISTER / BASELINE / QUESTIONS — synthetic blocks with no
-      single substrate id, so they carry the REAL underlying ids
-      (``ledger_finding_ids`` / ``situation_ids`` / ``baseline_keys`` /
-      ``question_ids``) and NO ``ref_id``. Minting one so a drill link resolves
+    * WINDOW LEDGER / REGISTER / OPEN EVENTS / BASELINE / QUESTIONS — synthetic
+      blocks with no single substrate id, so they carry the REAL underlying ids
+      (``ledger_finding_ids`` / ``situation_ids`` / ``event_ids`` /
+      ``baseline_keys`` / ``question_ids``) and NO ``ref_id``. Minting one so a drill link resolves
       would be a fabricated anchor. The ledger's members ARE real
       ``analyst_outputs`` rows, which makes the temptation sharper and the rule
       no different: the block is N of them, so pointing at any ONE would be a
@@ -843,6 +1237,15 @@ def citation_for_block(row: Mapping[str, Any], ordinal: int) -> dict[str, Any] |
     """
     kind = row.get(UNIT_GROUNDING_ROW_KEY)
     if not isinstance(kind, str) or kind not in GROUNDING_RECEIPT_KEYS:
+        return None
+    if kind == GROUNDING_HISTORY:
+        # 7g-2 — HISTORICAL SERIES is not a single-ordinal block and has no
+        # single citation: each of its LINES is its own ordinal and its own
+        # ``observation`` ref. Returning one citation here would have to pick a
+        # line (a lie about what the ordinal points at) or invent a block-level
+        # ref_kind that is not in ``GROUNDING_REF_KINDS`` (which the verify
+        # path would then score as unresolved). :func:`grounding_citations` is
+        # the front door for every block, and the only one for this one.
         return None
     evidence = block_evidence_text(row, ordinal)
     if not evidence:
@@ -898,164 +1301,63 @@ def citation_for_block(row: Mapping[str, Any], ordinal: int) -> dict[str, Any] |
             for e in entries
             if e.get("metric")
         ]
+    elif kind == GROUNDING_OPEN_EVENTS:
+        # The REAL event uuids, exactly as the register carries its situation
+        # ids — and NO ``ref_id``, for the same reason: the block is N events,
+        # so pointing at any one would be a lie about what the clause rests on.
+        # These are also NOT the expansion's lineage: a finding that writes a
+        # token gets the event id into ``derived_from`` through
+        # ``_expand_event_refs``. This list is what the BLOCK showed.
+        citation["event_ids"] = [
+            str(e["event_id"]) for e in entries if e.get("event_id")
+        ]
     elif kind == GROUNDING_QUESTIONS:
         citation["question_ids"] = [
             str(e["question_id"]) for e in entries if e.get("question_id")
         ]
     return citation
 
+def grounding_citations(
+    row: Mapping[str, Any], start_ordinal: int
+) -> list[tuple[int, dict[str, Any]]]:
+    """``[(ordinal, citation)]`` for ONE stamped grounding row — the front door.
 
-# ---------------------------------------------------------------------------
-# The prompt contract — ONE clause, appended to every unit system prompt
-# ---------------------------------------------------------------------------
-#
-# Generated as a single constant rather than pasted into nine descriptors: a copy
-# per unit would drift the moment one is edited, and the whole point of a
-# grounding contract is that every unit states it identically. It encodes exactly
-# the four obligations the composition clause encodes, in the order a reader needs
-# them — SAY WHAT CHANGED, ANCHOR ON THE BLOCK'S OWN DATES, NO-CHANGE IS AN
-# ANSWER, and NEVER assert continuity that is not grounded in a shown block —
-# plus the two obligations the extra unit blocks create: argue against the
-# baseline number instead of a vibe, and treat a standing question as standing
-# unless this run's own evidence answers it.
-#
-# PHASE-V D1 — the AS-OF clause rides in FRONT of it, on the same append. This
-# is the right seam for two reasons. (a) The clause below is where the temporal
-# discipline already lives, and it is exactly the clause the diagnostic found
-# causing the damage: it forbids 'today'/'now'/'as of this run' (correctly — it
-# is the temporal-collapse guard) and supplies NO replacement, so the model
-# resolves the conflict by dropping temporal reference altogether. Stating the
-# prohibition and the replacement in ONE breath is what makes the replacement
-# reachable. (b) ``with_grounding_clause`` is the single unconditional append
-# every inline_target analyst passes through, so the as-of obligation reaches
-# the four NON-unit inline_target analysts too — which is correct: an undated
-# read is no better from country_assessor than from escalation.
+    Exists because 7g-2's HISTORICAL SERIES block claims one ordinal per LINE
+    and therefore resolves to N citations, while every other block claims one
+    and resolves to one. Callers iterate the pairs instead of assuming the
+    one-block-one-citation shape, and :func:`citation_for_block` is untouched
+    (it is still the whole answer for the six single-ordinal blocks, and every
+    existing caller and test of it reads the same).
 
-#: D1 anchored for the UNIT layer. The three values come off the SLICE HEADER
-#: ``inline_target._render_user_prompt`` stamps at the top of the evidence —
-#: rendered text, not run state, so an as-of line is a COPY and never an
-#: assertion the judge cannot check.
-_AS_OF_CLAUSE: str = as_of_rule(
-    "'*As of <run date>; slice covers the trailing <window> to that date; <N> "
-    "signals.*'. Take all three values VERBATIM from the SLICE HEADER at the "
-    "top of the evidence (its 'Run date (as-of)', 'Slice window' and 'Number "
-    "of signals' lines); when an AUTHORITATIVE CURRENT CONTEXT block is also "
-    "shown, its 'as of' date is the same date and is your ground truth for "
-    "what 'current' means. Never substitute your own sense of the time. If NO "
-    "slice header is shown — a run that gathers its own evidence rather than "
-    "reading a cadence slice — take the date from the AUTHORITATIVE CURRENT "
-    "CONTEXT block instead and name the evidence you gathered in place of a "
-    "window; if neither is shown, OMIT the as-of line rather than inventing a "
-    "date. An absent anchor is an honest absence; a guessed one is a "
-    "fabrication."
-)
-
-#: V-N2 — the RETRIEVED-CONTEXT rule rides the SAME append, immediately after
-#: the as-of rule it completes. This is the right seam for the same reason D1
-#: chose it: ``with_grounding_clause`` is the ONE unconditional append every
-#: inline_target analyst passes through, and the four GATHERING analysts
-#: (cross_doc_corroborator, corpus_researcher, country_assessor and the unit
-#: disruption_status) are exactly the ones that run a GATHER loop and therefore
-#: the only ones that can be shown a RETRIEVED block at all. Gathering is a
-#: separate axis from unit-hood — DS-1 — and disruption_status is on both.
-#:
-#: Appended unconditionally rather than only when a gathered block is present,
-#: and that is deliberate: the GATHER phase and the SYNTHESIS phase are separate
-#: LLM calls, and the synthesis call is where the finding gets written. Making
-#: the clause conditional on this run having gathered would mean deciding, at
-#: prompt-assembly time, something only the tool loop knows — and would leave
-#: the rule unstated on precisely the runs that retrieved something.
-#:
-#: A unit that never gathers reads one paragraph about blocks it will not see.
-#: That is the same cost the "no DESK GROUNDING shown ⇒ this is a FIRST read"
-#: leg already pays, for the same reason: one definition, no drift.
-_RETRIEVED_CLAUSE: str = RETRIEVED_CONTEXT_RULE
-
-UNIT_GROUNDING_CLAUSE: str = (
-    _AS_OF_CLAUSE
-    + "\n\n"
-    + _RETRIEVED_CLAUSE
-    + "\n\n"
-    + "DESK GROUNDING (what this desk already knew). AFTER the numbered signals you "
-    "may be shown a DESK GROUNDING section carrying up to five blocks, each with "
-    "its own [N] handle in the SAME numbering as the signals: a PRIOR READ (this "
-    "unit's own previous verified read of this target, with its produced_at and "
-    "age), a WINDOW LEDGER (this unit's own dated, verified reads of the trailing "
-    "14 days — see the WINDOW LEDGER rules below), an OPEN SITUATION REGISTER "
-    "(the desk's open frames with their status, "
-    "intensity, event count and last_event_at), a DESK BASELINE (the trailing "
-    "normal band for this desk with the current observed value), and STANDING "
-    "OPEN QUESTIONS (questions this desk raised that nobody has answered). When a "
-    "block is shown you MUST: (1) state EXPLICITLY what CHANGED versus the cited "
-    "PRIOR READ — name the change and cite the block by its [N] handle exactly "
-    "like a signal; (2) anchor EVERY temporal statement on the dates printed IN "
-    "those blocks (the prior read's produced_at, a situation's last_event_at, the "
-    "baseline's computed_at, a question's asked_at) and on the SLICE HEADER's "
-    "run date — NEVER on 'today', 'now', 'as of this run', or the time you are "
-    "running; (3) if nothing material "
-    "changed, SAY SO plainly and briefly (e.g. 'no material change since the "
-    "3 August morning read [N]' — a HUMAN calendar date taken from the block's "
-    "produced_at, never the raw ISO/microsecond timestamp) rather than "
-    "re-deriving the same "
-    "picture in different words. When the block you are citing IS the PRIOR "
-    "READ, you may write '(prior read ref N)' in place of the bare '[N]' — it "
-    "resolves identically, and it lets a reader of the finished prose see that "
-    "you cited your own previous read rather than a signal; "
-    "(4) describe a situation ONLY as the register "
-    "states it — its own name and status — and never "
-    "upgrade, downgrade, or re-date it beyond what the register shows. The "
-    "register's intensity score and event_count are internal instrument "
-    "readings: USE them to decide, never PRINT them; (5) when "
-    "you call this window unusual (or normal), say so AGAINST the DESK BASELINE "
-    "band and cite it — do not assert 'elevated' or 'a spike' when the baseline "
-    "block shows the current value inside its normal band, and never restate the "
-    "baseline as a forecast; (6) treat every STANDING OPEN QUESTION as still "
-    "open unless THIS run's cited evidence answers it — if it does, say which "
-    "question and cite the signal that answers it; if it does not, do not "
-    "re-ask the same question as if it were new. NEVER assert continuity of ANY "
-    "kind — an escalation, a de-escalation, a trend, an 'ongoing'/'longstanding' "
-    "framing, or that something has 'been building' — unless it is grounded in a "
-    "cited DESK GROUNDING block. If NO DESK GROUNDING section is shown this is a "
-    "FIRST read of this target: make NO claim about what came before and use no "
-    "'ongoing' / 'continuing' / 'still' framing."
-    # FRAME-2 — the ledger's own three rules, generated by the SAME function the
-    # composition clause calls (``window_ledger_rule``) so both layers state the
-    # contract identically and neither can drift on an edit. Appended AFTER the
-    # six numbered obligations rather than folded into them: those govern a
-    # SINGLE-STEP diff against last cycle, these govern the FORTNIGHT, and the
-    # rule the round actually needs — "never write 'not observed' about a window
-    # your own ledger contradicts" — deserves to be readable on its own.
-    + "\n\n"
-    + window_ledger_rule("[N]")
-)
-
-_CLAUSE_FINGERPRINT = "DESK GROUNDING (what this desk already knew)."
-
-
-def with_grounding_clause(system_prompt: str) -> str:
-    """Append the grounding clause to a unit system prompt, exactly once.
-
-    Idempotent by fingerprint so a re-resolution (or a GEPA-promoted candidate
-    that already carries the clause) can never double it — the same posture
-    ``_tradecraft.with_preamble_if_absent`` takes for the house preamble.
-
-    The clause is appended in CODE rather than pasted into nine descriptors: one
-    definition, nine units, no drift. It is appended UNCONDITIONALLY — the
-    "no blocks shown ⇒ this is a first read, claim nothing about before" leg is
-    exactly the obligation a unit with no memory needs, and making the clause
-    conditional on the blocks resolving would leave that leg unstated on the one
-    run where it bites hardest.
+    An empty list is the honest answer for a block we cannot cite — a prior
+    read with no resolvable id, or a history row whose observations lost their
+    ids — and never a fabricated anchor.
     """
-    if not system_prompt:
-        return system_prompt
-    if _CLAUSE_FINGERPRINT in system_prompt:
-        return system_prompt
-    return f"{system_prompt.rstrip()}\n\n{UNIT_GROUNDING_CLAUSE}\n"
+    if row.get(UNIT_GROUNDING_ROW_KEY) == GROUNDING_HISTORY:
+        payload = row.get(GROUNDING_PAYLOAD_KEY)
+        entries = payload if isinstance(payload, (list, tuple)) else []
+        return observation_citations(entries, start_ordinal)
+    citation = citation_for_block(row, start_ordinal)
+    return [(start_ordinal, citation)] if citation is not None else []
 
 
 # ---------------------------------------------------------------------------
-# Small coercions — each returns None rather than a fabricated zero/date
+# The prompt contract — extracted to ``unit_grounding_clause`` (7g-2)
+#
+# The three clause constants, their fingerprint and the idempotent append moved
+# to a sibling VERBATIM when the HISTORICAL SERIES block brought this module to
+# the module-size gate's 1,500-line entry threshold. The gate is honoured by
+# splitting, never by pinning a new ceiling, and the contract was the clean cut:
+# it depends on nothing in this module. Imported back ONE WAY and re-exported,
+# so every caller and test is unchanged.
 # ---------------------------------------------------------------------------
+
+from .unit_grounding_clause import (  # noqa: E402
+    UNIT_GROUNDING_CLAUSE,
+    with_grounding_clause,
+)
+
+
 
 
 def _coerce_uuid(raw: Any) -> UUID | None:

@@ -24,6 +24,7 @@ scope:
   languages: [en]
   tags: [gov, energy, energy_security, economic, wave_a]
   source_class: official
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

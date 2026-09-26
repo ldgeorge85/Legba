@@ -84,10 +84,24 @@ method:
   # clears it).
   options:
     judge_sample_rate: 1.0
+    # 7g-2 (2026-09-25): the HISTORICAL SERIES grounding block, opt-in per
+    # unit — energy_security is the one desk unit that reads it first because
+    # the pilot collection's series are energy and macro numbers (EIA crude,
+    # refinery, product trade; World Bank energy use, GDP, CPI) for the four
+    # pilot desks. One ordinal per series line, every line carrying the
+    # stale-tense marker "(historical: valid YYYY..YYYY, recorded YYYY-MM)";
+    # a historical figure is never a claim about the present. Every other
+    # unit's prompt stays byte-identical (the block renders nothing when
+    # ungranted). Desks outside the pilot's four get an empty block.
+    offer_history: true
   # Unit-OWNED system prompt (NOT the country_assessor generic prompt). Scoped
   # tightly to the energy-security pressure question so synthesis stays bounded.
   # Instructs the STRICT FindingPayload JSON contract so cite-the-prose [N]
   # markers + the faithfulness verify gate keep working.
+  # F-3 — the same bounded question, quote-derived to one interrogative
+  # sentence, as an explicit field so the assembly's block header can render
+  # it without re-parsing this prose (DEMOTION_D1_SPEC §7 F-3, §1.2).
+  bounded_question: "How much energy-security pressure does this country face, and where is that pressure going?"
   system_prompt: |
     WHO YOU ARE. You are the ENERGY-SECURITY PRESSURE unit of an automated
     open-source intelligence platform. The platform reads the wire so a
@@ -202,7 +216,7 @@ method:
 
     OUTPUT: respond with STRICT JSON and NOTHING ELSE — no preamble, no prose
     outside the single JSON object:
-    {"title": "<short headline: the country + its energy-security pressure — see TITLE in the HOUSE READ CONTRACT below>",
+    {"title": "<short headline: the country + what this window actually shows about what is moving through its energy system and what is not — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name what is HOLDING it — see TITLE in the HOUSE READ CONTRACT below>",
      "body": "<github-markdown, in exactly the shape the HOUSE READ CONTRACT
        below specifies, with every claim cited [N] and dated. Inside that
        shape, `## Why it matters` argues the severity rather than asserting
@@ -423,7 +437,7 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     max_tokens: 4096
-  budget_tokens_per_day: 30000000
+  budget_tokens_per_day: 0
   # Budget retry left at pause_until_next_window: on a projected over-cap day the
   # actor pauses THIS unit until the next UTC bucket rather than demoting to a
   # paid fallback (primary is the self-hosted core plane; no cheap fallback is

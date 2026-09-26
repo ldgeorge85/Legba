@@ -122,9 +122,20 @@ async def test_handle_reports_writer_counts_verbatim(monkeypatch):
         seen.append("pull")
         return [{"claim_id": "a"}, {"claim_id": "b"}, {"claim_id": "c"}]
 
+    async def _expired(deps, options):
+        return 0
+
+    async def _minters(pool):
+        return []
+
     monkeypatch.setattr(fa, "issue_weekly_forecasts", _issue)
     monkeypatch.setattr(fa, "resolve_open_acute_forecasts", _resolve)
     monkeypatch.setattr(fa, "pull_resolved_acute_forecasts", _pull)
+    # H13 — the denominator legs; stubbed because _Deps(object()) is a stub
+    # pool (the pulls' own fake-conn coverage lives in test_forecast_acute /
+    # test_sealed_forecast_ledger).
+    monkeypatch.setattr(fa, "pull_expired_forecast_count", _expired)
+    monkeypatch.setattr(fs, "_pull_hypothesis_minter_counts", _minters)
 
     result = await fs.handle(
         [],

@@ -136,6 +136,7 @@ from typing import Any, Mapping
 from uuid import UUID
 
 from ... import correctness_axis
+from .desk_reference import REFERENCE_LABELED_BY_PREFIX
 from ...provenance.judge_pipeline_version import (
     METRIC_FAITHFULNESS_SCORE,
     poolable_stamps,
@@ -393,10 +394,32 @@ _FINDINGS_SQL = """
     ORDER BY produced_at DESC, id DESC
 """
 
+# F-2 (ATTENTION_MEASUREMENT_DESIGN_2026-09-05 §5) — THE ONE WHERE CLAUSE THAT
+# KEEPS THIS AXIS AN OPERATOR AXIS.
+#
+# This handler's SECONDARY axis has reported `None` every day of its life for a
+# structural reason: `unit_reference_labels` held ONE row, for a retired
+# analyst, with zero `canonical_source_ids`. The A-1 desk-reference writer now
+# fills that table daily with rows that DO carry real `canonical_source_ids` —
+# and without this clause the axis would silently start reporting a number, a
+# MACHINE-authored number, under the key that was built for OPERATOR labels.
+# That is the disease this whole campaign treats, arriving by side effect.
+#
+# So the read is GATED on the `labeled_by` prefix. The machine rows exist, are
+# scored by their own instrument, and publish under their own gauge keys
+# (`data.collection_gauge` / `data.attention_gauge`); they never enter this
+# mean. `test_desk_reference.py::test_f2_scorer_output_is_byte_identical_with_
+# machine_reference_rows_present` proves the scorer's whole payload is
+# byte-identical with and without them.
+#
+# COALESCE because `labeled_by` is nullable and `NULL NOT LIKE ...` is NULL, not
+# TRUE — the pre-existing operator row carries a bare hash there and would
+# otherwise vanish into SQL three-valued logic.
 _LABELS_SQL = """
     SELECT id::text AS label_id, target_id, canonical_source_ids
     FROM unit_reference_labels
     WHERE unit_analyst_id = $1
+      AND COALESCE(labeled_by, '') NOT LIKE $2
 """
 
 # Faithfulness critiques are the in-run verify side-writes (actor_critic): a
@@ -543,7 +566,9 @@ async def _pull_unit(
         }
     n_findings = len(finding_rows)
 
-    label_rows = await conn.fetch(_LABELS_SQL, unit)
+    label_rows = await conn.fetch(
+        _LABELS_SQL, unit, f"{REFERENCE_LABELED_BY_PREFIX}%"
+    )
     labels_by_target: dict[Any, list[dict[str, Any]]] = {}
     for row in label_rows:
         labels_by_target.setdefault(row["target_id"], []).append({

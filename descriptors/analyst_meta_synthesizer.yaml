@@ -24,9 +24,10 @@ identity:
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
   # RETIRED live via POST /retire (superseded by the bounded-unit + composition
-  # architecture) and excluded from bringup_register_analysts.py. Kept as draft
-  # (not active) so a stray re-register stays inert — repo now matches live (#174).
-  state: draft
+  # architecture) and excluded from bringup_register_analysts.py. State set to
+  # retired (was draft) so a stray re-register cannot resurrect a retired
+  # analyst — descriptor_state_drift reconciliation 2026-09-06.
+  state: retired
   owner: release_meta_activation
 
 subscription:
@@ -63,7 +64,7 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     max_tokens: 768            # the kind's DEFAULT_MAX_TOKENS (narrower context)
-  budget_tokens_per_day: 1000000
+  budget_tokens_per_day: 0
   retry:
     budget:
       strategy: pause_until_next_window

@@ -159,10 +159,28 @@ async def test_migration_creates_source_credibility_table(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_migration_seeds_canonical_baseline(migrated_pg: PostgresConfig):
-    """The seed migration pre-populates a dozen wires high + known-low rows."""
+async def test_migration_seeds_canonical_baseline(
+    migrated_pg: PostgresConfig, restore_source_credibility_seed,
+):
+    """The seed migration pre-populates a dozen wires high + known-low rows.
+
+    ``migrated_pg`` is session-scoped (conftest.py) so this table is shared
+    across every file in a full-suite run. At least two other files
+    (``agency/test_research_slice_and_gather.py``,
+    ``agency/test_research_web_evidence_e2e.py``) run an UNSCOPED
+    ``DELETE FROM source_credibility`` as part of their own reset fixtures —
+    they restore the baseline afterward via this same
+    ``restore_source_credibility_seed`` fixture, but a future file that
+    truncates/clears the table without restoring (or a still-unidentified
+    one that already does) would otherwise starve this assertion of rows it
+    never wrote itself, depending on run order. Re-applying the seed here —
+    idempotent, ``ON CONFLICT (source_host) DO NOTHING`` — makes this test
+    own its own precondition instead of trusting every other file in the
+    session to leave the shared table alone.
+    """
     conn = await asyncpg.connect(migrated_pg.dsn)
     try:
+        await restore_source_credibility_seed(conn)
         # Spot-check several high-credibility seeds.
         for host in (
             "reuters.com",

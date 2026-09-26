@@ -17,14 +17,17 @@ import {
   CONSULT_PAGE_LOAD_ID,
   EMPTY_PANEL,
   MAX_PERSISTED_PANELS,
+  MAX_PERSISTED_PREVIEW,
   MAX_PERSISTED_STEPS,
   MAX_PERSISTED_TURNS,
+  applyFrame,
   isDetached,
   parseConsultPanels,
   reconcileWithServer,
   toPersisted,
   turnsFromServer,
   useConsultSessions,
+  usageFromFrame,
   type ChatTurn,
   type ConsultPanelState,
   type PendingTurn,
@@ -496,5 +499,204 @@ describe('persistence', () => {
     // The conversation text is what matters; the trace is what gets dropped.
     expect(restored.transcript).toEqual([{ role: 'user', content: 'q1' }])
     expect(restored.pendingTurn?.steps).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Folding the spend frames (2026-09-16).
+ *
+ * A run that cost ~$10 and returned 487 characters was possible because three
+ * things the stream already knew never reached the operator: what it had spent,
+ * what cap it was under, and what the answer said before it was cut. These are
+ * the rules that carry each of them onto the pending turn.
+ */
+describe('applyFrame — spend, cap, and the answer as it forms', () => {
+  it('takes the round cap and its provenance off the first frame', () => {
+    const next = applyFrame(pending(), {
+      type: 'step',
+      phase: 'plan',
+      kind: 'render_prompt',
+      max_rounds: 6,
+      rounds_source: 'default_malformed_request',
+    })
+    expect(next.roundCap).toBe(6)
+    expect(next.roundsSource).toBe('default_malformed_request')
+  })
+
+  it('seeds the ceilings from render_prompt and keeps them across llm_calls', () => {
+    // The ceilings arrive ONCE, flat on the first frame; the running totals
+    // arrive nested on every model call. A meter that dropped either half is
+    // back to a number with no scale.
+    const seeded = applyFrame(pending(), {
+      type: 'step',
+      kind: 'render_prompt',
+      max_input_tokens: 150_000,
+      max_cost_usd: 3,
+    })
+    const after = applyFrame(seeded, {
+      type: 'step',
+      kind: 'llm_call',
+      usage: { calls: 3, input_tokens: 78_400, output_tokens: 1_200, est_cost_usd: 1.94 },
+    })
+    expect(after.usage).toEqual({
+      calls: 3,
+      input_tokens: 78_400,
+      output_tokens: 1_200,
+      est_cost_usd: 1.94,
+      max_input_tokens: 150_000,
+      max_cost_usd: 3,
+    })
+  })
+
+  it('accumulates answer_delta in order and keeps it OFF the step ticker', () => {
+    let turn = pending()
+    for (const text of ['The slope ', 'is ', 'flattening.']) {
+      turn = applyFrame(turn, { type: 'step', phase: 'narrate', kind: 'answer_delta', text })
+    }
+    expect(turn.answerPreview).toBe('The slope is flattening.')
+    // Hundreds of 400-char chunks must never be reported as hundreds of steps,
+    // nor evict the real trace out of the persisted-step cap.
+    expect(turn.steps).toEqual([])
+  })
+
+  it('leaves the turn untouched for a frame that says nothing', () => {
+    const turn = pending()
+    expect(applyFrame(turn, { type: 'step', kind: 'answer_delta' })).toBe(turn)
+    expect(applyFrame(turn, { type: 'step', kind: 'tool_call' }).usage).toBeUndefined()
+  })
+
+  it('reads a spend snapshot off spend_ceiling_reached too', () => {
+    const next = applyFrame(pending(), {
+      type: 'step',
+      phase: 'reflect',
+      kind: 'spend_ceiling_reached',
+      reason: 'projected cost would exceed the ceiling',
+      calls: 9,
+      input_tokens: 148_000,
+      output_tokens: 3_000,
+      est_cost_usd: 2.97,
+      max_input_tokens: 150_000,
+      max_cost_usd: 3,
+    })
+    expect(next.usage?.est_cost_usd).toBe(2.97)
+    expect(next.steps).toHaveLength(1)
+  })
+
+  it('ignores stray spend-shaped fields on frames that are not about spend', () => {
+    // `calls` is a generic enough word to appear somewhere else one day; a
+    // meter that jumped on it would be worse than no meter.
+    const next = applyFrame(pending(), { type: 'step', kind: 'tool_call', calls: 42 })
+    expect(next.usage).toBeUndefined()
+  })
+})
+
+describe('usageFromFrame', () => {
+  it('says nothing rather than zero when a frame carries no spend', () => {
+    expect(usageFromFrame({ type: 'step', kind: 'tool_call' })).toBeNull()
+  })
+
+  it('prefers the nested snapshot over flat fields of the same name', () => {
+    const merged = usageFromFrame(
+      {
+        type: 'step',
+        kind: 'llm_call',
+        input_tokens: 1,
+        usage: { input_tokens: 99 },
+      },
+      null,
+      true,
+    )
+    expect(merged?.input_tokens).toBe(99)
+  })
+})
+
+describe('the pending turn survives a reload WITH its meter', () => {
+  it('round-trips spend, cap and preview through localStorage', () => {
+    // `parsePending` enumerates its fields, so every new one is a field that
+    // can be silently dropped on reload. This is the test that notices.
+    const store = useConsultSessions.getState()
+    store.startTurn(PANEL, pending())
+    store.pushStep(PANEL, 'req-1', {
+      type: 'step',
+      kind: 'render_prompt',
+      max_rounds: 6,
+      rounds_source: 'default',
+      max_input_tokens: 150_000,
+      max_cost_usd: 3,
+    })
+    store.pushStep(PANEL, 'req-1', {
+      type: 'step',
+      kind: 'llm_call',
+      usage: { calls: 2, input_tokens: 40_000, output_tokens: 900, est_cost_usd: 0.8 },
+    })
+    store.pushStep(PANEL, 'req-1', {
+      type: 'step',
+      kind: 'answer_delta',
+      text: 'a partial answer worth keeping',
+    })
+
+    const restored = parseConsultPanels(localStorage.getItem(STORAGE_KEY))[PANEL]
+    const turn = restored.pendingTurn
+    expect(turn?.roundCap).toBe(6)
+    expect(turn?.roundsSource).toBe('default')
+    expect(turn?.answerPreview).toBe('a partial answer worth keeping')
+    expect(turn?.usage).toMatchObject({
+      calls: 2,
+      input_tokens: 40_000,
+      est_cost_usd: 0.8,
+      max_input_tokens: 150_000,
+      max_cost_usd: 3,
+    })
+  })
+
+  it('bounds the persisted preview — it is prose, and prose has no limit', () => {
+    const panels = {
+      [PANEL]: localState({
+        pendingTurn: pending({ answerPreview: 'x'.repeat(MAX_PERSISTED_PREVIEW + 500) }),
+      }),
+    }
+    const persisted = toPersisted(panels)[PANEL]
+    expect(persisted.pendingTurn?.answerPreview).toHaveLength(MAX_PERSISTED_PREVIEW)
+  })
+})
+
+describe('replaceTurn — the re-synthesised answer', () => {
+  it('replaces a settled assistant turn in place rather than appending', () => {
+    const store = useConsultSessions.getState()
+    store.startTurn(PANEL, pending())
+    store.completeTurn(PANEL, 'req-1', {
+      role: 'assistant',
+      content: 'ran out of time budget',
+      requestId: 'req-1',
+      synthesisStatus: 'partial',
+    })
+
+    store.replaceTurn(PANEL, 1, {
+      role: 'assistant',
+      content: 'the whole answer',
+      requestId: 'req-1',
+      synthesisStatus: 'complete',
+      replayFidelity: 'rebuilt',
+      replayNote: 'transcript rebuilt by re-executing 50 tool calls',
+    })
+
+    const { transcript } = useConsultSessions.getState().panel(PANEL)
+    // Two turns, not three: the stump and its repair are ONE answer, and
+    // appending would also feed the truncated text back as history.
+    expect(transcript).toHaveLength(2)
+    expect(transcript[1].content).toBe('the whole answer')
+    expect(transcript[1].replayNote).toContain('rebuilt')
+  })
+
+  it('refuses an index that is not a settled assistant turn', () => {
+    const store = useConsultSessions.getState()
+    store.startTurn(PANEL, pending())
+    const before = useConsultSessions.getState().panel(PANEL).transcript
+    // Index 0 is the USER turn; the transcript moved under a slow request.
+    store.replaceTurn(PANEL, 0, { role: 'assistant', content: 'nope' })
+    store.replaceTurn(PANEL, 9, { role: 'assistant', content: 'nope' })
+    expect(useConsultSessions.getState().panel(PANEL).transcript).toBe(before)
   })
 })

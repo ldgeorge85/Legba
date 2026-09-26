@@ -20,6 +20,8 @@ import { apiGet, ApiError } from '@/lib/api'
 import type { PanelProps } from '@/types'
 import { cn } from '@/lib/cn'
 import { selectRow } from '@/state/selection'
+import { ScaleStamp } from '@/components/ScaleStamp'
+import { requestCrossFraming } from '@/lib/crossFramingLink'
 
 type SituationStatus = 'active' | 'resolved' | 'escalating'
 
@@ -165,6 +167,18 @@ export default function TargetSituationsPanel({ registration, scope }: PanelProp
                             <Row label="intensity">
                               {tier.label} · {s.intensity_score.toFixed(2)}
                             </Row>
+                            {/* K3 — WHICH intensity scale this reading is on.
+                                Migration 0188 re-based every stored score in
+                                August 2026, so a 59 here and a 59 from July
+                                are not the same measurement; the chip says so
+                                instead of leaving the reader to assume. The
+                                "opened" row below is this reading's as-of. */}
+                            <Row label="scale">
+                              <ScaleStamp
+                                row={s.data}
+                                testId={`situation-scale-stamp-${s.id}`}
+                              />
+                            </Row>
                             <Row label="events">{s.event_count}</Row>
                             <Row label="opened">
                               {new Date(s.produced_at).toLocaleString()}
@@ -201,7 +215,11 @@ export default function TargetSituationsPanel({ registration, scope }: PanelProp
                                 </span>
                               )}
                             </div>
-                            <div className="pt-1">
+                            {/* V3/P6 — the bounded occurrences this frame
+                                tracks (situation_event_links), fetched
+                                lazily on expand. */}
+                            <TrackedEvents situationId={s.id} />
+                            <div className="flex flex-wrap items-center gap-3 pt-1">
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation()
@@ -211,6 +229,32 @@ export default function TargetSituationsPanel({ registration, scope }: PanelProp
                               >
                                 trace this situation →
                               </button>
+                              {/* Wave P lane B — CROSS-FRAMING from a situation
+                                  row. "Trace" walks DOWN into this frame's own
+                                  lineage; this walks ACROSS, putting the desk's
+                                  most contested claim against every bounded
+                                  unit and naming the ones that are silent. The
+                                  situation's name rides along as the claim hint
+                                  so the panel lands on the matter the operator
+                                  was reading, falling back to the desk's most
+                                  contested claim when no span matches it. */}
+                              {s.target_id && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    requestCrossFraming({
+                                      targetId: s.target_id!,
+                                      claimText: s.name,
+                                      origin: 'target.situations',
+                                    })
+                                  }}
+                                  className="text-[10px] underline text-accent-info"
+                                  data-testid={`situation-cross-framing-${s.id}`}
+                                  title="put this desk's claim against its other bounded units"
+                                >
+                                  cross-framing ▸
+                                </button>
+                              )}
                             </div>
                           </div>
                         )}
@@ -224,6 +268,65 @@ export default function TargetSituationsPanel({ registration, scope }: PanelProp
         </div>
       )}
     </PanelChrome>
+  )
+}
+
+/** The `/v3/events` row shape used by the tracked-events list (V3/P6). */
+interface EventRow {
+  id: string
+  title: string
+  lifecycle_state: string
+  severity?: string | null
+  time_start?: string | null
+  time_end?: string | null
+}
+
+/** V3/P6 — the events a situation tracks (`situation_event_links`), fetched
+ *  lazily when the row expands (the 404 degrade covers a substrate that
+ *  predates the events route). Clicking a row opens the event's lineage. */
+function TrackedEvents({ situationId }: { situationId: string }) {
+  const { data, isLoading, error } = useQuery<Page<EventRow>>({
+    queryKey: ['situation-events', situationId],
+    queryFn: async () => {
+      try {
+        return await apiGet<Page<EventRow>>(
+          `/v3/events?situation_id=${encodeURIComponent(situationId)}&limit=50`,
+        )
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return { data: [], next_cursor: null }
+        throw e
+      }
+    },
+    staleTime: 60_000,
+  })
+  const rows = data?.data ?? []
+  return (
+    <div className="pt-1" data-testid="target-situation-events">
+      <span className="text-slate-400">tracked events: </span>
+      {isLoading ? (
+        <span className="text-slate-500">loading…</span>
+      ) : error ? (
+        <span className="text-accent-critical">{(error as Error).message}</span>
+      ) : rows.length === 0 ? (
+        <span className="text-slate-500">none linked yet</span>
+      ) : (
+        <span className="inline-flex flex-wrap gap-1 align-top">
+          {rows.map((ev) => (
+            <button
+              key={ev.id}
+              title={`${ev.lifecycle_state} · ${ev.time_start ?? 'unstamped'}`}
+              onClick={(e) => {
+                e.stopPropagation()
+                openLineage('event', ev.id)
+              }}
+              className="font-mono text-[10px] underline text-accent-info"
+            >
+              {ev.title.length > 40 ? `${ev.title.slice(0, 40)}…` : ev.title}
+            </button>
+          ))}
+        </span>
+      )}
+    </div>
   )
 }
 

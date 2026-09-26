@@ -303,6 +303,50 @@ def test_export_cap_constant():
 
 
 # ---------------------------------------------------------------------------
+# A10/7b-iii — the Desk Brief's `appendix` field (client-composed markdown,
+# carried through verbatim, printed AFTER every basket item).
+# ---------------------------------------------------------------------------
+
+
+def test_render_markdown_appends_the_appendix_after_every_item():
+    doc = build_document(
+        title="Desk brief — Ruritania",
+        generated_at=datetime(2026, 7, 24, 12, 0, tzinfo=timezone.utc),
+        items=_golden_items(),
+        appendix="## Open situations & tracked events\n\n- unrest — escalating",
+    )
+    md = render_markdown(doc)
+    # Every item still renders, and the appendix comes LAST — after the final
+    # item's own content, not spliced between the header and the first item.
+    last_item_at = md.index("not found in substrate")
+    appendix_at = md.index("Open situations & tracked events")
+    assert appendix_at > last_item_at
+    assert md.rstrip().endswith("- unrest — escalating")
+
+
+def test_build_document_appendix_defaults_to_none_and_blank_is_dropped():
+    no_appendix = build_document(
+        title="t", generated_at=datetime(2026, 7, 24, tzinfo=timezone.utc), items=[],
+    )
+    assert no_appendix["appendix"] is None
+    assert "---" not in render_markdown(
+        build_document(
+            title="t",
+            generated_at=datetime(2026, 7, 24, tzinfo=timezone.utc),
+            items=[],
+            appendix="   ",  # blank/whitespace-only — never rendered as a section
+        )
+    )
+    blank = build_document(
+        title="t",
+        generated_at=datetime(2026, 7, 24, tzinfo=timezone.utc),
+        items=[],
+        appendix="",
+    )
+    assert blank["appendix"] is None
+
+
+# ---------------------------------------------------------------------------
 # App fixture (mirrors test_journal_api.py).
 # ---------------------------------------------------------------------------
 
@@ -373,10 +417,18 @@ async def client(export_app):
 
 
 async def _insert_signal(
-    pg_store: PostgresStore, *, title: str, canonical_url: str | None,
+    pg_store: PostgresStore,
+    *,
+    title: str,
+    canonical_url: str | None,
+    published_at: str | None = None,
+    fetched_at: datetime | None = None,
 ) -> UUID:
+    """One ``signals`` row. ``published_at`` / ``fetched_at`` are the two legs
+    of the o2 CITATION DATE and both are pinnable so a test never asserts
+    against today's clock."""
     row_id = uuid4()
-    ts = datetime.now(timezone.utc)
+    ts = fetched_at or datetime.now(timezone.utc)
     async with pg_store.acquire() as conn:
         await conn.execute(
             """
@@ -391,7 +443,12 @@ async def _insert_signal(
             )
             """,
             row_id, f"src_export_{uuid4().hex[:8]}", ts,
-            json.dumps({"title": title}), canonical_url,
+            json.dumps(
+                {"title": title}
+                if published_at is None
+                else {"title": title, "published_at": published_at}
+            ),
+            canonical_url,
         )
     return row_id
 
@@ -406,6 +463,7 @@ async def _insert_finding(
     target_id: str | None = None,
     analyst_id: str | None = "test_analyst",
     citations: list[dict] | None = None,
+    extra_data: dict | None = None,
 ) -> UUID:
     row_id = uuid4()
     ts = datetime.now(timezone.utc)
@@ -418,11 +476,18 @@ async def _insert_finding(
     # (every real exported finding printed "no citations recorded"). Built
     # through the real payload model so the nesting can never drift out of the
     # fixture again.
+    inner: dict = {}
+    if citations is not None:
+        inner["citations"] = citations
+    # W-2 — a rollup row's payload is not a citation list. Same double-nesting,
+    # same real model, so the fixture cannot drift from the shape the producer
+    # writes (`data.data.rollup`).
+    inner.update(extra_data or {})
     data: dict = FindingPayload(
         title=title,
         body=body,
         confidence=confidence,
-        data={"citations": citations} if citations is not None else {},
+        data=inner,
     ).model_dump(mode="json")
     async with pg_store.acquire() as conn:
         await conn.execute(
@@ -530,6 +595,8 @@ async def test_export_mixed_finding_and_journal_json(export_app, client: AsyncCl
         pg_store,
         title="Troop columns filmed on Route 9",
         canonical_url="https://example.org/route9",
+        published_at="2026-09-04T06:00:00+00:00",
+        fetched_at=datetime(2026, 9, 5, 7, 0, tzinfo=timezone.utc),
     )
     ghost_sig = uuid4()  # cited but never inserted — the pruned-signal path
     finding_id = await _insert_finding(
@@ -630,12 +697,29 @@ async def test_export_mixed_finding_and_journal_json(export_app, client: AsyncCl
         # object_ref, so both stay honestly empty (never fabricated).
         "archived": False,
         "archive_sha256": None,
+        # W-3 additive lineage surface. In the UNIFORM key set on purpose — a
+        # signal ref has no spine ordinal and no spine block, and it says so
+        # rather than omitting the keys and making a reader sniff the shape.
+        "ordinal": None,
+        "spine_block": None,
+        # 7g-2 — the cited OBSERVATION's own row, in the same uniform key set
+        # and for the same reason: None on every kind but `observation`, so
+        # the shape is stated rather than sniffed.
+        "observation": None,
+        # o2 — the SOURCE's own date, with the label that says which date it
+        # is. This row declares ``published_at`` so the label is `published`
+        # and the later ``fetched_at`` (2026-09-05) is NOT what is shown.
+        "citation_date": "2026-09-04",
+        "citation_date_label": "published",
     }
     assert c2["resolved"] is False
     assert c2["resolution_source"] == "stored"
     assert c2["title"] == "stored ghost title"
     assert c2["canonical_url"] == "https://stored.example/ghost"
     assert c2["archived"] is False and c2["archive_sha256"] is None
+    # A PRUNED signal carries no date: the stored citation record never held
+    # one, and dating it by the row that cited it would be a fabrication.
+    assert c2["citation_date"] is None and c2["citation_date_label"] is None
     # Verify state + flags + the confidence fold (min(0.72, 0.5)).
     assert f["verify_state"] == "faithfulness=0.50"
     assert f["verify_flags"] == {"hard_fail": 1}
@@ -939,6 +1023,7 @@ async def test_export_markdown_document(export_app, client: AsyncClient):
 
     sig_id = await _insert_signal(
         pg_store, title="Sig headline", canonical_url="https://example.org/sig",
+        published_at="2026-09-04T06:00:00+00:00",
     )
     finding_id = await _insert_finding(
         pg_store,
@@ -972,11 +1057,155 @@ async def test_export_markdown_document(export_app, client: AsyncClient):
     assert "## 1. MD finding" in md
     # No critique + a verify-covered analyst → the explicit unverified state.
     assert "- verify: unverified — no faithfulness verdict recorded for this finding" in md
-    assert "- [1] Sig headline — https://example.org/sig" in md
+    # o2 — the endnote carries the date and the label that says which date
+    # it is. The date follows the URL and precedes the archive hash.
+    assert "- [1] Sig headline — https://example.org/sig — published 2026-09-04" in md
     assert f"- receipt: /api/v1/lineage/finding/{finding_id}" in md
     assert "## 2. MD chronicle" in md
     assert f"tier: {JOURNAL_TIER_LABELS['chronicle']}" in md
     assert f"- voice: {JOURNAL_VOICE_NOTE}" in md
+
+
+def test_the_citation_line_renderers_import_under_the_slim_registry_image():
+    """``export_citation_lines`` claims stdlib-only and the registry ships a
+    SLIM image; o2 put the citation-date resolver in there, so the claim is
+    re-proved rather than re-asserted. Heavy modules poisoned to ``None``,
+    exactly as the slim image leaves them."""
+    import os
+    import pathlib as _pathlib
+    import subprocess
+    import sys
+    import textwrap
+
+    src = str(_pathlib.Path(__file__).resolve().parents[2] / "src")
+    script = textwrap.dedent(
+        """
+        import sys
+        for blocked in ("feedparser", "telethon", "warcio", "aiobotocore",
+                        "pycountry", "networkx", "qdrant_client"):
+            sys.modules[blocked] = None
+        from legba.data.registry.export_citation_lines import citation_date
+        assert citation_date("20260729", None, None) == ("2026-07-29", "published")
+        print("OK")
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True,
+        timeout=120,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(
+            p for p in (src, os.environ.get("PYTHONPATH", "")) if p)},
+    )
+    assert result.returncode == 0, (
+        f"slim import failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+    assert "OK" in result.stdout
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_a_signal_with_no_published_date_is_endnoted_as_FETCHED(
+    export_app, client: AsyncClient,
+):
+    """o2 — the fallback leg, and the reason it carries its own label. A source
+    that declared no date is dated by OUR read stamp, which is an upper bound
+    on the publication and is printed as ``fetched`` so a reader can treat it
+    as one instead of mistaking it for the publisher's own date."""
+    _, _, pg_store = export_app
+    sig_id = await _insert_signal(
+        pg_store, title="Undated wire", canonical_url="https://example.org/u",
+        fetched_at=datetime(2026, 9, 5, 7, 0, tzinfo=timezone.utc),
+    )
+    finding_id = await _insert_finding(
+        pg_store, title="Fetched-date finding", body="Claim [1].",
+        citations=[{"marker": "[1]", "signal_id": str(sig_id)}],
+    )
+    resp = await client.post(
+        "/api/v1/v3/export",
+        json={"items": [{"kind": "finding", "id": str(finding_id)}],
+              "format": "markdown"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert (
+        "- [1] Undated wire — https://example.org/u — fetched 2026-09-05"
+    ) in resp.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_a_gdelt_style_compact_published_at_still_dates_its_endnote(
+    export_app, client: AsyncClient,
+):
+    """46,236 live rows hold ``YYYYMMDD`` rather than an ISO stamp (the GDELT
+    files source writes the SQLDATE through verbatim). They are the source's
+    own declared date and they are read as one."""
+    _, _, pg_store = export_app
+    sig_id = await _insert_signal(
+        pg_store, title="GDELT item", canonical_url="https://example.org/g",
+        published_at="20260729",
+        fetched_at=datetime(2026, 9, 5, 7, 0, tzinfo=timezone.utc),
+    )
+    finding_id = await _insert_finding(
+        pg_store, title="Compact-date finding", body="Claim [1].",
+        citations=[{"marker": "[1]", "signal_id": str(sig_id)}],
+    )
+    resp = await client.post(
+        "/api/v1/v3/export",
+        json={"items": [{"kind": "finding", "id": str(finding_id)}],
+              "format": "json"},
+    )
+    assert resp.status_code == 200, resp.text
+    citation = resp.json()["items"][0]["citations"][0]
+    assert citation["citation_date"] == "2026-07-29"
+    assert citation["citation_date_label"] == "published"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_export_route_carries_the_appendix_through_both_formats(
+    export_app, client: AsyncClient,
+):
+    """A10/7b-iii — the Desk Brief's ``appendix`` rides through the route
+    unread and unmodified: printed after the one basket item in markdown,
+    and returned verbatim on the JSON document."""
+    _, _, pg_store = export_app
+    finding_id = await _insert_finding(pg_store, title="Appendix host finding")
+    appendix = "## Open situations & tracked events\n\n### Border unrest\n\n- status: escalating"
+
+    md_resp = await client.post(
+        "/api/v1/v3/export",
+        json={
+            "items": [{"kind": "finding", "id": str(finding_id)}],
+            "format": "markdown",
+            "title": "Desk brief",
+            "appendix": appendix,
+        },
+    )
+    assert md_resp.status_code == 200, md_resp.text
+    md = md_resp.text
+    assert md.index("Border unrest") > md.index("Appendix host finding")
+    assert md.rstrip().endswith("- status: escalating")
+
+    json_resp = await client.post(
+        "/api/v1/v3/export",
+        json={
+            "items": [{"kind": "finding", "id": str(finding_id)}],
+            "format": "json",
+            "title": "Desk brief",
+            "appendix": appendix,
+        },
+    )
+    assert json_resp.status_code == 200, json_resp.text
+    assert json_resp.json()["appendix"] == appendix
+
+    # Omitted entirely → carried as an honest absence, not an empty string.
+    no_appendix_resp = await client.post(
+        "/api/v1/v3/export",
+        json={
+            "items": [{"kind": "finding", "id": str(finding_id)}],
+            "format": "json",
+        },
+    )
+    assert no_appendix_resp.json()["appendix"] is None
 
 
 @pytest.mark.integration
@@ -1039,3 +1268,373 @@ async def test_export_cap_413_and_empty_400(export_app, client: AsyncClient):
         "/api/v1/v3/export", json={"items": [], "format": "json"},
     )
     assert resp_empty.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# HISTORY — the rollup rows whose stored citation order does not match the
+# order their own body renders.
+#
+# Rows are append-only, so the 16 ``region_rollup.v1`` rows written between
+# 2026-09-05 and the 2026-09-07 producer fix keep their citations in the SLICE
+# order while their body numbers its member sections in the ROSTER order. The
+# export re-maps them on READ so the operator's document stops labelling
+# Argentina's carried read with the United States' head.
+#
+# PURE, and total-or-nothing: the permutation is specified by the row itself
+# (``rollup.members[].assembly_id`` IS the citation's ``ref_id``), so nothing is
+# inferred, no DB is read, and a row that does not re-map cleanly is exported
+# exactly as stored.
+# ---------------------------------------------------------------------------
+
+_ROLLUP_MEMBER_IDS = {
+    "country_g20_ar": "11111111-0000-0000-0000-00000000000a",
+    "country_g20_br": "11111111-0000-0000-0000-00000000000b",
+    "country_g20_us": "11111111-0000-0000-0000-00000000000c",
+}
+#: Render order (the roster) vs the slice order the old CITE step numbered by.
+_ROLLUP_RENDER = ["country_g20_ar", "country_g20_br", "country_g20_us"]
+_ROLLUP_SLICE = ["country_g20_us", "country_g20_ar", "country_g20_br"]
+
+
+def _legacy_rollup_row(*, carried=None, citations=None):
+    carried = _ROLLUP_RENDER if carried is None else carried
+    if citations is None:
+        citations = [
+            {
+                "marker": f"[[ref:{n}]]",
+                "ordinal": n,
+                "ref_id": _ROLLUP_MEMBER_IDS[t],
+                "ref_kind": "finding",
+                "target_id": t,
+                "title": f"{t} read",
+                "evidence_text": f"the {t} read, verbatim",
+            }
+            for n, t in enumerate(_ROLLUP_SLICE, start=1)
+        ]
+    return {
+        "data": {
+            "rollup": {
+                "schema": "region_rollup.v1",
+                "members": [
+                    {
+                        "target_id": t,
+                        "assembly_id": _ROLLUP_MEMBER_IDS[t],
+                        "lead_source": "carried",
+                    }
+                    for t in carried
+                ],
+            },
+            "citations": citations,
+        }
+    }
+
+
+def test_export_remaps_a_legacy_rollups_citations_onto_its_rendered_order():
+    """``[[ref:N]]`` in section N resolves to section N's OWN head, on read."""
+    from legba.data.registry.export_api import _stored_citations
+
+    out = _stored_citations(_legacy_rollup_row())
+    assert [c["target_id"] for c in out] == _ROLLUP_RENDER
+    assert [c["ordinal"] for c in out] == [1, 2, 3]
+    assert [c["marker"] for c in out] == ["[[ref:1]]", "[[ref:2]]", "[[ref:3]]"]
+    # Every other field of every entry travels untouched — the re-map moves
+    # which ordinal names which row and nothing else.
+    for entry in out:
+        assert entry["evidence_text"] == f"the {entry['target_id']} read, verbatim"
+        assert entry["ref_id"] == _ROLLUP_MEMBER_IDS[entry["target_id"]]
+
+
+def test_export_remap_is_a_no_op_once_the_producer_is_fixed():
+    """A row written after the fix already renders in citation order, so the
+    re-map is the identity — one code path, no flag, correct as rows age out."""
+    from legba.data.registry.export_api import _stored_citations
+
+    aligned = [
+        {
+            "marker": f"[[ref:{n}]]",
+            "ordinal": n,
+            "ref_id": _ROLLUP_MEMBER_IDS[t],
+            "ref_kind": "finding",
+            "target_id": t,
+        }
+        for n, t in enumerate(_ROLLUP_RENDER, start=1)
+    ]
+    row = _legacy_rollup_row(citations=aligned)
+    assert _stored_citations(row) == aligned
+
+
+def test_export_leaves_a_non_rollup_rows_citations_exactly_as_stored():
+    """Every other tier is aligned at write time and must not be touched."""
+    from legba.data.registry.export_api import _stored_citations
+
+    stored = [
+        {"marker": "[[ref:2]]", "ordinal": 2,
+         "ref_id": "22222222-0000-0000-0000-000000000001",
+         "ref_kind": "finding", "target_id": "country_g20_in"},
+    ]
+    assert _stored_citations({"data": {"citations": stored}}) == stored
+
+
+def test_export_declines_a_partial_rollup_remap_rather_than_mixing_orders():
+    """TOTAL OR NOTHING. A half re-map would put two orderings inside one
+    ordinal space, which is the defect itself rather than a repair of it."""
+    from legba.data.registry.export_api import _stored_citations
+
+    # A carried member with no matching citation (counts still agree).
+    row = _legacy_rollup_row(
+        carried=["country_g20_ar", "country_g20_br", "country_g20_ar"]
+    )
+    assert _stored_citations(row) == row["data"]["citations"]
+
+    # Count mismatch — one citation dropped at write time.
+    short = _legacy_rollup_row()
+    short["data"]["citations"] = short["data"]["citations"][:2]
+    assert _stored_citations(short) == short["data"]["citations"]
+# W-3 (2026-09-06) — the Assessment's citations all resolve to ONE uuid
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_assessment_citations_export_their_spine_block_hop(
+    export_app, client: AsyncClient
+):
+    """THE FENCE IS FINE; THE RESOLUTION WAS THIN.
+
+    D-6 fences the voice to its spine (``derived_from == [spine_id]``), so every
+    ``citations[].ref_id`` an Assessment writes IS that one row — the live
+    2026-09-06 12:15Z row carried four citations and all four exported as the
+    same uuid with the titles "Escalation composition" / "Country composition".
+    That is the contract, and nothing here widens it: the Assessment row is
+    untouched.
+
+    What the export used to do was DROP the two keys the producer already
+    stamps — ``ordinal`` (which spine block the marker names) and
+    ``spine_block`` (that block's own desk head) — and with them the only
+    lineage that tells one fenced citation from another. Resolved, they are a
+    chain: Assessment → world read block N → the country read → its signals.
+    """
+    _, _, pg_store = export_app
+
+    leaf_sig = await _insert_signal(
+        pg_store, title="Karachi port call", canonical_url="https://example.org/khi",
+    )
+    # HOP 3 — the country read the spine's block quotes, with its own citation.
+    country_read = await _insert_finding(
+        pg_store,
+        title="country_g20_pk, 2026-09-06 — 3 threads lead",
+        body="Pakistan escalation risk is rising [1].",
+        analyst_id="country_composition",
+        target_id="country_g20_pk",
+        citations=[
+            {
+                "marker": "[1]",
+                "signal_id": str(leaf_sig),
+                # The hop shows the head's OWN STORED copy, never a live
+                # re-resolution: this is a lineage hop, and re-resolving one
+                # head's citations inside another row's export would claim a
+                # freshness the document did not check.
+                "title": "Karachi port call (as the desk cited it)",
+            }
+        ],
+    )
+    # HOP 1 — the spine, the row the channel actually read.
+    spine_id = await _insert_finding(
+        pg_store,
+        title="World read — 2026-09-06",
+        body="### 1 — Escalation composition",
+        analyst_id="world_assessor",
+    )
+    assessment_id = await _insert_finding(
+        pg_store,
+        title="Assessment — 2026-09-06",
+        body="BLUF: Pakistan leads [[ref:1]]. The US energy read sits below it [[ref:7]].",
+        analyst_id="world_assessment",
+        citations=[
+            {
+                "marker": "[[ref:1]]",
+                "ordinal": 1,
+                "ref_id": str(spine_id),
+                "ref_kind": "finding",
+                "source": "world_assessor",
+                "title": "Escalation composition",
+                "spine_block": {
+                    "finding_id": str(country_read),
+                    "desk": "country_composition",
+                    "target_id": "country_g20_pk",
+                },
+                "evidence_text": "Pakistan escalation risk is rising.",
+            },
+            {
+                "marker": "[[ref:7]]",
+                "ordinal": 7,
+                "ref_id": str(spine_id),
+                "ref_kind": "finding",
+                "source": "world_assessor",
+                "title": "Country composition",
+                # A hop whose head is GONE — stated as unresolved, never faked.
+                "spine_block": {
+                    "finding_id": str(uuid4()),
+                    "desk": "country_composition",
+                    "target_id": "country_g20_us",
+                },
+                "evidence_text": "The United States faces high energy-security pressure.",
+            },
+        ],
+    )
+
+    resp = await client.post(
+        "/api/v1/v3/export",
+        json={"items": [{"kind": "finding", "id": str(assessment_id)}], "format": "json"},
+    )
+    assert resp.status_code == 200, resp.text
+    cites = resp.json()["items"][0]["citations"]
+    assert len(cites) == 2
+
+    # The FENCE still holds — one ref_id, both entries. That was never the bug.
+    assert {c["ref_id"] for c in cites} == {str(spine_id)}
+    # ...and the ordinals now tell them apart.
+    assert [c["ordinal"] for c in cites] == [1, 7]
+
+    first, second = cites
+    sb = first["spine_block"]
+    assert sb["finding_id"] == str(country_read)
+    assert sb["desk"] == "country_composition"
+    assert sb["target_id"] == "country_g20_pk"
+    assert sb["resolved"] is True
+    assert sb["title"] == "country_g20_pk, 2026-09-06 — 3 threads lead"
+    assert sb["receipt_path"] == f"/api/v1/lineage/finding/{country_read}"
+    # HOP 3 — the chain terminates in the world, not in another of our rows.
+    assert sb["first_citation"]["citation_kind"] == "signal"
+    assert sb["first_citation"]["signal_id"] == str(leaf_sig)
+
+    # The absent head is an ABSENCE, not a fabrication.
+    assert second["spine_block"]["resolved"] is False
+    assert second["spine_block"]["title"] is None
+    assert second["spine_block"]["first_citation"] is None
+    # The stored half survives so the reader still knows what was cited.
+    assert second["spine_block"]["target_id"] == "country_g20_us"
+
+    md = await client.post(
+        "/api/v1/v3/export",
+        json={
+            "items": [{"kind": "finding", "id": str(assessment_id)}],
+            "format": "markdown",
+        },
+    )
+    text = md.text
+    assert "via block 1 of that record → country_composition / country_g20_pk" in text
+    assert "which cites [1] Karachi port call (as the desk cited it)" in text
+    assert "that read no longer resolves; stored hop shown" in text
+
+
+# ---------------------------------------------------------------------------
+# W-2 (2026-09-06) — a rollup is a DERIVED CARRY, not a finding that contradicts
+# the world read
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_rollup_exports_as_a_derived_carry_with_its_members(
+    export_app, client: AsyncClient
+):
+    """The export half of W-2.
+
+    The 2026-09-06 world read filed the five region rollups under
+    ``below_floor`` — "5 below the verification floor" — while this same export
+    shipped them as findings, so one document asserted both "these five failed
+    verification" and "here are five region reads". The ledger side is fixed at
+    the producer (regions are not world candidates post-D-5). This is the other
+    half: a rollup says what it is on its own face, with the members it carries.
+    """
+    _, _, pg_store = export_app
+
+    member_read = await _insert_finding(
+        pg_store,
+        title="country_g20_de, 2026-09-06",
+        body="Germany's rupture with Russia is accelerating.",
+        analyst_id="country_composition",
+        target_id="country_g20_de",
+    )
+    rollup_id = await _insert_finding(
+        pg_store,
+        title="Region — Europe, 2026-09-06 — 1 of 2 member country reads carried",
+        body="Europe rollup body.",
+        analyst_id="region_composition",
+        target_id="region_europe",
+        extra_data={
+            "rollup": {
+                "schema": "region_rollup.v1",
+                "regime": "rollup",
+                "tier": "region",
+                "region_id": "region_europe",
+                "region_name": "Europe",
+                "member_count": 2,
+                "members_with_head": 1,
+                "members_carried": 1,
+                "members_missing": ["country_g20_fr"],
+                "members": [
+                    {
+                        "target_id": "country_g20_de",
+                        "target_name": "Germany",
+                        "assembly_id": str(member_read),
+                        "lead_source": "carried",
+                        "lead_block_ordinal": 1,
+                    },
+                    {
+                        "target_id": "country_g20_fr",
+                        "target_name": "France",
+                        "assembly_id": None,
+                        "lead_source": "none",
+                        "lead_block_ordinal": None,
+                    },
+                ],
+            }
+        },
+    )
+    plain_id = await _insert_finding(
+        pg_store, title="An ordinary read", body="Nothing derived here.",
+    )
+
+    resp = await client.post(
+        "/api/v1/v3/export",
+        json={
+            "items": [
+                {"kind": "finding", "id": str(rollup_id)},
+                {"kind": "finding", "id": str(plain_id)},
+            ],
+            "format": "json",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    rollup_item, plain_item = resp.json()["items"]
+
+    # An ordinary read derives from nothing, and says so rather than omitting
+    # the key — the document stays self-describing.
+    assert plain_item["derivation"] is None
+
+    d = rollup_item["derivation"]
+    assert d["schema"] == "region_rollup.v1"
+    assert d["regime"] == "rollup"
+    assert d["frame_name"] == "Europe"
+    assert d["members_carried"] == 1 and d["member_count"] == 2
+    assert d["members_missing"] == ["country_g20_fr"]
+    assert "derived carry" in d["note"] and "not a candidate" in d["note"]
+    carried, absent = d["members"]
+    assert carried["carried"] is True
+    assert carried["member_read_id"] == str(member_read)
+    assert carried["receipt_path"] == f"/api/v1/lineage/finding/{member_read}"
+    assert absent["carried"] is False and absent["receipt_path"] is None
+
+    md = await client.post(
+        "/api/v1/v3/export",
+        json={
+            "items": [{"kind": "finding", "id": str(rollup_id)}],
+            "format": "markdown",
+        },
+    )
+    text = md.text
+    assert "### Derived carry" in text
+    assert "membership: 1 of 2 member reads carried" in text
+    assert "Germany — carried" in text
+    assert "no read inside the horizon: country_g20_fr" in text
+

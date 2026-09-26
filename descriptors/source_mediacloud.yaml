@@ -43,6 +43,7 @@ scope:
   languages: [en]
   tags: [news, media, world, geopolitical, global]
   source_class: reporting          # S1-T8 — open news-media corpus aggregator
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

@@ -487,9 +487,11 @@ async def _gather_write_bindings_for_target(
     """
     from ..data.analysts.agency.binding import GLOBAL_SCOPE
     from ..data.analysts.agency.journal_propose import JOURNAL_PROPOSE_PACK_ID
+    from ..data.analysts.agency.research_tools import RESEARCH_PACK_ID
     from ..data.analysts.agency.resolution import scope_view_from_target
     from ..data.analysts.agency.tools import ToolContext, WritebackContext
     from ..data.analysts.agency.write_tools import WRITE_PACK_ID
+    from ..data.analysts.inquiry import INQUIRY_STATE_PACK_ID
 
     target_allows: list[Any] | None = None
     scope = None
@@ -531,7 +533,25 @@ async def _gather_write_bindings_for_target(
     # Both reach ctx.writeback; web_access does not. NOTE: journal_propose's
     # writeback carries pg_pool + AnalystContext ONLY — it reaches NO provenance
     # writer (its handlers run a single INSERT into journal_proposals).
-    writeback_pack_ids = frozenset({WRITE_PACK_ID, JOURNAL_PROPOSE_PACK_ID})
+    #
+    # R-A adds `research`, and it is the first pack in this set that is not a
+    # PROPOSE pack: `web_evidence` lands ordinary `signals` rows directly, which
+    # is legitimate precisely because a signal is an OBSERVATION at the bottom
+    # of the tower and not a claim at the top — the ceiling (magnitude capped at
+    # MASS_FLOOR), the unregistered source (authority rank 0) and the never-
+    # auto-ground property are what make landing it safe. It needs the same two
+    # things the propose packs need and for the same reason: the connection
+    # source, and the per-run identity to stamp on what it writes.
+    # Program 5 adds `inquiry_state`: the ledger tools stamp the RUN that wrote
+    # each row (design §3 — `closed_by_entry`, and the per-descriptor scope the
+    # deps builder fences on), so they need the same two things every other pack
+    # in this set needs — the connection source and the per-run identity. The
+    # pack id is read off the KIND module rather than the pack module so this
+    # wiring does not wait on lane p5_state's landing.
+    writeback_pack_ids = frozenset({
+        WRITE_PACK_ID, JOURNAL_PROPOSE_PACK_ID, RESEARCH_PACK_ID,
+        INQUIRY_STATE_PACK_ID,
+    })
 
     # One per-run WritebackContext + AnalystContext shared by the write pack's
     # tools (they all stamp the same run identity). Built once per run, not per
@@ -577,6 +597,15 @@ async def _gather_write_bindings_for_target(
                     search=src_ctx.search,
                     search_route=src_ctx.search_route,
                     search_liveness=src_ctx.search_liveness,
+                    # R-C: the ladder's rungs and the paid-rung cost gate ride
+                    # the clone for the SAME reason — a copy that keeps the
+                    # provider but loses its fallbacks (or its budget reader)
+                    # would silently demote a laddered search to a
+                    # single-provider one, and silently refuse every metered
+                    # rung, on exactly the runs that get re-pointed.
+                    search_fallbacks=src_ctx.search_fallbacks,
+                    search_cost_ledger=src_ctx.search_cost_ledger,
+                    search_budget_account=src_ctx.search_budget_account,
                     writeback=WritebackContext(
                         pg_pool=bound.pg_pool,
                         analyst_ctx=analyst_ctx,

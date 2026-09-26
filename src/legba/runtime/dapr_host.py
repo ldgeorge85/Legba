@@ -47,6 +47,7 @@ from .actor_turn import (
     heal_breaker_trips,
     heal_timeout_seconds,
 )
+from .actor_turn_witness import mount_actor_turn_witness
 from .dapr_actors import AnalystActor, TargetActor
 
 logger = logging.getLogger(__name__)
@@ -117,7 +118,7 @@ RECONCILABLE_LIFECYCLE_STATES: frozenset[str] = frozenset({"active", "paused", "
 # GATHER machinery (inline_target._gather) on its own run_method. Membership
 # here — NOT an opt-in flag — is what makes the binding wire; the three-way
 # agency gate still decides whether each tool call is admitted at run time.
-_GATHER_KINDS: frozenset[str] = frozenset({"inline_target", "journal_assessor"})
+_GATHER_KINDS: frozenset[str] = frozenset({"inline_target", "journal_assessor", "inquiry"})
 
 # Per-kind default READ pack the GATHER loop fetches. The descriptor must still
 # GRANT the pack via `action_packs` (the grant leg is checked separately) — this
@@ -125,6 +126,13 @@ _GATHER_KINDS: frozenset[str] = frozenset({"inline_target", "journal_assessor"})
 _GATHER_READ_PACK_BY_KIND: dict[str, str] = {
     "journal_assessor": "journal_read",
     # inline_target falls through to the SUBSTRATE_READ_PACK_ID default below.
+    # So does Program 5's `inquiry`, deliberately: its DEFAULT read binding must
+    # be substrate_read, because `inline_target._GATHER_READ_TOOLS` IS that
+    # pack's 19 names and the GATHER loop routes exactly those through the
+    # default binding. Its journal_read instruments and its inquiry_state ledger
+    # tools reach it through the per-tool `gather_tool_bindings` channel
+    # instead (see the extra pack rows in the SEAM #22 loop below), which is
+    # what keeps Agency.run_pack_tool enforcing tool<->pack ownership per call.
 }
 
 
@@ -493,6 +501,9 @@ def build_dapr_host_app(
     app = FastAPI(title="Legba Runtime (Dapr)", version="0.1.0", lifespan=lifespan)
     # DaprActor mounts the magic actor endpoints daprd will hit.
     DaprActor(app)
+    # Each of those is a turn; witnessing the boundary is what lets the trigger
+    # plane tell a fire absorbed by a busy actor from a fire that was lost.
+    mount_actor_turn_witness(app)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, Any]:
@@ -1029,7 +1040,6 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
         AnalystDepsBuildError,
         build_analyst_run_method,
         build_llm_handler_from_stack_component,
-        build_search_handler_from_stack_component,
         resolve_judge_route,
     )
     from .audit_checkpointer_wiring import start_audit_checkpointer
@@ -1055,6 +1065,11 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
     )
     from .pipeline import PipelineRunner, build_filter_handler
     from .qdrant_factory import QdrantFactoryError
+    from .search_handler_factory import (
+        resolve_pack_search_fallback_bindings,
+        resolve_pack_search_route,
+        resolve_search_handler,
+    )
     from .source_factory import _unwrap_factory_dict, build_source_handler
     from .substrate_singleton_factory import (
         LazyEmbeddingService,
@@ -1101,8 +1116,24 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
         # dropped. Mirror the alert sink: route the STIX output subjects to core
         # publish too (no new stream). Durable substrate-write subjects keep
         # JetStream.
-        if subject.startswith("legba.alerts.") or subject.startswith(
-            "legba.outputs.stix."
+        #
+        # D-7 (2026-09-16): the SAME class again, and this time it cost a real
+        # answer. ``legba.consult.steps.<request_id>`` is the per-run SSE relay
+        # subject — request-scoped, interest-only, explicitly documented as
+        # "no JetStream consumer, no retained state" (consult_stream_api) — and
+        # no stream covers it (confirmed live: 14 streams, none matching). So
+        # every step the ReAct loop recorded went through publish_json and sat
+        # waiting for a stream ack that could never come, ~5s each (nats-py's
+        # default JetStream publish timeout), before raising. The consult kind's
+        # emitter swallows that exception, so it was invisible — but the WAIT
+        # was not free: a run recording ~20-25 steps burned ~100-125s of pure
+        # dead time inside its own wall-clock budget, which is a large part of
+        # why run 3ae77c64 crossed the front door's 300s ceiling at all.
+        # Interest-only, so: core publish, no new stream.
+        if (
+            subject.startswith("legba.alerts.")
+            or subject.startswith("legba.outputs.stix.")
+            or subject.startswith("legba.consult.steps.")
         ):
             await nats_store.publish_core(subject, payload)
         else:
@@ -1158,49 +1189,24 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
         return handler
 
     # ---- Search-provider handler factory (R-3d) -------------------
-    # The DISCOVERY leg's twin of _llm_handler_factory. Caches a SUCCESS per
-    # component id (a search handler holds no persistent client — every query
-    # opens its own guarded client — so one instance is freely shareable) and
-    # NEVER caches a failure, mirroring the Lazy* holders' #235 lesson: a
-    # component registered (or a registry recovered) minutes after boot must
-    # heal on the NEXT deps build, not on the next restart.
+    # The DISCOVERY leg's twin of _llm_handler_factory. The resolution itself
+    # (cache-a-success / never-cache-a-failure / return-None-never-raise) lives
+    # in runtime/search_handler_factory.py and is documented there; this closure
+    # only pins THIS process's registry client + secrets resolver onto it.
     #
-    # Returns None rather than raising, and that is NOT a silent degradation:
-    # the ONLY consumer binds it into ToolContext.search, and `web_search`
-    # turns a DECLARED-but-unbound route into a loud `search_provider_unresolved`
-    # tool failure that explicitly says NO query was issued. Raising here would
-    # instead take the whole analyst's deps build down (return None from the
-    # resolver ⇒ the actor never activates), which is a much worse failure for
-    # a capability that is additive to the analyst's substrate work.
-    _search_handler_cache: dict[str, Any] = {}
-
+    # #85: it was extracted because it used to live ONLY here, inside the
+    # in-actor GATHER branch below. The standing_auditor is a `deterministic`
+    # sub-handler that never enters that branch, so its web_access binding
+    # (external_audit_binding) had no way to reach a provider and silently bound
+    # search=None — a dead search leg with the component registered and healthy.
+    # Both sites now resolve through the shared factory, which also makes them
+    # share ONE handler instance for a given component id.
     async def _search_handler_factory(component_id: str) -> Any | None:
-        existing = _search_handler_cache.get(component_id)
-        if existing is not None:
-            return existing
-        try:
-            handler = await build_search_handler_from_stack_component(
-                component_id,
-                registry_client=registry_client,
-                secrets_resolve=_secrets_resolve,
-            )
-        except Exception as exc:
-            logger.error(
-                "dapr_host.search_provider.unresolved component=%s err=%s — "
-                "the web_search ToolSpec DECLARES this route; every web_search "
-                "call will fail loudly with search_provider_unresolved (never "
-                "an empty result set) until it resolves. Register the component "
-                "(scripts/bringup_register_stack.py) or drop the ref. Retried "
-                "on the NEXT analyst deps build.",
-                component_id, exc,
-            )
-            return None
-        logger.info(
-            "dapr_host.search_provider.bound component=%s subprovider=%s",
-            component_id, getattr(handler, "subprovider", "?"),
+        return await resolve_search_handler(
+            component_id,
+            registry_client=registry_client,
+            secrets_resolve=_secrets_resolve,
         )
-        _search_handler_cache[component_id] = handler
-        return handler
 
     # ---- Pre-built service clients --------------------------------
     # Construct stack-component-backed clients at bootstrap so filters +
@@ -1834,6 +1840,9 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 AgencyToolBinding as _GWBinding,
                 fetch_action_pack as _gw_fetch,
             )
+            from ..data.analysts.agency.search_cost import (
+                PackInvocationCostLedger as _GWCostLedger,
+            )
             from ..data.analysts.agency.tools import ToolContext as _GWToolContext
             from ..data.analysts.agency.web_tools import (
                 WEB_ACCESS_PACK_ID,
@@ -1842,6 +1851,19 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             from ..data.analysts.agency.journal_propose import (
                 JOURNAL_PROPOSE_PACK_ID,
                 JOURNAL_PROPOSE_TOOLS,
+            )
+            from ..data.analysts.agency.journal_read import (
+                JOURNAL_READ_PACK_ID,
+                JOURNAL_READ_TOOLS,
+            )
+            from ..data.analysts.inquiry import (
+                INQUIRY_KIND as _INQUIRY_KIND,
+                INQUIRY_STATE_PACK_ID as _INQUIRY_STATE_PACK_ID,
+                INQUIRY_STATE_TOOLS as _INQUIRY_STATE_TOOLS,
+            )
+            from ..data.analysts.agency.research_tools import (
+                RESEARCH_PACK_ID,
+                RESEARCH_TOOLS,
             )
             from ..data.analysts.agency.write_tools import (
                 WRITE_PACK_ID,
@@ -1860,11 +1882,35 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
             # WritebackContext injection (_is_write=True) exactly like propose_facts
             # (the connection source + run identity; NO provenance writer). A pack
             # the analyst does not grant is skipped (`_grants_include` below).
-            for _pack_id, _tool_names, _is_write in (
+            _gw_pack_rows: list[tuple[str, tuple[str, ...], bool]] = [
                 (WEB_ACCESS_PACK_ID, WEB_ACCESS_TOOLS, False),
+                # R-A — the `research` pack. It is BOTH legs at once: a web
+                # egress tool that needs the resolved search handler (below)
+                # AND a substrate writer that needs the per-run
+                # WritebackContext the actor injects (its pack id is in
+                # ``actor_output_emit``'s ``writeback_pack_ids``). `_is_write`
+                # is False here because that flag only chooses which PROMPT
+                # bucket the pack's fragments land in, and web_evidence's
+                # guidance belongs with the other egress tools.
+                (RESEARCH_PACK_ID, RESEARCH_TOOLS, False),
                 (WRITE_PACK_ID, WRITE_TOOLS, True),
                 (JOURNAL_PROPOSE_PACK_ID, JOURNAL_PROPOSE_TOOLS, True),
-            ):
+            ]
+            # Program 5 — the `inquiry` kind's two EXTRA packs. KIND-GATED on
+            # purpose: journal_read is journal_assessor's DEFAULT read binding,
+            # so adding it to the table unconditionally would bind that pack a
+            # second time for every journal tier and change what lands in their
+            # prompt fragments. For the inquiry, journal_read is a second pack
+            # behind a substrate_read default and inquiry_state is its ledger —
+            # both reachable only through the per-tool binding channel. The GRANT
+            # leg still decides (`_grants_include` below): a descriptor that does
+            # not grant a pack binds nothing.
+            if ad.identity.kind == _INQUIRY_KIND:
+                _gw_pack_rows += [
+                    (JOURNAL_READ_PACK_ID, JOURNAL_READ_TOOLS, False),
+                    (_INQUIRY_STATE_PACK_ID, _INQUIRY_STATE_TOOLS, True),
+                ]
+            for _pack_id, _tool_names, _is_write in _gw_pack_rows:
                 if not _grants_include(_inline_grant_dicts, _pack_id):
                     continue
                 _pack = await _gw_fetch(registry_client, _pack_id)
@@ -1900,17 +1946,20 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 # that adds the ref takes effect on the actor's next build.
                 _search_handler = None
                 _search_route = None
-                if _pack_id == WEB_ACCESS_PACK_ID:
-                    from ..data.stack.search import (
-                        resolve_tool_search_route as _resolve_search_route,
+                _search_fallbacks: list = []
+                if _pack_id in (WEB_ACCESS_PACK_ID, RESEARCH_PACK_ID):
+                    # Same pack->route derivation the auditor's binding uses
+                    # (search_handler_factory), so the two sites cannot drift.
+                    # The research pack declares its provider on its OWN tool
+                    # (`web_evidence`), so the route is read from that ToolSpec
+                    # — one ladder, two packs, one implementation.
+                    _search_route = resolve_pack_search_route(
+                        _pack,
+                        tool_name=(
+                            "web_evidence" if _pack_id == RESEARCH_PACK_ID
+                            else "web_search"
+                        ),
                     )
-
-                    _ws_cfg = next(
-                        (dict(_t.config) for _t in _pack.tools
-                         if _t.name == "web_search"),
-                        {},
-                    )
-                    _search_route = _resolve_search_route(_ws_cfg)
                     if _search_route is not None:
                         _search_handler = await _search_handler_factory(
                             _search_route.component_id
@@ -1921,6 +1970,17 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                             actor_id, _search_route.component_id,
                             _search_route.source, _search_handler is not None,
                         )
+                    # R-C — the rungs BELOW rung 0 (`config.fallback_providers`).
+                    # Empty for the shipped searxng-only ToolSpec, so the GATHER
+                    # path is untouched until an operator declares a paid rung.
+                    # Resolved through the SAME shared factory as rung 0, so a
+                    # fallback shares one handler cache, one control-probe budget
+                    # and one deferral ladder with every other caller.
+                    _search_fallbacks = await resolve_pack_search_fallback_bindings(
+                        _pack,
+                        registry_client=registry_client,
+                        secrets_resolve=_secrets_resolve,
+                    )
                 # The base ToolContext carries the read substrate + queue/emit;
                 # the per-run WritebackContext (write pack) is injected by the
                 # actor, NOT pinned here (it needs the run's AnalystContext).
@@ -1930,6 +1990,14 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                     substrate=substrate_query_port,
                     search=_search_handler,
                     search_route=_search_route,
+                    search_fallbacks=_search_fallbacks,
+                    # R-C — a METERED search rung must clear the pack's
+                    # `max_cost_usd_per_day` against the day's
+                    # `action_pack_invocations` spend BEFORE it may issue a
+                    # query. Bound for every pack (it is one pool reference);
+                    # only a paid rung ever reads it.
+                    search_cost_ledger=_GWCostLedger(pg_store.pool),
+                    search_budget_account=ad.identity.id,
                 )
                 _binding = _GWBinding(
                     agency=_gw_agency,
@@ -1948,7 +2016,11 @@ async def bring_up_production_runtime() -> _RuntimeHandles:
                 if _is_write:
                     _write_fragments = _frags
                 else:
-                    _web_fragments = _frags
+                    # APPEND, never assign: web_access and research can both be
+                    # granted, and the pre-R-A assignment silently dropped
+                    # whichever pack the loop visited first. With one egress
+                    # pack granted this is byte-identical to the assignment.
+                    _web_fragments = (_web_fragments or []) + _frags
             if _bindings:
                 gather_write_bindings = {
                     "bindings": _bindings,
@@ -2680,6 +2752,7 @@ def main() -> None:
         lifespan=production_lifespan,
     )
     DaprActor(app)
+    mount_actor_turn_witness(app)
 
     # Mount the L-193 A2A skill router on the production app — B-2: only
     # when explicitly enabled, and only with an explicit caller allowlist

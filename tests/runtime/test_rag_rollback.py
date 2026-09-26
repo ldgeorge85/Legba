@@ -11,6 +11,11 @@ only rollback:
   * ``world_context_disabled_units`` / ``is_world_context_enabled`` — the kill-switch
     sourced from the env pin AND the persisted state file.
   * ``record_rollback`` — the actuator that persists a unit into the state file.
+  * The GENERALIZED kill-switch (``disabled_units_for`` / ``is_source_enabled`` /
+    ``record_rollback_for``) and the ``exemplar`` corpus's own named wrappers
+    (``exemplar_disabled_units`` / ``is_exemplar_enabled``) — the new RAG corpus
+    gets the SAME rollback treatment as ``world_context``, and the two sources'
+    state stays isolated in one shared state file.
 """
 
 from __future__ import annotations
@@ -22,14 +27,20 @@ import pytest
 from legba.runtime.rag_rollback import (
     DEFAULT_TOKEN_RISE_FRAC,
     RollbackWindow,
+    disabled_units_for,
     evaluate_rollback,
+    exemplar_disabled_units,
+    is_exemplar_enabled,
+    is_source_enabled,
     is_world_context_enabled,
     record_rollback,
+    record_rollback_for,
     world_context_disabled_units,
 )
 
 _ENV_DISABLED = "LEGBA_WORLD_CONTEXT_DISABLED_UNITS"
 _ENV_STATE = "LEGBA_RAG_ROLLBACK_STATE"
+_ENV_EXEMPLAR_DISABLED = "LEGBA_EXEMPLAR_DISABLED_UNITS"
 
 
 # ---------------------------------------------------------------------------
@@ -199,3 +210,81 @@ def test_env_and_state_union(monkeypatch, tmp_path):
     monkeypatch.setenv(_ENV_DISABLED, "from_env")
     disabled = world_context_disabled_units()
     assert {"from_env", "from_state"} <= disabled
+
+
+# ---------------------------------------------------------------------------
+# generalized kill-switch — the `exemplar` corpus gets the SAME treatment
+# ---------------------------------------------------------------------------
+
+
+def test_exemplar_env_pin(monkeypatch):
+    monkeypatch.setenv(_ENV_EXEMPLAR_DISABLED, "port_capacity_crisis_unit")
+    monkeypatch.delenv(_ENV_STATE, raising=False)
+    disabled = exemplar_disabled_units()
+    assert "port_capacity_crisis_unit" in disabled
+    assert is_exemplar_enabled("port_capacity_crisis_unit") is False
+    assert is_exemplar_enabled("some_other_unit") is True
+
+
+def test_exemplar_rollback_persists_and_disables(monkeypatch, tmp_path):
+    state = tmp_path / "rag_rollback.json"
+    monkeypatch.setenv(_ENV_STATE, str(state))
+    monkeypatch.delenv(_ENV_EXEMPLAR_DISABLED, raising=False)
+
+    assert is_exemplar_enabled("chokepoint_unit") is True
+    path = record_rollback_for(
+        "exemplar", "chokepoint_unit", reasons=["faithfulness dropped -0.12"]
+    )
+    assert path == str(state)
+    assert is_exemplar_enabled("chokepoint_unit") is False
+    assert "chokepoint_unit" in exemplar_disabled_units()
+
+    data = json.loads(state.read_text())
+    # Own state key ("exemplar_disabled_units"), NOT the legacy bare
+    # "disabled_units" key world_context uses — the two sources never collide.
+    assert data["exemplar_disabled_units"] == ["chokepoint_unit"]
+    assert "disabled_units" not in data
+    entry = data["rollback_log"][0]
+    assert entry["source"] == "exemplar"
+    assert entry["analyst_id"] == "chokepoint_unit"
+    assert "faithfulness dropped -0.12" in entry["reasons"]
+
+
+def test_rollback_sources_are_isolated(monkeypatch, tmp_path):
+    """Rolling back exemplar must NOT touch world_context, and vice versa —
+    the whole point of parameterizing by ``source``."""
+    state = tmp_path / "s.json"
+    monkeypatch.setenv(_ENV_STATE, str(state))
+    monkeypatch.delenv(_ENV_DISABLED, raising=False)
+    monkeypatch.delenv(_ENV_EXEMPLAR_DISABLED, raising=False)
+
+    record_rollback_for("exemplar", "shared_unit_name")
+
+    assert is_exemplar_enabled("shared_unit_name") is False
+    assert is_world_context_enabled("shared_unit_name") is True
+
+    record_rollback("shared_unit_name")  # the legacy world_context actuator
+
+    assert is_exemplar_enabled("shared_unit_name") is False
+    assert is_world_context_enabled("shared_unit_name") is False
+
+    # Both sources' units + a SHARED audit log, tagged by source.
+    data = json.loads(state.read_text())
+    assert data["exemplar_disabled_units"] == ["shared_unit_name"]
+    assert data["disabled_units"] == ["shared_unit_name"]
+    assert [e["source"] for e in data["rollback_log"]] == ["exemplar", "world_context"]
+
+
+def test_generic_source_api_matches_named_wrappers(monkeypatch, tmp_path):
+    """``disabled_units_for`` / ``is_source_enabled`` / ``record_rollback_for``
+    are what the named per-corpus wrappers are built on — same result either
+    way, for any source string (not just the two named ones)."""
+    state = tmp_path / "s.json"
+    monkeypatch.setenv(_ENV_STATE, str(state))
+
+    record_rollback_for("tradecraft", "some_unit", reasons=["manual pin"])
+    assert is_source_enabled("tradecraft", "some_unit") is False
+    assert "some_unit" in disabled_units_for("tradecraft")
+    # A brand-new source name works with zero prior wiring (no bespoke guard
+    # required per corpus — that is the whole point of the generalization).
+    assert is_source_enabled("some_future_corpus", "some_unit") is True

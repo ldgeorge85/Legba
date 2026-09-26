@@ -26,7 +26,9 @@ repeating the measurement.
 [3 Measurement practice](#3-measurement-practice--inherited-constants-are-defaults-not-truths) ·
 [4 The data-quality practice](#4-the-data-quality-practice) ·
 [5 Gate governance](#5-gate-governance) ·
-[6 Expectations timeline](#6-expectations-timeline)
+[6 Expectations timeline](#6-expectations-timeline) ·
+[7 The models host](#7-the-models-host) ·
+[8 The MCP surface](#8-the-mcp-surface)
 
 ---
 
@@ -311,7 +313,8 @@ when, and you should read them. **The measurement apparatus does not ship**, and
 neither does the corpus it was run against. They transfer as reasonable priors.
 Their validity on your source mix is unproven, by definition, until you prove it.
 
-Some are re-tunable from configuration (an env var, or a descriptor
+Every budget, cap, governor and threshold, with where it lives and how it is changed, is one
+table: [TUNABLES.md](TUNABLES.md). Some are re-tunable from configuration (an env var, or a descriptor
 `method.options` key). Some are module constants and require a patch. Before
 assuming a knob does not exist, grep the constant name — not every env var a
 handler reads is listed in `.env.example`, and the descriptor options surface is
@@ -467,7 +470,7 @@ you, and go check.** The top of a system can measure entirely healthy — verifi
 findings, clean receipts, reminders firing — while the middle quietly does
 something else. On the reference deployment a systematic sweep of a
 healthy-looking pipeline turned up fourteen distinct defects in one night, and
-the published account of them ([CHANGELOG.md](../CHANGELOG.md), 2026-07-31) is
+the published account of them ([CHANGELOG.md](../CHANGELOG.md)) is
 deliberately unflattering because that is the useful version.
 
 Run the sweep on a cadence — monthly is reasonable; after any significant
@@ -656,7 +659,7 @@ Three properties worth preserving if you modify anything here:
 Set your floor deliberately and pin it in configuration. This project shipped
 the footgun worth naming: for months the code default was `0.0` while the real
 value was pinned in the reference deployment's environment, so a fresh install
-silently ran an ungated composition. It was raised to `0.50` on 2026-08-15 —
+silently ran an ungated composition. It was raised to `0.50` —
 `meta_findings_synthesizer.DEFAULT_VERIFY_FLOOR`, still overridable both ways
 via `LEGBA_COMPOSITION_VERIFY_FLOOR`. Check your own gates for the same shape,
 and note that if a constant appears in more than one place, they will drift.
@@ -751,6 +754,46 @@ days. The components that refuse to emit below their floors are the ones
 protecting you.
 
 ---
+
+---
+
+## 7. The models host
+
+The core plane, the embedder and the `legba-models` NLP service run on a separate GPU host and are
+reached over HTTP; nothing in the platform's containers runs a model. That host is yours to operate:
+its serving processes, its saturation, its disk. Two things ship for it in the tree and are not
+installed by `deploy.sh`, because they belong on the other machine: a vLLM saturation watch under
+`deploy/cron.d/` for the host's own cron, and the heartbeat probe the platform's watchdog runs against
+the endpoints from this side (its thresholds are in [TUNABLES.md](TUNABLES.md) §5). Register each
+endpoint as a stack component and keep its credentials in the vault; a model change on the host is a
+registry update here, followed by the measurement practice in §3 before the change is trusted.
+
+---
+
+## 8. The MCP surface
+
+A stdio MCP server ships as the `legba-mcp` entry point, so an MCP-capable client can read the
+substrate and run the sanctioned consult path without the console. Seven built-in tools wrap the
+registry over HTTP: findings, situations, signals, a lineage walk, the since-cursor diff, export, and
+consult. Reads and consult only; no registry mutation rides MCP, and a test asserts it. An analyst
+descriptor can surface one more tool by declaring an `outputs.mcp_tool` binding, registered at
+activation and removed at retire.
+
+Setup: the server needs the registry reachable at `LEGBA_REGISTRY_URL` and a bearer in
+`LEGBA_REGISTRY_API_TOKEN`; a read-scoped token serves the six read tools, and consult needs an
+operator token and blocks for up to five minutes while the tool loop runs. Build the image with
+`docker compose --profile mcp build`, then point the client at it per conversation:
+
+```bash
+docker run -i --rm --network=legba_default --env-file=/usr/local/deployments/active/legba/.env legba/legba-mcp:latest
+```
+
+The network flag lets the container reach the registry host named in the URL. The host-mode
+alternative is `PYTHONPATH=src python -m legba.ui.mcp_server`. Logging goes to stderr so stdout stays
+clean for the protocol; every tool fails loud, returning a described error for a registry error, a
+`registry_unreachable` object for a transport failure, and the available-tool list for an unknown
+tool. Transport is stdio only, and the descriptor-declared catalog is empty in a standalone process:
+only the built-ins survive without a shared runtime.
 
 ## The loop
 

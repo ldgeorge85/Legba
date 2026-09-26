@@ -74,6 +74,69 @@ _TRIGGER_WATCHLIST = "watchlist_hit"
 _TRIGGER_GEO_CONVERGENCE = "geo_convergence"
 _TRIGGER_PRODUCTION_DEFICIT = "production_deficit"
 _TRIGGER_SITUATION_ESCALATION = "situation_escalation"
+_TRIGGER_EXTERNAL_AUDIT = "external_audit"
+
+#: PER-CLASS cap overrides (W-8). The generic ``per_kind_cap`` is one number for
+#: every class; ``external_audit`` gets a TIGHTER one — 2 a day inside the same
+#: 5/day fleet budget — because it is the newest class, the only one whose
+#: subject is "a read we published may be wrong", and a new class that can take
+#: 60% of the day's slots on its first live week is how an alert plane loses an
+#: operator's attention permanently. An override may only ever LOWER a cap
+#: (:func:`cap_for_kind` takes the min), so a future operator raising
+#: ``per_kind_cap`` fleet-wide cannot silently loosen this one.
+_PER_CLASS_CAP: Mapping[str, int] = {
+    _TRIGGER_EXTERNAL_AUDIT: 2,
+}
+
+
+#: LIVENESS CLASSES — NEVER deferred, never capped, never counted (L1,
+#: 2026-09-20). The daily page budget exists to stop an operator drowning in
+#: FINDINGS about the world. A liveness alert is not a finding about the
+#: world: it is the system reporting that an instrument producing findings has
+#: stopped working. Deferring one is strictly worse than deferring anything
+#: else in this module, because the deferral is silent and the condition it
+#: was reporting keeps producing wrong output the whole time.
+#:
+#: This is not hypothetical. A grader model was removed upstream on 09-18 and
+#: the external audit graded with nothing for 2.7 days — with the failure
+#: visible only as a WARNING log line. The fix (``liveness_watchdog``'s
+#: ``llm_route_dead`` channel) writes an ``alert_sink_deliveries`` row
+#: directly and so does not pass through this budget at all today. This set is
+#: the guard for the day some future refactor routes a liveness class through
+#: the ordinary candidate path: it must come out the other side undeferred.
+#:
+#: Names match ``liveness_watchdog``'s ``ALERT_CHANNEL_*`` values. Literal
+#: copies, for the same reason the trigger-class strings above are literal
+#: copies — this module is a leaf and must not import the runtime package.
+LIVENESS_EXEMPT_CLASSES = frozenset(
+    {
+        "llm_route_dead",
+        "liveness_stall",
+        "analyst_cadence_stall",
+        "source_cadence_stall",
+    }
+)
+
+
+def is_page_budget_exempt(kind: str) -> bool:
+    """True for a LIVENESS class — see :data:`LIVENESS_EXEMPT_CLASSES`.
+
+    An exempt candidate is never marked ``budget_deferred`` and never consumes
+    a slot, so it can neither be suppressed by the day's budget nor push an
+    ordinary finding out of it.
+    """
+    return str(kind) in LIVENESS_EXEMPT_CLASSES
+
+
+def cap_for_kind(kind: str, per_kind_cap: int) -> int:
+    """The effective per-day slot cap for one trigger class.
+
+    The generic cap, tightened by :data:`_PER_CLASS_CAP` where a class declares
+    one. Never loosens: ``min`` is the whole rule, so the override is a floor on
+    strictness rather than a second knob that can disagree with the first.
+    """
+    override = _PER_CLASS_CAP.get(kind)
+    return per_kind_cap if override is None else min(int(per_kind_cap), override)
 
 _SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
@@ -182,9 +245,15 @@ def apply_daily_page_budget(
     Ranks worst-first via :func:`budget_sort_key`, then walks the ranked list
     ONCE, taking a candidate only while BOTH hold: the day's remaining budget
     (``max(0, budget - already_paged_today)``) is not exhausted, AND its own
-    ``trigger_class`` has not yet reached ``per_kind_cap`` slots today
-    (``already_paged_today_by_kind`` seeds each kind's running count, so the
-    cap is a DAY total across scans, not a per-call total).
+    ``trigger_class`` has not yet reached its own cap for the day
+    (:func:`cap_for_kind` — the generic ``per_kind_cap``, tightened where a
+    class declares a stricter one; ``already_paged_today_by_kind`` seeds each
+    kind's running count, so the cap is a DAY total across scans, not a
+    per-call total).
+
+    LIVENESS CLASSES SKIP BOTH GATES (:data:`LIVENESS_EXEMPT_CLASSES`): they
+    are marked undeferred without consuming a slot, so the budget can neither
+    silence "the instrument is broken" nor let it crowd out a finding.
 
     KIND-DIVERSITY CAP, single pass, deliberately no second pass: once a kind
     hits its cap it is skipped for the REST of the ranked list, but a
@@ -200,7 +269,16 @@ def apply_daily_page_budget(
     taken = 0
     for cand in ranked:
         kind = cand.trigger_class
-        if taken < remaining and kind_counts.get(kind, 0) < per_kind_cap:
+        if is_page_budget_exempt(kind):
+            # A LIVENESS class passes through: not deferred, and it does not
+            # consume a slot either — the budget is a cap on how much of the
+            # WORLD an operator is asked to read, and this is a cap on how
+            # much of the SYSTEM is broken. See LIVENESS_EXEMPT_CLASSES.
+            cand.data["budget_deferred"] = False
+            continue
+        if taken < remaining and kind_counts.get(kind, 0) < cap_for_kind(
+            kind, per_kind_cap
+        ):
             cand.data["budget_deferred"] = False
             kind_counts[kind] = kind_counts.get(kind, 0) + 1
             taken += 1
@@ -310,6 +388,8 @@ async def count_paged_today_by_kind(
 
 __all__ = [
     "BUDGET_PER_KIND_CAP_ENV",
+    "LIVENESS_EXEMPT_CLASSES",
+    "cap_for_kind",
     "CONTENTION_FLIP_ENABLED_ENV",
     "DAILY_PAGE_BUDGET_ENV",
     "DEFAULT_BUDGET_PER_KIND_CAP",
@@ -325,4 +405,5 @@ __all__ = [
     "count_paged_today_by_kind",
     "daily_page_budget_from_env",
     "handle_kill_switch",
+    "is_page_budget_exempt",
 ]

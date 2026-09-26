@@ -402,7 +402,7 @@ method:
     max_rounds: 5
   # Per-day CORE-plane token cap (24h bucket). A META analyst fires ONCE per cadence
   # tick (not a per-target fan-out), so a few multi-round runs/day fit comfortably.
-  budget_tokens_per_day: 500000
+  budget_tokens_per_day: 0
   retry:
     budget:
       strategy: pause_until_next_window

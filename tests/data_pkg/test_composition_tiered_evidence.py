@@ -251,7 +251,7 @@ async def test_flag_off_per_country_read_is_byte_identical(monkeypatch):
     assert "FROM situations" in conn.calls[1][0]
     assert "CASE f.severity" in conn.calls[-1][0]
     query, params = conn.calls[0]
-    assert "JOIN LATERAL" in query and "LEFT JOIN LATERAL" not in query
+    assert "JOIN v ON v.fid = f.id::text" in query and "LEFT JOIN v ON v.fid = f.id::text" not in query
     assert "LEAST(f.confidence, v.faithfulness_score) >= $4" in query
     assert params[3] == synth.DEFAULT_VERIFY_FLOOR
 
@@ -276,7 +276,7 @@ async def test_flag_on_per_country_read_splits_basis_and_periphery(monkeypatch):
     peri_q, peri_p = conn.calls[1]
     assert "LEAST(f.confidence, v.faithfulness_score) >= $4" in basis_q
     assert basis_p[3] == synth.TIERED_BASIS_FLOOR_DEFAULT
-    assert "LEFT JOIN LATERAL" in peri_q
+    assert "LEFT JOIN v ON v.fid = f.id::text" in peri_q
     assert "v.faithfulness_score IS NULL" in peri_q
     assert "LEAST(f.confidence, v.faithfulness_score) < $4" in peri_q
     # Same scope: analyst set, window, target; same floor value.
@@ -335,7 +335,7 @@ async def test_flag_on_region_read_splits_with_member_scope(monkeypatch):
     assert len(conn.calls) == 4
     assert "FROM situations" in conn.calls[-1][0]
     peri_q, peri_p = conn.calls[2]
-    assert "LEFT JOIN LATERAL" in peri_q
+    assert "LEFT JOIN v ON v.fid = f.id::text" in peri_q
     assert peri_p[2] == ["country_g20_sa", "country_watch_ir"]
     assert peri_p[3] == synth.TIERED_BASIS_FLOOR_DEFAULT
     # Region periphery reads country_composition heads, which ARE meta=True —
@@ -795,7 +795,7 @@ class _DispatchConn:
         self.calls.append((query, params))
         if "target_descriptors" in query:
             return [dict(r) for r in self._roster]
-        if "LEFT JOIN LATERAL" in query:
+        if "LEFT JOIN v ON v.fid = f.id::text" in query:
             return [dict(r) for r in self._periphery]
         return [dict(r) for r in self._basis]
 
@@ -852,9 +852,9 @@ async def test_flag_on_thematic_read_splits_basis_and_periphery(monkeypatch):
     # then the periphery complement at the SAME floor.
     basis_calls = [
         (q, p) for q, p in conn.calls
-        if "JOIN LATERAL" in q and "LEFT JOIN LATERAL" not in q
+        if "JOIN v ON v.fid = f.id::text" in q and "LEFT JOIN v ON v.fid = f.id::text" not in q
     ]
-    peri_calls = [(q, p) for q, p in conn.calls if "LEFT JOIN LATERAL" in q]
+    peri_calls = [(q, p) for q, p in conn.calls if "LEFT JOIN v ON v.fid = f.id::text" in q]
     assert len(basis_calls) == 1 and len(peri_calls) == 1
     basis_q, basis_p = basis_calls[0]
     peri_q, peri_p = peri_calls[0]
@@ -890,7 +890,7 @@ async def test_flag_on_thematic_dyad_scopes_periphery_to_desk_allowlist(monkeypa
         ),
         target_filter=None,
     )
-    peri_calls = [(q, p) for q, p in conn.calls if "LEFT JOIN LATERAL" in q]
+    peri_calls = [(q, p) for q, p in conn.calls if "LEFT JOIN v ON v.fid = f.id::text" in q]
     assert len(peri_calls) == 1
     peri_q, peri_p = peri_calls[0]
     # Dyad allow-list scopes the periphery too: target-id SET at $3, floor $4.
@@ -913,7 +913,7 @@ async def test_flag_off_thematic_read_is_byte_identical(monkeypatch):
         conn, descriptor=_thematic_descriptor(), target_filter=None
     )
     # Exactly the legacy pair: basis read (floor 0.0) + desk roster; NO periphery.
-    assert not [q for q, _ in conn.calls if "LEFT JOIN LATERAL" in q]
+    assert not [q for q, _ in conn.calls if "LEFT JOIN v ON v.fid = f.id::text" in q]
     basis_q, basis_p = conn.calls[0]
     assert basis_p[2] == synth.DEFAULT_VERIFY_FLOOR
     assert all("_evidence_floor" not in r for r in rows)
@@ -934,9 +934,9 @@ async def test_flag_on_world_read_splits_basis_and_periphery(monkeypatch):
     )
     basis_calls = [
         (q, p) for q, p in conn.calls
-        if "JOIN LATERAL" in q and "LEFT JOIN LATERAL" not in q
+        if "JOIN v ON v.fid = f.id::text" in q and "LEFT JOIN v ON v.fid = f.id::text" not in q
     ]
-    peri_calls = [(q, p) for q, p in conn.calls if "LEFT JOIN LATERAL" in q]
+    peri_calls = [(q, p) for q, p in conn.calls if "LEFT JOIN v ON v.fid = f.id::text" in q]
     assert len(basis_calls) == 1 and len(peri_calls) == 1
     basis_q, basis_p = basis_calls[0]
     peri_q, peri_p = peri_calls[0]
@@ -966,10 +966,10 @@ async def test_flag_off_world_read_is_byte_identical(monkeypatch):
         conn, descriptor=_world_descriptor(), target_filter=None
     )
     # Legacy pair only: region roster + the ONE floor-0.0 basis read.
-    assert not [q for q, _ in conn.calls if "LEFT JOIN LATERAL" in q]
+    assert not [q for q, _ in conn.calls if "LEFT JOIN v ON v.fid = f.id::text" in q]
     basis_calls = [
         (q, p) for q, p in conn.calls
-        if "JOIN LATERAL" in q and "LEFT JOIN LATERAL" not in q
+        if "JOIN v ON v.fid = f.id::text" in q and "LEFT JOIN v ON v.fid = f.id::text" not in q
     ]
     assert len(basis_calls) == 1
     _, basis_p = basis_calls[0]

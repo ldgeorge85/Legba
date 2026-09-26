@@ -233,6 +233,13 @@ def test_cron_hour_minutes_parses_the_house_am_pm_shape():
         # region_composition's own "unit" is country_composition's head — the
         # SAME ordering obligation one floor up the tower.
         ("region_composition", ("country_composition",)),
+        # D-6 — the ASSESSMENT CHANNEL is the top floor, and its obligation is
+        # sharper than the tiers below it rather than looser: it does not
+        # merely want a fresh source, it reads exactly ONE row and refuses to
+        # write when that row is outside a 24h window. A tick that landed
+        # BEFORE the world composition would find yesterday's record while
+        # today's was minutes away, and write an argument about the wrong page.
+        ("world_assessment", ("world_assessor",)),
     ],
 )
 def test_composition_tick_lands_after_every_source_units_slot(

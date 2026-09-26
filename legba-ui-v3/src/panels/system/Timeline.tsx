@@ -28,6 +28,7 @@ import { useDockviewTileRedraw } from '@/components/useTileRedraw'
 import { fetchTimeline } from '@/lib/api'
 import { useElementWidth } from '@/lib/useElementWidth'
 import { useSelection, selectRow } from '@/state/selection'
+import { useScope } from '@/state/scope'
 import type { ProvenanceFacts } from '@/lib/provenance'
 import type { PanelProps } from '@/types'
 import {
@@ -116,8 +117,27 @@ function axisTicks(domain: [number, number], count = 6): number[] {
 
 export default function TimelinePanel({ registration }: PanelProps) {
   const selection = useSelection((s) => s.selection)
-  const targetId = selection?.kind === 'target' ? selection.id : undefined
-  const targetLabel = selection?.kind === 'target' ? selection.label ?? selection.id : undefined
+  // SCOPE decides WHAT is fetched (design §3.1). The panel used to read the
+  // single `kind==='target'` selection for its fetch, which meant the fetch
+  // changed every time the operator clicked a row — the same defect the feed
+  // had. A scope names its desks and survives every row click; the single-desk
+  // case pushes `target_id` server-side, and a multi-desk report scope fetches
+  // wide and lets the lanes carry it (the endpoint takes one target, not a set,
+  // and sending the first of fourteen would be a lie about the aperture).
+  const scope = useScope((s) => s.scope)
+  const scopeTargets = scope?.members.targetIds ?? []
+  const targetId =
+    scopeTargets.length === 1
+      ? scopeTargets[0]
+      : selection?.kind === 'target'
+        ? selection.id
+        : undefined
+  const targetLabel =
+    scopeTargets.length === 1
+      ? scope?.label
+      : selection?.kind === 'target'
+        ? (selection.label ?? selection.id)
+        : undefined
   const [days, setDays] = useState<number>(30)
   const [showProvenance, setShowProvenance] = useState(false)
 
@@ -146,6 +166,30 @@ export default function TimelinePanel({ registration }: PanelProps) {
   useEffect(() => {
     setDomain(fitDomain)
   }, [fitDomain])
+
+  // FOCUS centers the window (design §3.1). Before this, a selection inside the
+  // visible window produced NO visual reaction at all, and a selected record
+  // OUTSIDE it was simply not drawn — the operator clicked a row elsewhere and
+  // the timeline sat there showing a different fortnight. The record's own
+  // instant now arrives on `selection.preview.ts` (design enabler 1) for a
+  // record this panel never fetched; when the item is in `shaped` its real
+  // window is preferred, because that is the authority.
+  useEffect(() => {
+    if (!selection) return
+    const item = shaped.find((it) => it.id === selection.id)
+    const centre = item ? (item.startMs + item.endMs) / 2 : (selection.preview?.ts ?? null)
+    if (centre == null || !Number.isFinite(centre)) return
+    setDomain((cur) => {
+      const base = cur ?? fitDomain
+      if (!base) return cur
+      const span = base[1] - base[0]
+      // Already comfortably inside the window? Leave the operator's pan alone —
+      // re-centering on every click would make the axis jitter under a read.
+      const pad = span * 0.1
+      if (centre >= base[0] + pad && centre <= base[1] - pad) return cur
+      return [centre - span / 2, centre + span / 2]
+    })
+  }, [selection, shaped, fitDomain])
 
   const [wrapRef, width] = useElementWidth<HTMLDivElement>()
   const plotW = Math.max(0, width - GUTTER)
@@ -204,7 +248,12 @@ export default function TimelinePanel({ registration }: PanelProps) {
 
   const onBarClick = useCallback((item: ShapedItem) => {
     if (dragRef.current?.moved) return // a pan, not a select
-    selectRow(item.kind, item.id, item.label, { origin: 'timeline' })
+    // `ts` (design enabler 1) — the record's own instant, carried on the
+    // selection so ANY timeline can center on it without a fetch.
+    selectRow(item.kind, item.id, item.label, {
+      origin: 'timeline',
+      preview: { ts: (item.startMs + item.endMs) / 2 },
+    })
   }, [])
 
   const zoomBtn = (factor: number) => {

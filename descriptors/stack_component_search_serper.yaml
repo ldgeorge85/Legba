@@ -1,0 +1,158 @@
+# KEYED stack component: search.serper.paid (kind: search_provider).
+#
+# THE PAID SERP RUNG THE EXTERNAL AUDIT ESCALATES TO — and nothing else.
+# `search.searxng.local` stays rung 0 for every caller in the platform: the
+# reference builder, the researcher, the consult and the auditor's PRIMARY
+# query all run on it, free, exactly as they do today. This component is
+# reached only on the external audit's ABSENCE-CLAIM path, when rung 0 has
+# already answered and could not decide the claim (a NOT_FOUND it offered no
+# reformulation for, or an absence-shaped claim whose emptiness SearXNG could
+# not verify). See `_external_audit_width.escalate_to_paid_rung`.
+#
+# WHY THAT NARROW. SearXNG is a metasearch whose upstream engines CAPTCHA and
+# ban it; a zero-result response from it is indistinguishable from "nothing
+# exists" without a liveness probe, and 16-41% of every read was ungradable
+# behind that ambiguity (F-11). serper is a single first-party proxy onto one
+# index with no partial-service channel, so a well-formed empty body from it
+# IS a clean empty — which is the one property the absence path needs and the
+# only thing being bought here.
+#
+# Handler: src/legba/data/stack/search/serper.py (SerperSearchHandler,
+# subprovider "serper", config schema SearchProviderConfig). POST-only with an
+# `X-API-KEY` header, which is why it is a module and not a configured
+# `json` component — see that module's docstring.
+#
+# ⚠ THIS FILE IS THE REVIEWABLE HOME OF THE COMPONENT BODY. It is NOT
+# registered by this lane. The orchestrator registers it.
+#
+# KEYED — the same activation posture as stack_component_search_brave.yaml:
+#   * config.api_key is a VAULT REF (a vault id, NEVER the plaintext). The key
+#     is already in the vault under `search.serper.api_key`; no key value
+#     appears in this tree, in this file, or in any commit.
+#   * An ABSENT, UNRESOLVABLE or EMPTY key is a SearchProviderUnresolved that
+#     says "NO query was issued" — never a silent empty result set.
+#   * The health checker enforces it at rest: a `serper` component with no
+#     api_key is UNHEALTHY, not merely keyless
+#     (health.py KEY_REQUIRED_SEARCH_SUBPROVIDERS), because TCP to
+#     google.serper.dev:443 succeeds from anywhere and would otherwise report
+#     green for a provider that refuses 100% of queries.
+#
+# ⚠ METERED. cost_usd_per_query is a LIST PRICE, in config rather than in code
+# because a provider's price is a contract term that moves without a code
+# change. 0.001 = $50 per 50,000 queries as understood at authoring time;
+# VERIFY IT at serper.dev/pricing before trusting a burn figure.
+#
+#   The ladder charges this number against the `web_access` pack's governor
+#   `max_cost_usd_per_day` BEFORE issuing a query and settles the true cost
+#   onto `action_pack_invocations.cost_usd` after. A metered rung with NO
+#   declared `max_cost_usd_per_day` is REFUSED, not silently billed
+#   (agency/search_cost.py) — an unenforced spend cap on a metered external
+#   API is an open tab. The operator sets `max_cost_usd_per_day: 1.0` on the
+#   web_access pack; until then this rung is registered and CANNOT spend.
+#
+#   Two queries can be billed for one escalation: the search itself plus the
+#   liveness CONTROL PROBE that runs when a search comes back empty — which,
+#   on this path, is the likely case. The ladder counts both.
+#
+# ⚠ NO EGRESS ALLOWLIST ENTRY IS NEEDED. `LEGBA_EGRESS_ALLOW_HOSTS` exists to
+# permit RFC-1918 compose sidecars; google.serper.dev is a PUBLIC host and is
+# already permitted. The control that IS needed — and that the SSRF guard
+# structurally cannot provide — is the credential fence in the handler:
+# `allowed_endpoint_hosts` pins the endpoint host, so a mis-pointed or tampered
+# `endpoint` cannot ship the paid API key to some other public host.
+#
+# OPERATOR STEPS (the orchestrator owns all of them; this lane performed none):
+#   1. The key is already stored under vault id `search.serper.api_key`.
+#   2. Register the component:
+#        python3 scripts/bringup_register_stack.py   (once this file is added
+#        to its DESCRIPTOR list — the orchestrator's call, not this lane's)
+#      or POST {registry}/api/v1/registry/stack with this body.
+#   3. Declare the spend ceiling on the pack — PUT the web_access pack with
+#        governor: {budget_account: web_access, max_cost_usd_per_day: 1.00, ...}
+#      Without it EVERY serper call is refused by the metered-rung brake.
+#   4. Add the rung to the ladder — PUT the web_access pack's web_search
+#      ToolSpec config with:
+#        fallback_providers:
+#          - {factory_kind: stack_ref, raw: search.serper.paid}
+#      This is what BINDS the component for the audit to select by name; the
+#      audit pins the rung explicitly and never falls to it generically.
+#   5. PUT the standing auditor descriptor's options with:
+#        serp_provider_order: [searxng, serper]
+#      ⚠ NOT CHANGED BY THIS LANE. `descriptors/analyst_standing_auditor.yaml`
+#      still ships `serp_provider_order: [searxng]`; the orchestrator PUTs the
+#      two-rung value after the roll. Until then the escalation is INERT: the
+#      code reads the order and finds one rung.
+#
+# Verify after the flip:
+#   POST {registry}/api/v1/registry/stack/search.serper.paid/healthcheck
+#   -> HEALTHY with extra.key_declared true and extra.cost_usd_per_query 0.001.
+#   UNHEALTHY with a "requires an api_key" detail means the vault ref is wrong.
+
+id: search.serper.paid
+name: serper.dev SERP (paid absence-check rung)
+schema_uri: legba/stack/search_provider/1.0.0
+# Placeholder — the registry stamps the content hash at register time.
+version: "0000000000000000"
+state: active
+owner: lewis@local
+
+config:
+  subprovider:
+    factory_kind: dropdown_static
+    raw: serper
+    options: [searxng, json, firecrawl, jina, tavily, brave, serper, agent]
+
+  # The WEB corpus. The handler derives /news from this by path swap, and
+  # refuses any host other than google.serper.dev.
+  endpoint:
+    factory_kind: text
+    raw: https://google.serper.dev/search
+
+  # VAULT REF, never the plaintext. The secret already exists under this id.
+  api_key:
+    factory_kind: secret
+    raw: search.serper.api_key
+
+  timeout_seconds:
+    factory_kind: number
+    raw: 15
+
+  # 10 — the audit reads the top of one page to decide ONE claim, and every
+  # result past that is context it will not use. Deliberately NOT the package
+  # cap (30): this rung is metered and its job is a verdict, not width.
+  max_results:
+    factory_kind: number
+    raw: 10
+
+  # LIST PRICE per query, USD. ~$50 per 50,000. VERIFY at serper.dev/pricing.
+  cost_usd_per_query:
+    factory_kind: number
+    raw: 0.001
+
+  # Not a metasearch — there is no upstream engine set to name. Empty.
+  engines:
+    factory_kind: list
+    item_kind: text
+    raw: []
+
+  # Selects the corpus this component defaults to. Empty = the WEB corpus;
+  # [news] would pin it to /news.
+  categories:
+    factory_kind: list
+    item_kind: text
+    raw: []
+
+  # Empty = serper's own default (no language pin). Sent as `hl` in the body.
+  language:
+    factory_kind: text
+    raw: ""
+
+  # Generic-JSON knobs. UNUSED by this subprovider — the serper handler knows
+  # both of its own body shapes (web nests hits under `organic`, news under
+  # `news`). Present at their schema defaults so the stored body round-trips.
+  results_key:
+    factory_kind: text
+    raw: results
+  query_param:
+    factory_kind: text
+    raw: q

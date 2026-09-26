@@ -25,7 +25,11 @@ import { useExportBasket } from '@/state/exportBasket'
 import ProvenanceTrail from '@/v4/why/ProvenanceTrail'
 import CitedAssessment from '@/components/inspector/CitedAssessment'
 import { extractCitations } from '@/lib/citationsModel'
+import { corroborationByOrdinal } from '@/lib/claimFold'
+import { useReadContentions } from '@/lib/contentionsModel'
 import { unwrapEnvelope } from '@/lib/proseText'
+import { ScaleStamp } from '@/components/ScaleStamp'
+import { readScaleStamp } from '@/lib/scaleStamp'
 import type { PanelProps } from '@/types'
 
 /** Keys floated to the top of the BODY DescriptorView. */
@@ -226,8 +230,25 @@ function Breadcrumb({
   )
 }
 
+/** K3 — the as-of a stamped number is a reading AT. The stamp says which
+ *  scale; this says which moment on it. Read defensively in the two homes a
+ *  record's own clock lives in, newest-first; null when the record carries
+ *  neither, which renders as nothing rather than as an invented time. */
+function asOfOf(body: Record<string, unknown>): string | null {
+  for (const key of ['produced_at', 'computed_at']) {
+    const v = body[key]
+    if (typeof v === 'string' && v) return v
+  }
+  return null
+}
+
 function DetailView({ detail }: { detail: InspectorDetail }) {
   const report = pickReport(detail.body)
+  // H12/K3 — the instrument stamps, read off the top level or out of `data`
+  // by the one shared reader (`lib/scaleStamp`), so the Inspector and the
+  // panels can never disagree about where a stamp lives.
+  const stamp = readScaleStamp(detail.body)
+  const asOf = asOfOf(detail.body)
   // P1-T3: pull the finding's citation list out of the merged body
   // (`body.data.citations`). Empty for a legacy / uncited finding — the card
   // then renders the prose plainly with an honest "uncited" marker.
@@ -238,6 +259,17 @@ function DetailView({ detail }: { detail: InspectorDetail }) {
     detail.body.verification && typeof detail.body.verification === 'object'
       ? (detail.body.verification as Record<string, unknown>)
       : null
+  // 7b-i — the RECORD's own per-ordinal corroboration blocks, so a claim's
+  // `wire-folded` chip can state the COUNT the record renders ("2 wire copies
+  // folded") rather than the bare boolean the citation stamps. Empty for a
+  // read with no assembly payload; the chips then fall back to the citation.
+  const corroboration = detail.kind === 'finding' ? corroborationByOrdinal(detail.body) : null
+  // 7a — the CONTRARY-EVIDENCE records written against this read, by the
+  // ordinal they were written against. `null` while unread (and on every
+  // non-finding selection), which chips nothing: the pass's descriptor ships
+  // draft, so an empty answer is the expected one until it is activated, and
+  // an empty answer and an unread one must not look the same to the chip.
+  const contentions = useReadContentions(detail.kind === 'finding' ? detail.id : null)
   // The report renders as markdown in its own section — drop it from the raw
   // metadata view so the long text isn't also shown collapsed into one line.
   const metaBody = report
@@ -245,6 +277,19 @@ function DetailView({ detail }: { detail: InspectorDetail }) {
     : detail.body
   return (
     <>
+      {/* H12/K3 — the instrument stamps beside the record's own identity:
+          which SCALE this record's numbers are comparable within, and which
+          method revision computed them, with the as-of they were read at.
+          A pre-stamp row says so in words rather than showing a guess. */}
+      <div className="flex items-center gap-2">
+        <ScaleStamp stamp={stamp} testId="inspector-scale-stamp" />
+        {asOf && (
+          <span className="text-label text-ink-3" data-testid="inspector-stamp-asof">
+            as of {asOf}
+          </span>
+        )}
+      </div>
+
       {/* The actual written report FIRST (the operator reached this finding to
           READ it) — a CITED card: each `[N]` chip scrolls to its evidence row.
           The card handles BOTH the cited and the honest uncited path. */}
@@ -257,6 +302,9 @@ function DetailView({ detail }: { detail: InspectorDetail }) {
               verification={verification}
               confidence={typeof detail.body.confidence === 'number' ? detail.body.confidence : null}
               analystId={typeof detail.body.analyst_id === 'string' ? detail.body.analyst_id : null}
+              targetId={typeof detail.body.target_id === 'string' ? detail.body.target_id : null}
+              corroboration={corroboration}
+              contentions={contentions}
             />
           </div>
         </Section>

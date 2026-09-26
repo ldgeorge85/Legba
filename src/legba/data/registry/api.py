@@ -77,6 +77,7 @@ from .descriptor import (
     DescriptorRow,
     Family,
 )
+from .descriptor_families import state_machine_for, terminal_state_for
 from .errors import (
     AuditChainError,
     DescriptorNotFound,
@@ -679,7 +680,7 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"unknown descriptor family {family!r}; "
-                       f"expected target|analyst|source|action_pack",
+                       f"expected {'|'.join(f.value for f in Family)}",
             ) from exc
 
     def _parse_descriptor(family: Family, body: dict[str, Any]):
@@ -870,18 +871,27 @@ def build_router(deps: RegistryAPIDeps) -> APIRouter:
         `action` stays accurate — use `/retire`.
         """
         fam = _parse_family(family)
+        # Family-aware since Program 7g: a `collection` runs its own four
+        # states (draft → reviewed → loaded → superseded), so parsing
+        # `to_state` as a `LifecycleState` would 400 on every legal
+        # collection move. `state_machine_for` is the one place that mapping
+        # lives.
+        state_cls, _transitions = state_machine_for(fam.value)
+        terminal = terminal_state_for(fam.value)
         try:
-            to_state = LifecycleState(body.to_state)
+            to_state = state_cls(body.to_state)
         except ValueError as exc:
             raise HTTPException(
                 status_code=400,
-                detail=f"unknown lifecycle state {body.to_state!r}; "
-                       f"expected {[s.value for s in LifecycleState]}",
+                detail=f"unknown lifecycle state {body.to_state!r} for family "
+                       f"{fam.value!r}; expected "
+                       f"{[s.value for s in state_cls]}",
             ) from exc
-        if to_state is LifecycleState.RETIRED:
+        if to_state is terminal:
             raise HTTPException(
                 status_code=400,
-                detail="use POST /retire to move a descriptor to 'retired'",
+                detail=f"use POST /retire to move a descriptor to "
+                       f"{terminal.value!r}",
             )
         try:
             typed = await deps_.descriptor_registry.get_typed(

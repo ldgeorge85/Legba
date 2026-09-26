@@ -1,0 +1,186 @@
+# SPDX-FileCopyrightText: 2026 Lewis George
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# exemplar_shelf.example.yaml — SCHEMA DOC for the curated exemplar shelf.
+# Copy to `seeds/exemplar_shelf.yaml` (gitignored — curated DATA never ships)
+# and replace these FAKE patterns with your own. Read it with:
+#
+#     from legba.data.seed.exemplar_shelf import load_shelf
+#     shelf = load_shelf()
+#
+# WHAT THE SHELF IS. A pattern-thread is a WARNING PROBLEM (UK JDP 2-00): a
+# named standing monitor with a watch condition, emitting on critical-indicator
+# change rather than on cadence. This file is the shelf INDEX — the curated list
+# of which warning problems exist, at what stage, and how retired/merged ids
+# resolve. The authored bodies (JIPOE event matrices: indicator rows with
+# RELATIVE windows, negative + deterred instances, `official_disclosure`
+# classing) are authored per-pattern in a later pass and are not this file's
+# shape.
+#
+# STABLE IDS. `slot` is a curation number and is NEVER renumbered — culling a
+# pattern leaves a hole. An id that leaves the active shelf must stay
+# RESOLVABLE, by exactly one of two routes:
+#
+#   * MERGED  — the id moves into another pattern's `aliases` (so it resolves
+#               to the survivor) and is recorded in that pattern's
+#               `merged_from`, usually with a matching entry in `variants`
+#               carrying the distinctive framing/indicators it contributed.
+#   * RETIRED — the id moves to the top-level `retired:` list with a `reason`.
+#               It resolves to a retired record and is NEVER offered.
+#
+# Neither route re-uses the slot, and neither leaves a dangling id.
+#
+# TOP-LEVEL KEYS
+#   version   (required) — schema version, currently 1.
+#   shelf_id  (optional) — a name for this shelf revision.
+#   stage     (optional) — free text; `culled` = index curated, threads not yet
+#                          authored.
+#   culled_on / decision / sources — optional provenance, kept verbatim.
+#   cull      (optional) — the curation arithmetic, CHECKED against the rows:
+#             kept_slots / ready_slots (distinct numbered slots, so a split
+#             slot like "19a"/"19b" counts once) · offered_patterns /
+#             ready_patterns / held_patterns (rows) · merged_slots ·
+#             killed_slots. Any key that disagrees with the shelf raises.
+#   patterns  (required) — the ACTIVE shelf. Everything here is `offered`.
+#   retired   (optional) — cut patterns, resolvable but never offered.
+#   pending_acquisitions (optional) — corpora a pattern is waiting on.
+#
+# PATTERN FIELDS
+#   id               (required) — stable snake_case identifier.
+#   slot             (required) — curation number as a STRING ("19a" is legal).
+#   tier             (optional) — grouping label (T1/T2/T3 here).
+#   title            (required) — human-readable name.
+#   doctrine_source  (required) — WHERE the pattern comes from. The shelf's own
+#                    build rule is "doctrine-derived, not invented"; a pattern
+#                    that cannot name a source does not belong on the shelf.
+#   fuse             (optional) — warning-time regime (hours … years). There is
+#                    deliberately no single decay curve.
+#   osint_legibility (optional) — free text; how visible the pattern is to US.
+#   status           (required) — `ready` (authorable now) or `hold` (on the
+#                    shelf, gated). A `hold` MUST carry `authoring_gate` saying
+#                    what unblocks it.
+#   authoring_gate   (required iff status is `hold`).
+#   note             (optional) — the curation rationale.
+#   role             (optional) — e.g. `discriminator` for a control case.
+#   aliases          (optional) — other ids that resolve to this pattern.
+#   merged_from      (optional) — provenance rows {id, slot, tier?, variant?,
+#                    merge_reason?}. Every `merged_from[].id` must also appear
+#                    in `aliases` (the loader enforces this).
+#   variants         (optional) — named sub-framings folded in by a merge:
+#                    {id, name, framing, distinctive_indicators[], counter_tell,
+#                    canonical_instances[], negative_instances[],
+#                    scoring_rule}. Free-form below the named keys.
+#   must_stay_split_from (optional) — ids this pattern must NOT be merged with
+#                    (opposite base rates). The loader checks the target exists.
+#   research_ref     (optional) — pointer to the backing research entry.
+#
+# RETIRED FIELDS
+#   id / slot / tier / title — as above.
+#   disposition (required) — `killed` (cut) or any curation verb you use.
+#   reason      (required) — WHY, ideally quoted from the deciding document.
+#   retired_on / successor_note / reversal / research_ref — optional.
+#
+# VALIDATION (all loud — a malformed curated file raises, it never half-loads):
+#   duplicate pattern id · duplicate slot · alias colliding with a pattern id or
+#   another alias · a `merged_from` id missing from `aliases` · a retired id
+#   that is also active or aliased · `status: hold` without `authoring_gate` ·
+#   `must_stay_split_from` naming an id that is not on the shelf.
+# A MISSING file is NOT an error: the loader warns and returns an empty shelf
+# (the house seed-degrade pattern — see seeds/README.md).
+#
+# ALL PATTERNS BELOW ARE FAKE — schema illustration only.
+
+version: 1
+shelf_id: exemplar_shelf.example
+stage: culled
+
+cull:
+  drafted_slots: 5
+  kept_slots: 3
+  ready_slots: 2
+  merged_slots: 1
+  killed_slots: 1
+  offered_patterns: 3
+  ready_patterns: 2
+  held_patterns: 1
+
+patterns:
+  - id: example_standing_pattern
+    slot: "1"
+    tier: T1
+    title: Example standing pattern
+    doctrine_source: "Example doctrine, Example Field Manual p.II-81"
+    fuse: weeks-months
+    osint_legibility: high
+    status: ready
+    note: "The plain shape: an active pattern with nothing folded into it."
+    research_ref: planning/example_research/example.md
+
+  - id: example_absorbing_pattern
+    slot: "2"
+    tier: T1
+    title: Example absorbing pattern
+    doctrine_source: "Example doctrine, Example Handbook §4"
+    fuse: days
+    osint_legibility: med
+    status: ready
+    note: "Absorbed a merged pattern as a named variant."
+    aliases:
+      - example_merged_pattern
+    merged_from:
+      - id: example_merged_pattern
+        slot: "3"
+        tier: T1
+        variant: example_variant
+        merge_reason: >-
+          The merged pattern is a MODIFIER on this one, not an independently
+          observable pattern — keeping both would score the same indicators
+          twice.
+    variants:
+      - id: example_variant
+        name: Example modifier variant
+        from_slot: "3"
+        framing: "Scored as a modifier on the parent, never a standalone alarm."
+        distinctive_indicators:
+          - id: example_indicator
+            statement: "The one thing this variant contributes that the parent lacks."
+            observability: directly_observed
+        counter_tell: "The high-base-rate look-alike that must not fire this."
+        canonical_instances: ["Example instance, 1999 [V]"]
+        negative_instances: ["Example non-completion, 2001 [V]"]
+        scoring_rule: "Raises the parent's watch condition; never fires alone."
+
+  - id: example_gated_pattern
+    slot: "4"
+    tier: T2
+    title: Example gated pattern
+    doctrine_source: "Example doctrine, Example Review 2020"
+    fuse: months
+    osint_legibility: high
+    status: hold
+    authoring_gate: >-
+      No clean negative instance found yet, and negative_instances are
+      mandatory before authoring — on the shelf, not authorable.
+    note: "KEEP, CONDITIONAL — must not stall the patterns that are ready."
+
+retired:
+  - id: example_retired_pattern
+    slot: "5"
+    tier: T3
+    title: Example retired pattern
+    disposition: killed
+    retired_on: "2026-01-01"
+    reason: >-
+      Quoted verbatim from the deciding document: the pattern's own naming
+      literature is contested, and it is a post-hoc composite label rather than
+      a forward warning problem.
+    successor_note: "Expected to emerge from co-occurrence of kept patterns."
+    reversal: "Re-admit with a CONTESTED flag if current relevance is reweighted."
+    research_ref: planning/example_research/example.md
+
+pending_acquisitions:
+  - id: example_corpus
+    title: "Example statistical series"
+    feeds: [example_gated_pattern]
+    why: "The baseline the gated pattern is measured against."
+    fetch: "browser required (operator drops the file in)"

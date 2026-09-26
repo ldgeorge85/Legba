@@ -1,0 +1,117 @@
+# Sahel coverage pass — Burkina Faso desk (country_watch_bf) — 2026-09-07.
+# Ships DRAFT.
+#
+# See source_aib_burkina.yaml's header for the full WHY-THIS-BATCH-EXISTS note.
+# This descriptor is Studio Yafa's — the batch's Fondation Hirondelle
+# up-country quality lane for Burkina Faso, the direct sibling of
+# source_studiokalangou.yaml (Niger) and source_studiotamani.yaml (Mali).
+#
+# Studio Yafa (studioyafa.bf) — Fondation Hirondelle's Burkina Faso newsroom
+# (Hirondelle is the Swiss non-profit that builds independent newsrooms in
+# conflict and post-conflict states — see source_studiokalangou.yaml's header
+# for the organisation background). Produces daily bulletins ("Yafa soir")
+# plus up-country feature reporting.
+#
+# WHY IT EARNS A SLOT NEXT TO AIB/LEFASO.NET. Same reasoning as
+# source_studiokalangou.yaml on the Niger desk: it is the candidate that
+# reports OUT of specific localities (Kaya, Loroum/Titao, Bobo-Dioulasso) with
+# feature-depth pieces (an excision investigation across two linked stories,
+# artisanal-mining livelihoods) rather than wire-style dispatches. Lower
+# volume than AIB/LeFaso.net, priced accordingly — a quality lane, not a
+# volume one.
+#
+# VERIFIED LIVE 2026-09-07 by direct fetch + feedparser: `https://www.studioyafa.bf/feed/`
+# -> HTTP 200, `application/rss+xml; charset=UTF-8`, feedparser bozo=False,
+# 10 items, newest item 2026-09-04T17:18:45Z (3 days old at fetch time), all
+# 10 within the 7-day window. ALL 10 items are Burkina-domestic, no crossover
+# observed (unlike source_lefaso_net.yaml's occasional AES-regional item or
+# source_amap_mali.yaml's wire filler) — see the geo note. WordPress feed,
+# keyless, no auth wall.
+#
+# NOT A DUPLICATE: no head row in source_descriptors points at studioyafa.bf.
+#
+# geo: [BF] = publisher origin, honest and useful, same call as
+# source_studiokalangou.yaml for Niger: a Burkinabè station writing about
+# Burkina Faso, so the post-enrichment fallback in data/sources/baseline.py
+# correctly rescues domestic stories whose bodies name only a locality
+# (Kaya, Titao, Loroum, Bobo-Dioulasso) and never the country name itself.
+#
+# source_class: reporting — an independent non-profit newsroom, same
+# treatment as source_studiokalangou.yaml. Not `official` (Hirondelle is an
+# NGO operator, not a government/IGO publisher) and not `state_media`, though
+# donor/institutional-funded rather than commercial. Credibility scoring at
+# registration time should land it above the commercial domestic press on
+# editorial-integrity grounds, consistent with Studio Kalangou's seeded
+# rationale.
+#
+# LICENCE/ROBOTS POSTURE: `robots.txt` present (Yoast SEO default block, at
+# `www.studioyafa.bf/robots.txt` — the bare host redirects there),
+# `User-agent: * / Disallow:` (nothing disallowed) — no restriction observed.
+# No machine-readable licence declaration found on-site. `scope.license_class`
+# left UNSET (honest absence, the LIC-2 default), which lands ingested
+# signals at teaser depth until an operator reviews it.
+#
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after the route is
+# re-verified live on the instance.
+
+identity:
+  id: source.studioyafa.news
+  name: Studio Yafa — Burkina Faso (Fondation Hirondelle)
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: source_batch_2026_09
+  created: "2026-09-07T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [BF]
+  # The station's web feed publishes in French; language_detect below
+  # confirms per signal rather than trusting this.
+  languages: [fr]
+  tags: [news, world, africa, sahel, burkina_faso, francophone, local, source_batch_2026_09]
+  source_class: reporting
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  # Hourly, staggered minute offset. Low-volume feed (10 items/7d observed),
+  # so most polls are 304s — near-free with the handler's conditional GET.
+  schedule:
+    factory_kind: cron
+    raw: "56 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 60
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.studioyafa.bf/feed/"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

@@ -1,0 +1,96 @@
+# sources_wave_2 — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# Reserve Bank of India — Press Releases. Closes the audit-flagged gap
+# (planning/COVERAGE_VS_SELECTION_AUDIT_2026-09-07.md item #8): the RBI
+# freeze on Ashok Sahakari Bank reached India's economic_coercion desk ONLY
+# as a bare GDELT CAMEO stub ("BUSINESS: coerce in Ahmednagar, Maharashtra,
+# India", magnitude 0.05, no body text, the bank name recoverable only from
+# a SOURCEURL slug) and was then carried with zero wire citations for 8
+# days. The audit's own remedy for this row: "register indiancooperative.com
+# or an RBI-releases feed if this file matters" — this IS that RBI-releases
+# feed, a primary source that would have given the same story a real title
+# and body instead of a CAMEO label. Verified live 2026-09-07: valid RSS
+# 2.0, title "PRESS RELEASES FROM RBI", newest item same-day; items are
+# exactly this class of story with real text ("RBI imposes monetary penalty
+# on Hinduja Leyland Finance Limited", 2026-09-04), well inside 7d.
+#
+# Chosen over the brief's named India business-daily candidates (Business
+# Standard, The Hindu BusinessLine) after both failed validation: Business
+# Standard returned HTTP 403 on every path tried (three RSS URLs plus its
+# own /rss-feeds/listing index — a full-site block, not feed-specific); The
+# Hindu BusinessLine's domain (and, on the same check, thehindu.com,
+# livemint.com, economictimes.indiatimes.com, hindustantimes.com,
+# financialexpress.com) could not be reached by this fetcher at all — refused
+# before any HTTP request, a tool-side restriction rather than a
+# live-availability signal, so unconfirmable either way from here. RBI's own
+# feed is a strictly better source for the flagged gap regardless (primary
+# vs. secondary reporting on RBI's own actions) and was the audit's own
+# suggestion, so it was registered instead of continuing to chase a business
+# daily. Say-so for the rest; see the sources-wave-2 report.
+#
+# source_class: official. Central-bank primary source — same bucket as
+# source_stategov_press.yaml / source_kremlin.yaml / source_un_press.yaml.
+# Credibility host rbi.org.in (seeded 0.90/gov, state_affiliation True).
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after verifying the route
+# live on the instance.
+
+identity:
+  id: source.rbi.press_releases
+  name: Reserve Bank of India — Press Releases
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: sources_wave_2
+  created: "2026-09-07T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [IN]
+  languages: [en]
+  tags: [gov, economy, india, sources_wave_2]
+  source_class: official
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "25 0-23/6 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.rbi.org.in/pressreleases_rss.xml"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming the
+    # route yields full article text (mirrors the RSSHub-lane conservative default).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

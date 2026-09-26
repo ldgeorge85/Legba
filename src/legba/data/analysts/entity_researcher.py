@@ -525,9 +525,14 @@ class MergeReport:
     edges_repointed: int = 0
     edges_superseded: int = 0
     edges_self_closed: int = 0
+    #: V3/P0 — ``event_entity_links`` rows repointed by ``fold_event_entity_links``
+    #: (migration 0202) inside the same transaction. Zero until events land.
+    event_links_repointed: int = 0
 
 
-#: The counter keys `merge_pair` accumulates into (K-G1).
+#: The counter keys `merge_pair` accumulates into (K-G1) — the entity_edges fold
+#: result columns. The V3/P0 event-actor fold accumulates under the separate
+#: ``"event_links"`` key (it returns a bare count, not this row shape).
 EDGE_FOLD_KEYS = ("repointed", "superseded", "self_closed")
 
 
@@ -640,6 +645,19 @@ async def merge_pair(
         if edge_fold is not None and fold is not None:
             for k in EDGE_FOLD_KEYS:
                 edge_fold[k] = edge_fold.get(k, 0) + int(fold[k] or 0)
+        # V3/P0 — the same contract for the event-actor links (migration 0202):
+        # repoint through resolve_entity() INSIDE this transaction, so an
+        # event's actor can never keep pointing at the tombstone. NO guard, on
+        # purpose (review 2026-09-22): 0202 is in the chain the registry applies
+        # before the runtime starts, so the function exists wherever this runs;
+        # and a caught UndefinedFunctionError inside this OPEN transaction would
+        # not degrade anyway — Postgres marks the transaction aborted and the
+        # merge fails one statement later. A missing 0202 fails loud, here.
+        ev_links = await conn.fetchval(
+            "SELECT fold_event_entity_links($1::uuid)", loser)
+        if edge_fold is not None and ev_links:
+            edge_fold["event_links"] = (
+                edge_fold.get("event_links", 0) + int(ev_links))
     return True
 
 
@@ -683,6 +701,7 @@ async def execute_merges(
     applied: list[tuple[str, str]] = []
     skipped = 0
     edge_fold: dict[str, int] = {k: 0 for k in EDGE_FOLD_KEYS}
+    edge_fold["event_links"] = 0  # V3/P0 event-actor fold (0202)
 
     for key, pair in by_key.items():
         v = verdict_by_key.get(key)
@@ -717,6 +736,7 @@ async def execute_merges(
         edges_repointed=edge_fold["repointed"],
         edges_superseded=edge_fold["superseded"],
         edges_self_closed=edge_fold["self_closed"],
+        event_links_repointed=edge_fold.get("event_links", 0),
     )
 
 
@@ -776,6 +796,9 @@ class ResearchReport:
     edges_repointed: int = 0
     edges_superseded: int = 0
     edges_self_closed: int = 0
+    #: V3/P0 — event_entity_links repointed by the 0202 fold. Zero until events
+    #: land; the receipt side of "a merge never strands an event actor".
+    event_links_repointed: int = 0
 
     def summary(self) -> str:
         verb = "would merge" if self.mode == "dry_run" else "merged"
@@ -800,11 +823,13 @@ class ResearchReport:
                 f" class_correction: {self.class_corrections_flagged} flagged "
                 "by the adjudicator."
             )
-        if self.edges_repointed or self.edges_superseded or self.edges_self_closed:
+        if (self.edges_repointed or self.edges_superseded
+                or self.edges_self_closed or self.event_links_repointed):
             s += (
                 f" edge fold: {self.edges_repointed} repointed, "
                 f"{self.edges_superseded} coalesced, "
-                f"{self.edges_self_closed} self-closed."
+                f"{self.edges_self_closed} self-closed, "
+                f"{self.event_links_repointed} event links repointed."
             )
         return s
 
@@ -826,6 +851,7 @@ class ResearchReport:
             "edges_repointed": self.edges_repointed,
             "edges_superseded": self.edges_superseded,
             "edges_self_closed": self.edges_self_closed,
+            "event_links_repointed": self.event_links_repointed,
         }
 
 
@@ -1493,6 +1519,7 @@ async def run_entity_research(
         edges_repointed=report.edges_repointed,
         edges_superseded=report.edges_superseded,
         edges_self_closed=report.edges_self_closed,
+        event_links_repointed=report.event_links_repointed,
         sample=tuple(sample),
         reclass_examined=reclass_examined, reclass_changed=reclass_changed,
         reclass_sample=tuple(reclass_sample),

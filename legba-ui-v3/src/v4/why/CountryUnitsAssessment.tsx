@@ -20,6 +20,7 @@ import { formatDistanceToNow } from 'date-fns'
 import { apiGet } from '@/lib/api'
 import { selectRow } from '@/state/selection'
 import { UnitEvalBadge } from '@/components/inspector/UnitEvalBadge'
+import { UnitCorrectnessBadge } from '@/components/inspector/UnitCorrectnessBadge'
 import { SEVERITY_COLOR } from '@/v4/world/types'
 
 /** The bounded units + their display labels, in headline order. Kept in ONE place
@@ -116,6 +117,9 @@ export function CountryUnitsAssessment({ targetId }: { targetId: string }) {
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-label uppercase tracking-wider text-slate-400">{u.label}</span>
                 <UnitEvalBadge analystId={u.id} />
+                {/* G2 — the per-unit CORRECTNESS number, beside the read it
+                    grades. Renders nothing when this unit carries no row. */}
+                <UnitCorrectnessBadge analystId={u.id} targetId={targetId} />
                 {f?.produced_at && (
                   <span className="text-xs text-slate-600">
                     · {formatDistanceToNow(Date.parse(f.produced_at))} ago

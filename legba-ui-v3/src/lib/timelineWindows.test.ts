@@ -20,7 +20,7 @@ import {
   zoomDomain,
   type TimelineItem,
 } from './timelineWindows'
-import { SEVERITY_COLOR } from '@/v4/world/types'
+import { SEVERITY_COLOR, EVENT_LIFECYCLE_COLOR } from '@/v4/world/types'
 
 const NOW = Date.parse('2026-07-24T12:00:00Z')
 const DAY = 86_400_000
@@ -96,6 +96,15 @@ describe('itemColor', () => {
   it('uses the kind color for facts + situations', () => {
     expect(itemColor(shapeItem(item({ id: 'x', kind: 'fact' }), NOW)!)).toBe('#34d399')
     expect(itemColor(shapeItem(item({ id: 'y', kind: 'situation' }), NOW)!)).toBe('#fb7185')
+  })
+  it('colors an event by its lifecycle-state badge (V3/P6)', () => {
+    const s = shapeItem(
+      item({ id: 'e', kind: 'event', status: 'evolving' }), NOW,
+    )!
+    expect(itemColor(s)).toBe(EVENT_LIFECYCLE_COLOR.evolving)
+    // An unmapped lifecycle falls back to the event kind color, never a crash.
+    const u = shapeItem(item({ id: 'e2', kind: 'event', status: 'unknown' }), NOW)!
+    expect(itemColor(u)).toBe('#a78bfa')
   })
 })
 
@@ -205,7 +214,10 @@ describe('kindTallies', () => {
       { situation: 1, finding: 5, fact: 0 },
       { situation: false, finding: true, fact: false },
     )
-    expect(tallies.map((t) => t.kind)).toEqual(['situation', 'finding', 'fact'])
+    // V3/P6 — `event` is the fourth lane, first in LANE_ORDER.
+    expect(tallies.map((t) => t.kind)).toEqual([
+      'event', 'situation', 'finding', 'fact',
+    ])
     const finding = tallies.find((t) => t.kind === 'finding')!
     expect(finding.shown).toBe(2)
     expect(finding.total).toBe(5)

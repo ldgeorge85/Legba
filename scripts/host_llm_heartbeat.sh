@@ -9,7 +9,7 @@
 # recently? Deterministic analysts are excluded — they run fine through an
 # LLM outage, which is exactly why signal-freshness cannot see this class.
 #
-# §31.1 — THREE CHECKS, because the silence alarm alone is a LAGGING signal
+# §31.1 — FOUR CHECKS, because the silence alarm alone is a LAGGING signal
 # (it needs 90 min of nothing before it fires) and liveness pings lie:
 #
 #   1. SILENCE     — has any LLM-bearing analyst succeeded lately? (lagging,
@@ -25,6 +25,11 @@
 #                    server can answer "PONG" happily and still OOM, truncate
 #                    or hang on a production-sized slice. Runs every Nth tick
 #                    (hourly by default) because it is the expensive one.
+#   4. DISK        — root-filesystem usage (added 2026-09-05). WARN at >=85%
+#                    (log only), CRITICAL at >=92% (pages). OpenSearch's own
+#                    flood-stage watermark is 95% and SILENTLY blocks corpus
+#                    indexing once crossed — see check_disk_usage below for
+#                    the 2026-09-05 specimen this closes.
 #
 # The completion probes resolve the model name, endpoint and credential from
 # the LIVE stack component via the registry + vault — NEVER hardcoded, so the
@@ -84,6 +89,12 @@ LONGCTX_CHARS="${LONGCTX_CHARS:-24000}"
 LONGCTX_EVERY_N="${LONGCTX_EVERY_N:-6}"
 LONGCTX_COOLDOWN_STAMP="${LONGCTX_COOLDOWN_STAMP:-/tmp/legba-llm-longctx.cooldown}"
 TICK_COUNTER="${TICK_COUNTER:-/tmp/legba-llm-heartbeat.tick}"
+
+# --- disk-usage knobs (added 2026-09-05, see check_disk_usage below) -------
+DISK_PATH="${DISK_PATH:-/}"
+DISK_WARN_PCT="${DISK_WARN_PCT:-85}"
+DISK_CRITICAL_PCT="${DISK_CRITICAL_PCT:-92}"
+DISK_COOLDOWN_STAMP="${DISK_COOLDOWN_STAMP:-/tmp/legba-llm-heartbeat-disk.cooldown}"
 
 log() { echo "$(date -u +%FT%TZ) [llm-heartbeat] $*" >> "$LOG"; }
 
@@ -382,7 +393,69 @@ check_longctx() {
   touch "$LONGCTX_COOLDOWN_STAMP"
 }
 
+# ---------------------------------------------------------------------------
+# 4) DISK — root-filesystem usage gauge (added 2026-09-05).
+#
+# WHY THIS EXISTS: OpenSearch's flood-stage watermark is 95% disk used on the
+# volume backing its data path. Crossing it makes OpenSearch silently force
+# every index on that node read-only — corpus indexing then stops with NO
+# error surfaced anywhere in THIS codebase (the 2026-09-05 event: host disk
+# crossed the watermark and indexing went dark with nothing paging until an
+# operator noticed downstream). This gauge exists to catch the APPROACH, not
+# the aftermath: WARN at >=85% is early enough to free space or grow storage
+# before flood-stage; CRITICAL at >=92% pages, because host_log_collector.sh's
+# own comment block already records this host running ~86-92% disk even
+# before this gauge existed, so the OpenSearch cliff can be one bad ingest
+# burst away by the time CRITICAL fires.
+#
+# The percentage comes from shutil.disk_usage(), run directly on the HOST (no
+# docker exec) because it is the host root filesystem — not a container's
+# writable layer — that actually fills up and that OpenSearch's bind-mounted
+# data volume lives on.
+#
+# WARN is log-only by design (a two-tier gauge: WARN gives the operator
+# runway, CRITICAL is the page). Wiring WARN into ntfy too would just be a
+# second alarm for the same trend CRITICAL already pages on.
+# ---------------------------------------------------------------------------
+check_disk_usage() {
+  out="$(DISK_PATH="$DISK_PATH" python3 - <<'DISKPY'
+import os
+import shutil
+
+path = os.environ.get("DISK_PATH", "/")
+du = shutil.disk_usage(path)
+pct = (du.used / du.total * 100) if du.total else 0.0
+print(f"{pct:.1f} {du.used} {du.total}")
+DISKPY
+)"
+  read -r pct used total <<<"$out"
+  case "$pct" in
+    ''|*[!0-9.]*)
+      log "SKIP disk usage probe returned no numeric percent (raw=${out:0:200})"
+      return 0
+      ;;
+  esac
+
+  log "disk.usage pct=${pct}% used=${used} total=${total} path=${DISK_PATH}"
+
+  if awk -v p="$pct" -v c="$DISK_CRITICAL_PCT" 'BEGIN{exit !(p>=c)}'; then
+    cooled_down "$DISK_COOLDOWN_STAMP" && return 0
+    log "FIRE disk usage ${pct}% >= CRITICAL ${DISK_CRITICAL_PCT}% (path=${DISK_PATH})"
+    page 5 "Legba: disk CRITICAL ${pct}%" "rotating_light,floppy_disk" \
+      "Root filesystem at ${pct}% (used=${used} total=${total}, path=${DISK_PATH}). OpenSearch's flood-stage watermark is 95% and SILENTLY forces its indices read-only there — corpus indexing stops with no error surfaced in this codebase (the 2026-09-05 event). Free space or grow storage now."
+    touch "$DISK_COOLDOWN_STAMP"
+    return 0
+  fi
+
+  rm -f "$DISK_COOLDOWN_STAMP"
+  if awk -v p="$pct" -v w="$DISK_WARN_PCT" 'BEGIN{exit !(p>=w)}'; then
+    log "WARN disk usage ${pct}% >= WARN ${DISK_WARN_PCT}% (below CRITICAL ${DISK_CRITICAL_PCT}%, not paged)"
+  fi
+}
+
+# --- main --------------------------------------------------------------------
 check_silence
 check_completion
 check_longctx
+check_disk_usage
 exit 0

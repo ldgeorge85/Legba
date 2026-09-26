@@ -8,8 +8,8 @@ retrievable Qdrant chunks:
   * :mod:`legba.data.rag.chunker` — a heading-aware, ~400-800-token chunker.
   * :mod:`legba.data.rag.lane4_loader` — the Lane-4 manual-ingest loader that
     chunks + embeds + upserts a batch's ``docs`` lane into the ``world_context``
-    / ``tradecraft`` collections, riding the existing ``seed_batches`` ledger
-    for idempotency.
+    / ``tradecraft`` / ``exemplar`` collections, riding the existing
+    ``seed_batches`` ledger for idempotency.
 
 The retrieval side (inline grounding of `vector:world_context`, the
 `search_context` tool) hangs off these but lands later (RAG plan phases 3-4).
@@ -20,7 +20,10 @@ from __future__ import annotations
 from .chunker import Chunk, chunk_text, estimate_tokens
 from .lane4_loader import (
     CORPUS_COLLECTIONS,
+    EXEMPLAR_CORPUS,
+    ExemplarIdCheck,
     VectorLoadResult,
+    check_exemplar_id,
     contextual_embedding_input,
     load_vector_batch,
 )
@@ -30,7 +33,10 @@ __all__ = [
     "chunk_text",
     "estimate_tokens",
     "CORPUS_COLLECTIONS",
+    "EXEMPLAR_CORPUS",
+    "ExemplarIdCheck",
     "VectorLoadResult",
+    "check_exemplar_id",
     "contextual_embedding_input",
     "load_vector_batch",
 ]

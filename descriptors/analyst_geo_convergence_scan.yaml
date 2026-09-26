@@ -47,8 +47,11 @@
 #   * cooldown_seconds = 1500 — a 25-min floor below the 30-min tick, so an
 #     organic tick is never swallowed by its own cooldown.
 #
-# State: draft in-tree — registration (scripts/bringup_register_
-# geo_convergence_scan.py) and the operator's activate flip are DEPLOY steps.
+# State: RETIRED live (POST /retire) — tree reconciled 2026-09-06
+# (production_gauge.descriptor_state_drift) so a re-register from this file
+# cannot resurrect it. Re-registration (scripts/bringup_register_
+# geo_convergence_scan.py) and the operator's activate flip remain the
+# deploy steps if this analyst is ever revived.
 
 identity:
   id: geo_convergence_scan
@@ -60,7 +63,7 @@ identity:
     input_type: legba.runtime.SignalList
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
-  state: draft
+  state: retired
   owner: a7_geo_convergence
 
 subscription:

@@ -415,7 +415,8 @@ async def test_clustering_upsert_writes_columns_and_is_idempotent(pg_conn):
     assert a1 == "created" and a2 == "updated"  # atomic upsert, not a duplicate
 
     rows = await pg_conn.fetch(
-        "SELECT situation_signature, valid_from, valid_until, status "
+        "SELECT situation_signature, valid_from, valid_until, status, "
+        "data->>'method_version' AS method_version "
         "FROM situations WHERE situation_signature=$1 AND analyst_id=$2",
         sig, analyst,
     )
@@ -424,6 +425,10 @@ async def test_clustering_upsert_writes_columns_and_is_idempotent(pg_conn):
     assert rows[0]["valid_from"] == datetime(2026, 1, 1, tzinfo=timezone.utc)
     assert rows[0]["valid_until"] == datetime(2026, 1, 10, tzinfo=timezone.utc)
     assert rows[0]["status"] == "closed"
+    # H12 (review 2026-09-24) — the method version is on the PERSISTED row, read
+    # back through the column, not on an in-memory dict: 0 of 296 live rows
+    # carried it when the stamp lived only on the cluster description.
+    assert rows[0]["method_version"] == sc.METHOD_VERSION
 
 
 # ---------------------------------------------------------------------------

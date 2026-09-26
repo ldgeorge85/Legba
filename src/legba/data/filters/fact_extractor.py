@@ -71,6 +71,7 @@ from .._entity_canon import (
     is_place_surface,
     is_region_surface,
 )
+from ..provenance.origin import origin_class_clause
 from ..provenance.writes import (
     resolve_fact_source_credibility,
     supersede_prior_facts,
@@ -100,6 +101,14 @@ from .slm_relationship_validate import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: P7/7g-1 — the origin-class leg on the ingest upsert's row PICK (SEAMS #57
+#: sweep). The corroboration path finds the open row for a triple and merges
+#: live evidence into it; without this leg an imported historical row with the
+#: same triple could be the row picked, and a 2016 holding would silently
+#: acquire 2026 lineage and confidence. Concatenated rather than f-string
+#: interpolated because the surrounding SQL is full of literal JSON braces.
+_LIVE_FACTS = origin_class_clause("")
 
 
 # ---------------------------------------------------------------------------
@@ -2061,6 +2070,7 @@ async def _insert_ingestion_fact(
                     AND lower(value)     = lower($3)
                     AND valid_until IS NULL
                     AND superseded_by IS NULL
+                    AND """ + _LIVE_FACTS + """
                   ORDER BY valid_from ASC, created_at ASC
                   LIMIT 1
                )

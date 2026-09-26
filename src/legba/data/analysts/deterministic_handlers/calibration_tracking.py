@@ -57,6 +57,7 @@ from typing import Any, Mapping
 import numpy as np
 
 from ...provenance.models import FindingPayload
+from ...provenance.origin import origin_class_clause
 from ...provenance.verify import JUDGE_PIPELINE_VERSION
 from ...retrieval_origin import (
     WEB_EVIDENCE_RESOLUTION,
@@ -67,9 +68,24 @@ from . import forecast_acute
 
 logger = logging.getLogger(__name__)
 
+#: P7/7g-1 — the origin-class leg on the ACTUALS count (SEAMS #57 sweep;
+#: `calibration` in the collection firewall). A forecast is graded against
+#: what actually arrived in its horizon; counting imported history there
+#: makes a calibration set out of numbers nobody predicted.
+_LIVE_SIGNALS = origin_class_clause("")
+
 _DEFAULT_BIN_COUNT = 10
 _DEFAULT_ROLLING_WEEKS = 12
 _DEFAULT_DRIFT_THRESHOLD = 2.0
+
+#: H12 — the METHOD/SCALE version this plane's published numbers were computed
+#: under, stamped ``data.method_version`` on the run receipt. Covers the Brier
+#: surface: ``_DEFAULT_BIN_COUNT``, ``_DEFAULT_ROLLING_WEEKS``,
+#: ``_DEFAULT_DRIFT_THRESHOLD``, ``_FORECAST_ACUTE_MIN_SAMPLE``,
+#: ``_MIN_EXOGENOUS_FOR_BRIER`` and the weak-tier / exogenous-vs-self-consistency
+#: split rules below. Bump it when any of them moves, so a Brier diff across the
+#: change reads as an instrument revision, not a calibration regression.
+METHOD_VERSION = "calibration_tracking/2026-09.1"
 
 # R1-T1.3 (#92) — the pre-registered acute-binary forecast pilot reports its
 # segregated Brier only once it has at least this many EXOGENOUSLY-resolved
@@ -335,10 +351,11 @@ async def _grade_one_prediction(
         return None
     try:
         actrow = await conn.fetchrow(
-            """
+            f"""
             SELECT count(*)::float AS cnt
             FROM signals
             WHERE geo && $1::text[]
+              AND {_LIVE_SIGNALS}
               AND fetched_at >  ($2::timestamptz - make_interval(days => $3::int))
               AND fetched_at <= $2::timestamptz
             """,
@@ -933,6 +950,9 @@ def _build_finding(
         tags=tags,
         data={
             "sub_handler": "calibration_tracking",
+            # H12 — the instrument revision every Brier below was computed
+            # under (bins, lookback, drift threshold, tiering split).
+            "method_version": METHOD_VERSION,
             # `brier` is the HONEST headline = exogenous-only (None when
             # insufficient exogenous sample). The pooled + self-consistency
             # Briers are kept as DIAGNOSTICS, never as the headline.

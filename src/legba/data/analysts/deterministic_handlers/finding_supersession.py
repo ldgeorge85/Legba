@@ -103,6 +103,24 @@ _COMPOSITION_ANALYST_IDS = frozenset({
     "region_composition",
     "escalation_composition",
     "world_assessor",
+    # D-6 (2026-09-04) — the ASSESSMENT CHANNEL. This list is the one of the four
+    # composition-id lists whose omission FAILS OPEN rather than closed: an
+    # unlisted id is not merely invisible to a feature, it flows INTO the
+    # situation clusterer and mints a fake "situation" out of a report — the P6
+    # defect this frozenset exists to prevent. The Assessment is a report about a
+    # report; its supersession runs through the same dedicated composition fold
+    # as every other tier, keyed on the ``composition:`` raw signature it stamps
+    # (``composition:world_assessment:world``), so it needs the exclusion and
+    # nothing else.
+    "world_assessment",
+    # P3 LANE A — the PER-COUNTRY Assessment, and this list is the one it could
+    # not be left out of. Omission here does not hide a feature, it MINTS one:
+    # an unlisted id flows into the situation clusterer and turns a report about
+    # a report into a fake "situation". Its supersession runs through the same
+    # dedicated composition fold, on the signature it stamps —
+    # ``composition:country_assessment:<target_id>``, with the TARGET in it, so
+    # the 32 desks' heads fold per desk rather than collapsing into one.
+    "country_assessment",
     # M18 (2026-07-06) — the cross_analyst_correlator is a META report producer
     # too (analysis-of-analysis): its findings are contradiction/agreement/
     # blind_spot meta-observations, NOT evolving situation frames. Exclude it from

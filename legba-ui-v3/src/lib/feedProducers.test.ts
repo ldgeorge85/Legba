@@ -32,6 +32,10 @@ describe('classifyProducer', () => {
   it('names the compositions — but not a sweep that merely mentions them', () => {
     expect(classifyProducer('country_composition')).toBe('composition')
     expect(classifyProducer('region_composition')).toBe('composition')
+    // Both interpretive channels are compositions, at their own grain — neither
+    // id ends in `_composition`, so both are listed explicitly or fall to 'other'.
+    expect(classifyProducer('world_assessment')).toBe('composition')
+    expect(classifyProducer('country_assessment')).toBe('composition')
     // A real analyst_id in the substrate; it is a sweep, not a composition.
     expect(classifyProducer('composition_lineage_sweep')).toBe('other')
   })

@@ -11,7 +11,8 @@ Two tools let an agentic assessor reach OUTSIDE the substrate for evidence:
                      titles + URLs + snippets, PLUS an explicit degradation
                      verdict.
 
-Both egress EXCLUSIVELY through :func:`guarded_async_client` — the SAME
+Both egress EXCLUSIVELY through :func:`fetch_client` (the SSRF-guarded
+client, or the flag-gated impersonating one) — the SAME
 ``SsrfGuardedTransport`` every ingress fetcher uses (``sources/_egress.py``).
 A URL that resolves to a private / loopback / link-local / metadata address is
 REFUSED before connect; the guard re-runs on every redirect hop. There is no
@@ -131,6 +132,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass, field, replace as _dc_replace
 from typing import Any
 
 import httpx
@@ -138,12 +140,17 @@ import httpx
 from ...schemas.action_pack import ActionPack
 from ...schemas.properties import Property
 from ...schemas.stack import SearchProviderConfig
-from ...sources._egress import EgressBlockedError, guarded_async_client
+from ...sources._egress import (
+    EgressBlockedError,
+    fetch_client,
+    guarded_async_client,
+)
 from ...stack.search import (
     DEFAULT_LIVENESS_CACHE,
     HardSearchFailure,
     LivenessVerdict,
     SearchHandlerContext,
+    SearchProviderUnresolved,
     SearchStatus,
     SearxngSearchHandler,
     TransientSearchFailure,
@@ -152,6 +159,7 @@ from ...stack.search import (
     resolve_tool_search_route,
     verify_engine_liveness,
 )
+from .search_cost import check_paid_rung_budget
 from .tools import ToolCall, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -168,9 +176,48 @@ WEB_ACCESS_TOOLS = (
 # can't blow the context window or pin memory. The planner's GATHER round
 # already truncates tool output, but cap at the source too.
 _MAX_FETCH_BYTES = 200_000
-_MAX_SEARCH_RESULTS = 10
+#: Matches ``stack.search.base.MAX_RESULTS_CAP``. See its docstring for why
+#: 10 was measured to be throwing away two thirds of every search.
+_MAX_SEARCH_RESULTS = 30
 _DEFAULT_TIMEOUT_SECONDS = 15.0
 _USER_AGENT = "legba-web-tools/1.0 (+https://github.com/ldgeorge85/legba)"
+
+#: Extra attempts a TIMED-OUT fetch gets. ONE, and on timeout only.
+#:
+#: The measured failure: a 07:23Z reference build spent fifteen fetch records
+#: for one usable page, and four of them went to ``dfat.gov.au`` and
+#: ``defence.gov.au`` URLs that were probed afterwards and found to be REAL
+#: pages — one dated inside the build's own window. They had answered
+#: ``httpx.ReadTimeout`` with an EMPTY message, which surfaced as
+#: ``web_fetch.http_error … err=`` and reached the model as a blocked host. A
+#: France build read 0 pages the same way. An intermittent hang is the one
+#: failure class where the same request a second later is genuinely likely to
+#: work, and it is also the one this tool could not tell apart from a refusal.
+#:
+#: NOT retried: 4xx/5xx (``web_fetch`` returns those as a completed fetch of
+#: whatever the host served — the caller reads ``status_code``), a
+#: challenge/paywall stub (a served page; see ``_challenge_detect``), and an
+#: SSRF refusal. None of those change on a second identical request; retrying
+#: them would spend the caller's fetch budget to be told the same thing twice.
+_FETCH_TIMEOUT_RETRIES = 1
+
+#: Outcome vocabulary stamped on every ``web_fetch`` result, so a caller can
+#: TALLY fetches by what actually happened rather than inferring it from an
+#: error string. ``ok`` is "the host served something" — 200 or 404 alike;
+#: whether the body is an article, a stub or a challenge page is a question
+#: about the BODY and belongs to the caller that parses it.
+FETCH_OUTCOME_OK = "ok"
+FETCH_OUTCOME_TIMED_OUT = "timed_out"
+FETCH_OUTCOME_BLOCKED = "blocked"
+FETCH_OUTCOME_ERROR = "error"
+
+#: The UA ``web_fetch`` actually sends, published for callers that gate this
+#: path on robots.txt. A robots decision is evaluated PER USER-AGENT, so a
+#: caller that asks ``robots.py`` about ``legba-research/1.0`` (its default)
+#: while this tool sends ``legba-web-tools/1.0`` is obeying rules written for a
+#: different agent than the one that shows up in the publisher's log. Exported
+#: so the two can never drift apart silently.
+WEB_FETCH_USER_AGENT = _USER_AGENT
 
 # Env fallback for the search endpoint when a pack's web_search ToolSpec pins
 # neither a `provider` stack_ref nor an `endpoint`. Unset by default —
@@ -225,21 +272,73 @@ async def web_fetch_tool(
 
     cfg = _tool_config(pack, "web_fetch")
     timeout = float(cfg.get("timeout_seconds") or _DEFAULT_TIMEOUT_SECONDS)
-    try:
-        async with guarded_async_client(
-            follow_redirects=True,
-            timeout=timeout,
-            headers={"User-Agent": _USER_AGENT},
-        ) as client:
-            response = await client.get(url)
-    except EgressBlockedError as exc:
-        # The SSRF guard refused a non-public target (or a redirect to one).
-        # Clean tool failure — the planner sees it and stops, the run survives.
-        logger.warning("web_fetch.egress_blocked url=%s err=%s", url, exc)
-        return ToolResult(status="failed", error=f"egress_blocked: {exc!s}")
-    except httpx.HTTPError as exc:
-        logger.warning("web_fetch.http_error url=%s err=%s", url, exc)
-        return ToolResult(status="failed", error=f"fetch_failed: {exc!s}")
+    attempts = 0
+    response: httpx.Response | None = None
+    last_timeout: httpx.TimeoutException | None = None
+    while attempts <= _FETCH_TIMEOUT_RETRIES:
+        attempts += 1
+        try:
+            async with fetch_client(
+                # ``guarded=`` hands ``fetch_client`` THIS module's own
+                # ``guarded_async_client``, so the flag-off path is the exact
+                # call this site made before, through the exact name the
+                # existing e2e suites monkeypatch. See _egress.fetch_client.
+                guarded=guarded_async_client,
+                follow_redirects=True,
+                timeout=timeout,
+                headers={"User-Agent": _USER_AGENT},
+            ) as client:
+                response = await client.get(url)
+            break
+        except EgressBlockedError as exc:
+            # The SSRF guard refused a non-public target (or a redirect to
+            # one). Clean tool failure — the planner sees it and stops, the run
+            # survives. NEVER retried: the guard's verdict is deterministic.
+            logger.warning("web_fetch.egress_blocked url=%s err=%s", url, exc)
+            return ToolResult(
+                status="failed", error=f"egress_blocked: {exc!s}",
+                output={"url": url, "fetch_outcome": FETCH_OUTCOME_BLOCKED,
+                        "attempts": attempts},
+            )
+        except httpx.TimeoutException as exc:
+            # MUST precede the HTTPError arm — every timeout class is an
+            # HTTPError subclass, and catching the parent first is exactly how
+            # this path used to swallow a retryable hang as a dead host.
+            last_timeout = exc
+            logger.warning(
+                "web_fetch.timeout url=%s attempt=%d/%d cls=%s timeout=%.1fs",
+                url, attempts, _FETCH_TIMEOUT_RETRIES + 1,
+                type(exc).__name__, timeout,
+            )
+            continue
+        except httpx.HTTPError as exc:
+            logger.warning("web_fetch.http_error url=%s err=%s", url, exc)
+            return ToolResult(
+                status="failed", error=f"fetch_failed: {exc!s}",
+                output={"url": url, "fetch_outcome": FETCH_OUTCOME_ERROR,
+                        "attempts": attempts},
+            )
+
+    if response is None:
+        # Every attempt timed out. Reported under its OWN name and with the
+        # class named, because ``httpx.ReadTimeout`` carries an EMPTY message
+        # and the old ``fetch_failed: `` read as "this host refused us".
+        detail = str(last_timeout or "") or "no message"
+        logger.warning(
+            "web_fetch.timed_out url=%s attempts=%d cls=%s",
+            url, attempts, type(last_timeout).__name__ if last_timeout else "?",
+        )
+        return ToolResult(
+            status="failed",
+            error=(
+                f"fetch_timed_out: {type(last_timeout).__name__ if last_timeout else 'timeout'}"
+                f" after {attempts} attempt(s) at {timeout:.0f}s ({detail}). "
+                "The host did not answer in time — this is NOT a refusal and "
+                "NOT evidence the page is missing."
+            ),
+            output={"url": url, "fetch_outcome": FETCH_OUTCOME_TIMED_OUT,
+                    "attempts": attempts},
+        )
 
     body = _decode_body(response)
     return ToolResult(
@@ -250,6 +349,8 @@ async def web_fetch_tool(
             "content_type": response.headers.get("content-type", ""),
             "body": body,
             "truncated": len(response.text) > _MAX_FETCH_BYTES,
+            "fetch_outcome": FETCH_OUTCOME_OK,
+            "attempts": attempts,
         },
         units=1,
     )
@@ -293,7 +394,8 @@ async def _legacy_endpoint_handler(
     config = SearchProviderConfig(
         subprovider=Property.Dropdown.Static.of(
             "searxng",
-            ["searxng", "json", "firecrawl", "jina", "tavily", "brave", "agent"],
+            ["searxng", "json", "firecrawl", "jina", "tavily", "brave",
+             "serper", "agent"],
         ),
         endpoint=Property.Text.of(endpoint),
         timeout_seconds=Property.Number.of(timeout, minimum=1, maximum=300),
@@ -306,18 +408,311 @@ async def _legacy_endpoint_handler(
     return handler, label
 
 
+# ---------------------------------------------------------------------------
+# THE PROVIDER LADDER (R-C)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _Rung:
+    """One provider the ladder may try, in order.
+
+    ``handler`` is ``None`` for a rung that was DECLARED on the ToolSpec but
+    could not be built this run. That is deliberately not the same as "absent":
+    a declared-but-unbuildable rung is reported by name, so an operator sees
+    WHICH provider was missing instead of a ladder that silently got shorter.
+    """
+
+    handler: Any | None
+    label: str
+    route: Any | None = None
+
+    @property
+    def cost_usd_per_query(self) -> float:
+        try:
+            return max(0.0, float(getattr(self.handler, "cost_usd_per_query", 0.0)))
+        except (TypeError, ValueError):
+            return 0.0
+
+    @property
+    def metered(self) -> bool:
+        return self.cost_usd_per_query > 0.0
+
+
+@dataclass
+class _RungOutcome:
+    """What one rung did. ``answered`` is the only thing the loop branches on."""
+
+    result: ToolResult | None
+    answered: bool
+    reason: str
+    cost_usd: float = 0.0
+    #: Real upstream queries this rung issued (the search itself plus any
+    #: liveness control probe). The probe is a REAL query on a metered
+    #: provider — pretending otherwise would under-report the bill by up to
+    #: 100%.
+    queries: int = 0
+    detail: str = ""
+
+
+@dataclass
+class _LadderLog:
+    """Per-rung record, attached to the output ONLY when a ladder exists."""
+
+    entries: list[dict[str, Any]] = field(default_factory=list)
+
+    def record(self, rung: "_Rung", reason: str, *, detail: str = "",
+               queries: int = 0, cost_usd: float = 0.0) -> None:
+        self.entries.append({
+            "provider": rung.label,
+            "route": getattr(rung.route, "source", "") or "",
+            "outcome": reason,
+            "queries": queries,
+            "cost_usd": round(cost_usd, 6),
+            **({"detail": detail} if detail else {}),
+        })
+
+
+def _rung_matches(pin: str, rung: _Rung) -> bool:
+    """Does ``pin`` name THIS rung? Component id, or its subprovider segment.
+
+    ``search.serper.paid`` is matched by its full id, by ``serper`` (the dotted
+    segment), and by the handler's own ``subprovider``. Nothing else: a pin is
+    a SELECTION among rungs the operator already declared, never a way to name
+    a component that is not on the ladder.
+    """
+    label = str(rung.label or "")
+    if not pin:
+        return False
+    if pin == label:
+        return True
+    if pin in label.split("."):
+        return True
+    return str(getattr(rung.handler, "subprovider", "") or "") == pin
+
+
+def _build_ladder(ctx: ToolContext, first: _Rung) -> list[_Rung]:
+    """Rung 0 plus the runtime-bound ``config.fallback_providers`` rungs.
+
+    ``ctx.search_fallbacks`` is a list of ``(handler, route)`` pairs the runtime
+    resolved from the ToolSpec. Absent or empty ⇒ a one-element ladder, which is
+    the shipped state and the reason the searxng path is byte-identical.
+    """
+    rungs = [first]
+    seen = {first.label}
+    for entry in (getattr(ctx, "search_fallbacks", None) or []):
+        handler, route = (
+            entry if isinstance(entry, (tuple, list)) and len(entry) == 2
+            else (entry, None)
+        )
+        label = (
+            getattr(route, "component_id", "")
+            or getattr(handler, "component_id", "")
+            or ""
+        )
+        if not label or label in seen:
+            # A rung is attempted AT MOST ONCE per run — re-entering a provider
+            # that just failed is exactly the hammering the deferral ladder
+            # exists to prevent.
+            continue
+        seen.add(label)
+        rungs.append(_Rung(handler=handler, label=label, route=route))
+    return rungs
+
+
+async def _run_rung(
+    rung: _Rung,
+    *,
+    query: str,
+    limit: int,
+    extra_params: Any,
+    cache: Any,
+) -> _RungOutcome:
+    """Run ONE provider and classify the outcome.
+
+    Every ToolResult this returns — success, degraded-empty, unverified-empty,
+    transient, hard — is the SAME shape the single-provider path has always
+    returned, error strings included. The ladder adds a choice about what to do
+    next; it does not restate the honesty contract.
+    """
+    handler = rung.handler
+    probes_before = int(getattr(cache, "probes", 0) or 0)
+    try:
+        queries = 1
+        response = await handler.search(query, limit=limit, params=extra_params)
+    except SearchProviderUnresolved as exc:
+        # Refused BEFORE egress (no key bound, endpoint host fenced). Nothing
+        # was spent and nothing was asked.
+        logger.warning(
+            "web_search.provider_unresolved provider=%s err=%s", rung.label, exc,
+        )
+        return _RungOutcome(
+            result=ToolResult(status="failed", error=str(exc)),
+            answered=False, reason="search_provider_unresolved",
+            queries=0, detail=str(exc),
+        )
+    except TransientSearchFailure as exc:
+        # Retryable class (timeout / 429 / upstream 5xx). One fallback attempt
+        # is the caller's choice, never a loop — with a ladder configured that
+        # choice is the NEXT rung, and it is taken once.
+        logger.warning("web_search.transient provider=%s err=%s", rung.label, exc)
+        advice = compute_deferral(
+            "search_unavailable", provider_key=rung.label, cache=cache,
+            detail=str(exc),
+        )
+        return _RungOutcome(
+            result=ToolResult(
+                status="failed", error=f"search_unavailable: {exc!s}",
+                output={"deferral": advice.to_dict()},
+            ),
+            answered=False, reason="search_unavailable",
+            cost_usd=rung.cost_usd_per_query * queries, queries=queries,
+            detail=str(exc),
+        )
+    except HardSearchFailure as exc:
+        # Already carries its own classified prefix (egress_blocked / HTTP nnn /
+        # "search response not JSON" / misconfiguration). NO deferral: this
+        # class is never retried by contract, and waiting cannot fix a
+        # misconfiguration — it needs an operator.
+        logger.warning("web_search.hard_failure provider=%s err=%s", rung.label, exc)
+        return _RungOutcome(
+            result=ToolResult(status="failed", error=str(exc)),
+            answered=False, reason="search_hard_failure",
+            cost_usd=rung.cost_usd_per_query * queries, queries=queries,
+            detail=str(exc),
+        )
+
+    # ---- empty is SUSPECT: measure the engine set before believing it ----
+    # Only a zero-result response that admitted NO degradation needs this. One
+    # bounded control probe through the SAME provider, cached per provider for
+    # a short TTL so N empties in a run cost 1 probe.
+    if response.status is SearchStatus.EMPTY:
+        verdict, detail = await verify_engine_liveness(
+            handler, provider_key=rung.label, cache=cache,
+        )
+        apply_liveness(response, verdict, detail)
+    queries += max(0, int(getattr(cache, "probes", 0) or 0) - probes_before)
+    spent = rung.cost_usd_per_query * queries
+
+    output = response.to_tool_output()
+    output["provider"] = rung.label
+    if rung.route is not None:
+        output["provider_route"] = rung.route.source
+        output["provider_route_class"] = rung.route.route_class
+
+    if response.status is SearchStatus.DEGRADED_EMPTY:
+        # Every hit was lost — either to degradation the provider ADMITTED, or
+        # to a control probe that found the engine set dead/unverifiable. NOT an
+        # empty success (see the module docstring); the detail is carried so the
+        # planner can say WHY, and the deferral tells the caller to come back
+        # later rather than hammer engines that are already refusing.
+        probe_failed = response.liveness in (
+            LivenessVerdict.DEAD, LivenessVerdict.PROBE_FAILED,
+        )
+        reason = (
+            "search_liveness_unverified" if probe_failed
+            else "search_degraded_no_results"
+        )
+        logger.warning(
+            "web_search.%s provider=%s liveness=%s detail=%s",
+            reason, rung.label, response.liveness.value,
+            response.degraded_detail,
+        )
+        advice = compute_deferral(
+            reason, provider_key=rung.label, cache=cache,
+            detail=response.degraded_detail,
+        )
+        output["deferral"] = advice.to_dict()
+        error = (
+            (
+                "search_liveness_unverified: the search returned zero results "
+                "and a control probe could not show the engine set answering "
+                f"({response.liveness_detail or 'no detail'}) — this is "
+                "UNKNOWN, not absence. Do NOT conclude that no evidence exists."
+            )
+            if probe_failed else
+            (
+                "search_degraded_no_results: the provider reported PARTIAL "
+                f"service ({response.degraded_detail or 'no detail'}) and "
+                "returned zero results — this is UNKNOWN, not absence. Do NOT "
+                "conclude that no evidence exists."
+            )
+        )
+        return _RungOutcome(
+            result=ToolResult(
+                status="failed", error=error, output=output, units=1,
+            ),
+            answered=False, reason=reason, cost_usd=spent, queries=queries,
+            detail=response.degraded_detail,
+        )
+    if response.status is SearchStatus.EMPTY:
+        # Defensive: an UNVERIFIED empty must never leave as a `completed`
+        # count-0 result, which is exactly the shape a planner summarizes as
+        # "no results found". Unreachable while the probe above runs; kept so
+        # no future path can reintroduce the assumed-absence default.
+        logger.warning(
+            "web_search.empty_unverified provider=%s — liveness was not "
+            "measured; refusing to report an unverified empty as a completion",
+            rung.label,
+        )
+        advice = compute_deferral(
+            "search_liveness_unverified", provider_key=rung.label,
+            cache=cache, detail="liveness was never measured",
+        )
+        output["deferral"] = advice.to_dict()
+        return _RungOutcome(
+            result=ToolResult(
+                status="failed",
+                error=(
+                    "search_liveness_unverified: the search returned zero results "
+                    "and engine-set liveness was NOT measured — over a multi-engine "
+                    "meta-search that shape usually means BROKEN, not absent. This "
+                    "is UNKNOWN, not absence."
+                ),
+                output=output,
+                units=1,
+            ),
+            answered=False, reason="search_liveness_unverified",
+            cost_usd=spent, queries=queries,
+        )
+    if response.degraded:
+        logger.warning(
+            "web_search.degraded provider=%s count=%d detail=%s",
+            rung.label, response.count, response.degraded_detail,
+        )
+    # A served search — results, or a liveness-VERIFIED empty. Either way the
+    # provider answered, so the deferral ladder resets.
+    cache.record_success(rung.label)
+    return _RungOutcome(
+        result=ToolResult(status="completed", output=output, units=1),
+        answered=True, reason="ok", cost_usd=spent, queries=queries,
+    )
+
+
 async def web_search_tool(
     call: ToolCall, pack: ActionPack, ctx: ToolContext
 ) -> ToolResult:
-    """Run one query through the resolved search provider; return top results.
+    """Run one query through the resolved provider LADDER; return top results.
 
     ``args``:
       * ``query`` (required) — the search query string (planner-supplied).
       * ``limit`` (optional) — max results, clamped to ``_MAX_SEARCH_RESULTS``.
+      * ``provider`` (optional) — PIN this call to ONE rung of the ladder, by
+        component id (``search.serper.paid``) or by its subprovider segment
+        (``serper``).
 
-    Provider selection and the four honest outcomes are documented in the module
+    Provider selection and the honest outcomes are documented in the module
     docstring. The provider is OPERATOR-owned at every rung; the planner
     supplies only the query.
+
+    ``provider`` DOES NOT WEAKEN THAT. It selects among the rungs the operator
+    already declared on the ToolSpec and can reach nothing else: a pin naming
+    no declared rung is a clean, loud failure, never a silent fall-back to
+    rung 0 and never a way to name an arbitrary component. It exists for the
+    one caller that must escalate on a rung 0 that ANSWERED — the external
+    audit's absence-claim path, where SearXNG's empty is exactly the thing
+    that cannot be believed, and where the generic fallback ladder (which
+    only moves when a rung FAILS) structurally cannot help.
     """
     query = str(call.args.get("query", "")).strip()
     if not query:
@@ -325,18 +720,21 @@ async def web_search_tool(
 
     cfg = _tool_config(pack, "web_search")
     limit = max(1, min(_MAX_SEARCH_RESULTS, int(call.args.get("limit", 5))))
+    pin = str(call.args.get("provider", "") or "").strip()
 
     # The liveness/deferral cache. Injectable off the ToolContext for tests and
     # for a caller that wants an isolated probe budget; the process-wide default
     # otherwise, so every analyst shares ONE verdict and ONE probe.
     cache = getattr(ctx, "search_liveness", None) or DEFAULT_LIVENESS_CACHE
 
-    # ---- resolve the provider (the ladder in the module docstring) ----
+    # ---- resolve rung 0 (the ladder in the module docstring) ----
     route = resolve_tool_search_route(cfg)
     bound = getattr(ctx, "search", None)
-    if route is not None and bound is None:
-        # A DECLARED route the runtime did not bind. Loud, never empty: the
-        # planner must not read "provider missing" as "the web has nothing".
+    fallbacks = list(getattr(ctx, "search_fallbacks", None) or [])
+    if route is not None and bound is None and not fallbacks:
+        # A DECLARED route the runtime did not bind, with nothing below it.
+        # Loud, never empty: the planner must not read "provider missing" as
+        # "the web has nothing".
         logger.warning(
             "web_search.provider_unresolved component=%s source=%s",
             route.component_id, route.source,
@@ -357,136 +755,178 @@ async def web_search_tool(
             ),
             output={"deferral": advice.to_dict()},
         )
-    if bound is not None:
-        handler = bound
+    if bound is not None or (route is not None and fallbacks):
         provider_label = (
             route.component_id if route is not None
             else getattr(bound, "component_id", "") or "runtime-bound"
         )
+        rung0 = _Rung(handler=bound, label=provider_label, route=route)
     else:
         built = await _legacy_endpoint_handler(cfg, limit=limit)
         if isinstance(built, ToolResult):
             return built
-        handler, provider_label = built
+        legacy_handler, provider_label = built
+        rung0 = _Rung(handler=legacy_handler, label=provider_label, route=None)
 
-    # ---- run it ----
+    rungs = _build_ladder(ctx, rung0)
+    if pin:
+        pinned = [r for r in rungs if _rung_matches(pin, r)]
+        if not pinned:
+            # LOUD, never a silent fall-back. A caller that asked for the paid
+            # rung and got rung 0's answer back would believe it had bought a
+            # verifiable empty when it had not — which is the precise error the
+            # rung was bought to prevent.
+            declared = [r.label for r in rungs]
+            logger.warning(
+                "web_search.pin_not_declared pin=%s declared=%s", pin, declared,
+            )
+            return ToolResult(
+                status="failed",
+                error=(
+                    f"search_provider_not_declared: web_search was pinned to "
+                    f"{pin!r}, which is not a declared rung of this pack's "
+                    f"ladder (declared: {declared}) — NO query was issued. "
+                    "This is not an empty result set. Add the component to the "
+                    "web_search ToolSpec's fallback_providers."
+                ),
+                output={"pinned_provider": pin, "declared_rungs": declared},
+            )
+        rungs = pinned
+    # A LADDER exists only when an operator declared one. With a single rung the
+    # loop below runs exactly the single-provider path, and the two ladder-only
+    # output keys are never emitted — that is the byte-identity contract.
+    laddered = len(rungs) > 1
+    log = _LadderLog()
+    budget_account = (
+        str(getattr(ctx, "search_budget_account", "") or "")
+        or str(getattr(call, "budget_account", "") or "system")
+    )
+
     extra_params = cfg.get("params") if isinstance(cfg.get("params"), dict) else None
-    try:
-        response = await handler.search(query, limit=limit, params=extra_params)
-    except TransientSearchFailure as exc:
-        # Retryable class (timeout / 429 / upstream 5xx). One fallback attempt
-        # is the caller's choice, never a loop; today there is no second
-        # provider bound, so this is terminal AND explicit — but DEFERRABLE:
-        # the same query may well succeed on a later tick.
-        logger.warning("web_search.transient provider=%s err=%s", provider_label, exc)
-        advice = compute_deferral(
-            "search_unavailable", provider_key=provider_label, cache=cache,
-            detail=str(exc),
-        )
-        return ToolResult(
-            status="failed", error=f"search_unavailable: {exc!s}",
-            output={"deferral": advice.to_dict()},
-        )
-    except HardSearchFailure as exc:
-        # Already carries its own classified prefix (egress_blocked / HTTP nnn /
-        # "search response not JSON" / misconfiguration). NO deferral: this
-        # class is never retried by contract, and waiting cannot fix a
-        # misconfiguration — it needs an operator.
-        logger.warning("web_search.hard_failure provider=%s err=%s", provider_label, exc)
-        return ToolResult(status="failed", error=str(exc))
-
-    # ---- empty is SUSPECT: measure the engine set before believing it ----
-    # Only a zero-result response that admitted NO degradation needs this. One
-    # bounded control probe through the SAME provider, cached per provider for
-    # a short TTL so N empties in a run cost 1 probe.
-    if response.status is SearchStatus.EMPTY:
-        verdict, detail = await verify_engine_liveness(
-            handler, provider_key=provider_label, cache=cache,
-        )
-        apply_liveness(response, verdict, detail)
-
-    output = response.to_tool_output()
-    output["provider"] = provider_label
-    if route is not None:
-        output["provider_route"] = route.source
-        output["provider_route_class"] = route.route_class
-
-    if response.status is SearchStatus.DEGRADED_EMPTY:
-        # Every hit was lost — either to degradation the provider ADMITTED, or
-        # to a control probe that found the engine set dead/unverifiable. NOT an
-        # empty success (see the module docstring); the detail is carried so the
-        # planner can say WHY, and the deferral tells the caller to come back
-        # later rather than hammer engines that are already refusing.
-        probe_failed = response.liveness in (
-            LivenessVerdict.DEAD, LivenessVerdict.PROBE_FAILED,
-        )
-        reason = (
-            "search_liveness_unverified" if probe_failed
-            else "search_degraded_no_results"
-        )
-        logger.warning(
-            "web_search.%s provider=%s liveness=%s detail=%s",
-            reason, provider_label, response.liveness.value,
-            response.degraded_detail,
-        )
-        advice = compute_deferral(
-            reason, provider_key=provider_label, cache=cache,
-            detail=response.degraded_detail,
-        )
-        output["deferral"] = advice.to_dict()
-        error = (
-            (
-                "search_liveness_unverified: the search returned zero results "
-                "and a control probe could not show the engine set answering "
-                f"({response.liveness_detail or 'no detail'}) — this is "
-                "UNKNOWN, not absence. Do NOT conclude that no evidence exists."
+    total_cost = 0.0
+    last: _RungOutcome | None = None
+    for rung in rungs:
+        if rung.handler is None:
+            detail = (
+                f"declared at {getattr(rung.route, 'source', '?')}, not bound "
+                "on this run"
             )
-            if probe_failed else
-            (
-                "search_degraded_no_results: the provider reported PARTIAL "
-                f"service ({response.degraded_detail or 'no detail'}) and "
-                "returned zero results — this is UNKNOWN, not absence. Do NOT "
-                "conclude that no evidence exists."
+            logger.warning(
+                "web_search.rung_unresolved component=%s source=%s",
+                rung.label, getattr(rung.route, "source", ""),
             )
+            log.record(rung, "unresolved", detail=detail)
+            # The contract (module docstring, "DEFERRAL, NOT RETRY"): an
+            # unresolved DECLARED provider carries a deferral block, on the
+            # single-rung path and on the ladder alike — a rung below rung 0
+            # (2026-09-20: the serper absence rung) must not strip it.
+            advice = compute_deferral(
+                "search_provider_unresolved", provider_key=rung.label,
+                cache=cache, detail=detail,
+            )
+            last = _RungOutcome(
+                result=ToolResult(
+                    status="failed",
+                    error=(
+                        f"search_provider_unresolved: the web_search ToolSpec "
+                        f"routes to {rung.label!r} "
+                        f"({getattr(rung.route, 'source', '?')}) but no search "
+                        "provider is bound on this run — NO query was issued. "
+                        "This is not an empty result set."
+                    ),
+                    output={"deferral": advice.to_dict()},
+                ),
+                answered=False, reason="search_provider_unresolved", detail=detail,
+            )
+            continue
+        # DEFERRAL HOLDS ACROSS RUNGS. A provider inside its backoff window is
+        # SKIPPED, not re-queried — hammering engines that are already refusing
+        # worsens the ban, and that rule does not stop applying just because
+        # there is somewhere else to go. Applied only when a ladder exists: with
+        # one rung there is nowhere to fall to, so skipping would turn "try and
+        # fail honestly" into "do not try", which is strictly worse.
+        if laddered:
+            until = cache.deferred_until(rung.label)
+            if until is not None:
+                detail = f"deferred until {until.isoformat()}"
+                logger.info(
+                    "web_search.rung_deferred provider=%s until=%s",
+                    rung.label, until.isoformat(),
+                )
+                log.record(rung, "deferred", detail=detail)
+                continue
+        # A METERED rung is priced BEFORE it is allowed to spend. Free rungs
+        # (every self-hosted one) never touch the ledger.
+        if rung.metered:
+            decision = await check_paid_rung_budget(
+                pack=pack,
+                ledger=getattr(ctx, "search_cost_ledger", None),
+                budget_account=budget_account,
+                cost_usd=rung.cost_usd_per_query,
+                component_id=rung.label,
+            )
+            if not decision.admitted:
+                logger.warning(
+                    "web_search.paid_rung_refused provider=%s cause=%s detail=%s",
+                    rung.label, decision.cause, decision.detail,
+                )
+                log.record(rung, f"cost_{decision.cause}", detail=decision.detail)
+                last = _RungOutcome(
+                    result=ToolResult(
+                        status="failed",
+                        error=(
+                            f"search_cost_{decision.cause}: the paid rung "
+                            f"{rung.label!r} was NOT queried — {decision.detail} "
+                            "This is a budget refusal, NOT an empty result set: "
+                            "we did not look, so nothing was found or ruled out."
+                        ),
+                    ),
+                    answered=False, reason=f"search_cost_{decision.cause}",
+                    detail=decision.detail,
+                )
+                continue
+
+        outcome = await _run_rung(
+            rung, query=query, limit=limit, extra_params=extra_params, cache=cache,
         )
-        return ToolResult(
-            status="failed", error=error, output=output, units=1,
+        total_cost += outcome.cost_usd
+        log.record(
+            rung, outcome.reason, detail=outcome.detail,
+            queries=outcome.queries, cost_usd=outcome.cost_usd,
         )
-    if response.status is SearchStatus.EMPTY:
-        # Defensive: an UNVERIFIED empty must never leave as a `completed`
-        # count-0 result, which is exactly the shape a planner summarizes as
-        # "no results found". Unreachable while the probe above runs; kept so
-        # no future path can reintroduce the assumed-absence default.
-        logger.warning(
-            "web_search.empty_unverified provider=%s — liveness was not "
-            "measured; refusing to report an unverified empty as a completion",
-            provider_label,
-        )
-        advice = compute_deferral(
-            "search_liveness_unverified", provider_key=provider_label,
-            cache=cache, detail="liveness was never measured",
-        )
-        output["deferral"] = advice.to_dict()
+        last = outcome
+        if outcome.answered and outcome.result is not None:
+            result = outcome.result
+            if laddered:
+                result.output["provider_used"] = rung.label
+                result.output["ladder"] = log.entries
+            # ToolResult is frozen; a free ladder produces the IDENTICAL object
+            # the single-provider path always returned (no rebuild at all).
+            return (
+                _dc_replace(result, cost_usd=round(total_cost, 6))
+                if total_cost else result
+            )
+
+    # Nothing answered. Report the LAST rung's failure verbatim — its error
+    # string is the one the pack rules and the planner already know how to
+    # read — and attach the ladder so an operator can see every rung that was
+    # tried, skipped or refused, and why.
+    if last is None or last.result is None:  # pragma: no cover — rungs is non-empty
         return ToolResult(
             status="failed",
             error=(
-                "search_liveness_unverified: the search returned zero results "
-                "and engine-set liveness was NOT measured — over a multi-engine "
-                "meta-search that shape usually means BROKEN, not absent. This "
-                "is UNKNOWN, not absence."
+                "search_provider_unresolved: no search rung was runnable on this "
+                "run — NO query was issued. This is not an empty result set."
             ),
-            output=output,
-            units=1,
         )
-    if response.degraded:
-        logger.warning(
-            "web_search.degraded provider=%s count=%d detail=%s",
-            provider_label, response.count, response.degraded_detail,
-        )
-    # A served search — results, or a liveness-VERIFIED empty. Either way the
-    # provider answered, so the deferral ladder resets.
-    cache.record_success(provider_label)
-    return ToolResult(status="completed", output=output, units=1)
+    result = last.result
+    if laddered:
+        result.output["provider_used"] = ""
+        result.output["ladder"] = log.entries
+    return (
+        _dc_replace(result, cost_usd=round(total_cost, 6))
+        if total_cost else result
+    )
 
 
 def register_web_access_tools(registry: "Any") -> None:
@@ -499,6 +939,11 @@ __all__ = [
     "WEB_ACCESS_PACK_ID",
     "WEB_ACCESS_TOOLS",
     "register_web_access_tools",
+    "FETCH_OUTCOME_BLOCKED",
+    "FETCH_OUTCOME_ERROR",
+    "FETCH_OUTCOME_OK",
+    "FETCH_OUTCOME_TIMED_OUT",
+    "WEB_FETCH_USER_AGENT",
     "web_fetch_tool",
     "web_search_tool",
 ]

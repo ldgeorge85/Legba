@@ -149,7 +149,18 @@ def _preserve_analyst_kind_registry():
 #: Exemptions, checked FIRST: skip reasons that are NOT infra gates even
 #: when they mention infra nouns. Permanent test retirements, explicit
 #: opt-in env gates (`LEGBA_TEST_X=1 not set`), missing external creds /
-#: endpoints, optional libraries, and host-CLI capability probes.
+#: endpoints, optional libraries, host-CLI capability probes, and host
+#: resource CONFLICTS (below).
+#:
+#: The conflict category (2026-09-26) is the inverse of an infra gate and
+#: was the missing one. An infra gate says a dependency is DOWN; a conflict
+#: says the canonical rig is UP and is holding the resource — port 6090 is
+#: bound because the production runtime container has it, which is exactly
+#: the state the rig is supposed to be in. Escalating that tells the
+#: operator to "fix the rig" by stopping the runtime, which is backwards,
+#: and it is how three tests/runtime/test_critic_descriptor_e2e.py skips sat
+#: in the suite's known-failure baseline for a week. "bound"/"held" is the
+#: opposite claim from "not reachable", so this cannot swallow a real gate.
 _STRICT_EXEMPT_REASON_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     re.compile(p, re.IGNORECASE)
     for p in (
@@ -160,6 +171,7 @@ _STRICT_EXEMPT_REASON_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"not installed",                        # optional library (dspy, bigquery)
         r"is installed",                         # inverse-gate (negative-case tests)
         r"docker (not on PATH|version lacks)",   # host CLI capability probe
+        r"\bport \d+ is (already )?(bound|held|in use)\b",  # host resource conflict
     )
 )
 

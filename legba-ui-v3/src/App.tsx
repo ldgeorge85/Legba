@@ -57,6 +57,9 @@ import {
   type WorkspaceId,
 } from '@/lib/workspaces'
 import { WorkspaceBar } from '@/components/WorkspaceBar'
+import { findMission, isMissionId, type MissionId } from '@/lib/missions'
+import { OPEN_CROSS_FRAMING_EVENT } from '@/lib/crossFramingLink'
+import { applyMission } from '@/lib/applyMission'
 import { applyInvestigateLayout, applyInvestigateAnalystLayout } from '@/lib/investigateLayout'
 import { toggleDebugMode } from '@/lib/debugMode'
 import { useSelection, type SelectionKind } from '@/state/selection'
@@ -65,7 +68,15 @@ import {
   installReadTelemetryLifecycle,
   setTelemetryWorkspace,
 } from '@/lib/readTelemetry'
-import { readWorkspaceHash, useShareState, writeWorkspaceHash } from '@/lib/shareState'
+import {
+  readMissionHash,
+  readWorkspaceHash,
+  useShareState,
+  writeMissionHash,
+  writeWorkspaceHash,
+} from '@/lib/shareState'
+import { installDeskScopeBridge } from '@/lib/scopeFromReport'
+import { useScope } from '@/state/scope'
 import type { PaletteRecord } from '@/components/usePaletteRecords'
 
 /**
@@ -254,6 +265,17 @@ const TAB_COMPONENTS = { anchor: AnchorTab }
  */
 export const ANCHOR_KINDS: ReadonlySet<PanelKind> = new Set<PanelKind>([])
 
+/**
+ * The Cross-framing deep link.
+ *
+ * The event name is IMPORTED from `lib/crossFramingLink.ts` — the one authority
+ * for it — and re-exported here so the shell's test dispatches the real name
+ * rather than a copy that could drift. The kind is a `PanelKind` now that the
+ * panel is registered, so a rename fails at `tsc` rather than at runtime.
+ */
+export { OPEN_CROSS_FRAMING_EVENT }
+export const CROSS_FRAMING_KIND: PanelKind = 'analysis.cross_framing'
+
 export function App() {
   const mode = currentMode()
   const { registrations, isLoading, isError, error } = useRegistry(mode)
@@ -263,9 +285,24 @@ export function App() {
   const [savedLayout, setSavedLayout] = useState(() => hasCustomLayout(mode))
   // The active stance (design §2). A shared link can carry it (`#ws=`), so the
   // initial value is read from the hash and falls back to the landing.
+  // The MISSION the reader is on (wave-P design pass). A mission is a stance
+  // plus its target scope, its temporal window and its map layers
+  // (`lib/missions.ts`), and a link can carry it as `#mission=`.
+  const [mission, setMission] = useState<MissionId | null>(() => {
+    const fromHash = readMissionHash()
+    return fromHash && isMissionId(fromHash) ? fromHash : null
+  })
+  // What applying it actually did to the scope — including "no desk selected,
+  // so the wall was left as it was". Rendered on the bar; never swallowed.
+  const [missionNote, setMissionNote] = useState<string | null>(null)
   const [workspace, setWorkspace] = useState<WorkspaceId>(() => {
     const fromHash = readWorkspaceHash()
-    return fromHash && isWorkspaceId(fromHash) ? fromHash : LANDING_WORKSPACE
+    if (fromHash && isWorkspaceId(fromHash)) return fromHash
+    // `#mission=` alone names a stance: the mission's own. A link that carries
+    // the job does not also have to spell out the arrangement.
+    const m = readMissionHash()
+    if (m && isMissionId(m)) return findMission(m)!.workspace
+    return LANDING_WORKSPACE
   })
   const seededRef = useRef(false)
   // The stance whose layout the dock currently holds — read by the unload
@@ -273,8 +310,15 @@ export function App() {
   const workspaceRef = useRef<WorkspaceId>(workspace)
   workspaceRef.current = workspace
 
-  // Shareable state — the selection ⇄ URL hash (addressability without a router).
+  // Shareable state — selection AND scope ⇄ URL hash (addressability, no router).
   useShareState()
+
+  // SCOPE ≠ FOCUS (WORKSTATION_V2_FLOW_DESIGN §3). One subscription in the shell
+  // mirrors deliberate DESK selections into the scope store, so "pick a desk →
+  // the feed/map/timeline filter to it" holds no matter which surface the desk
+  // was picked from — and, unlike the `seedDeskFilter` it replaces, survives
+  // every subsequent row click. See `lib/scopeFromReport.installDeskScopeBridge`.
+  useEffect(() => installDeskScopeBridge(), [])
 
   // READ TELEMETRY (D2e) — the drain hooks. Queued events flush on a timer;
   // this makes sure the LAST batch of a morning is not the one that gets lost,
@@ -397,10 +441,82 @@ export function App() {
       workspaceRef.current = next
       setWorkspace(next)
       writeWorkspaceHash(next)
+      // A mission describes a stance AND its aperture. Walking off that stance
+      // by tab or Alt+N leaves the mission's name no longer true of the wall,
+      // so it is dropped rather than left advertising a job you are not on.
+      // The scope, the window and the layers it set are NOT rolled back — they
+      // are the reader's posture now, and undoing them would be the surprise.
+      setMission((cur) => {
+        if (cur && findMission(cur)?.workspace !== next) {
+          writeMissionHash(null)
+          setMissionNote(null)
+          return null
+        }
+        return cur
+      })
       enterWorkspace(next)
     },
     [dockApi, mode, enterWorkspace],
   )
+
+  // CHOOSE A MISSION (wave-P design pass) — the stance, then the three axes a
+  // stance never carried. The stance switch goes through `onSwitchWorkspace` so
+  // "switching never destroys" is not forked: the outgoing arrangement is still
+  // serialized into its own slot first. Then `applyMission` sets the scope (so
+  // the Consult tile it opens comes up already pinned), moves the map's and the
+  // scrubber's window, sets the layers the job claims, and opens the tiles the
+  // stance's seed does not carry.
+  const onChooseMission = useCallback(
+    (id: MissionId, opts: { skipScope?: boolean } = {}) => {
+      if (!dockApi) return
+      const def = findMission(id)
+      if (!def) return
+      onSwitchWorkspace(def.workspace)
+      // Written unconditionally: `onSwitchWorkspace` is a no-op when the reader
+      // is already standing on the mission's stance, and a shared link must
+      // carry the arrangement either way.
+      writeWorkspaceHash(def.workspace)
+      const applied = applyMission(
+        def,
+        (kind, position) =>
+          // Re-anchor rather than hand Dockview a position naming a tile it
+          // never saw — the same rule `seedWorkspace` keeps for a mode-gated
+          // reference panel, which here also covers a saved arrangement the
+          // reader closed the reference out of.
+          addSingleton(
+            dockApi,
+            kind,
+            mode,
+            position && dockApi.getPanel(position.referencePanel) ? position : undefined,
+          ),
+        opts,
+      )
+      setMission(id)
+      setMissionNote(`${def.label} — ${applied.scope.note}`)
+      writeMissionHash(id)
+      // No new telemetry event kind: `enterWorkspace` already emitted
+      // `workspace_open` for the stance this mission mounts, and minting a
+      // vocabulary the rollup does not know would be a silent write of an
+      // event nothing can read back.
+    },
+    [dockApi, mode, onSwitchWorkspace],
+  )
+
+  // The `#mission=` deep-link, applied ONCE after the boot seed. It runs in its
+  // own effect (rather than inside the seed effect) because `onChooseMission`
+  // is declared below that effect and would be in its temporal dead zone.
+  //
+  // SCOPE IS SUPPRESSED when the link also carries `#scope=`: `useShareState`
+  // restored that address a moment ago, the sender chose it deliberately, and a
+  // mission's default aperture must not clear it on the way in.
+  const missionBootRef = useRef(false)
+  useEffect(() => {
+    if (!dockApi || missionBootRef.current) return
+    missionBootRef.current = true
+    const id = readMissionHash()
+    if (!id || !isMissionId(id)) return
+    onChooseMission(id, { skipScope: useScope.getState().scope != null })
+  }, [dockApi, onChooseMission])
 
   // Discard this stance's saved layout and re-seed its curated default —
   // the design's "Reset this workspace" (Alt+Shift+R). Scoped to ONE stance:
@@ -422,12 +538,35 @@ export function App() {
           e.preventDefault()
           onResetWorkspace()
         }
+        // Alt+Shift+← / → walk the SCOPE trail — "what the wall was about
+        // before this", a coarser and much shorter history than the focus one.
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault()
+          useScope.getState().back()
+        }
+        if (e.key === 'ArrowRight') {
+          e.preventDefault()
+          useScope.getState().forward()
+        }
         return
       }
       if (e.key === '`') {
         e.preventDefault()
         const i = WORKSPACES.findIndex((w) => w.id === workspaceRef.current)
         onSwitchWorkspace(WORKSPACES[(i + 1) % WORKSPACES.length].id)
+        return
+      }
+      // Alt+← / Alt+→ walk the FOCUS trail (design §3 enabler 3). The store
+      // shipped `back()` only, with one consumer inside the Inspector; the
+      // drill trail is navigation, so it gets a binding in the shell.
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        useSelection.getState().back()
+        return
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        useSelection.getState().forward()
         return
       }
       const digit = Number(e.key)
@@ -505,6 +644,38 @@ export function App() {
     window.addEventListener('legba:open-optimizer-diff', onOpenDiff)
     return () => window.removeEventListener('legba:open-optimizer-diff', onOpenDiff)
   }, [onOpenPanel])
+
+  // The same bridge for Cross-framing. `lib/crossFramingLink.ts` parks the
+  // claim on `window` as a replayable slot AND fires this event; the slot serves
+  // the first-open case (a `CustomEvent` with no listener is lost) and this
+  // listener materialises the tile so that first click actually opens it, with
+  // the panel draining the parked subject on mount. The event name is the
+  // module's own export and the kind is a registered `PanelKind`, so neither
+  // can drift from the panel silently.
+  useEffect(() => {
+    function onOpenCrossFraming() {
+      onOpenPanel(CROSS_FRAMING_KIND, null)
+    }
+    window.addEventListener(OPEN_CROSS_FRAMING_EVENT, onOpenCrossFraming)
+    return () => window.removeEventListener(OPEN_CROSS_FRAMING_EVENT, onOpenCrossFraming)
+  }, [onOpenPanel])
+
+  // P-A — the Target Overview's "read as page" opens the desk brief page BOUND
+  // to that desk. Same bridge shape as the optimizer diff above, and the same
+  // reason: a panel cannot mount a sibling panel, and the shell must not have
+  // to know which panels carry which cross-links. `addBound` mints the
+  // synthetic per-target registration, so the tile dedupes with a sidebar or
+  // palette open of the same kind on the same desk.
+  useEffect(() => {
+    function onOpenDeskBrief(e: Event) {
+      if (!dockApi) return
+      const targetId = (e as CustomEvent<{ targetId?: string }>).detail?.targetId
+      if (!targetId) return
+      addBound(dockApi, 'target.desk_brief_page', targetId, mode)
+    }
+    window.addEventListener('legba:open-desk-brief', onOpenDeskBrief)
+    return () => window.removeEventListener('legba:open-desk-brief', onOpenDeskBrief)
+  }, [dockApi, mode])
 
   // Apply a named layout preset — clears the workspace and re-seeds it
   // through the same singleton opener the boot grid uses, so preset panels
@@ -624,6 +795,9 @@ export function App() {
             active={workspace}
             onSwitch={onSwitchWorkspace}
             onReset={onResetWorkspace}
+            activeMission={mission}
+            missionNote={missionNote}
+            onChooseMission={onChooseMission}
           />
           <div className="min-h-0 flex-1">
             <DockviewReact
@@ -637,11 +811,11 @@ export function App() {
       </div>
       <StatusBar
         mode={mode}
-        panelCount={visibleRegistrations.length}
         authenticated={getToken() != null}
         lastRefresh={lastRefresh}
         errorText={errorText}
         onOpenExport={() => onOpenPanel('system.report_export', null)}
+        onOpenPanel={(kind) => onOpenPanel(kind, null)}
       />
       <CommandPalette
         open={paletteOpen}

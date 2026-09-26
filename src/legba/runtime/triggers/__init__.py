@@ -21,6 +21,9 @@ Layers (inner → outer):
                         the fire anchor prevents double-dispatch.
   * :mod:`.dispatch`  — ``AnalystTriggerRunner`` protocol + a deterministic
                         in-process runner (belt-and-braces LLM-method refusal).
+                        A fire whose invoke could not complete because the
+                        target actor was already inside a turn is ``coalesced``,
+                        not ``failed`` — see ``DispatchCoalesced``.
   * :mod:`.coalescer` — the I/O-bearing mechanism (testable against the dev rig
                         with no loop): signal → dirty (dedup-aware) → decide →
                         CAS-claim → dispatch.
@@ -34,12 +37,19 @@ separate batched runner (out of P-10 scope), wired the same way.
 
 from __future__ import annotations
 
-from .coalescer import Coalescer, PolicyResolver, canonical_id_of, severity_of
+from .coalescer import (
+    Coalescer,
+    PolicyResolver,
+    canonical_id_of,
+    is_live_origin,
+    severity_of,
+)
 from .dispatch import (
     ActorTriggerRunner,
     AnalystTriggerRunner,
     DeterministicTriggerRunner,
     DeterministicWork,
+    DispatchCoalesced,
     TriggerFire,
     TriggerRunResult,
     is_llm_method,
@@ -76,6 +86,7 @@ __all__ = [
     "DeterministicTriggerRunner",
     "ActorTriggerRunner",
     "DeterministicWork",
+    "DispatchCoalesced",
     "TriggerFire",
     "TriggerRunResult",
     "is_llm_method",
@@ -83,6 +94,7 @@ __all__ = [
     "Coalescer",
     "PolicyResolver",
     "canonical_id_of",
+    "is_live_origin",
     "severity_of",
     # engine
     "TriggerEngine",

@@ -61,10 +61,54 @@ describe('selection store', () => {
     expect(useSelection.getState().history).toEqual([])
   })
 
-  it('caps history at MAX_HISTORY (12)', () => {
+  it('caps history at MAX_HISTORY (50)', () => {
+    // RAISED 12 → 50 (WORKSTATION_V2_FLOW_DESIGN §3 enabler 3). 12 was a cap on
+    // a store with one consumer inside the Inspector; with `Alt+←`/`Alt+→`
+    // bound in the shell the trail is NAVIGATION, and a morning's drilling
+    // routinely exceeds a dozen hops. 50 is what v2 kept.
     const { select } = useSelection.getState()
     for (let i = 0; i < 20; i++) select({ kind: 'finding', id: `f${i}` })
-    expect(useSelection.getState().history.length).toBeLessThanOrEqual(12)
+    expect(useSelection.getState().history.length).toBe(19)
+    for (let i = 20; i < 80; i++) select({ kind: 'finding', id: `f${i}` })
+    expect(useSelection.getState().history.length).toBe(50)
+    // The cap drops the OLDEST hops, never the most recent ones.
+    expect(useSelection.getState().history.at(-1)?.id).toBe('f78')
+  })
+
+  it('forward re-enters a selection `back()` stepped out of', () => {
+    const { select } = useSelection.getState()
+    select({ kind: 'finding', id: 'a' })
+    select({ kind: 'finding', id: 'b' })
+    select({ kind: 'finding', id: 'c' })
+
+    useSelection.getState().back()
+    expect(useSelection.getState().selection?.id).toBe('b')
+    useSelection.getState().forward()
+    expect(useSelection.getState().selection?.id).toBe('c')
+  })
+
+  it('a fresh select DROPS the forward stack — a new branch, as a browser does', () => {
+    const { select } = useSelection.getState()
+    select({ kind: 'finding', id: 'a' })
+    select({ kind: 'finding', id: 'b' })
+    useSelection.getState().back()
+    expect(useSelection.getState().future.map((s) => s.id)).toEqual(['b'])
+    select({ kind: 'finding', id: 'c' })
+    expect(useSelection.getState().future).toEqual([])
+  })
+
+  it('the vocabulary has a word for a report and for a journal entry', () => {
+    // Design §0: a report IS a `finding` row, and a journal entry could not be
+    // selected at all — so "click a report and everything follows it" was
+    // inexpressible rather than merely unimplemented.
+    expect(selectionKindOf('report')).toBe('report')
+    expect(selectionKindOf('journal_entry')).toBe('journal_entry')
+    expect(selectionKindOf('journal')).toBe('journal_entry')
+  })
+
+  it('carries the record’s own instant on the preview when the caller has it', () => {
+    selectRow('finding', 'f1', 'F1', { origin: 'timeline', preview: { ts: 1_700_000 } })
+    expect(useSelection.getState().selection?.preview?.ts).toBe(1_700_000)
   })
 
   it('onSelectionChange fires on every change', () => {

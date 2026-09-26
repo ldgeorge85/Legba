@@ -338,8 +338,11 @@ async def test_empty_window_is_valid_envelope(client: AsyncClient):
     assert r.status_code == 200
     body = r.json()
     assert body["items"] == []
-    assert body["counts"] == {"fact": 0, "situation": 0, "finding": 0}
-    assert body["truncated"] == {"fact": False, "situation": False, "finding": False}
+    # V3/P6 — `event` is the fourth ranged kind (bounded occurrences).
+    assert body["counts"] == {
+        "event": 0, "fact": 0, "situation": 0, "finding": 0}
+    assert body["truncated"] == {
+        "event": False, "fact": False, "situation": False, "finding": False}
 
 
 # ---------------------------------------------------------------------------
@@ -352,29 +355,45 @@ async def test_empty_window_is_valid_envelope(client: AsyncClient):
 async def test_ranged_windows_open_and_closed(client: AsyncClient, timeline_app):
     _, _, pg = timeline_app
     now = datetime.now(timezone.utc)
+    # UNIQUE desk — same discipline test_target_filter_scopes_items and
+    # test_window_excludes_stale_rows below already use, and for the same
+    # reason: the migrated DB is SESSION-shared, and an unscoped `/timeline`
+    # query is not just "noisier" with other tests' rows mixed in, it is
+    # capped (timeline_api.KIND_CAP = 300/kind, newest start_at first). At
+    # whole-suite scale enough OTHER recent findings exist that this test's
+    # OWN finding can be pushed out of the top 300 and silently absent from
+    # `items` — surfacing as `KeyError` on `items[str(finding)]` under
+    # shuffled order (09-05 hygiene fix; reproduced deterministically by
+    # inserting 305 unrelated recent findings ahead of this test). Scoping
+    # every insert AND the query itself to one target_id makes the read a
+    # statement about only this test's own rows, cap included.
+    desk = f"country_tl_ranged_{uuid4().hex[:8]}"
 
     # Open fact: valid_from set, valid_until NULL -> end=None (live window).
     open_fact = await _insert_fact(
-        pg, subject="Open", valid_from=now - timedelta(days=2),
+        pg, subject="Open", valid_from=now - timedelta(days=2), target_id=desk,
     )
     # Closed fact: valid_until inside the window -> end carried verbatim.
     closed_until = now - timedelta(days=1)
     closed_fact = await _insert_fact(
         pg, subject="Closed", valid_from=now - timedelta(days=5),
-        valid_until=closed_until,
+        valid_until=closed_until, target_id=desk,
     )
     # Resolved situation: end = last_event_at (no valid_until).
     le = now - timedelta(hours=6)
     sit = await _insert_situation(
         pg, name="Resolved sit", status_val="resolved",
-        produced_at=now - timedelta(days=3), last_event_at=le,
+        produced_at=now - timedelta(days=3), last_event_at=le, target_id=desk,
     )
     # Open finding (current head): superseded_at NULL -> end=None.
     finding = await _insert_finding(
         pg, title="Live finding", produced_at=now - timedelta(days=1),
+        target_id=desk,
     )
 
-    r = await client.get("/api/v1/v3/timeline", params={"days": 30})
+    r = await client.get(
+        "/api/v1/v3/timeline", params={"target_id": desk, "days": 30},
+    )
     assert r.status_code == 200
     body = r.json()
     items = _by_id(body)
@@ -399,16 +418,28 @@ async def test_ranged_windows_open_and_closed(client: AsyncClient, timeline_app)
 async def test_supersession_edge_is_surfaced(client: AsyncClient, timeline_app):
     _, _, pg = timeline_app
     now = datetime.now(timezone.utc)
+    # UNIQUE desk — see test_ranged_windows_open_and_closed's comment above:
+    # an unscoped query is capped at timeline_api.KIND_CAP (300) findings,
+    # newest first, so at whole-suite scale this test's own two findings can
+    # be pushed out of the top 300 by unrelated ones and go missing from
+    # `items`, which is exactly the KeyError this file's 09-05 hygiene fix
+    # closes (reproduced deterministically with 305 unrelated inserts ahead
+    # of this test).
+    desk = f"country_tl_supersede_{uuid4().hex[:8]}"
 
     head = await _insert_finding(
         pg, title="Superseding head", produced_at=now - timedelta(hours=2),
+        target_id=desk,
     )
     superseded = await _insert_finding(
         pg, title="Old finding", produced_at=now - timedelta(days=2),
         superseded_by=head, superseded_at=now - timedelta(hours=2),
+        target_id=desk,
     )
 
-    r = await client.get("/api/v1/v3/timeline", params={"days": 30})
+    r = await client.get(
+        "/api/v1/v3/timeline", params={"target_id": desk, "days": 30},
+    )
     items = _by_id(r.json())
     # The superseded row points at its replacement (the chain edge) + closes.
     assert items[str(superseded)]["superseded_by"] == str(head)

@@ -38,6 +38,7 @@ import { selectRow, useSelection } from '@/state/selection'
 import {
   KIND_COLORS,
   buildLineageElements,
+  isLineageRootKind,
   kindColor,
   presentRowKinds,
   toRowKind,
@@ -129,10 +130,20 @@ export default function TargetGraphPanel({ registration, scope }: PanelProps) {
   // Redesign Move 2: re-root the graph from the shared selection store
   // (replaces the legacy `legba:open-lineage` window listener). `instanceKey`
   // carries the true substrate kind when the cross-room kind was coerced.
+  //
+  // Re-root ONLY on a kind `/lineage/{kind}/{id}` can actually serve. The
+  // selection store's kinds are the ROOM's kinds (`target`, `entity`,
+  // `source`, `analyst`, …), not substrate row kinds, and `toRowKind` coerces
+  // every one it doesn't know to `'finding'` — so selecting a country desk
+  // used to fire `GET /lineage/finding/<target-uuid>`, a walk that cannot
+  // resolve, and the panel threw away its working root for a 404 on every
+  // click. A selection this endpoint can't root at is not an error: the graph
+  // simply keeps the root it has, which is the one the operator was reading.
   const selection = useSelection((s) => s.selection)
   useEffect(() => {
     if (!selection) return
     const rawKind = selection.instanceKey ?? selection.kind
+    if (!isLineageRootKind(rawKind)) return
     setRoot({ kind: toRowKind(rawKind), id: selection.id })
   }, [selection])
 

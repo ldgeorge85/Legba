@@ -23,6 +23,7 @@ scope:
   languages: [en]
   tags: [news, world, canada, wave_a]
   source_class: reporting
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

@@ -48,6 +48,7 @@ scope:
   languages: [en]
   tags: [push, discord, osint, community]
   source_class: analysis
+  access_class: restricted          # Wave-E — never-bound generic adapter; no concrete source to review terms for — fail-closed until classified at activation
 
 acquisition: push
 

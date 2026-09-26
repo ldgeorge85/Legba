@@ -59,6 +59,7 @@ scope:
   languages: [en]
   tags: [news, events, geopolitical, structured, global, conflict]
   source_class: reporting          # news-derived structured event stream (same class as gdelt_query)
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

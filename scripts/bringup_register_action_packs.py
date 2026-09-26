@@ -46,6 +46,15 @@ TO_REGISTER = [
     # each tool writes ONLY a pending journal_proposals row, NEVER a live table.
     # Granted to BOTH journal tiers (journal_assessor + journal_consolidator).
     ("action_pack", "action_pack_journal_propose.yaml", "journal_propose"),
+    # R-A (research program) — the OUTBOUND RESEARCH write path. One tool,
+    # `web_evidence`, which searches the open web and LANDS what it keeps as
+    # ordinary `signals` rows tagged with `retrieval_origin`. A separate pack
+    # from `web_access` on purpose: web_access is read-only by contract and its
+    # governor's `budget_account` is shared by every caller (the standing
+    # auditor among them), so a research money cap could not live there.
+    # Gated at runtime by LEGBA_RESEARCH_EVIDENCE (default `off` — the tool is
+    # granted-but-refuses until an operator opens it).
+    ("action_pack", "action_pack_research.yaml", "research"),
 ]
 
 

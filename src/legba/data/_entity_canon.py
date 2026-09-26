@@ -85,6 +85,7 @@ from __future__ import annotations
 import html
 import re
 from functools import lru_cache
+from typing import Sequence
 
 try:
     import pycountry
@@ -1716,24 +1717,24 @@ def _direction_probe_tokens(name: str) -> list[str]:
     return [t for t in (tok.strip(_ORG_TOKEN_STRIP) for tok in lo.split()) if t]
 
 
-def differs_by_direction(name_a: str, name_b: str) -> bool:
-    """True when the two surfaces are distinguished by a DIRECTION token.
+def differs_by_direction_tokens(ta: Sequence[str], tb: Sequence[str]) -> bool:
+    """The ONE implementation of the DIRECTION-token comparison.
 
-    The gate the W3-C census earned: 30 of the 726 pairs the V-G6 phonetic
-    predicate accepts are opposing compass directions on an identical stem, and
-    all 30 are guaranteed-wrong merges.
+    :func:`differs_by_direction` tokenizes both surfaces and delegates here;
+    a caller that already holds each surface's probe tokens — the P1 tower
+    matcher's per-row precomputation, which used to re-tokenize both sides on
+    EVERY pairwise call across an O(members x mentions) cross product —
+    passes them straight in and skips the re-tokenize. Same verdict either
+    way; this is the whole predicate, not a fast path with different
+    semantics.
 
     Positional when the two token vectors are the same length — which is the
-    only case the V-G6 predicate can produce, since it requires equal token
-    counts — so a differing token is compared against the token that actually
-    stands opposite it. For unequal lengths (a caller outside that predicate)
+    only case the V-G6 phonetic predicate can produce, since it requires
+    equal token counts — so a differing token is compared against the token
+    that actually stands opposite it. For unequal lengths (any other caller)
     it falls back to comparing the multiset of direction tokens each surface
     carries, which is the same question asked without an alignment.
-
-    Never raises; a blank surface simply carries no direction tokens.
     """
-    ta = _direction_probe_tokens(name_a)
-    tb = _direction_probe_tokens(name_b)
     if len(ta) == len(tb):
         return any(
             x != y and (x in DIRECTIONAL_TOKENS or y in DIRECTIONAL_TOKENS)
@@ -1741,6 +1742,22 @@ def differs_by_direction(name_a: str, name_b: str) -> bool:
         )
     return sorted(t for t in ta if t in DIRECTIONAL_TOKENS) != sorted(
         t for t in tb if t in DIRECTIONAL_TOKENS
+    )
+
+
+def differs_by_direction(name_a: str, name_b: str) -> bool:
+    """True when the two surfaces are distinguished by a DIRECTION token.
+
+    The gate the W3-C census earned: 30 of the 726 pairs the V-G6 phonetic
+    predicate accepts are opposing compass directions on an identical stem,
+    and all 30 are guaranteed-wrong merges. See
+    :func:`differs_by_direction_tokens` for the comparison itself — this
+    function only tokenizes both sides and delegates.
+
+    Never raises; a blank surface simply carries no direction tokens.
+    """
+    return differs_by_direction_tokens(
+        _direction_probe_tokens(name_a), _direction_probe_tokens(name_b)
     )
 
 
@@ -2240,6 +2257,7 @@ __all__ = [
     "is_known_org_surface",
     "DIRECTIONAL_TOKENS",
     "differs_by_direction",
+    "differs_by_direction_tokens",
     "leads_with_direction",
     "COUNTRY_CLASS",
     "ORGANIZATION_CLASS",

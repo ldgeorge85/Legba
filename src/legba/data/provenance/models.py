@@ -644,8 +644,17 @@ class JournalPayload(BaseModel):
     # ('lens_diff'). Both ride this exact JournalPayload contract + verify floor.
     # (The chronicle build hit exactly this Literal: an unwidened list rejected
     # the new kind at validation — widen it BEFORE the write path can produce it.)
+    # 'inquiry' / 'crossroads' = the Program 5 STATEFUL tier
+    # (planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §2): a standing
+    # investigation carrying a ledger across cycles, written by the `inquiry`
+    # KIND (not by journal_assessor) but riding this exact payload contract,
+    # this verify floor and the same off-chain derived_from. `crossroads` is the
+    # one fixed-mandate descriptor on that kind (§5). Same Literal-widen lesson
+    # the chronicle and the lenses both hit: widen BEFORE the write path can
+    # produce the kind, or validation rejects the row.
     entry_kind: Literal[
-        "entry", "consolidation", "chronicle", "lens", "lens_diff"
+        "entry", "consolidation", "chronicle", "lens", "lens_diff",
+        "inquiry", "crossroads",
     ] = "entry"
     title: str = Field(min_length=1, max_length=2048)
     # The narrative (markdown, with inline [[ref:<uuid>]] citation markers).
@@ -713,3 +722,92 @@ class NexusPayload(BaseModel):
     source_signal_ids: list[UUID] = Field(default_factory=list)
     data: dict[str, Any] = Field(default_factory=dict)
     kind_marker: Literal["nexus"] = "nexus"
+
+
+class EventSignalLinkPayload(BaseModel):
+    """One ``signal_event_links`` row carried on an ``EventPayload`` (V3/P0).
+
+    ``linked_at`` is REQUIRED and is EVIDENCE time — the signal's own
+    ``fetched_at``, never the write's wall clock. The lifecycle FSM's silence
+    clocks run on ``max(linked_at)``, so a writer that does not know the
+    evidence time must not invent one (the column deliberately carries no
+    default in 0202). The three source axes are denormalized at link time so
+    an event's cross-class composition is one query, never a four-table join.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    signal_id: UUID
+    linked_at: datetime
+    relevance: float = Field(default=1.0, ge=0.0, le=1.0)
+    source_class: Literal[
+        "reporting", "analysis", "official", "state_media"
+    ] = "reporting"
+    source_kind: str = Field(default="", max_length=128)
+    source_id: str = Field(default="", max_length=256)
+
+
+class EventEntityLinkPayload(BaseModel):
+    """One ``event_entity_links`` row carried on an ``EventPayload`` (V3/P0).
+
+    ``entity_id`` is the resolved profile UUID — never the name string (the
+    0143 id-keyed discipline; merges repoint through
+    ``fold_event_entity_links``). ``derived_from`` carries the signal ids that
+    motivated the link.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    entity_id: UUID
+    role: Literal[
+        "actor", "target", "location", "observer", "victim", "mediator"
+    ] = "actor"
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    derived_from: list[UUID] = Field(default_factory=list)
+
+
+class EventPayload(BaseModel):
+    """Mirrors the hot columns on the ``events`` table (DATA MODEL V3 / P0).
+
+    An event is a bounded occurrence evidenced by signals — NOT a situation
+    (a persistent frame composed of findings). ``event_signature`` +
+    ``analyst_id`` is the upsert key: the signature is minted by the producer
+    (``events.signature.event_signature`` — the clusterer live, the SQL twin
+    in the backfill) and carried here, so the write path never re-derives the
+    identity the producer measured.
+
+    ``lifecycle_state`` is deliberately NOT on the payload: a write-path event
+    is born ``emerging`` and the ledger owns every transition thereafter.
+    ``summary`` is prose and NEVER evidence — every claim chains to a signal
+    through ``signal_event_links``.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    event_signature: str = Field(min_length=1, max_length=2048)
+    title: str = Field(min_length=1, max_length=2048)
+    summary: str = Field(default="", max_length=8192)
+    category: str = Field(default="", max_length=256)
+    event_type: Literal[
+        "incident", "development", "shift", "threshold"
+    ] = "incident"
+    severity: Literal[
+        "critical", "high", "medium", "low", "routine"
+    ] = "medium"
+    time_start: datetime | None = None
+    time_end: datetime | None = None
+    geo: list[str] = Field(default_factory=list)
+    geo_lat: float | None = None
+    geo_lon: float | None = None
+    locations: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    signal_count: int = Field(default=0, ge=0)
+    distinct_source_count: int = Field(default=0, ge=0)
+    oversized: bool = False
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
+    source_method: Literal["clustering", "tower", "manual"] = "clustering"
+    signals: list[EventSignalLinkPayload] = Field(default_factory=list)
+    entities: list[EventEntityLinkPayload] = Field(default_factory=list)
+    data: dict[str, Any] = Field(default_factory=dict)
+    kind_marker: Literal["event"] = "event"

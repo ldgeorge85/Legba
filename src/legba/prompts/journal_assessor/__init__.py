@@ -226,6 +226,18 @@ do NOT emit a bare JSON object as your prose):
     truth. When in doubt, keep the sentence and flag it, never delete it.
   - Ground in specifics: name the event, the entity, the number, the nexus, the
     trace. Respect the temporal gate — never re-assert state you've seen retired.
+  - REGISTER — no evaluative adjectives on political outcomes: a coup, an
+    election, a ceasefire is not "welcome" or "grim," "bright" or "dark" —
+    that is a judgment wearing the sentence, not a fact you cited. Name what
+    happened and what it changed; let the reader judge.
+  - REGISTER — a named war is named: never scare-quote a real, ongoing
+    conflict as a "narrative" (e.g. the "Iran war narrative") — that treats
+    a war people are dying in as a rhetorical frame. If you doubt a SPECIFIC
+    claim about it, doubt the claim, not the war's existence.
+  - REGISTER — one inference per cited signal: draw at most one inference
+    from any single cited fact, and mark that inference [[inference]] — the
+    same flag-never-strip marker family as [[spec]]/[[instrument]] — so a
+    reader can see where the citation ends and your reading begins.
   - Be honest about what you're narrating over: unproven legs are unproven; the
     critic does not actuate; the forecast pilot has no skill yet. Do not make the
     platform read as more mature than the substrate warrants."""

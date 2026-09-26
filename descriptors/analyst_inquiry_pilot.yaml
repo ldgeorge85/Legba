@@ -1,0 +1,146 @@
+# inquiry_pilot — the FIRST standing investigation (Program 5 archetype 2).
+#
+# planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §2 / §7.2. The proof this
+# descriptor exists to produce is one week of its LEDGER: >= 3 hypotheses each
+# carrying a resolution test, and >= 1 of them resolved by a later read.
+#
+# ── kind = inquiry (NEW; NOT journal_assessor) ────────────────────────────
+# A new kind, not a seventh tier on journal_assessor, because the METHOD differs:
+# the run reads its own ledger BEFORE the prompt is rendered and writes to it
+# AFTER the body is final, and a descriptor-borne BRIEF changes what the run is
+# for. Everything else is the journal family's: OUTPUT_KIND = OutputKind.JOURNAL,
+# one journal_entries row (entry_kind='inquiry'), append-only, derived_from
+# ALWAYS empty, the same V1 faithfulness verify keyed on identity.kind. It never
+# writes a fact, nexus, finding or situation.
+#
+# ── THE BRIEF IS A REGISTRY ROW, NOT CODE ─────────────────────────────────
+# `method.options.brief` is the whole mandate and it is live-editable:
+# `PUT /api/v1/descriptors/analyst/inquiry_pilot` re-aims the investigation with
+# no code edit, no image rebuild and a visible content-hash change. The prompt
+# renders it VERBATIM, so the registry row IS the copy an audit points at as
+# "the mandate this run actually saw". `target_scope` names the desks the
+# inquiry is accountable for; it is CONTEXT, never a query filter — fencing the
+# reads would make "the record is silent outside my desks" unfalsifiable.
+#
+# ── WHY THESE THREE TARGET IDS ────────────────────────────────────────────
+# The design named UA / RU / DE. The real ids in this tree are country_watch_ua
+# (the non-G20 watch tier, scripts/bringup_register_watch_country_targets.py),
+# country_g20_ru and country_g20_de (the G20 tier,
+# scripts/bringup_register_g20_country_targets.py) — there is no
+# country_watch_ru, because RU is a G20 member and is materialised there.
+#
+# ── GRANTS (§2) ───────────────────────────────────────────────────────────
+#   substrate_read  — the DEFAULT GATHER binding: the raw corpus, the signals,
+#                     the graph walks, the as-of register. 19 tools.
+#   journal_read    — the tower top + the platform's own instruments, reached
+#                     through the per-tool binding channel (its names are not in
+#                     the substrate_read surface, so ownership is enforced call
+#                     by call).
+#   inquiry_state   — the ledger: ledger_read / ledger_write / ledger_close,
+#                     scoped to THIS descriptor by the deps builder.
+# NO web_access and NO research pack: the inquiry has no web BY CONSTRUCTION,
+# and that is the property that makes it safe to let it read this widely. NO
+# propose/write pack either — it adds nothing to the record but its own entry,
+# so no rung of this run can spend money.
+#
+# ── PLANE ─────────────────────────────────────────────────────────────────
+# $0 core plane for gather / voice / verify (the 2026-07-14 hard rule — Anthropic
+# is consult/deep_consult only), model-card sampling at temperature 1.0, and NO
+# max_tokens: the core plane never caps model output.
+#
+# identity.state: draft — the orchestrator promotes. Registration and promotion
+# are not an agent's act.
+
+identity:
+  id: inquiry_pilot
+  name: "Inquiry — Refinery Campaign and European Fuel Security"
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: inquiry                      # NEW kind; OUTPUT_KIND = OutputKind.JOURNAL
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Journal
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: program5_inquiry
+
+subscription:
+  # No `targets` block → META analyst: ONE global run per cadence tick
+  # (target_filter=None), like every other journal-family voice. The inquiry's
+  # SCOPE is its brief, not a target predicate.
+  other_analysts: []
+  substrate:
+    direct_queries: false            # reads via the granted packs only, governed
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: llm_planner
+  # COLON form ('module:ATTR') — a dotted path silently falls back to the kind
+  # default and loses the whole investigator stance.
+  prompt_module: "legba.prompts.inquiry:INQUIRY_SYSTEM"
+  options:
+    # The mandate, verbatim. <= 2,000 characters (the catalog pattern enforces
+    # it; the kind truncates defensively as well, so a legacy row that predates
+    # the spec is trimmed rather than obeyed).
+    brief: >-
+      the Ukraine–Russia refinery campaign and what it does to Europe's fuel
+      security
+    # The desks this inquiry answers for. Context, not a filter.
+    target_scope:
+      - country_watch_ua
+      - country_g20_ru
+      - country_g20_de
+    # pre_pass_module is DELIBERATELY unset here: the deterministic pre-pass is
+    # the crossroads mandate's hook (design §7.3), and an inquiry with a brief
+    # reasons from the record directly. Absent => no import and no call.
+  llm:
+    # Model-card sampling (gpt-oss ships generation_config temperature=1.0; the
+    # vLLM client always sends temperature, so the card default can never apply
+    # on its own). Fleet-wide per the 2026-07-24 sampling audit + A/B.
+    temperature: 1.0
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat  # core plane — the GATHER investigation
+      expected_family: llm_provider
+    verify:
+      # The V1 journal faithfulness pass over the entry's cited FACT claims
+      # (readings are exempt, the entry is never mutated; the critique row lands
+      # with analyzed_output_id = the entry id). Gated on identity.kind, same as
+      # every journal tier. $0 core plane.
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    narrate:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat  # core plane — the inquiry VOICE
+      expected_family: llm_provider
+  budget_tokens_per_day: 0            # the $0 core plane carries no per-day cap
+  gather:
+    max_rounds: 6                     # the in-actor GATHER ReAct cap (HARD ceiling)
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  fallback_schedule: "30 12 * * *"    # daily — 12:30 UTC, after the crossroads
+                                      # (12:00) and clear of the 09:00–11:30
+                                      # lean band and the 00:00/12:00 burst
+  cooldown_seconds: 79200             # 22h — below the 24h interval (below-interval guard)
+
+grounding:
+  enabled: false                      # OFF by default (§4.3) — the inquiry cites
+                                      # the record's own conclusions or weighs
+                                      # them; revisit if live reads show
+                                      # stale-fact creep into fact claims
+
+action_packs:
+  - pack_id: substrate_read
+  - pack_id: journal_read
+  - pack_id: inquiry_state
+  - pack_id: journal_propose   # the dispatch: a question or a contention goes out as a proposal through the journal gate (never a spend)
+
+outputs: []                           # JournalPayload → journal_entries
+                                      # (entry_kind='inquiry'); no sinks

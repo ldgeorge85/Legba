@@ -38,6 +38,12 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from .assessment_aperture import (
+    ROUTE_EXCLUSION_APERTURE,
+    claim_in_aperture_section,
+)
+from .text_fold import normalize_for_match
+
 logger = logging.getLogger(__name__)
 
 # The citation-marker shapes, spelled ONCE here so this module imports nothing
@@ -1085,13 +1091,30 @@ def _first_absence_marker_pos(low: str) -> int:
     return min(positions) if positions else -1
 
 
-def _absence_route_exclusion(claim: str) -> str | None:
+def _absence_route_exclusion(claim: str, *, body: str = "") -> str | None:
     """Why this scope-qualified span is NOT a slice-checkable negative, or ``None``.
 
-    Deterministic + pure-lexical, like the rest of the V-B classifier. A returned
-    reason means the claim keeps TODAY'S route (the V3 absence rubric / the
-    generic judge) instead of being decided against the input slice.
+    Deterministic, like the rest of the V-B classifier. Every class below the
+    first is pure-lexical; the first is POSITIONAL, and needs the body the claim
+    came out of.
+
+    ``body`` is OPTIONAL and defaults to ``""`` — every pre-o4 caller
+    (``composition_integrity``'s desk-absence screen, ``judge_quote_rules``'s
+    V-I5 gate before it was threaded) is byte-identical without it, because the
+    aperture branch cannot fire on a body nobody passed.
+
+    A returned reason means the claim keeps TODAY'S route (the V3 absence rubric
+    / the generic judge) instead of being decided against the input slice — and,
+    under V-I5's binding rule, the hard class is not available to the judge on it
+    either.
     """
+    # o4: the APERTURE SECTION. FIRST, because it is a fact about where the
+    # sentence sits rather than about what it says, and a claim whose truthmaker
+    # is the record's own drop ledger is off this route whatever lexical shape
+    # its negative happens to take. See ``assessment_aperture`` for why the input
+    # slice can never bear on it.
+    if body and claim_in_aperture_section(claim, body):
+        return ROUTE_EXCLUSION_APERTURE
     stripped = claim.strip().lstrip("#-*> ").strip()
     core = re.sub(r"[*_`]+", "", stripped)
     # Drop a leading BLUF / Assessed / Judgment label so the subordinate test sees
@@ -1270,9 +1293,27 @@ def _absence_content_terms(claim: str, *, target_id: str | None) -> set[str]:
     OWN country tokens (every title in a country slice names the country, so they
     collide with everything). Terms are singular-stemmed so "sanctions" screens
     a "Sanctioned …" headline — the exact live collision class.
+
+    RE-POINTED AT THE SHARED FOLD 2026-09-03 (D-3), and this is a GRADED-BEHAVIOUR
+    CHANGE, not a refactor — which is why it rides a stamp with the number
+    attached rather than slipping in with D-0. The tokenizer below is ASCII-only
+    (``[a-z][a-z\\-]{3,}``), so before this change ``energy‑security`` written with
+    U+2011 yielded ``{energy, security}`` — TWO terms, neither of which is the
+    compound the desk wrote — while the same phrase written with an ASCII hyphen
+    yielded ``{energy-security}``. The archived audit measured folding changing
+    the term set on **4,272 of 7,562 claims = 56.5%**.
+
+    THE SECOND DEFECT THE RE-POINT CLOSES, and it is the worse one: this function
+    returned DIFFERENT TERM SETS DEPENDING ON THE CALLER. The V-B production path
+    (``verify._fold_absence_slice``) and all six ``judge_quote_rules`` call sites
+    passed UNFOLDED text; ``denied_enumeration`` and ``composition_integrity``
+    passed folded text. One screen, two answers, decided by who called it. The
+    fold now happens HERE, so every caller gets the same terms whatever it hands
+    in — and ``normalize_for_match`` is idempotent, so the callers that already
+    folded are unaffected by folding again.
     """
     stripped = claim.strip().lstrip("#-*> ").strip()
-    low = re.sub(r"[*_`]+", " ", stripped).lower()
+    low = normalize_for_match(re.sub(r"[*_`]+", " ", stripped))
     low = _CITATION_MARKER_STRIP_RE.sub(" ", low)
     desk_tokens: set[str] = set()
     slug = _country_desk_slug(target_id)
@@ -1380,8 +1421,14 @@ _ABSENCE_SLICE_JUDGE_SYSTEM = (
     "shares with the claim.\n"
     "Be conservative: when in doubt answer supported. A row is only a violation "
     "if a reader of that row alone would say the claim is false.\n"
-    'Output strict JSON only: {"verdicts": ["supported"|"contradicted"|'
-    '"unsupported", ...]} with one verdict per claim, in order. Alongside '
+    # H3 (2026-09-24/1): same reply contract as the other judge routes — every
+    # entry names its claim as ``claim_index``. Stated INLINE for the same
+    # reason the quote rule below is: ``judge_quote_rules`` imports this module,
+    # so the shared renderer in it cannot be imported back. An unchecked slot
+    # lands as ``absence_slice_unresolved`` — never a fabricated verdict.
+    'Output strict JSON only: {"verdicts": [{"claim_index": <the claim\'s '
+    'number>, "verdict": "supported"|"contradicted"|"unsupported"}, ...]} with '
+    'one entry per claim, in order. Alongside '
     '"verdicts", return "quotes": a list of the SAME length, one entry per claim; '
     "for a \"contradicted\" verdict the entry MUST be a VERBATIM run copied from "
     'the violating row, and for every other verdict "". Output only the JSON '

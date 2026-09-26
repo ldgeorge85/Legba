@@ -115,9 +115,13 @@ INTENDED_SHA256: dict[str, str] = {
 }
 
 #: sha256 of the HELD unit's prompt as it stands BEFORE and AFTER this train.
+#: Re-pinned 2026-09-24: Program 7 piece 7e gave narrative_coordination its
+#: coordination DEFINITION (the SPREAD BLOCK paragraph) — a deliberate prompt
+#: change outside this train; the VOICE hold itself is untouched (the v4 flip
+#: still never PUTs this unit).
 #: The whole point of the HOLD is that this value does not change.
 HELD_SHA256: str = (
-    "2b655f20155d7d8dd7e0327f2399ebdbb6e885dc3accb90983b1f75457c56e35"
+    "84c0fe7242a5121002a13581f1d744be547c2e798494c6bd2b8908e093e21739"
 )
 
 #: MA2's replay addendum — the fleet sentence, word-identical on every draft.
@@ -158,6 +162,107 @@ TITLE_AMENDMENT_SENTENCE: str = (
 LATER_CONTRACT_PARAGRAPHS: tuple[str, ...] = (SEVERITY_AS_STATE_RULE,)
 
 
+#: TITLE-FRAME-FIX (2026-09-01) — the second later train to touch these nine
+#: prompts, and the first to change a LINE rather than append a PARAGRAPH.
+#:
+#: WHAT IT CHANGED AND WHY. ``VOICE_ORGANIC_REVIEW_2026-09-01`` §2.a measured the
+#: per-desk ``"title"`` schema hint against each desk's own title corpus and
+#: found it predicts that desk's lock exactly: a hint of the form "the driving X
+#: vector" whose X composes with a risk noun produces the ``<subject> <verb>
+#: <risk noun>`` frame (escalation 80.8%, internal_stability 40.6%), while a
+#: hint of the form "its X level / its X pressure" produces a degenerate
+#: constant instead (leadership_transition 23.1% distinct titles, one string
+#: repeated 15 times). The two desks carrying the identical "driving … vector"
+#: wording with a noun that does NOT compose — military_posture,
+#: proliferation_watch — sit at 0.0%, which is what rules the shared HOUSE READ
+#: CONTRACT out as the cause and puts it on this one line per desk.
+#:
+#: WHY IT IS PEELED RATHER THAN RE-PINNED. Identical reasoning to
+#: :data:`LATER_CONTRACT_PARAGRAPHS` above, which see: :data:`INTENDED_SHA256`
+#: is a frozen digest of gitignored drafts and its whole value is that it is NOT
+#: re-derivable from the tree, so a later train can neither re-pin it (a
+#: re-pinned digest proves nothing) nor be allowed to turn it red (the D6 claim
+#: is still true). Restoring the D6 line before hashing keeps the pin covering
+#: exactly the bytes it was written to cover, and makes the LAYERING the thing
+#: the tests state: D6's prose, plus FRAME-3's paragraph, plus this train's one
+#: line per desk, and nothing else.
+#:
+#: THE HELD DESK IS IN HERE TOO. ``narrative_coordination``'s VOICE hold is about
+#: the D6 PROSE (MA2 / MA4, asserted separately below and still held). Its title
+#: hint is a response-schema line, it carries the same measured defect class, and
+#: §5.1 Option 5 scopes the fix to "the eight per-desk title hints" as one train
+#: — a headline grammar that is per-desk is the defect, so the repair cannot be.
+#:
+#: Keyed unit -> (D6 line, TITLE-FRAME-FIX line). Both sides are the FULL
+#: ``"title": "<…>"`` JSON-shape line minus its trailing comma, which is what
+#: makes the rollback a single unambiguous substring swap per desk.
+LATER_TITLE_HINTS: dict[str, tuple[str, str]] = {
+    "escalation": (
+        '"title": "<concise headline naming the country + the driving escalation vector — see TITLE in the HOUSE READ CONTRACT below>"',
+        '"title": "<concise headline: the country + what this window actually shows about who is doing what to whom — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name what is HOLDING it — see TITLE in the HOUSE READ CONTRACT below>"',
+    ),
+    "internal_stability": (
+        '"title": "<concise headline naming the country + the driving instability vector — see TITLE in the HOUSE READ CONTRACT below>"',
+        '"title": "<concise headline: the country + what this window actually shows about who holds the street and who holds the state — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name what is HOLDING it — see TITLE in the HOUSE READ CONTRACT below>"',
+    ),
+    "economic_coercion": (
+        '"title": "<concise headline naming the country + the driving coercion vector + target/wielder — see TITLE in the HOUSE READ CONTRACT below>"',
+        '"title": "<concise headline: the country + what this window actually shows about who is squeezing whom and with what measure — name wielder and target; the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name what is HOLDING it — see TITLE in the HOUSE READ CONTRACT below>"',
+    ),
+    "military_posture": (
+        '"title": "<concise headline naming the country + the driving posture-shift vector — see TITLE in the HOUSE READ CONTRACT below>"',
+        '"title": "<concise headline: the country + what this window actually shows about what moved, whose it was and where it went — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name what is HOLDING it — see TITLE in the HOUSE READ CONTRACT below>"',
+    ),
+    "proliferation_watch": (
+        '"title": "<concise headline naming the country + the driving proliferation vector — see TITLE in the HOUSE READ CONTRACT below>"',
+        '"title": "<concise headline: the country + what this window actually shows about the program or the safeguards around it — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name what is HOLDING it — see TITLE in the HOUSE READ CONTRACT below>"',
+    ),
+    "energy_security": (
+        '"title": "<short headline: the country + its energy-security pressure — see TITLE in the HOUSE READ CONTRACT below>"',
+        '"title": "<short headline: the country + what this window actually shows about what is moving through its energy system and what is not — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name what is HOLDING it — see TITLE in the HOUSE READ CONTRACT below>"',
+    ),
+    "leadership_transition": (
+        '"title": "<short headline naming the country + its transition-risk level — see TITLE in the HOUSE READ CONTRACT below>"',
+        '"title": "<short headline: the country + what this window actually shows about who holds power and what is testing that hold — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name what is HOLDING it — see TITLE in the HOUSE READ CONTRACT below>"',
+    ),
+    "disruption_status": (
+        '"title": "<concise headline naming the lane/flow + the driving vector — see TITLE in the HOUSE READ CONTRACT below>"',
+        '"title": "<concise headline: the lane/flow + what this window actually shows about what is moving through it and what is not — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name what is HOLDING it — see TITLE in the HOUSE READ CONTRACT below>"',
+    ),
+    "narrative_coordination": (
+        '"title": "<short headline naming the narrative, if any — see TITLE in the HOUSE READ CONTRACT below>"',
+        '"title": "<short headline: what this window actually shows about who is pushing which line, if anyone — the concrete development in its own words, never a category label and never a bare risk level; where no coordination appears, name what you CHECKED — see TITLE in the HOUSE READ CONTRACT below>"',
+    ),
+}
+
+
+def pre_title_frame_fix(prompt: str) -> str:
+    """``prompt`` with TITLE-FRAME-FIX's ``"title"`` hint rolled back to D6.
+
+    A pure substring swap rather than a paragraph drop, because this train
+    changed ONE LINE inside the response-schema paragraph rather than appending
+    a paragraph of its own. Unit-agnostic by construction: each desk's new hint
+    is a distinct string, so the map can be applied blind and at most one entry
+    matches. Returns the input unchanged when no new hint is present, which is
+    what makes it safe to run over a pre-train descriptor.
+
+    Raises rather than silently double-swapping when a prompt somehow carries
+    BOTH lines — that would mean the response schema grew a second ``"title"``
+    example and the pin is no longer measuring what it claims to.
+    """
+    out = prompt
+    for unit, (d6_line, new_line) in LATER_TITLE_HINTS.items():
+        if new_line not in out:
+            continue
+        if d6_line in out:
+            raise ValueError(
+                f"{unit}: prompt carries BOTH the D6 title hint and the "
+                "TITLE-FRAME-FIX one — the rollback is ambiguous"
+            )
+        out = out.replace(new_line, d6_line, 1)
+    return out
+
+
 def norm(text: str) -> str:
     """Whitespace-normalized text.
 
@@ -169,18 +274,27 @@ def norm(text: str) -> str:
 
 
 def d6_base(prompt: str) -> str:
-    """``prompt`` with every later train's contract paragraph peeled off.
+    """``prompt`` with every later train's edit peeled back off.
 
-    Paragraph-wise rather than by string surgery: the constants are hard-wrapped
-    into the YAML at a width that belongs to the file, so a byte-level removal
-    would have to know the wrap and would break on a re-wrap. Splitting on the
-    blank-line separator and dropping whole paragraphs by their NORMALIZED text
-    is wrap-independent, and rejoining is byte-exact for everything kept — the
-    result is the D6 prompt as the drafts wrote it, or the input unchanged when
-    no later paragraph is present.
+    TWO peels, in the order the trains landed, because the two trains changed
+    the prompt in structurally different ways:
+
+    1. TITLE-FRAME-FIX's per-desk ``"title"`` hint is rolled back by
+       :func:`pre_title_frame_fix` — a LINE swap, because that is what it was.
+    2. FRAME-3's ``SEVERITY_AS_STATE_RULE`` is dropped paragraph-wise. Paragraph
+       -wise rather than by string surgery: the constants are hard-wrapped into
+       the YAML at a width that belongs to the file, so a byte-level removal
+       would have to know the wrap and would break on a re-wrap. Splitting on
+       the blank-line separator and dropping whole paragraphs by their
+       NORMALIZED text is wrap-independent, and rejoining is byte-exact for
+       everything kept.
+
+    The result is the D6 prompt as the drafts wrote it, or the input unchanged
+    when no later edit is present.
     """
+    rolled = pre_title_frame_fix(prompt)
     drop = {norm(p) for p in LATER_CONTRACT_PARAGRAPHS}
-    return "\n\n".join(p for p in prompt.split("\n\n") if norm(p) not in drop)
+    return "\n\n".join(p for p in rolled.split("\n\n") if norm(p) not in drop)
 
 
 def sha(text: str) -> str:

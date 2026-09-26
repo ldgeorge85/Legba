@@ -1,0 +1,89 @@
+{
+  "_provenance": "ASSESSMENT CITATIONS specimen — the LIVE 2026-09-06 12:15Z world_assessment row (e0ce7fbf-933e-4a08-bed8-2f93c35b7096), read read-only from analyst_outputs. Its four citations are the W-3 specimen: by the D-6 fence every ref_id is the SAME spine uuid (a80225ec, the 12:00Z world_assessor read), and the lineage that tells them apart is the ordinal plus the spine_block the producer already stamps. ONE field is elided per entry: evidence_text, which is ~3 KB of the record's own arithmetic repeated per citation and is the JUDGE's input, never this reader's. Everything else is verbatim. The spine paired with it in the suite is assembly.world.json, a different cycle's record — ordinals 1/2/3/7 resolve and subjects differ, the same honest A/B shape assessment.world.json carries.",
+  "id": "e0ce7fbf-933e-4a08-bed8-2f93c35b7096",
+  "kind": "finding",
+  "analyst_id": "world_assessment",
+  "target_id": null,
+  "title": "Pakistan’s proxy militant attacks surge, lifting near‑term escalation risk",
+  "severity": null,
+  "confidence": 0.5,
+  "produced_at": "2026-09-06T12:15:29.373927+00:00",
+  "derived_from": [
+    "a80225ec-17c9-48e1-8237-315a13910595"
+  ],
+  "data": {
+    "data": {
+      "meta": true,
+      "citations": [
+        {
+          "title": "Escalation composition",
+          "marker": "[[ref:1]]",
+          "ref_id": "a80225ec-17c9-48e1-8237-315a13910595",
+          "source": "world_assessor",
+          "ordinal": 1,
+          "ref_kind": "finding",
+          "spine_block": {
+            "desk": "escalation_composition",
+            "target_id": null,
+            "finding_id": "3f5e69cb-5870-4694-aa14-b62de6b34994"
+          },
+          "derived_from": [
+            "a80225ec-17c9-48e1-8237-315a13910595"
+          ],
+          "effective_confidence": 0.5
+        },
+        {
+          "title": "Country composition",
+          "marker": "[[ref:2]]",
+          "ref_id": "a80225ec-17c9-48e1-8237-315a13910595",
+          "source": "world_assessor",
+          "ordinal": 2,
+          "ref_kind": "finding",
+          "spine_block": {
+            "desk": "country_composition",
+            "target_id": "country_watch_ir",
+            "finding_id": "9576a669-fcf9-466a-98e3-02a737bd580b"
+          },
+          "derived_from": [
+            "a80225ec-17c9-48e1-8237-315a13910595"
+          ],
+          "effective_confidence": 0.6
+        },
+        {
+          "title": "Country composition",
+          "marker": "[[ref:3]]",
+          "ref_id": "a80225ec-17c9-48e1-8237-315a13910595",
+          "source": "world_assessor",
+          "ordinal": 3,
+          "ref_kind": "finding",
+          "spine_block": {
+            "desk": "country_composition",
+            "target_id": "country_watch_il",
+            "finding_id": "5c1ed98a-c354-4369-b540-5914d2e86130"
+          },
+          "derived_from": [
+            "a80225ec-17c9-48e1-8237-315a13910595"
+          ],
+          "effective_confidence": 0.5
+        },
+        {
+          "title": "Country composition",
+          "marker": "[[ref:7]]",
+          "ref_id": "a80225ec-17c9-48e1-8237-315a13910595",
+          "source": "world_assessor",
+          "ordinal": 7,
+          "ref_kind": "finding",
+          "spine_block": {
+            "desk": "country_composition",
+            "target_id": "country_g20_us",
+            "finding_id": "58fea21d-1915-44f7-9baa-e8e0989a74f7"
+          },
+          "derived_from": [
+            "a80225ec-17c9-48e1-8237-315a13910595"
+          ],
+          "effective_confidence": 0.5
+        }
+      ]
+    }
+  }
+}

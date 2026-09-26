@@ -103,12 +103,31 @@ async def append_turn(
     tool_calls: Any = None,
     cited_refs: Any = None,
     finding_id: str | None = None,
+    request_id: str | None = None,
+    parent_turn_id: str | None = None,
+    synthesis_status: str = "complete",
+    replay_transcript: Any = None,
+    usage: Any = None,
 ) -> str | None:
     """Append one ``consult_turns`` row and bump the session's ``updated_at``.
 
     ``role`` is ``'user'`` | ``'assistant'``. The jsonb projections default to
     empty lists. Returns the new turn id, or None on failure (best-effort — the
     audit write never fails the consult request).
+
+    The recovery columns (migration 0195) all default to what a pre-0195 row
+    means, so every existing caller is unchanged:
+
+    * ``request_id`` — the run that produced this turn. Before 0195 this
+      existed only in the registry's in-process run dict, so a restart severed
+      a turn from its run permanently; that is what made the c8a0105c turn
+      unrecoverable.
+    * ``parent_turn_id`` — set on a re-synthesised turn, pointing at the turn
+      whose evidence it re-read.
+    * ``synthesis_status`` — ``complete`` | ``partial`` | ``none``.
+    * ``replay_transcript`` — the synthesis prompt as sent, for a run that may
+      need finishing. NULL for a run that answered.
+    * ``usage`` — the run's spend receipt (tokens, estimated USD, ceilings).
     """
     if role not in ("user", "assistant"):
         logger.warning("consult_persistence.append_turn bad role=%r", role)
@@ -122,8 +141,10 @@ async def append_turn(
                     """
                     INSERT INTO consult_turns
                         (session_id, role, content, steps, tool_calls,
-                         cited_refs, finding_id)
-                    VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7)
+                         cited_refs, finding_id, request_id, parent_turn_id,
+                         synthesis_status, replay_transcript, usage)
+                    VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7,
+                            $8, $9::uuid, $10, $11::jsonb, $12::jsonb)
                     RETURNING id
                     """,
                     session_id,
@@ -133,6 +154,11 @@ async def append_turn(
                     _as_jsonb(tool_calls),
                     _as_jsonb(cited_refs),
                     finding_id,
+                    request_id,
+                    parent_turn_id,
+                    synthesis_status or "complete",
+                    _as_jsonb(replay_transcript) if replay_transcript else None,
+                    _as_jsonb(usage) if usage else "{}",
                 )
                 await conn.execute(
                     "UPDATE consult_sessions SET updated_at = now() WHERE id = $1",
@@ -278,7 +304,7 @@ async def load_session(pg: Any, session_id: str) -> dict[str, Any] | None:
         turn_rows = await conn.fetch(
             """
             SELECT id, role, content, steps, tool_calls, cited_refs,
-                   finding_id, created_at
+                   finding_id, created_at, request_id, synthesis_status
               FROM consult_turns
              WHERE session_id = $1
              ORDER BY created_at ASC, id ASC
@@ -304,9 +330,76 @@ async def load_session(pg: Any, session_id: str) -> dict[str, Any] | None:
                 "cited_refs": _load_jsonb(t["cited_refs"]),
                 "finding_id": t["finding_id"],
                 "created_at": t["created_at"].isoformat() if t["created_at"] else None,
+                "request_id": t["request_id"],
+                "synthesis_status": t["synthesis_status"] or "complete",
             }
             for t in turn_rows
         ],
+    }
+
+
+async def load_turn_for_recovery(
+    pg: Any, *, request_id: str | None = None, turn_id: str | None = None,
+) -> dict[str, Any] | None:
+    """The evidence of one assistant turn, for "Synthesize from evidence".
+
+    Resolves by ``request_id`` (the run) when the turn was written after
+    migration 0195, and by ``turn_id`` otherwise — every turn persisted before
+    that migration has a NULL ``request_id``, including the c8a0105c turn this
+    whole path exists for, so a recovery that could ONLY resolve by run would
+    be unable to recover the run that motivated it.
+
+    Unlike the write helpers this does NOT swallow: a recovery that silently
+    returns "no evidence" when the database is down would send the operator to
+    re-ask an expensive question for no reason. Let it raise; the route maps it.
+    """
+    if not request_id and not turn_id:
+        return None
+    async with pg.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id, session_id, role, content, steps, tool_calls,
+                   cited_refs, finding_id, request_id, synthesis_status,
+                   replay_transcript, usage, created_at
+              FROM consult_turns
+             WHERE role = 'assistant'
+               AND (($1::text IS NOT NULL AND request_id = $1)
+                 OR ($2::uuid IS NOT NULL AND id = $2))
+             ORDER BY created_at DESC
+             LIMIT 1
+            """,
+            request_id,
+            turn_id,
+        )
+        if row is None:
+            return None
+        question = await conn.fetchval(
+            """
+            SELECT content FROM consult_turns
+             WHERE session_id = $1 AND role = 'user'
+               AND created_at <= $2
+             ORDER BY created_at DESC
+             LIMIT 1
+            """,
+            row["session_id"],
+            row["created_at"],
+        )
+
+    transcript = row["replay_transcript"]
+    return {
+        "turn_id": str(row["id"]),
+        "session_id": str(row["session_id"]),
+        "request_id": row["request_id"],
+        "question": question or "",
+        "answer": row["content"],
+        "steps": _load_jsonb(row["steps"]),
+        "tool_calls": _load_jsonb(row["tool_calls"]),
+        "cited_refs": _load_jsonb(row["cited_refs"]),
+        "synthesis_status": row["synthesis_status"],
+        "replay_transcript": (
+            _load_jsonb(transcript) if transcript is not None else None
+        ),
+        "usage": _load_jsonb(row["usage"]) if row["usage"] is not None else {},
     }
 
 
@@ -315,5 +408,6 @@ __all__ = [
     "create_session",
     "list_sessions",
     "load_session",
+    "load_turn_for_recovery",
     "record_deep_completion",
 ]

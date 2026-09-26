@@ -125,6 +125,72 @@ export const STRUCTURAL_VERIFIED_EXPLAIN =
   'the faithfulness-verify pass (which this analyst is exempt from).'
 
 /**
+ * D-5 (DEMOTION_D1_SPEC §4) — the DETERMINISTIC ROLLUP analysts.
+ *
+ * Mirror of the ONE server registry
+ * (`legba.data.provenance.kinds.DETERMINISTIC_ROLLUP_ANALYSTS`), and it is a
+ * SEPARATE set from `STRUCTURAL_VERIFY_EXEMPT_ANALYSTS` above for the same
+ * reason it is separate on the server: that set is drift-guarded to equal the
+ * deterministic FINDING sub-handlers, and `region_composition` is not one.
+ *
+ * THE REGIME IS A PROPERTY OF THE ROW, NOT OF THE ANALYST. The same analyst_id
+ * wrote graded LLM prose before the cutover and will again if the flag is
+ * rolled back, so membership here is necessary but NEVER sufficient: a row also
+ * has to CARRY the rollup payload (`data.data.rollup.schema`) or the server's
+ * `verify_exempt` stamp. That is why `isDeterministicRollup` takes the row and
+ * not just the id — an analyst-only check would retroactively re-label the
+ * generative history as deterministic, which is the exact class of lie this
+ * demotion exists to stop.
+ */
+export const DETERMINISTIC_ROLLUP_ANALYSTS: ReadonlySet<string> = new Set([
+  'region_composition',
+])
+
+/** The server's `verify_exempt` stamps for a rollup row (mirror of
+ *  `kinds.ROLLUP_EXEMPT_REASON` / `kinds.ROLLUP_VERIFIED_REASON`). */
+export const ROLLUP_EXEMPT = 'deterministic-rollup'
+export const ROLLUP_VERIFIED = 'deterministic-rollup-verified'
+
+/** The payload marker a rollup row carries (mirror of
+ *  `kinds.ROLLUP_PAYLOAD_SCHEMA`). Live-tail rows never pass through the
+ *  reads-API projection, so they arrive with no `verify_exempt` stamp and this
+ *  is the only thing that identifies them. */
+export const ROLLUP_PAYLOAD_SCHEMA = 'region_rollup.v1'
+
+/**
+ * True when a finding is a DETERMINISTIC ROLLUP: the server stamped it
+ * (authoritative), or its analyst is registered above AND its payload carries
+ * the rollup schema (the live-tail case).
+ */
+export function isDeterministicRollup(
+  analystId?: string | null,
+  verifyExempt?: string | null,
+  data?: unknown,
+): boolean {
+  if (verifyExempt === ROLLUP_EXEMPT || verifyExempt === ROLLUP_VERIFIED) return true
+  if (analystId == null || !DETERMINISTIC_ROLLUP_ANALYSTS.has(analystId)) return false
+  const envelope = data as { data?: { rollup?: { schema?: string } }; rollup?: { schema?: string } } | null | undefined
+  const schema = envelope?.data?.rollup?.schema ?? envelope?.rollup?.schema
+  return schema === ROLLUP_PAYLOAD_SCHEMA
+}
+
+/** D-5 — true when a rollup's declared arithmetic was re-derived and MATCHED
+ *  (server stamp `deterministic-rollup-verified`). */
+export function isRollupVerified(verifyExempt?: string | null): boolean {
+  return verifyExempt === ROLLUP_VERIFIED
+}
+
+/** Why a deterministic rollup carries no faithfulness score — and what it DOES
+ *  carry instead. Deliberately never says "structural": a reader told
+ *  "structural" goes looking for a mining handler and finds a composition
+ *  analyst, which is a worse answer than no answer. */
+export const ROLLUP_UNVERIFIED_EXPLAIN =
+  'This region read is a deterministic rollup — it carries its member country ' +
+  'reads\u2019 own quoted blocks forward and writes no prose of its own, so there ' +
+  'is nothing for the faithfulness judge to grade. Its counts are verified a ' +
+  'different way: they are re-derived from the members it recorded.'
+
+/**
  * True when a finding is verify-exempt STRUCTURAL: either the server stamped
  * it (`verify_exempt === 'structural'`, authoritative) or its analyst_id is in
  * the client mirror registry (live-tail rows carry no stamp). Never true for
@@ -181,6 +247,14 @@ export interface Verdict {
    *  deterministically re-derived and matched (server stamp
    *  `structural-verified`). The badge then reads `structural — recomputation-verified`. */
   structuralVerified: boolean
+  /** D-5 — true for a DETERMINISTIC ROLLUP row (a region read that carries its
+   *  members' blocks forward and writes no prose). The badge must not render it
+   *  as an ordinary unverified LLM read: nothing failed, and nothing is
+   *  pending. */
+  rollup: boolean
+  /** D-5 — true when the rollup's declared arithmetic was re-derived and
+   *  matched (server stamp `deterministic-rollup-verified`). */
+  rollupVerified: boolean
 }
 
 /** ICD-203 probability bands, as [low, high] inclusive-low/exclusive-high cuts
@@ -250,6 +324,11 @@ export interface VerdictInput {
   analystId?: string | null
   /** The server's `verify_exempt` stamp from `/findings`, when present. */
   verifyExempt?: string | null
+  /** D-5 — the row's `data` envelope, when the caller has it. Live-tail rows
+   *  carry no `verify_exempt` stamp, so the rollup payload marker inside this
+   *  is the only way to classify them. Optional: omitting it degrades to the
+   *  server stamp, never to a guess. */
+  data?: unknown
 }
 
 /** Assemble the two-axis {@link Verdict} from a finding's fields. */
@@ -271,6 +350,8 @@ export function buildVerdict(input: VerdictInput): Verdict {
     citationCount,
     structural: isStructuralExempt(input.analystId, input.verifyExempt),
     structuralVerified: isStructuralVerified(input.verifyExempt),
+    rollup: isDeterministicRollup(input.analystId, input.verifyExempt, input.data),
+    rollupVerified: isRollupVerified(input.verifyExempt),
   }
 }
 
@@ -279,6 +360,12 @@ export function judgeStatusLabel(status: string | null): string {
   switch (status) {
     case 'llm':
       return 'LLM judge'
+    // 2026-09-08/1: one partition graded, another came back empty and fell to
+    // the floor. Adjudicated enough to escape the provisional ceiling, not
+    // enough to read as a full LLM pass — which is why it never earns High
+    // above (that still requires `judge_status === 'llm'`).
+    case 'partial':
+      return 'LLM judge (partial)'
     case 'deterministic':
       return 'deterministic floor'
     case 'judge-unavailable':

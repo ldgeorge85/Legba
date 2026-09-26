@@ -1,0 +1,126 @@
+# R-A — the `research` action pack (the OUTBOUND RESEARCH write path).
+#
+# ONE tool, `web_evidence`: search the open web and LAND what comes back as
+# ordinary `signals` rows — tagged `retrieval_origin='web_search:<component>'`,
+# archived where the host's licence clears it, capped at the credibility
+# ceiling, stamped with the question that dispatched them — then return the
+# full-text hits as `rows` so the planner can cite them [N] like any other
+# document.
+#
+# WHY THIS IS ITS OWN PACK AND `web_access` IS NOT TOUCHED
+# --------------------------------------------------------
+#   1. `web_tools.py` is READ-ONLY BY CONTRACT ("neither tool writes to the
+#      substrate — that is write_tools.py"). The plane's discipline puts writes
+#      in their own pack.
+#   2. Tool RESULTS are deliberately never recorded on the receipt
+#      (`agency.py::_account_tool_call`), so no post-persist converter can ever
+#      see the fetched bytes. The write has to happen at TOOL time.
+#   3. THE MONEY CAP HAS NOWHERE ELSE TO LIVE. `web_access` declares
+#      `max_cost_usd_per_day: null` and a `budget_account: web_access` that
+#      OVERRIDES each binding's per-analyst account — so every web_access caller
+#      shares one rate window. Putting a paid search provider's cap there would
+#      silently re-budget the standing auditor, which is the R4 window's own
+#      instrument. This pack has its own account, its own window, its own cap.
+#
+# ROLLBACK is one descriptor state flip (`state: paused`) that leaves the
+# auditor and consult untouched, or one env var (`LEGBA_RESEARCH_EVIDENCE`) —
+# see below.
+#
+# THE PROGRAM FLAG — `LEGBA_RESEARCH_EVIDENCE ∈ {off, substrate, desks}`,
+# default `off`. It gates the tool, not the grant:
+#   off       — web_evidence REFUSES loudly, naming the flag. No query is
+#               issued, no row is written, nothing is fetched. The pre-research
+#               path is byte-identical (a test, not a hope).
+#   substrate — the write path runs in FULL (land, tag, archive, cap, measure)
+#               and the rows are EXCLUDED from every desk's slice by one
+#               predicate. This is the poisoning rollback rung.
+#   desks     — the exclusion lifts. The cutover.
+#
+# THE PROVIDER LADDER is `web_access`'s, verbatim and by import — the tool
+# calls `resolve_tool_search_route` on the `web_evidence` ToolSpec config below,
+# and every degradation/liveness/deferral behaviour is `web_search`'s. An empty
+# result is NEVER a completed count-0 success; a degraded-empty lands ZERO
+# signals and fails with a deferral.
+#
+# TWO FETCH DEPTHS, and the split is the licensing ledger's own rule
+# (SOURCE_LICENSING_LEDGER §E.2), resolved PER HOST from the operator-owned
+# ledger (`source_credibility.license_class`, migration 0190):
+#   cleared host      -> full text + content-addressed bytes + a citable row
+#   unreviewed host   -> TEASER depth: title/url/snippet, NO bytes, named to
+#                        the planner in prose, never numbered [N]
+#   forbidden host    -> never fetched, and NO row is written at all
+# The archiver's fail-closed gate (`WEB_ORIGIN_UNKNOWN_LICENSE_ARCHIVES=False`)
+# is HONOURED, never weakened, and `web_origin_license_gate: "inherit"` is not
+# passed. R-A ships the ledger machinery and ZERO licence verdicts —
+# classifying a host is a legal reading and an OPERATOR item.
+#
+# robots.txt IS HONOURED before every page fetch (`agency/robots.py`), and
+# fails CLOSED on an unreachable robots.txt (RFC 9309 §2.3.1.4) — stricter than
+# the crawler's fail-open, because the domain set here is chosen by a search
+# engine, not by an operator.
+#
+# Registered via scripts/bringup_register_action_packs.py.
+
+identity:
+  id: research
+  name: Outbound Research
+  schema_uri: legba/action_pack/1.0.0
+  version: "<content-hash stamped at register time>"
+  abstraction_level: L1
+  state: active
+  owner: research_program
+  created: "2026-09-05T00:00:00Z"
+
+tools:
+  - name: web_evidence
+    config:
+      # Rung 1 — the stack-family provider, resolved through the SAME ladder
+      # web_access documents (and honouring the LEGBA_SEARCH_STACK_REF global
+      # repoint). Repoint by PUTting a different component id here; the handler
+      # is chosen by the component's own subprovider, so swapping engines —
+      # SearXNG for a paid rung — never touches code.
+      provider:
+        factory_kind: stack_ref
+        raw: search.searxng.local
+        expected_family: search_provider   # documentation only — the bind-time
+                                           # check is assert_search_component()
+      # Page-fetch timeout. Longer than web_access's 15s: this tool fetches
+      # article pages, not a JSON search endpoint.
+      timeout_seconds: 20
+
+prompt_fragments:
+  - >-
+    When the corpus cannot answer a standing question, call web_evidence(query)
+    to reach outside it. What comes back is LANDED AS EVIDENCE in the substrate
+    — it is not a scratch read. Hits that carry a body are returned in `rows`
+    and are numbered [N] exactly like a corpus document: cite the ones you rely
+    on and list their signal ids in `evidence`.
+  - >-
+    Hits in `teaser_hits` carry NO body — only a title, a URL and the search
+    engine's snippet, because the publisher's licence has not been reviewed.
+    Name them in prose if they matter ("a Reuters item dated X reports …") and
+    say the body was not retrieved. NEVER cite one with [N], and never quote
+    from a snippet as though you had read the page.
+
+rules:
+  - "Research evidence is UNVERIFIED by construction: it comes from an unbounded, unreviewed domain set selected by a search engine's relevance model, which is an adversarially gameable input. Corroborate against the substrate before you lean on it, and say plainly when you could not."
+  - "A hit in `teaser_hits` was NOT read. You have its title, its URL and the engine's snippet, and nothing else. Do not summarise a page you did not fetch, and do not present a snippet as the article."
+  - "Never invent a URL, a quote, a publication date or an outlet. Every date you print must come from the source's own printed date, which for a research hit is `published_at` — absent means absent, never today's date."
+  - "An empty search result is SUSPECT, not evidence. Over a multi-engine search a truly empty result set is close to impossible, so zero results usually means the search was BROKEN — every engine blocked, a network fault — not that nothing exists."
+  - "A failed web_evidence call landed NOTHING. `search_degraded_no_results` and `search_liveness_unverified` both mean UNKNOWN, not absence: say the retrieval was degraded or unverified and name the unresponsive engines if any. `research_evidence_disabled` and `research_writeback_unavailable` are CONFIGURATION states — they say nothing whatsoever about the world."
+  - "If a failed call carries `deferral.defer` = true, do NOT search again this run — retrying against engines that are already refusing makes it worse. Work from substrate evidence, leave the standing question OPEN, and let a later run retry it."
+  - "Counts in the result are the honest record of what was refused: `refused_license` hosts whose publisher terms forbid retention (never fetched), `refused_robots` pages whose robots.txt disallowed us. A refusal is not an absence of evidence — do not report it as one."
+
+governor:
+  # Its OWN account, so a research run can never re-budget web_access's callers
+  # (the standing auditor is one of them, and it is R4's own instrument).
+  budget_account: research
+  # ~30 research queries/day against a 4-round GATHER loop, with headroom for a
+  # catch-up tick; well inside SearXNG's local capacity.
+  max_invocations_per_hour: 1000   # 2026-09-20 operator: was 30/h — the gap-filling loop is the agent
+  api_rate_per_minute: 100   # 2026-09-20 operator: was 10/min
+  # THE MONEY LEG. A real number, not null: `cost_usd` is 0.000000 on all 3,951
+  # invocations ever made, so this program is the first real test of the cap.
+  # Anchored on a free-tier SERP allowance (~2,000 queries/month) against ~30
+  # research queries/day; one number, in one descriptor, PUT-able.
+  max_cost_usd_per_day: 2.0

@@ -48,12 +48,16 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 from uuid import UUID
 
-from ..provenance.models import FindingPayload, NexusPayload
+from ._reifier_receipt import build_reifier_summary
+from ..provenance.entity_edge_writes import bind_edge_write_sink
+from ..provenance.models import NexusPayload
+from ..provenance.origin import origin_class_clause
 from ..provenance.writes import write_nexus
 from ...runtime.analyst_method import AnalystMethodResult, LLMHandlerLike
 
@@ -85,9 +89,27 @@ from .reifier_selection import (
     MIN_EDGE_CONFIDENCE,
     SelectionCounters,
     select_candidates,
+    mark_rejected_candidates,
+)
+# H14 — the wall-clock TURN budget; bookkeeping lives in ._reifier_pass_budget
+# (see its docstring). `PassBudget` rides along unmodified so a test can
+# monkeypatch ``relationship_reifier.PassBudget`` (the ``_FiniteBudget`` idiom,
+# test_event_clustering_p1.py).
+from ._reifier_pass_budget import (
+    PassBudget,
+    ChunkCostTracker,
+    DEFAULT_CANDIDATE_SECONDS_PRIOR,
+    DEFAULT_REIFIER_PASS_BUDGET_SECONDS,
+    REIFIER_PASS_BUDGET,
+    reifier_pass_budget_seconds,
 )
 
 logger = logging.getLogger(__name__)
+
+#: P7/7g-1 — the origin-class leg on the typer's fact context (SEAMS #57
+#: sweep). The reifier types the relationship holding NOW; a decade-old
+#: imported fact is not context for that, it is a different question.
+_LIVE_FACTS = origin_class_clause("")
 
 KIND_NAME: str = "relationship_reifier"
 HANDLER_VERSION: str = "0.1.0"
@@ -170,6 +192,8 @@ famous-but-absent proxy. Kept small to bound prompt tokens."""
 MIN_INTERMEDIARY_PAIR_CONFIDENCE: float = 0.55
 """Only the more-corroborated (A,B) pairs get the (more expensive) 3-entity
 candidate path. A bare single co-mention is too thin to chase a cut-out."""
+
+# (H14's pass-budget knobs live in ._reifier_pass_budget, imported above.)
 
 # Canonical relationship-type set the LLM may pick from. This is the POLARITY
 # table's key set — the model is constrained to labels we can sign. Anything
@@ -788,10 +812,11 @@ async def _recent_facts_for(
 ) -> list[dict[str, Any]]:
     """Open facts whose subject is either endpoint — context for the typer."""
     rows = await conn.fetch(
-        """
+        f"""
         SELECT subject, predicate, value
           FROM facts
          WHERE valid_until IS NULL AND superseded_by IS NULL
+           AND {_LIVE_FACTS}
            AND (lower(subject) = lower($1) OR lower(subject) = lower($2))
          ORDER BY confidence DESC, produced_at DESC
          LIMIT $3
@@ -1198,6 +1223,8 @@ async def run_method(
 
     n_candidates = len(candidates)
     typed = 0
+    rejected_ids: list[Any] = []
+    rejected_marked = 0
     accepted = 0
     rejected = 0
     alias_pairs = 0
@@ -1222,162 +1249,205 @@ async def run_method(
         target_version=options.get("target_version"),
     )
 
+    # H14 — the wall-clock turn budget (see ._reifier_pass_budget). `cost`
+    # tracks the running per-candidate mean the admission check below reads.
+    pass_budget = PassBudget(reifier_pass_budget_seconds())
+    cost = ChunkCostTracker()
+    pass_budget_exceeded = False
+
     # 2) TYPE. K-G2: N candidates per LLM call, one verdict per candidate,
     #    correlated by idx (never by position). One typer — no escalation ladder;
     #    see SINGLE_TYPER_RATIONALE.
-    for start in range(0, len(candidates), batch_size):
-        chunk = candidates[start : start + batch_size]
+    # V3/P5 — bind the task-local edge-write sink for the run: every
+    # entity_edges upsert under this loop appends {outcome, inserted}, so
+    # the receipt can split `written` into inserted/folded without reading
+    # the process-wide COUNTERS (other producers share this process).
+    with bind_edge_write_sink() as edge_writes:
+        for start in range(0, len(candidates), batch_size):
+            chunk = candidates[start : start + batch_size]
 
-        # Honor the budget envelope before each LLM call (degrade-not-drop:
-        # stop issuing new calls, keep what we already wrote).
-        if deps.budget is not None:
-            try:
-                envelope = await deps.budget.check_envelope()
-            except Exception:  # pragma: no cover - defensive
-                envelope = "ok"
-            if envelope != "ok":
-                budget_paused = True
+            # H14 — the turn gate, checked BEFORE each candidate's LLM call
+            # (see ._reifier_pass_budget for the estimate + resume rationale).
+            if not pass_budget.allows(cost.estimate):
+                pass_budget_exceeded = True
                 break
 
-        batch: list[BatchCandidate] = []
-        gate_text: dict[int, str] = {}
-        by_idx: dict[int, dict[str, Any]] = {}
-        for offset, cand in enumerate(chunk):
-            raw_source = str(cand["source_entity"])
-            raw_target = str(cand["target_entity"])
-            # D3 EARLY GATE — drop junk endpoints and canonicalize the pair
-            # BEFORE it costs a slot in a typing call. A demonym pair ("Iran" /
-            # "Iranian") both canonicalize to "Iran" → a self-loop, never a
-            # relationship; a junk endpoint ("TV") is dropped. Selection already
-            # applies this for the pg path; it stays here because the no-pool
-            # ``inputs`` path bypasses selection entirely, and because
-            # _coerce_typing still re-guards the LLM's own subject/object.
-            if is_junk_entity(raw_source) or is_junk_entity(raw_target):
-                skipped_endpoints += 1
-                continue
-            c_source, _ = canonicalize_entity(raw_source, "entity")
-            c_target, _ = canonicalize_entity(raw_target, "entity")
-            # DQ M8 — same_referent (not a bare lower() equality) also drops a
-            # plain singular/plural self-loop ("Houthi"/"Houthis").
-            if not c_source or not c_target or same_referent(c_source, c_target):
-                skipped_endpoints += 1
-                continue
-
-            facts_ctx: list[dict[str, Any]] = []
-            intermediaries: list[str] = []
-            if pool is not None:
+            # Honor the budget envelope before each LLM call (degrade-not-drop:
+            # stop issuing new calls, keep what we already wrote).
+            if deps.budget is not None:
                 try:
-                    async with pool.acquire() as conn:
-                        facts_ctx = await _recent_facts_for(
-                            conn, source=c_source, target=c_target
-                        )
-                        # 3-entity proxy-chain path (#99): only for the more-
-                        # corroborated pairs (cost guard), offer the third
-                        # entities co-mentioned with BOTH endpoints so the typer
-                        # SELECTS a real cut-out instead of hallucinating one.
-                        try:
-                            pair_conf = float(cand.get("confidence") or 0.0)
-                        except (TypeError, ValueError):
-                            pair_conf = 0.0
-                        if pair_conf >= MIN_INTERMEDIARY_PAIR_CONFIDENCE:
-                            intermediaries = await _intermediary_candidates_for(
-                                conn,
-                                source=c_source,
-                                target=c_target,
-                                limit=MAX_INTERMEDIARY_CANDIDATES,
-                            )
-                except Exception:  # pragma: no cover - context is best-effort
-                    facts_ctx = []
-                    intermediaries = []
+                    envelope = await deps.budget.check_envelope()
+                except Exception:  # pragma: no cover - defensive
+                    envelope = "ok"
+                if envelope != "ok":
+                    budget_paused = True
+                    break
 
-            idx = start + offset
-            by_idx[idx] = cand
-            # FU4 — the gate runs over the UNION of the excerpt + all backing
-            # source-signal texts, so a sports frame in a CO-SOURCE signal (not
-            # the excerpt) still gates. The PROMPT keeps the terse excerpt.
-            gate_text[idx] = _sports_gate_text(cand)
-            batch.append(
-                BatchCandidate(
-                    idx=idx,
-                    source=c_source,
-                    target=c_target,
-                    evidence_text=str(cand.get("evidence_text") or ""),
-                    facts=tuple(facts_ctx),
-                    intermediaries=tuple(intermediaries),
-                    ref=idx,
-                )
-            )
+            chunk_started = time.monotonic()
+            batch: list[BatchCandidate] = []
+            gate_text: dict[int, str] = {}
+            by_idx: dict[int, dict[str, Any]] = {}
+            for offset, cand in enumerate(chunk):
+                raw_source = str(cand["source_entity"])
+                raw_target = str(cand["target_entity"])
+                # D3 EARLY GATE — drop junk endpoints and canonicalize the pair
+                # BEFORE it costs a slot in a typing call. A demonym pair ("Iran" /
+                # "Iranian") both canonicalize to "Iran" → a self-loop, never a
+                # relationship; a junk endpoint ("TV") is dropped. Selection already
+                # applies this for the pg path; it stays here because the no-pool
+                # ``inputs`` path bypasses selection entirely, and because
+                # _coerce_typing still re-guards the LLM's own subject/object.
+                if is_junk_entity(raw_source) or is_junk_entity(raw_target):
+                    skipped_endpoints += 1
+                    continue
+                c_source, _ = canonicalize_entity(raw_source, "entity")
+                c_target, _ = canonicalize_entity(raw_target, "entity")
+                # DQ M8 — same_referent (not a bare lower() equality) also drops a
+                # plain singular/plural self-loop ("Houthi"/"Houthis").
+                if not c_source or not c_target or same_referent(c_source, c_target):
+                    skipped_endpoints += 1
+                    continue
 
-        if not batch:
-            continue
-
-        verdicts, batch_degraded = await _type_one_batch(
-            deps.llm,
-            batch,
-            batch_system_prompt=batch_system_prompt,
-            single_system_prompt=system_prompt,
-            single_max_tokens=deps.max_tokens,
-            temperature=deps.temperature,
-            gate_text=gate_text,
-            usage_sink=total_usage,
-        )
-        degraded += batch_degraded
-        typed += len(verdicts)
-
-        # 3) Side-write one nexus per ACCEPTED verdict (write_nexus supersedes a
-        #    prior open row on polarity/label change). Degrade-not-drop.
-        for verdict in verdicts:
-            # ALIAS PAIR — "these are two names for one entity". Never an edge
-            # (an entity is not related to itself), and not a plain rejection
-            # either: it is a merge-candidate signal. See reifier_alias_pairs.
-            if getattr(verdict, "same_entity", False):
-                alias_pairs += 1
+                facts_ctx: list[dict[str, Any]] = []
+                intermediaries: list[str] = []
                 if pool is not None:
-                    async with pool.acquire() as conn:
-                        outcome = await record_alias_pair(
-                            conn, verdict.source, verdict.target,
-                            confidence=verdict.confidence,
-                            keeper_cache=keeper_cache,
-                        )
-                    if outcome == "recorded":
-                        alias_pairs_routed += 1
-                continue
-            if not verdict.accepted or verdict.payload is None:
-                rejected += 1
-                continue
-            accepted += 1
-            cand = by_idx.get(int(verdict.idx))
-            if cand is None:  # pragma: no cover - defensive
-                continue
-            payload = verdict.payload
-            # event time = the pair's produced_at (the co-mention's event
-            # clock), else now. Mirrors fact_extractor stamping valid_from at
-            # event time.
-            ev = cand.get("produced_at")
-            payload.valid_from = ev if isinstance(ev, datetime) else now
-            # D15 — carry the originating signal UUIDs (the co-occurrence edge's
-            # derived_from) so the nexus lands with real provenance.
-            derived = [
-                u for u in (cand.get("derived_from") or []) if isinstance(u, UUID)
-            ]
-            payload.source_signal_ids = list(derived)
+                    try:
+                        async with pool.acquire() as conn:
+                            facts_ctx = await _recent_facts_for(
+                                conn, source=c_source, target=c_target
+                            )
+                            # 3-entity proxy-chain path (#99): only for the more-
+                            # corroborated pairs (cost guard), offer the third
+                            # entities co-mentioned with BOTH endpoints so the typer
+                            # SELECTS a real cut-out instead of hallucinating one.
+                            try:
+                                pair_conf = float(cand.get("confidence") or 0.0)
+                            except (TypeError, ValueError):
+                                pair_conf = 0.0
+                            if pair_conf >= MIN_INTERMEDIARY_PAIR_CONFIDENCE:
+                                intermediaries = await _intermediary_candidates_for(
+                                    conn,
+                                    source=c_source,
+                                    target=c_target,
+                                    limit=MAX_INTERMEDIARY_CANDIDATES,
+                                )
+                    except Exception:  # pragma: no cover - context is best-effort
+                        facts_ctx = []
+                        intermediaries = []
 
-            if pool is None:
-                # No-pool test path: the typing was counted; without a pool there
-                # is nothing to persist.
+                idx = start + offset
+                by_idx[idx] = cand
+                # FU4 — the gate runs over the UNION of the excerpt + all backing
+                # source-signal texts, so a sports frame in a CO-SOURCE signal (not
+                # the excerpt) still gates. The PROMPT keeps the terse excerpt.
+                gate_text[idx] = _sports_gate_text(cand)
+                batch.append(
+                    BatchCandidate(
+                        idx=idx,
+                        source=c_source,
+                        target=c_target,
+                        evidence_text=str(cand.get("evidence_text") or ""),
+                        facts=tuple(facts_ctx),
+                        intermediaries=tuple(intermediaries),
+                        ref=idx,
+                    )
+                )
+
+            if not batch:
+                cost.record(chunk_started, chunk)
                 continue
-            outcome = await _write_typed_nexus(
-                pool, payload, derived=derived, actx=actx, keeper_cache=keeper_cache
+
+            verdicts, batch_degraded = await _type_one_batch(
+                deps.llm,
+                batch,
+                batch_system_prompt=batch_system_prompt,
+                single_system_prompt=system_prompt,
+                single_max_tokens=deps.max_tokens,
+                temperature=deps.temperature,
+                gate_text=gate_text,
+                usage_sink=total_usage,
             )
-            if outcome == "written":
-                written += 1
-            elif outcome == "superseded":
-                written += 1
-                superseded += 1
-            elif outcome == "degraded":
-                degraded += 1
+            degraded += batch_degraded
+            typed += len(verdicts)
 
-    finding = _build_summary(
+            # 3) Side-write one nexus per ACCEPTED verdict (write_nexus supersedes a
+            #    prior open row on polarity/label change). Degrade-not-drop.
+            for verdict in verdicts:
+                # ALIAS PAIR — "these are two names for one entity". Never an edge
+                # (an entity is not related to itself), and not a plain rejection
+                # either: it is a merge-candidate signal. See reifier_alias_pairs.
+                if getattr(verdict, "same_entity", False):
+                    alias_pairs += 1
+                    if pool is not None:
+                        async with pool.acquire() as conn:
+                            outcome = await record_alias_pair(
+                                conn, verdict.source, verdict.target,
+                                confidence=verdict.confidence,
+                                keeper_cache=keeper_cache,
+                            )
+                        if outcome == "recorded":
+                            alias_pairs_routed += 1
+                    continue
+                if not verdict.accepted or verdict.payload is None:
+                    rejected += 1
+                    # H9 — remember the candidate so the run can stamp it below;
+                    # without the stamp the scan hands the same reject back next
+                    # tick (measured: 847 of the 907 un-reified head rows > 14 d old).
+                    cand_r = by_idx.get(int(verdict.idx))
+                    if cand_r is not None and cand_r.get("id") is not None:
+                        rejected_ids.append(cand_r["id"])
+                    continue
+                accepted += 1
+                cand = by_idx.get(int(verdict.idx))
+                if cand is None:  # pragma: no cover - defensive
+                    continue
+                payload = verdict.payload
+                # event time = the pair's produced_at (the co-mention's event
+                # clock), else now. Mirrors fact_extractor stamping valid_from at
+                # event time.
+                ev = cand.get("produced_at")
+                payload.valid_from = ev if isinstance(ev, datetime) else now
+                # D15 — carry the originating signal UUIDs (the co-occurrence edge's
+                # derived_from) so the nexus lands with real provenance.
+                derived = [
+                    u for u in (cand.get("derived_from") or []) if isinstance(u, UUID)
+                ]
+                payload.source_signal_ids = list(derived)
+
+                if pool is None:
+                    # No-pool test path: the typing was counted; without a pool there
+                    # is nothing to persist.
+                    continue
+                outcome = await _write_typed_nexus(
+                    pool, payload, derived=derived, actx=actx, keeper_cache=keeper_cache
+                )
+                if outcome == "written":
+                    written += 1
+                elif outcome == "superseded":
+                    written += 1
+                    superseded += 1
+                elif outcome == "degraded":
+                    degraded += 1
+
+            cost.record(chunk_started, chunk)
+
+    # V3/P5 — the edge mirror's insert/fold split for THIS run's writes. A
+    # parked endpoint (entity_edges_unresolved) shows as the
+    # written-(inserted+folded) residue rather than being counted either way.
+    inserted = sum(1 for w in edge_writes if w.get("inserted") is True)
+    folded = sum(1 for w in edge_writes if w.get("inserted") is False)
+
+    # H9 — write the rejections back ONCE per run, after every batch, in one
+    # statement: the scan's cooldown reads the stamp, status stays pending.
+    if pool is not None and rejected_ids:
+        async with pool.acquire() as conn:
+            rejected_marked = await mark_rejected_candidates(conn, rejected_ids)
+
+    # H14 — the run receipt's turn-budget readings (see ._reifier_pass_budget).
+    per_candidate_seconds = cost.per_candidate_seconds()
+    stopped_after, cursor = cost.resume_cursor(pass_budget_exceeded)
+
+    finding = build_reifier_summary(
         n_candidates=n_candidates,
         typed=typed,
         accepted=accepted,
@@ -1385,86 +1455,21 @@ async def run_method(
         alias_pairs=alias_pairs,
         alias_pairs_routed=alias_pairs_routed,
         written=written,
+        inserted=inserted,
+        folded=folded,
+        rejected_marked=rejected_marked,
         superseded=superseded,
         degraded=degraded,
         skipped_endpoints=skipped_endpoints,
         budget_paused=budget_paused,
         target_id=target_id,
         selection=selection,
+        pass_budget_exceeded=pass_budget_exceeded,
+        stopped_after=stopped_after,
+        per_candidate_seconds=per_candidate_seconds,
+        cursor=cursor,
     )
     return AnalystMethodResult(finding=finding, usage=total_usage)
-
-
-def _build_summary(
-    *,
-    n_candidates: int,
-    typed: int,
-    written: int,
-    superseded: int,
-    degraded: int,
-    skipped_endpoints: int = 0,
-    budget_paused: bool,
-    target_id: str | None,
-    accepted: int = 0,
-    rejected: int = 0,
-    alias_pairs: int = 0,
-    alias_pairs_routed: int = 0,
-    selection: SelectionCounters | None = None,
-) -> FindingPayload:
-    # K-G2 counter vocabulary. ``typed`` is now "the typer returned a verdict",
-    # which splits into ``accepted`` (a payload the coercion accepted → an edge
-    # is attempted) and ``rejected`` (the model said no relationship, or the
-    # verdict failed validation). Before batching, ``typed`` meant only the
-    # accepted half, so a run could not distinguish "the typer rejected these"
-    # from "the typer never saw these" — the exact ambiguity that let the dead-row
-    # window hide for weeks.
-    title = (
-        f"Relationship reifier: {written} nexuses written "
-        f"({typed} typed / {n_candidates} candidates)"
-    )
-    if target_id:
-        title = f"{title} for {target_id}"
-    tags = ["meta", "relationship_reifier"]
-    if written:
-        tags.append("nexuses_written")
-    if degraded:
-        tags.append("degraded")
-    if budget_paused:
-        tags.append("budget_paused")
-    # K-G2 — the selection receipt. The old summary said ``candidates=40`` on
-    # every tick while all 40 were dead rows; these counters are what makes a
-    # collapsed window visible without a DB session.
-    sel = (selection or SelectionCounters()).as_dict()
-    return FindingPayload(
-        title=title[:2048],
-        body=(
-            f"candidates={n_candidates} typed={typed} accepted={accepted} "
-            f"rejected={rejected} alias_pairs={alias_pairs} "
-            f"alias_pairs_routed={alias_pairs_routed} written={written} "
-            f"superseded={superseded} degraded={degraded} "
-            f"skipped_endpoints={skipped_endpoints} "
-            f"budget_paused={budget_paused} "
-            + " ".join(f"selection_{k}={v}" for k, v in sel.items())
-        )[:65536],
-        confidence=1.0,
-        tags=tags,
-        data={
-            "meta": True,
-            "sub_handler": "relationship_reifier",
-            "candidates": n_candidates,
-            "typed": typed,
-            "accepted": accepted,
-            "rejected": rejected,
-            "alias_pairs": alias_pairs,
-            "alias_pairs_routed": alias_pairs_routed,
-            "written": written,
-            "superseded": superseded,
-            "degraded": degraded,
-            "skipped_endpoints": skipped_endpoints,
-            "budget_paused": budget_paused,
-            "selection": sel,
-        },
-    )
 
 
 __all__ = [
@@ -1479,4 +1484,8 @@ __all__ = [
     # (:mod:`.reifier_selection`), kept importable here because this was its
     # name first and the K-G2 report cites it at this path.
     "MIN_EDGE_CONFIDENCE",
+    # H14 — the wall-clock turn budget.
+    "REIFIER_PASS_BUDGET",
+    "DEFAULT_REIFIER_PASS_BUDGET_SECONDS",
+    "DEFAULT_CANDIDATE_SECONDS_PRIOR",
 ]

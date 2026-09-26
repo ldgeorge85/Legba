@@ -221,7 +221,31 @@ def _continuity_rule(letter: str, *, read_noun: str) -> str:
 
 
 def _shape_rule(letter: str, *, block_noun: str, lead: str) -> str:
-    """The (d)-slot SHAPE rule: judgment in the body, coverage in a footer."""
+    """The (d)-slot SHAPE rule: judgment in the body, coverage in a footer.
+
+    TITLE-FRAME-FIX (2026-09-01) — ``lead`` went PLURAL at all four call sites.
+
+    D6 cured the roll call above by crowning a king, and the crown is what
+    ``VOICE_ORGANIC_REVIEW_2026-09-01`` measures: every ``lead=`` here said "the
+    single most consequential X", the world one added "getting the ranking right
+    is this read's whole job", and the sentence renders adjacent to
+    ``COMPOSITION_BODY_SHAPE``'s TITLE rule. Together they specified a headline
+    grammar that ran 93.1% of world reads.
+
+    Each ``lead=`` now asks for ONE TO THREE things WEIGHTED against each other.
+    Not a list — §5.1 Option 2's own objection is that an unranked N-thread head
+    re-creates the roll call in a new costume, and §3.4 C3 rules that a read
+    which will not state a bottom line has abdicated. The tier-specific clauses
+    are all kept: the region tier's "this is a REGION, not the world" (which
+    measurably holds), the world tier's statement of what its headline IS, and
+    the thematic tier's propagation warning.
+
+    ``CONSEQUENCE_RULE`` is deliberately NOT touched by this train. It is the
+    ORDER key, ordering remains legitimate — weighted threads are ordered
+    threads — and the review folds its rewrite into the demotion program's D-1
+    (§5.3), where the stakes ladder becomes the assembly's key rather than a
+    prompt line. Changing it here would race that A/B.
+    """
     return (
         f"({letter}) {COMPOSITION_BODY_SHAPE} "
         f"The BLUF names {lead}. '## The picture' is CONNECTED ARGUMENT: what "
@@ -692,8 +716,9 @@ _COMPOSITION_SYSTEM = with_preamble(
         "e",
         block_noun="units",
         lead=(
-            "the single most consequential thing on this desk and why it "
-            "matters — ranked on the STAKES the cited blocks describe (cited "
+            "the ONE TO THREE things that most define this desk's window and "
+            "why they matter, weighted against each other — ranked on the "
+            "STAKES the cited blocks describe (cited "
             "loss of life or armed conflict, then cited disruption to a system "
             "many actors depend on, then cited irreversibility, then cited "
             "proximity), NEVER on which block scored the highest "
@@ -795,8 +820,9 @@ _REGION_COMPOSITION_SYSTEM = with_preamble(
         block_noun="country reads",
         lead=(
             "the specific REGION this read covers (infer it from the shown "
-            "country reads, which are ALL members of ONE region) and the "
-            "single most consequential thing in it — do NOT open with a global "
+            "country reads, which are ALL members of ONE region) and the ONE "
+            "TO THREE things that most define its window, weighed against each "
+            "other — do NOT open with a global "
             "'The world faces...' frame; this is a REGION, not the world"
         ),
     )
@@ -906,10 +932,13 @@ _WORLD_OVER_REGIONS_SYSTEM = with_preamble(
         "e",
         block_noun="region reads",
         lead=(
-            "the single most consequential situation on this board and why it "
-            "matters. THIS IS THE WORLD HEADLINE: it is read as the tower's "
-            "answer to 'what matters most right now', so getting the ranking "
-            "right is this read's whole job"
+            "the ONE TO THREE situations that most define this board and why "
+            "they matter, weighed against each other. THIS IS THE WORLD READ: "
+            "it is read as the tower's answer to 'what matters most right "
+            "now', and that is a question about the WHOLE BOARD — where "
+            "several situations carry comparable stakes, saying so accurately "
+            "IS the answer, and collapsing them into one crowned driver is the "
+            "WRONG answer however confidently it is written"
         ),
     )
     + CONSEQUENCE_RULE
@@ -1014,9 +1043,11 @@ _THEMATIC_COMPOSITION_SYSTEM = with_preamble(
         "f",
         block_noun="desk reads",
         lead=(
-            "where global escalation risk is actually concentrated. THIS READ "
-            "FEEDS THE WORLD HEADLINE, so its ordering propagates: rank the "
-            "desks by stakes, and never present them as a list sorted by score"
+            "where global escalation risk actually SITS — on one desk where it "
+            "genuinely concentrates, across several where it does not. THIS "
+            "READ FEEDS THE WORLD READ, so its shape propagates: weigh the "
+            "desks by stakes, never present them as a list sorted by score, "
+            "and never manufacture a concentration the blocks do not show"
         ),
     )
     + CONSEQUENCE_RULE

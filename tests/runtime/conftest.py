@@ -53,6 +53,36 @@ from tests.data_pkg.conftest import (  # noqa: F401,E402
     test_pg_config,
     migrated_pg,
 )
+from tests._env_isolation_shared_flags import (  # noqa: E402
+    RUNTIME_SHARED_PROGRAM_FLAG_DEFAULTS,
+)
+
+
+#: TEST-ENV ISOLATION, tests/runtime half (2026-09-06 follow-up).
+#:
+#: ``tests/data_pkg/conftest.py`` pins its ``_PROGRAM_FLAG_DEFAULTS`` to the
+#: shipped default for every LEGBA_* program flag the live
+#: ``/usr/local/deployments/active/legba/.env`` leaks into the test process
+#: (see that module's docstring for the mechanism — the live file always
+#: wins on this host, worktree or main checkout). Four of those flags gate
+#: code ALSO exercised from tests/runtime
+#: (test_verify_judge_wiring.py, test_judge_metering.py,
+#: test_rag_rollback.py, test_grounding_world_context.py) — a
+#: tests/data_pkg-only pin would have left this suite leaking the operator's
+#: live values for exactly those four. The table itself lives once, in
+#: tests/_env_isolation_shared_flags.py, imported by both conftests — see
+#: that module's docstring for the shipped default + citation of each.
+@pytest.fixture(autouse=True)
+def _pin_runtime_program_flags_to_shipped_defaults(monkeypatch):
+    """Strip the shared judge/RAG-rollback flags from the process env before
+    each tests/runtime test, mirroring
+    ``tests.data_pkg.conftest._pin_program_flags_to_shipped_defaults`` for
+    the flags this suite (also) exercises. A test that wants a flag's
+    overridden/ON path sets it explicitly via ``monkeypatch.setenv(...)`` —
+    that always wins over this fixture (monkeypatch layers per-test) and
+    self-reverts at the test boundary."""
+    for env_key, _default, _why in RUNTIME_SHARED_PROGRAM_FLAG_DEFAULTS:
+        monkeypatch.delenv(env_key, raising=False)
 
 
 @pytest.fixture(scope="session")

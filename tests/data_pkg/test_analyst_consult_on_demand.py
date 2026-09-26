@@ -197,11 +197,12 @@ class _SubstrateStub:
         predicate: str | None = None,
         value: str | None = None,
         limit: int = 30,
+        as_of: str | None = None,
     ) -> dict[str, Any]:
         self.calls.append((
             "query_facts",
             {"subject": subject, "predicate": predicate, "value": value,
-             "limit": limit},
+             "limit": limit, "as_of": as_of},
         ))
         if self.raise_on == "query_facts":
             raise RuntimeError("substrate down")
@@ -262,11 +263,12 @@ class _SubstrateStub:
         rel_type: str | None = None,
         polarity: int | None = None,
         limit: int = 30,
+        as_of: str | None = None,
     ) -> dict[str, Any]:
         self.calls.append((
             "query_nexuses",
             {"subject": subject, "object": obj, "rel_type": rel_type,
-             "polarity": polarity, "limit": limit},
+             "polarity": polarity, "limit": limit, "as_of": as_of},
         ))
         if self.raise_on == "query_nexuses":
             raise RuntimeError("substrate down")
@@ -297,8 +299,19 @@ class _SubstrateStub:
             "count": len(self.hypothesis_rows),
         }
 
-    async def get_timeline(self, *, subject: str, limit: int = 40) -> dict[str, Any]:
-        self.calls.append(("get_timeline", {"subject": subject, "limit": limit}))
+    async def get_timeline(
+        self,
+        *,
+        subject: str,
+        limit: int = 40,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> dict[str, Any]:
+        self.calls.append((
+            "get_timeline",
+            {"subject": subject, "limit": limit,
+             "since": since, "until": until},
+        ))
         if self.raise_on == "get_timeline":
             raise RuntimeError("substrate down")
         return {
@@ -325,6 +338,77 @@ class _SubstrateStub:
             "compared": list(target_ids),
         }
 
+    async def query_paths(
+        self,
+        *,
+        subject: str,
+        obj: str,
+        max_hops: int = 3,
+        polarity_product: int | None = None,
+        limit: int = 30,
+        families: list[str] | None = None,
+        as_of: str | None = None,
+    ) -> dict[str, Any]:
+        self.calls.append((
+            "query_paths",
+            {"subject": subject, "object": obj, "max_hops": max_hops,
+             "polarity_product": polarity_product, "limit": limit,
+             "families": families, "as_of": as_of},
+        ))
+        if self.raise_on == "query_paths":
+            raise RuntimeError("substrate down")
+        return {
+            "subject": subject, "object": obj,
+            "paths": [], "refs": [], "warnings": [],
+        }
+
+    async def find_proxy_chains(
+        self,
+        *,
+        subject: str,
+        obj: str,
+        max_hops: int = 3,
+        polarity_product: int | None = None,
+        limit: int = 30,
+        families: list[str] | None = None,
+        as_of: str | None = None,
+    ) -> dict[str, Any]:
+        self.calls.append((
+            "find_proxy_chains",
+            {"subject": subject, "object": obj, "max_hops": max_hops,
+             "polarity_product": polarity_product, "limit": limit,
+             "families": families, "as_of": as_of},
+        ))
+        if self.raise_on == "find_proxy_chains":
+            raise RuntimeError("substrate down")
+        return {
+            "subject": subject, "object": obj,
+            "chains": [], "refs": [], "warnings": [],
+        }
+
+    async def query_brokers(
+        self,
+        *,
+        camp_a: list[str],
+        camp_b: list[str],
+        max_hops: int = 3,
+        limit: int = 50,
+        families: list[str] | None = None,
+        as_of: str | None = None,
+    ) -> dict[str, Any]:
+        self.calls.append((
+            "query_brokers",
+            {"camp_a": list(camp_a), "camp_b": list(camp_b),
+             "max_hops": max_hops, "limit": limit,
+             "families": families, "as_of": as_of},
+        ))
+        if self.raise_on == "query_brokers":
+            raise RuntimeError("substrate down")
+        return {
+            "camp_a": list(camp_a), "camp_b": list(camp_b),
+            "brokers": [], "refs": [], "warnings": [],
+        }
+
     async def list_findings(
         self,
         *,
@@ -334,12 +418,14 @@ class _SubstrateStub:
         since_hours: int | None = None,
         include_superseded: bool = False,
         limit: int = 20,
+        believed_as_of: str | None = None,
     ) -> dict[str, Any]:
         self.calls.append((
             "list_findings",
             {"target_id": target_id, "analyst_id": analyst_id,
              "severity": severity, "since_hours": since_hours,
-             "include_superseded": include_superseded, "limit": limit},
+             "include_superseded": include_superseded, "limit": limit,
+             "believed_as_of": believed_as_of},
         ))
         if self.raise_on == "list_findings":
             raise RuntimeError("substrate down")
@@ -356,11 +442,12 @@ class _SubstrateStub:
         target_id: str | None = None,
         since_hours: int | None = None,
         limit: int = 20,
+        as_of: str | None = None,
     ) -> dict[str, Any]:
         self.calls.append((
             "list_situations",
             {"status": status, "target_id": target_id,
-             "since_hours": since_hours, "limit": limit},
+             "since_hours": since_hours, "limit": limit, "as_of": as_of},
         ))
         if self.raise_on == "list_situations":
             raise RuntimeError("substrate down")
@@ -387,6 +474,27 @@ class _SubstrateStub:
             "rows": self.prediction_rows,
             "refs": [str(r) for r in self.prediction_refs],
             "count": len(self.prediction_rows),
+        }
+
+    async def belief_as_of(
+        self,
+        *,
+        as_of: str,
+        target_id: str | None = None,
+        fold_verdicts: str = "as_of",
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        self.calls.append((
+            "belief_as_of",
+            {"as_of": as_of, "target_id": target_id,
+             "fold_verdicts": fold_verdicts, "limit": limit},
+        ))
+        if self.raise_on == "belief_as_of":
+            raise RuntimeError("substrate down")
+        return {
+            "rows": [], "refs": [], "count": 0,
+            "as_of": as_of, "fold_verdicts": fold_verdicts,
+            "verdict_pending_at_as_of": 0,
         }
 
     async def list_targets(self, *, active_only: bool = True) -> dict[str, Any]:
@@ -1981,7 +2089,8 @@ async def test_finished_intelligence_tools_are_known_and_dispatchable():
     assert substrate.calls[-1] == (
         "list_findings",
         {"target_id": "country_g20_ir", "analyst_id": None, "severity": None,
-         "since_hours": 48, "include_superseded": False, "limit": 5},
+         "since_hours": 48, "include_superseded": False, "limit": 5,
+         "believed_as_of": None},
     )
 
     out = await _dispatch_tool(

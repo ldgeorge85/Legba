@@ -23,6 +23,7 @@ scope:
   languages: [en]
   tags: [analysis, thinktank, nuclear, escalation, wave_a]
   source_class: analysis
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

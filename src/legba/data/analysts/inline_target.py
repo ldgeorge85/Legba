@@ -135,8 +135,15 @@ from ._llm_budget import (
     estimate_tokens,
     input_token_budget,
 )
+from ..run_accounting import bind_run_steps
 from ..provenance.citation_markers import _PRIOR_READ_REF_RE
 from ..provenance.consumption import CONSUMPTION_CONTEXT_QUESTION
+from ..provenance.event_citations import (
+    EVENT_ID_RE,
+    event_citations_enabled,
+    event_expansion_max_signals,
+    expand_event_citation,
+)
 from ..provenance.kinds import OutputKind
 from ..provenance.models import FindingPayload
 from ..schemas.analyst import IndicatorEntry, MAX_OPEN_QUESTIONS, OpenQuestionEntry
@@ -168,11 +175,58 @@ from .output_contract import (
     salvage_json_envelope,
     strip_tool_plan_preamble,
 )
+# NATIVE TOOL ROUNDS — the structured tool channel the providers already
+# speak, behind ``LEGBA_AGENCY_NATIVE_TOOLS``. ``gather_native`` owns the
+# decision + the batch concurrency policy; ``stack.llm.tool_rounds`` owns the
+# provider-shaped wire grammar and is SHARED with the consult loop. The
+# JSON-text protocol below is unchanged and remains the fallback.
+from .gather_native import (
+    complete_with_tools,
+    execute_batch,
+    native_round_plan,
+    usage_dict,
+)
+from ..stack.llm.tool_rounds import (
+    ToolCall,
+    assistant_tool_turn,
+    parse_tool_calls,
+    tool_result_messages,
+    visible_text,
+)
+# THE GATHER TOOL SURFACE lives one floor down (extracted 2026-09-16 to make
+# room for the native-tool-call protocol): the tool-name sets, the system-suffix
+# text that describes them, and the result mining that decides which rows are
+# [N]-citable. Imported back and RE-EXPORTED, because callers outside this
+# module import these names FROM here (tests, ``journal_assessor``,
+# ``scripts/render_prompt_pack.py``).
+from .gather_surface import (  # noqa: F401 — re-export, see the module note
+    _GATHER_BLOCK_SNIPPET_CHARS,
+    _GATHER_DEFAULT_ROUNDS,
+    _GATHER_MAX_CITED_SIGNALS,
+    _GATHER_READ_TOOLS,
+    _GATHER_ROUNDS_CEILING,
+    _GATHER_SIGNAL_ROW_TOOLS,
+    _GATHER_SYSTEM_SUFFIX,
+    _GATHER_TIMEOUT_BUDGET_FRACTION,
+    _GATHER_TOOLS,
+    _GATHER_WEB_TOOLS,
+    _GATHER_WRITE_TOOLS,
+    _MAX_TITLE_CHARS,
+    _RESEARCH_TOOLS_SUFFIX,
+    _WEB_TOOLS_SUFFIX,
+    _WRITE_TOOLS_SUFFIX,
+    _gather_system_suffix,
+    _gathered_signals_from_result,
+    _render_gathered_block,
+)
+# PLANNER ACTION — how an emitted action is READ (generously) and what happens
+# when it is only NARRATED. Same leaf-module seam argument as above.
+from .planner_action import DISPATCH_SCOPED_TOOLS, dispatched_hypothesis_id, normalize_planner_action, refuse_narration, stamp_dispatch_hypothesis_id, synthesis_prompt, unreadable_answer_step  # noqa: E501
 # QW1-B DESK GROUNDING — the composition CONTINUITY idiom one floor down. The
 # slice reader stamps the marked rows; this module owns the partition, the render,
 # the honest citation shapes and the prompt clause.
 from .unit_grounding import (
-    citation_for_block,
+    grounding_citations,
     grounding_receipts,
     partition_grounding_rows,
     render_grounding_section,
@@ -303,7 +357,6 @@ class AnalystMethodResult:
 # is reached; ``_MAX_INPUT_SIGNALS`` is now just a hard backstop so a flood of
 # tiny signals can't blow past a sane row count.
 _MAX_INPUT_SIGNALS = 200        # hard backstop count (the token budget is the real bound)
-_MAX_TITLE_CHARS = 200
 _MAX_SNIPPET_CHARS = 1500       # fuller per-article context (was 400)
 # #116(e): a COMPACT snippet persisted onto each citation entry (data['citations'])
 # — the verify judge's evidence text. It MUST cover everything the analyst could
@@ -313,13 +366,6 @@ _MAX_SNIPPET_CHARS = 1500       # fuller per-article context (was 400)
 # ~97% teaser signals the body is shorter than this cap so nothing changes; the
 # extra length is spent only on the ~3% rich-body cited signals that need it.
 _CITATION_SNIPPET_CHARS = _MAX_SNIPPET_CHARS
-# Bounds on the GATHER-gathered [N] evidence rendered into the synthesis prompt
-# (Piece 1). A broad search_corpus can return 20+ rows; rendering them all as full
-# [N] blocks balloons the prompt so large the CORE plane returns an EMPTY synthesis
-# completion. Cap the citable/rendered gathered set + keep each block's preview
-# short (the FULL raw source_text stays in the citation entry for the verify judge).
-_GATHER_MAX_CITED_SIGNALS = 8
-_GATHER_BLOCK_SNIPPET_CHARS = 500
 # FAITHFULNESS TRUST BOUNDARY (2026-07): each citation ALSO carries the RAW
 # authoritative source text (``source_text``) so the verify judge can ground a
 # claim against the real article — NOT against ``distilled_body`` (the
@@ -1219,6 +1265,122 @@ def _resolve_signal_id(raw_id: Any) -> str | None:
     return None
 
 
+# V3/P2 — the ``event:<uuid>`` ref kind (spec §2.5). The token is matched
+# bare or bracketed (``[event:<uuid>]`` / ``[[event:<uuid>]]`` — marker
+# drift is the norm on this plane). Flag off ⇒ ordinary text, byte-identical.
+_EVENT_BODY_REF_RE = re.compile(
+    r"\[{1,2}\s*event:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\s*\]{1,2}"
+    r"|\bevent:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+)
+
+
+def _event_ref_uuid(m: "re.Match[str]") -> str:
+    """The uuid a body-ref match carries — group 1 is the bracketed
+    spelling, group 2 the bare one."""
+    return m.group(1) or m.group(2)
+
+
+async def _expand_event_refs(
+    pg: Any,
+    finding: "FindingPayload",
+    *,
+    start_ordinal: int,
+    stats: dict[str, int] | None = None,
+) -> tuple["FindingPayload", list[dict[str, Any]], list[UUID]]:
+    """Expand ``event:<uuid>`` refs in the finding's body + ``evidence`` list
+    into ordinary per-signal citation entries (spec §2.5, LEGBA_EVENT_CITATIONS).
+
+    Each distinct token expands through :func:`expand_event_citation` into at
+    most ``LEGBA_EVENT_EXPANSION_MAX_SIGNALS`` entries numbered onto fresh
+    ordinals past the render index; the body token is REWRITTEN to the new
+    ``[K]`` markers so the verify floor sees ordinary markers (the prose, the
+    citation bridge and the UI chips key on the same spelling — the same
+    contract ``_normalize_citation_markers`` persists). An event whose members
+    don't resolve keeps ONE bare entry (``ref_kind="event"`` + ``event_id``,
+    no ``signal_id``) and its token becomes a marker with no backing id — the
+    honest ``unresolved_citation`` shape, never a fabricated resolution.
+
+    Returns ``(finding, entries, derived_ids)`` — ``derived_ids`` carries the
+    event id AND the expanded signal ids (rule 4: the lineage walk resolves
+    either way). A pool/conn failure degrades to the bare-entry path — a
+    substrate blip must not DLQ a finding over a citation.
+    """
+    body = finding.body or ""
+    evidence = list(finding.evidence or [])
+    event_ids: list[str] = []
+    for m in _EVENT_BODY_REF_RE.finditer(body):
+        eid = _event_ref_uuid(m)
+        if eid.lower() not in {e.lower() for e in event_ids}:
+            event_ids.append(eid)
+    for item in evidence:
+        m = EVENT_ID_RE.fullmatch(str(item).strip())
+        if m and m.group(1).lower() not in {e.lower() for e in event_ids}:
+            event_ids.append(m.group(1))
+    if not event_ids:
+        return finding, [], []
+
+    max_signals = event_expansion_max_signals()
+    next_ord = start_ordinal
+    rewritten = body
+    entries: list[dict[str, Any]] = []
+    derived: list[UUID] = []
+    for eid in event_ids:
+        event_uuid = UUID(eid)
+        derived.append(event_uuid)
+        try:
+            expanded = await expand_event_citation(
+                pg, event_uuid, start_ordinal=next_ord,
+                max_signals=max_signals, build_entry=_citation_entry,
+            )
+        except Exception as exc:  # noqa: BLE001 — degrade, never sink the run
+            logger.warning(
+                "inline_target.event_citation_expand_failed event=%s err=%s",
+                eid, exc,
+            )
+            expanded = []
+            if stats is not None:  # the receipt sees the degrade (09-23 review, item 1)
+                stats["event_expand_failed"] = stats.get("event_expand_failed", 0) + 1
+        else:
+            if not expanded and stats is not None:
+                stats["event_unresolved"] = stats.get("event_unresolved", 0) + 1
+        if expanded:
+            markers = "".join(f"[{e['ordinal']}]" for e in expanded)
+            for entry in expanded:
+                entry["marker"] = f"[{entry['ordinal']}]"
+                entries.append(entry)
+                sid = entry.get("signal_id")
+                if sid:
+                    try:
+                        derived.append(UUID(sid))
+                    except (ValueError, TypeError):
+                        pass
+            next_ord = expanded[-1]["ordinal"] + 1
+        else:
+            # Cited, unresolvable — the token becomes a marker with no
+            # backing signal id; the bare entry records WHICH event the
+            # analyst meant so the citation list stays honest.
+            markers = f"[{next_ord}]"
+            entries.append({
+                "marker": f"[{next_ord}]",
+                "ref_kind": "event",
+                "event_id": eid,
+            })
+            next_ord += 1
+        rewritten = _EVENT_BODY_REF_RE.sub(
+            lambda m, _eid=eid, _markers=markers: (
+                _markers
+                if _event_ref_uuid(m).lower() == _eid.lower()
+                else m.group(0)
+            ),
+            rewritten,
+        )
+    if rewritten != body:
+        finding = finding.model_copy(update={"body": rewritten})
+    return finding, entries, derived
+
+
 def _citation_entry(
     *,
     signal_id: str | None,
@@ -2031,6 +2193,11 @@ def _coerce_finding(raw: str, *, fallback_title: str) -> FindingPayload:
         return _unstructured_finding(
             str(parsed), fallback_title=fallback_title, tag="unstructured",
         )
+    # THE FINDING BEHIND THE TOOL CALL (2026-09-09). The scan above stops at the
+    # first balanced object; live, that is a {"tool": …} protocol object with
+    # the real finding on the NEXT line. Walk past it. See ``planner_action``.
+    if not (parsed.get("title") or parsed.get("body")):
+        parsed = parse_finding_envelope(repair_confidence_word_token(raw)) or parsed
 
     try:
         # D27 (second pass): the live us/cn/fr/za findings carry a body that is
@@ -2317,307 +2484,6 @@ GROUNDING_QUESTION_SINK_KEY = "_grounding_question_sink"
 _REASONING_HIGH_DIRECTIVE = "Reasoning: high"
 
 
-# S5 — GATHER phase tuning.
-#
-# Default ONE round (vs consult's 6): the cadence assessors run under the P-1
-# ~180s invoke timeout + a tight per-day token budget. ``_GATHER_ROUNDS_CEILING``
-# is the hard clamp the runner applies regardless of what a descriptor requests,
-# so a mis-set ``method.gather.max_rounds`` can never grind forever inside a
-# cadence tick.
-_GATHER_DEFAULT_ROUNDS = 1
-_GATHER_ROUNDS_CEILING = 6
-
-# Soft latency guard: when this much of the descriptor's invoke timeout has
-# already elapsed, stop opening new GATHER rounds and go straight to synthesis
-# so the run always lands a finding inside the P-1 window (degrade-not-drop).
-_GATHER_TIMEOUT_BUDGET_FRACTION = 0.6
-
-# The GATHER tool surface, appended to the assessor's system prompt only for the
-# tool-call turns. Mirrors consult's tool catalogue (the same ``substrate_read``
-# pack), but the loop protocol is GATHER-shaped: a tool call OR a single
-# ``{"done": true}`` to proceed to synthesis. The final FINDING is produced by
-# the existing one-shot REASON+ACT call (NOT here), so the assessor's finding
-# schema and prompt stay unchanged — GATHER only enriches the context.
-#
-# SEAM #22: the read surface is ALWAYS described; the external (``web_access``)
-# and write-back (``propose_facts``) tool guidance is spliced in ONLY when the
-# running assessor is bound to those packs — see ``_gather_system_suffix``. The
-# splice text is lifted verbatim from each pack descriptor's
-# ``prompt_fragments`` + ``rules`` (the operator-authored tool-use guidance), so
-# the in-run instruction tracks the descriptor, not a hardcoded copy that can
-# drift from it.
-_GATHER_SYSTEM_SUFFIX = (
-    "\n\nBefore you write the finding you may FIRST query the substrate to "
-    "ground your assessment. Each query must be a single strict-JSON object.\n"
-    "Available tools:\n"
-    "  - search_signals(query, [limit]) — full-text signal search (title + summary).\n"
-    "  - search_corpus(query, [filters], [size]) — BM25 keyword search over the "
-    "FULL raw body of every ingested signal (the whole corpus, not the recent "
-    "slice); a row's id is the signal id. Use it to FIND source documents.\n"
-    "  - read_document(doc_id) — the FULL stored body of ONE signal by its id "
-    "(a search_corpus / search_signals row id) when you need the whole article.\n"
-    "  - query_facts([subject], [predicate], [value], [limit]) — fact store.\n"
-    "  - inspect_entity(name) — entity profile + recent facts.\n"
-    "  - query_nexuses([subject], [object], [rel_type], [polarity], [limit]) — "
-    "open signed/typed relationships.\n"
-    "  - query_hypotheses([target_id], [status], [situation_id], [limit]) — "
-    "competing-hypothesis (ACH) rows.\n"
-    "  - get_timeline(subject, [limit]) — time-ordered facts ∪ signals.\n"
-    "  - compare_targets(target_ids) — side-by-side substrate rollup.\n"
-    "  - list_findings([target_id], [analyst_id], [severity], [since_hours], "
-    "[include_superseded], [limit]) — the platform's OWN prior LIVE "
-    "assessments/findings (analyst products; superseded revisions are "
-    "excluded unless include_superseded=true). Check these FIRST to build on "
-    "and reconcile against earlier work; cite the output_id. "
-    "effective_confidence already folds in the critic.\n"
-    "  - list_situations([status], [target_id], [since_hours], [limit]) — "
-    "ongoing situation frames the platform has clustered (analysis-derived). "
-    "Use a situation_id with query_hypotheses to pull its ACH rows.\n"
-    "  - query_predictions([target_id], [status], [limit]) — the platform's "
-    "event-volume forecasts (forecast_method='naive_mean' means no trend could "
-    "be fit, low-confidence; 'auto_arima' means fitted). The feed is FROZEN "
-    "(writer retired 2026-07-01) — rows are historical, never present one as "
-    "a current forecast; cite the output_id.\n\n"
-    "Protocol:\n"
-    '  - To query, reply with strict JSON: {"tool": "<name>", "args": {...}}\n'
-    '  - When you have gathered enough, reply with: {"done": true}\n'
-    "  - Do not write the finding yet — you will be asked for it after gathering.\n"
-    "  - The full-text source documents that search_corpus / read_document return "
-    "are added to your context NUMBERED [N] (continuing after the input signals). "
-    "In the finding you write next, cite each numbered source you rely on with [N] "
-    "exactly like the input signals, and list that source's signal id in `evidence`."
-)
-
-# SEAM #22 — external + write tool guidance, spliced into the GATHER suffix only
-# when the matching pack is EFFECTIVE for this (assessor, target) run. The
-# descriptions name the tool signatures; the operator-authored tool-use rules
-# (cite-the-URL / require derived_from / propose-not-assert) come from the pack
-# descriptors via ``_gather_system_suffix``.
-_WEB_TOOLS_SUFFIX = (
-    "\n\nEXTERNAL EVIDENCE (web_access pack — egress is SSRF-guarded; a blocked "
-    "host is a clean tool failure, not a crash):\n"
-    "  - web_search(query, [limit]) — query the operator-pinned search endpoint; "
-    "returns {title, url, snippet} results.\n"
-    "  - web_fetch(url) — GET one absolute http(s) URL through the guarded "
-    "transport; returns its (capped) text body.\n"
-)
-_WRITE_TOOLS_SUFFIX = (
-    "\n\nWRITE-BACK (propose_facts pack — these PROPOSE, they do NOT assert "
-    "truth; every write REQUIRES derived_from lineage citing the substrate "
-    "UUIDs it is grounded in):\n"
-    "  - propose_fact(subject, predicate, value, derived_from=[uuid,...], "
-    "[confidence]) — write one proposed-grade fact (source_type='proposed', "
-    "confidence clamped).\n"
-    "  - request_source(need, [rationale], derived_from=[uuid,...]) — record a "
-    "coverage / evidence gap.\n"
-    "  - open_question(question, [counter], derived_from=[uuid,...]) — record an "
-    "unresolved analytical question.\n"
-)
-
-# GATHER read tools — the substrate_read pack's tool surface (S4).
-_GATHER_READ_TOOLS = (
-    "search_signals",
-    # Stage 1 — OpenSearch full-text corpus readers. Both are in the
-    # substrate_read pack (SUBSTRATE_READ_TOOLS); listing them here is what makes
-    # the inline_target GATHER loop RECOGNIZE + read-route them, so a corpus-mining
-    # analyst (corpus_researcher) can actually search + read the full-text corpus.
-    # Their result signals are then numbered [N]-citable (see
-    # ``_gathered_signals_from_result``).
-    "search_corpus",
-    "read_document",
-    "query_facts",
-    "inspect_entity",
-    "vector_search",
-    "query_nexuses",
-    "query_hypotheses",
-    "get_timeline",
-    "compare_targets",
-    # Finished-intelligence reads — the platform's OWN prior products, so an
-    # assessor can build on (and reconcile against) earlier assessments rather
-    # than re-derive from the raw signal firehose every run.
-    "list_findings",
-    "list_situations",
-    "query_predictions",
-)
-
-# SEAM #22 — external (web_access) + write-back (propose_facts) tool names. A
-# GATHER round may invoke these ONLY when the runner is passed a per-tool
-# binding for the owning pack (``options['gather_tool_bindings']``); the binding
-# is built by the host iff the pack is EFFECTIVE (assessor grant ∩ target allow)
-# and re-pointed per run by the actor. Read tools route through the default
-# ``substrate_read`` binding; these route through their own pack's binding so
-# ``Agency.run_pack_tool`` enforces tool↔pack ownership.
-_GATHER_WEB_TOOLS = (
-    "web_fetch",
-    "web_search",
-)
-_GATHER_WRITE_TOOLS = (
-    "propose_fact",
-    "request_source",
-    "open_question",
-)
-
-# The full set the GATHER loop will dispatch. Membership here only means "a
-# recognized tool name"; whether a call is actually admitted is decided by the
-# three-way gate inside the routed binding's ``run_pack_tool``. A read tool with
-# no write/web binding wired simply has no per-tool binding and falls back to the
-# substrate_read binding; a write/web tool with no binding is reported as an
-# unbound tool (a loud no-op folded back to the planner), never an ungoverned call.
-_GATHER_TOOLS = _GATHER_READ_TOOLS + _GATHER_WEB_TOOLS + _GATHER_WRITE_TOOLS
-
-
-# Piece 1 — GATHER tools whose result ROWS are substrate SIGNALS carrying a REAL
-# corpus BODY (a resolvable signal id + doc fields incl raw_body), so each
-# newly-seen result signal is numbered and becomes [N]-citable in the finding
-# (see ``_gathered_signals_from_result``). ONLY ``search_corpus`` /
-# ``read_document`` qualify — they are special-cased below because their doc
-# fields (with raw_body) sit under ``source`` / ``document``.
-#
-# ``_GATHER_SIGNAL_ROW_TOOLS`` (the generic rows-with-id numbering path) is
-# DELIBERATELY EMPTY. ``search_signals`` is EXCLUDED even though its rows carry a
-# signal id: its Postgres-FTS projection has NO body field (only id/title/category/
-# source_url/rank), so a numbered [N] citation to it would carry ``source_text=
-# None`` → a TITLE-ONLY citation → a spurious faithfulness DEMOTION for the live
-# agentic units that bind substrate_read + gather. So search_signals stays a
-# prose-summary tool exactly as before this change (no regression); it already
-# returns a ``refs`` list, so its rows still extend lineage the normal way. Every
-# OTHER read tool (query_facts / query_nexuses / list_situations / list_findings /
-# …) returns facts / relationships / products whose ids are NOT signal ids and
-# likewise stay UNnumbered — numbering one would fabricate an ungroundable citation.
-_GATHER_SIGNAL_ROW_TOOLS: tuple[str, ...] = ()
-
-
-def _render_gathered_block(
-    n: int, entry: Mapping[str, Any], fields: Mapping[str, Any] | None,
-) -> str:
-    """Render ONE [N]-numbered GATHERED source document.
-
-    V-N2 — THIS BLOCK USED TO CARRY NO DATE AT ALL. It rendered as
-    ``[N] <title> — <snippet>`` while a slice signal rendered its
-    ``ingested=`` / ``published=`` provenance line, and BOTH share one flat
-    ``[N]`` numbering space. Two consequences, both real:
-
-      * The D1 dated-claim rule (``_tradecraft._DATED_CLAIM_RULE``) requires
-        every load-bearing claim to carry "the date of the reporting that
-        supports it, taken from that source's OWN printed date". For a gathered
-        document there WAS no printed date, so the rule was unfollowable for
-        exactly the evidence a retrieval analyst leans on hardest. The only
-        date visible was whatever the prose happened to mention — which is a
-        date INSIDE the story, not the date OF the reporting.
-      * A document pulled from the ~106k-doc corpus can be years old, and
-        nothing distinguished it from a signal collected this morning. The
-        model cannot weigh recency it cannot see.
-
-    So the shape now mirrors :func:`_render_signal` field-for-field — same
-    labels, same order, same honesty about ingestion-vs-publication — plus a
-    RETRIEVED marker naming what this block IS: a document this run went and
-    fetched, not part of the cadence slice. The corpus doc carries
-    ``fetched_at`` / ``published_at`` at the top level of its OpenSearch
-    ``_source`` (see ``data/opensearch.py``); an absent date renders as an
-    absent field, never as a fabricated one.
-    """
-    title = str(entry.get("title") or "(untitled)")[:_MAX_TITLE_CHARS]
-    snippet = str(entry.get("snippet") or "")[:_GATHER_BLOCK_SNIPPET_CHARS]
-    fetched_at = published_at = None
-    if isinstance(fields, Mapping):
-        fetched_at = fields.get("fetched_at") or fields.get("produced_at")
-        published_at = fields.get("published_at")
-    parts = [f"[{n}] {title}", "    RETRIEVED (fetched by this run from the corpus"]
-    if fetched_at:
-        parts[1] += f"; collected {fetched_at}"
-    parts[1] += ")"
-    prov = ""
-    if published_at:
-        prov += f" published={published_at}"
-    source = entry.get("source")
-    if source:
-        prov += f" source={source}"
-    if prov:
-        parts.append(f"   {prov}")
-    parts.append(f"    snippet={snippet}")
-    return "\n".join(parts)
-
-
-def _gathered_signals_from_result(
-    tool_name: str, tool_result: Mapping[str, Any],
-) -> list[tuple[Any, Mapping[str, Any]]]:
-    """Extract ``(raw_signal_id, doc_fields)`` pairs from a SIGNAL-bearing tool
-    result, for numbering as [N]-citable gathered citations (Piece 1).
-
-    Per-tool result shapes (ONLY the corpus readers, which carry a REAL body):
-      * ``search_corpus`` — ``result['rows']``; each row is
-        ``{id, score, source: {…doc fields incl raw_body…}}`` (OpenSearch ``_source``).
-      * ``read_document`` — ``{status, doc_id, document: {…doc fields…}}``; mined
-        ONLY when ``status == 'found'``.
-      * the generic rows-with-id readers (:data:`_GATHER_SIGNAL_ROW_TOOLS`, now
-        EMPTY) — reserved extension point; ``search_signals`` is DELIBERATELY not
-        here (its FTS rows carry no body → a title-only citation would demote).
-
-    A non-signal tool (query_facts / list_situations / search_signals / …), an
-    errored result, or a corpus reader that returned no rows yields ``[]`` — it is
-    never numbered (it stays a prose summary in the GATHER preamble).
-    """
-    if not isinstance(tool_result, Mapping) or "error" in tool_result:
-        return []
-    out: list[tuple[Any, Mapping[str, Any]]] = []
-    if tool_name == "read_document":
-        if tool_result.get("status") == "found":
-            raw_id = tool_result.get("doc_id")
-            doc = tool_result.get("document")
-            if raw_id is not None:
-                out.append((raw_id, doc if isinstance(doc, Mapping) else {}))
-        return out
-    if tool_name == "search_corpus":
-        for row in tool_result.get("rows") or []:
-            if not isinstance(row, Mapping):
-                continue
-            raw_id = row.get("id")
-            if raw_id is None:
-                continue
-            src = row.get("source")
-            out.append((raw_id, src if isinstance(src, Mapping) else {}))
-        return out
-    if tool_name in _GATHER_SIGNAL_ROW_TOOLS:
-        for row in tool_result.get("rows") or []:
-            if not isinstance(row, Mapping):
-                continue
-            raw_id = row.get("id")
-            if raw_id is None:
-                continue
-            out.append((raw_id, row))
-    return out
-
-
-def _gather_system_suffix(
-    *,
-    web_fragments: list[str] | None = None,
-    write_fragments: list[str] | None = None,
-) -> str:
-    """Build the GATHER system suffix, splicing in external/write guidance.
-
-    The read surface is always present. ``web_fragments`` / ``write_fragments``
-    are the owning pack descriptors' ``prompt_fragments`` + ``rules`` (operator
-    authored), appended verbatim under the tool-signature block so the in-run
-    instruction tracks the descriptor. Empty/None → that section is omitted
-    (the pack is not bound for this run), keeping the read-only suffix
-    byte-for-byte unchanged for a non-write assessor.
-    """
-    suffix = _GATHER_SYSTEM_SUFFIX
-    if web_fragments is not None:
-        suffix += _WEB_TOOLS_SUFFIX
-        for frag in web_fragments:
-            frag = str(frag).strip()
-            if frag:
-                suffix += f"  {frag}\n"
-    if write_fragments is not None:
-        suffix += _WRITE_TOOLS_SUFFIX
-        for frag in write_fragments:
-            frag = str(frag).strip()
-            if frag:
-                suffix += f"  {frag}\n"
-    return suffix
-
-
 # Optional budget-headroom precheck. The actor wires this (closing over the
 # per-analyst BudgetEnforcer + a connection) so GATHER can be skipped — NOT the
 # finding — when the per-day cap has no room for the extra rounds. Returns True
@@ -2677,6 +2543,10 @@ class InlineTargetDeps:
     # Optional budget-headroom precheck (see BudgetPrecheck). None → no
     # precheck; GATHER engages whenever a binding is present.
     budget_precheck: BudgetPrecheck | None = None
+    # V3/P2 — optional substrate pool/conn for the ``event:<uuid>`` citation
+    # expansion (LEGBA_EVENT_CITATIONS). None (the pre-P2 construction shape)
+    # leaves the tokens ordinary prose even when the flag is on.
+    pg: Any | None = None
     # PER-PHASE LLM SPLIT — inject the gpt-oss ``Reasoning: high`` directive into
     # the GATHER system prompt ONLY (the heavy gpt-oss/vLLM investigation rounds).
     # Default False → the gather suffix is byte-for-byte unchanged for every
@@ -2757,6 +2627,7 @@ async def _gather(
     extra_read_tools: tuple[str, ...] = (),
     extra_write_tools: tuple[str, ...] = (),
     base_offset: int = 0,
+    dispatch_hypothesis_id: str | None = None,
 ) -> tuple[
     str, dict[str, int], list[UUID], list[dict[str, Any]], dict[int, dict[str, Any]]
 ]:
@@ -2868,162 +2739,80 @@ async def _gather(
     if deps.gather_reasoning_high:
         gather_system = f"{_REASONING_HIGH_DIRECTIVE}\n\n{gather_system}"
     tool_bindings = tool_bindings or {}
+    # NATIVE TOOL ROUNDS (``LEGBA_AGENCY_NATIVE_TOOLS``, default OFF in the
+    # tree; the orchestrator flips it at deploy). ``routable`` is precisely what
+    # THIS run can dispatch — the read surface plus whichever web/write tools
+    # have a wired per-tool binding — so the structured channel offers exactly
+    # the surface the prose suffix describes and the loop can actually reach.
+    #
+    # ``None`` means keep the JSON-text protocol, and it is returned for three
+    # different reasons that all matter: the flag is off; the bound provider has
+    # no proven native tool surface; or THERE ARE NO TOOLS AT ALL. That last one
+    # is the composition/assessment path (the five R4-frozen units bind no
+    # action pack), and it is why their request payload is bit-for-bit the same
+    # with the flag on as with it off — nothing is offered, so nothing is sent.
+    native = native_round_plan(
+        deps.llm,
+        routable=sorted(read_tools) + sorted(set(tool_bindings) - read_tools),
+    )
     messages: list[Mapping[str, Any]] = [
         {"role": "user", "content": user_prompt}
     ]
 
-    rounds_used = 0
-    for round_idx in range(max_rounds):
-        # Soft latency guard: stop opening new rounds once we've burned the
-        # latency budget so synthesis still lands inside the invoke timeout.
-        if deadline is not None and time.monotonic() >= deadline:
-            step = {
-                "phase": "gather",
-                "kind": "timeout_guard",
-                "round": rounds_used,
-            }
-            steps.append(step)
-            gather_steps.append(step)
-            logger.warning(
-                "inline_target.gather.approaching_timeout analyst_id=%s "
-                "target_id=%s rounds_used=%d — stopping GATHER, proceeding to "
-                "synthesis",
-                analyst_id, target_id, rounds_used,
-            )
-            break
-        rounds_used = round_idx + 1
-        try:
-            content, usage = await _reason_via_llm(
-                deps.llm,
-                user_prompt="",  # full conversation passed via messages below
-                max_tokens=deps.max_tokens,
-                temperature=deps.temperature,
-                system_prompt=gather_system,
-                messages=messages,
-            )
-        except Exception as exc:  # GATHER must degrade-not-drop — never fail the run
-            logger.warning(
-                "inline_target.gather.llm_error analyst_id=%s round=%d err=%s",
-                analyst_id, rounds_used, exc,
-            )
-            step = {"phase": "gather", "kind": "llm_error", "round": rounds_used}
-            steps.append(step)
-            gather_steps.append(step)
-            break
-        for k in aggregate_usage:
-            aggregate_usage[k] += usage.get(k, 0)
+    async def _dispatch(call: ToolCall) -> tuple[dict[str, Any], bool, bool]:
+        """Route ONE call to its owning pack's binding and run it.
 
-        parsed = _extract_json(content)
-        if not parsed:
-            # Unparseable GATHER turn — the loop still degrades-not-drops (break to
-            # synthesis, as before), but persist the RAW reply on the trace step so
-            # a malformed gather leaves a debuggable trail in
-            # ``intermediate_steps`` (→ analyst_traces) instead of being silently
-            # conflated with a clean "done". Shared by journal_assessor's GATHER.
-            step = {
-                "phase": "gather",
-                "kind": "unparseable",
-                "round": rounds_used,
-                "raw": (content or "")[:4000],
-            }
-            steps.append(step)
-            gather_steps.append(step)
-            break
-        if parsed.get("done") is True:
-            step = {"phase": "gather", "kind": "done", "round": rounds_used}
-            steps.append(step)
-            gather_steps.append(step)
-            break
+        Returns ``(tool_result, admitted, unbound)``. Never raises for a gate
+        denial — a block, a failure and an unbound tool all come back as an
+        ``error`` body the planner reads, because the loop degrades, it does
+        not drop.
 
-        tool_name = str(parsed.get("tool") or "")
-        tool_args = parsed.get("args") or {}
-        if not isinstance(tool_args, Mapping) or tool_name not in recognized_tools:
-            # Neither a recognized tool nor done — nudge once, then move on.
-            step = {
-                "phase": "gather",
-                "kind": "unrecognized",
-                "round": rounds_used,
-            }
-            steps.append(step)
-            gather_steps.append(step)
-            messages = messages + [
-                {"role": "assistant", "content": content},
-                {
-                    "role": "user",
-                    "content": (
-                        'Reply with a tool call ({"tool": ..., "args": ...}) '
-                        'or {"done": true}.'
-                    ),
-                },
-            ]
-            continue
-
-        # SEAM #22 — route to the OWNING pack's binding. Read tools use the
-        # default substrate_read ``binding``; web/write tools use their per-tool
-        # binding from ``tool_bindings`` (built by the host iff the pack is
-        # EFFECTIVE). A write/web tool named without a wired binding is reported
-        # as an unbound no-op (folded back to the planner), never dispatched
-        # through the substrate_read binding (where run_pack_tool would block it
-        # as unknown_tool anyway) — keep the cause explicit.
-        if tool_name in read_tools:
-            routed = binding
-        else:
-            routed = tool_bindings.get(tool_name)
+        SEAM #22 — read tools use the default ``substrate_read`` binding;
+        web/write tools use their per-tool binding from ``tool_bindings``
+        (built by the host iff the pack is EFFECTIVE). A write/web tool named
+        with no binding wired is reported as an unbound no-op, never dispatched
+        through the substrate_read binding (where ``run_pack_tool`` would block
+        it as unknown_tool anyway) — keep the cause explicit.
+        """
+        routed = binding if call.name in read_tools else tool_bindings.get(call.name)
         if routed is None:
-            tool_result: dict[str, Any] = {
-                "error": (
-                    f"tool_unbound: {tool_name} requires its action pack to be "
-                    "EFFECTIVE for this (assessor, target) — not granted/allowed"
-                )
-            }
-            step = {
-                "phase": "gather",
-                "kind": "tool_call",
-                "round": rounds_used,
-                "tool": tool_name,
-                "admitted": False,
-                "ok": False,
-            }
-            steps.append(step)
-            gather_steps.append(step)
-            messages = messages + [
-                {"role": "assistant", "content": content},
+            return (
                 {
-                    "role": "tool",
-                    "name": tool_name,
-                    # R2 / W2-T3: JSON-safe cut + explicit truncated marker.
-                    "content": _bounded_tool_json(tool_result, 4000),
+                    "error": (
+                        f"tool_unbound: {call.name} requires its action pack to "
+                        "be EFFECTIVE for this (assessor, target) — not "
+                        "granted/allowed"
+                    )
                 },
-            ]
-            continue
-
-        outcome = await routed.run_tool(tool_name, dict(tool_args))
+                False,
+                True,
+            )
+        outcome = await routed.run_tool(call.name, dict(call.args))
         if not outcome.admitted:
-            tool_result = {
-                "error": f"tool_blocked: {outcome.block_cause}: {outcome.detail}"
-            }
-        elif outcome.tool_result is None or outcome.tool_result.status == "failed":
+            return (
+                {"error": f"tool_blocked: {outcome.block_cause}: {outcome.detail}"},
+                outcome.admitted,
+                False,
+            )
+        if outcome.tool_result is None or outcome.tool_result.status == "failed":
             err = (
                 outcome.tool_result.error
                 if outcome.tool_result is not None
                 else "tool produced no result"
             )
-            tool_result = {"error": f"tool_failed: {err}"}
-        else:
-            tool_result = dict(outcome.tool_result.output)
+            return ({"error": f"tool_failed: {err}"}, outcome.admitted, False)
+        return (dict(outcome.tool_result.output), outcome.admitted, False)
 
-        ok = "error" not in tool_result
-        step = {
-            "phase": "gather",
-            "kind": "tool_call",
-            "round": rounds_used,
-            "tool": tool_name,
-            "admitted": outcome.admitted,
-            "ok": ok,
-        }
-        steps.append(step)
-        gather_steps.append(step)
+    def _fold(
+        tool_name: str, tool_args: Mapping[str, Any],
+        tool_result: Mapping[str, Any], ok: bool,
+    ) -> None:
+        """Fold ONE result into lineage, the citable set, and the prose summary.
 
+        Called in EMITTED order for every call in a batch, whatever order they
+        actually ran in — a citation number that depended on which read
+        finished first would not be reproducible.
+        """
         new_refs = _refs_from_tool_result(tool_result)
         # SEAM #22: a write tool returns the id of the row it LANDED
         # (``fact_id`` / ``hypothesis_id``) rather than a ``refs`` list — that
@@ -3096,17 +2885,239 @@ async def _gather(
                 f"{tool_name}({json.dumps(dict(tool_args))[:200]}) -> "
                 f"{json.dumps(tool_result)[:600]}"
             )
-        messages = messages + [
-            {"role": "assistant", "content": content},
-            {
-                "role": "tool",
-                "name": tool_name,
-                # R2 / W2-T3: JSON-safe cut + explicit truncated marker — a
-                # blind [:4000] chop handed the model invalid mid-JSON with no
-                # way to tell rows were missing.
-                "content": _bounded_tool_json(tool_result, 4000),
-            },
-        ]
+
+    rounds_used = 0
+    for round_idx in range(max_rounds):
+        # Soft latency guard: stop opening new rounds once we've burned the
+        # latency budget so synthesis still lands inside the invoke timeout.
+        if deadline is not None and time.monotonic() >= deadline:
+            step = {
+                "phase": "gather",
+                "kind": "timeout_guard",
+                "round": rounds_used,
+            }
+            steps.append(step)
+            gather_steps.append(step)
+            logger.warning(
+                "inline_target.gather.approaching_timeout analyst_id=%s "
+                "target_id=%s rounds_used=%d — stopping GATHER, proceeding to "
+                "synthesis",
+                analyst_id, target_id, rounds_used,
+            )
+            break
+        rounds_used = round_idx + 1
+        response: Any = None
+        try:
+            if native is None:
+                content, usage = await _reason_via_llm(
+                    deps.llm,
+                    user_prompt="",  # full conversation passed via messages below
+                    max_tokens=deps.max_tokens,
+                    temperature=deps.temperature,
+                    system_prompt=gather_system,
+                    messages=messages,
+                )
+            else:
+                response = await complete_with_tools(
+                    deps.llm,
+                    messages=messages,
+                    system_prompt=gather_system,
+                    max_tokens=deps.max_tokens,
+                    temperature=deps.temperature,
+                    plan=native,
+                )
+                # ``visible_text`` and never ``raw_response``: the core plane
+                # populates ``reasoning_content`` on every reply, and the model's
+                # private reasoning must not reach the transcript — which is
+                # persisted as ``analyst_traces.prompt_rendered``.
+                content = visible_text(response)
+                usage = usage_dict(response)
+        except Exception as exc:  # GATHER must degrade-not-drop — never fail the run
+            logger.warning(
+                "inline_target.gather.llm_error analyst_id=%s round=%d err=%s",
+                analyst_id, rounds_used, exc,
+            )
+            step = {"phase": "gather", "kind": "llm_error", "round": rounds_used}
+            steps.append(step)
+            gather_steps.append(step)
+            break
+        for k in aggregate_usage:
+            aggregate_usage[k] += usage.get(k, 0)
+
+        # --- READ THE TURN --------------------------------------------------
+        # NATIVE first: every call the assistant turn carried, in order, keyed
+        # on the structured payload and NEVER on finish_reason (the live core
+        # plane returns finish_reason=stop on a forced call).
+        calls: list[ToolCall] = []
+        protocol: str | None = None
+        if native is not None:
+            calls = parse_tool_calls(native.provider, response)
+            if calls:
+                protocol = "native"
+        if not calls:
+            parsed = _extract_json(content)
+            action = (
+                normalize_planner_action(parsed, recognized_tools)
+                if parsed and parsed.get("done") is not True
+                else None
+            )
+            if native is not None and action is None:
+                # NO tool call and no readable action: under the native protocol
+                # that IS the terminal condition — the model has stopped asking
+                # for tools, so gathering is over and the §28.4 synthesis turn
+                # writes the finding exactly as it always has. (This is why
+                # ``tool_choice`` stays ``auto``: a forced call could never
+                # stop.) ``protocol`` says which channel closed the loop.
+                step = {
+                    "phase": "gather",
+                    "kind": "done",
+                    "round": rounds_used,
+                    "protocol": (
+                        "text" if parsed and parsed.get("done") is True
+                        else "native"
+                    ),
+                    "batch": 0,
+                }
+                steps.append(step)
+                gather_steps.append(step)
+                break
+            if not parsed:
+                # Unparseable GATHER turn — the loop still degrades-not-drops (break to
+                # synthesis, as before), but persist the RAW reply on the trace step so
+                # a malformed gather leaves a debuggable trail in
+                # ``intermediate_steps`` (→ analyst_traces) instead of being silently
+                # conflated with a clean "done". Shared by journal_assessor's GATHER.
+                step = {
+                    "phase": "gather",
+                    "kind": "unparseable",
+                    "round": rounds_used,
+                    "raw": (content or "")[:4000],
+                }
+                steps.append(step)
+                gather_steps.append(step)
+                break
+            if parsed.get("done") is True:
+                step = {"phase": "gather", "kind": "done", "round": rounds_used}
+                steps.append(step)
+                gather_steps.append(step)
+                break
+            # THE ACTION IS READ GENEROUSLY (2026-09-08) — the live runs emitted
+            # the right tool and arguments in the wrong envelope and the strict
+            # ``parsed["tool"]`` read refused them. Why: ``planner_action``.
+            if action is None:
+                # Neither a recognized tool nor done — nudge once, then move on.
+                step = {
+                    "phase": "gather",
+                    "kind": "unrecognized",
+                    "round": rounds_used,
+                }
+                steps.append(step)
+                gather_steps.append(step)
+                messages = messages + [
+                    {"role": "assistant", "content": content},
+                    {
+                        "role": "user",
+                        "content": (
+                            'Reply with a tool call ({"tool": ..., "args": ...}) '
+                            'or {"done": true}.'
+                        ),
+                    },
+                ]
+                continue
+            # A native run whose model answered in the TEXT envelope anyway. Run
+            # it rather than dropping it — an executable intent is an executable
+            # intent — and TAG the round ``text`` so the two channels stay
+            # countable against each other in the trace.
+            calls = [ToolCall(id="", name=action[0], args=dict(action[1]))]
+            protocol = "text" if native is not None else None
+
+        # --- EXECUTE THE BATCH ----------------------------------------------
+        # THE SCOPE CARRY IS STRUCTURAL, NOT TRANSCRIPTIONAL: an assigned run
+        # stamps its own id onto a call that omitted it (09-08 15:37Z landed
+        # five signals with ``geo {}``).
+        batch_size = len(calls)
+        prepared: list[tuple[ToolCall, bool]] = []
+        for _call in calls:
+            _args: Mapping[str, Any] = dict(_call.args)
+            _stamped = False
+            if _call.name in DISPATCH_SCOPED_TOOLS:
+                _args, _stamped = stamp_dispatch_hypothesis_id(
+                    _args, dispatch_hypothesis_id,
+                )
+            prepared.append((
+                ToolCall(
+                    id=_call.id or f"call_{rounds_used}_{len(prepared)}",
+                    name=_call.name,
+                    args=dict(_args),
+                    raw=_call.raw,
+                ),
+                _stamped,
+            ))
+        outcomes = await execute_batch(
+            [c for c, _ in prepared], _dispatch,
+        )
+
+        bodies: list[str] = []
+        for (_call, _stamped), (tool_result, _admitted, _unbound) in zip(
+            prepared, outcomes,
+        ):
+            ok = "error" not in tool_result
+            step = {
+                "phase": "gather",
+                "kind": "tool_call",
+                "round": rounds_used,
+                "tool": _call.name,
+                "admitted": _admitted,
+                "ok": ok,
+            }
+            # Absent-by-default: an untouched run's trace stays byte-identical.
+            # An UNBOUND call never reached a binding, so it carries no dispatch
+            # scope either — the key stays off it, exactly as before.
+            if _stamped and not _unbound:
+                step["dispatch_hypothesis_id"] = dispatch_hypothesis_id
+            if native is not None:
+                # Native runs (and only native runs) record WHICH channel carried
+                # the round and how many calls shared it. Absent on a flag-off
+                # run, so that trace is byte-identical to today's.
+                step["protocol"] = protocol
+                step["batch"] = batch_size
+            steps.append(step)
+            gather_steps.append(step)
+            _fold(_call.name, _call.args, tool_result, ok)
+            # R2 / W2-T3: JSON-safe cut + explicit truncated marker — a blind
+            # [:4000] chop handed the model invalid mid-JSON with no way to tell
+            # rows were missing.
+            bodies.append(_bounded_tool_json(tool_result, 4000))
+
+        if native is not None:
+            # Replay the assistant turn VERBATIM and id-stable (rebuilt from
+            # normalized fields, so reasoning_content cannot ride along), then
+            # every result of the batch in emitted order, correlated by id.
+            #
+            # A native run uses this shape even for a round the model answered
+            # in the TEXT envelope: its content is carried through untouched and
+            # the call it described is attached as the structured call it was.
+            # The alternative — a bare ``role: tool`` message with no assistant
+            # ``tool_calls`` before it — is a malformed conversation that a
+            # strict OpenAI-compatible endpoint rejects outright, which would
+            # turn a recoverable turn into a dead round.
+            messages = messages + [
+                assistant_tool_turn(
+                    native.provider, response, [c for c, _ in prepared],
+                ),
+                *tool_result_messages(
+                    native.provider, [c for c, _ in prepared], bodies,
+                ),
+            ]
+        else:
+            messages = messages + [
+                {"role": "assistant", "content": content},
+                {
+                    "role": "tool",
+                    "name": prepared[0][0].name,
+                    "content": bodies[0],
+                },
+            ]
 
     # Assemble the preamble: the NUMBERED gathered source documents first (so the
     # model can cite them [N]), then the non-signal tool prose summaries. Both
@@ -3168,7 +3179,9 @@ async def run_method(
     # only when a GATHER binding is actually engaged (a tool-less synthesis on an
     # empty slice would fabricate). Default False → every other analyst unchanged.
     gather_only = bool(options.get("gather_only"))
-    steps: list[dict[str, Any]] = []
+    # On the run account BY REFERENCE, so a run that RAISES still persists the
+    # phases it reached (``run_accounting.bind_run_steps``).
+    steps: list[dict[str, Any]] = bind_run_steps()
 
     # --- WAKE ----------------------------------------------------------
     steps.append({"phase": "wake", "kind": "envelope"})
@@ -3250,10 +3263,38 @@ async def run_method(
     # constant here and never out of the prompt prose. Absent => the header
     # simply omits the window line.
     _window_opt = options.get("slice_window_hours")
+    # Lane narrative (Program 7 piece 7e) — the narrative_coordination unit's
+    # pre-computed SPREAD BLOCK. Opt-in ONLY via the descriptor's declared
+    # ``method.options.spread_block: true`` (ANALYST_KIND_OPTIONS["inline_target"]
+    # catalog entry, handler_options.py) — every other inline_target unit leaves
+    # this option unset and `_render_user_prompt` gets `spread_block=None`,
+    # byte-identical to before this lane. Class-mix resolution is best-effort:
+    # a `deps.pg`-less test double or a substrate blip degrades to "unknown"
+    # per source (spread_block.resolve_source_classes), never fails the run.
+    spread_block_text: str | None = None
+    if bool(options.get("spread_block")):
+        from .spread_block import build_spread_block, resolve_source_classes
+
+        source_ids = {row.get("source_id") for row in sliced if row.get("source_id")}
+        source_class_map: dict[str, str] = {}
+        if source_ids and deps.pg is not None:
+            source_class_map = await resolve_source_classes(deps.pg, source_ids)
+        spread_result = build_spread_block(
+            sliced, source_class_by_source_id=source_class_map,
+        )
+        spread_block_text = spread_result.text
+        steps.append({
+            "phase": "plan",
+            "kind": "spread_block",
+            "spread_framings": len(spread_result.framings),
+            "spread_max_sources": spread_result.max_sources,
+            "spread_min_hours": spread_result.min_hours,
+        })
     user_prompt = _render_user_prompt(
         sliced,
         target_id,
         window_hours=_window_opt if isinstance(_window_opt, int) else None,
+        spread_block=spread_block_text,
     )
     # Piece 2 (gather_only): with an EMPTY slice the default render is
     # "Number of signals: 0", which reads as "nothing to do" — the model then
@@ -3350,6 +3391,11 @@ async def run_method(
         else:
             steps.append({"phase": "ground", "kind": "no_current_facts"})
 
+    # Was this run ASSIGNED a dispatched question? Read off the sink the GROUND
+    # hook just filled — ``None`` for a self-selected run and for an analyst
+    # with no backlog, which keeps both legs below inert everywhere else.
+    assignment_question_id = dispatched_hypothesis_id(question_sink)
+
     # --- GATHER (S5 agentic investigation) -----------------------------
     # OPT-IN via the EFFECTIVE read pack: the deps-builder wires
     # ``agency_binding`` only when the assessor grants ``substrate_read``. The
@@ -3380,6 +3426,9 @@ async def run_method(
     gather_system = _gather_system_suffix(
         web_fragments=list(web_fragments) if web_fragments is not None else None,
         write_fragments=list(write_fragments) if write_fragments is not None else None,
+        # Which egress tools actually have a binding on this run — the research
+        # pack and web_access are granted independently.
+        bound_tools=tuple(tool_bindings),
     )
     if active_binding is not None:
         gathered_context, gather_usage, gather_refs, _, gather_citation_extension = (
@@ -3394,6 +3443,7 @@ async def run_method(
                 gather_system=gather_system,
                 # Piece 1: gathered [N] continue AFTER the slice signals [1..len].
                 base_offset=len(sliced),
+                dispatch_hypothesis_id=assignment_question_id,
             )
         )
         if gathered_context:
@@ -3452,12 +3502,12 @@ async def run_method(
         if grounding_text:
             user_prompt = f"{user_prompt}\n\n{grounding_text}"
             for _ordinal, _row in grounding_stamped:
-                _citation = citation_for_block(_row, _ordinal)
-                if _citation is None:
-                    # A block we cannot cite honestly (a prior read with no
-                    # resolvable id) is never rendered as an unciteable block.
-                    continue
-                citation_index[_ordinal] = {_PREBUILT_CITATION_KEY: _citation}
+                # 7g-2: ONE row can claim more than one ordinal (HISTORICAL
+                # SERIES takes one per series line), so the front door returns
+                # pairs. A block we cannot cite honestly (a prior read with no
+                # resolvable id) yields none and is never rendered as citable.
+                for _n, _citation in grounding_citations(_row, _ordinal):
+                    citation_index[_n] = {_PREBUILT_CITATION_KEY: _citation}
             ground_blocks_step: dict[str, Any] = {
                 "phase": "ground",
                 "kind": "desk_grounding_blocks",
@@ -3476,7 +3526,11 @@ async def run_method(
     try:
         content, usage = await _reason_via_llm(
             deps.llm,
-            user_prompt=user_prompt,
+            # GATHERING IS CLOSED — the synthesis turn only, because this call
+            # reuses the GATHER system prompt and its "emit every action as a
+            # protocol object" order. Gated on the binding, so a single-shot
+            # analyst is byte-identical. Evidence: ``planner_action`` docstring.
+            user_prompt=synthesis_prompt(user_prompt, gathered=active_binding is not None),
             max_tokens=deps.max_tokens,
             temperature=deps.temperature,
             # P2-T1: the descriptor-supplied unit prompt drives synthesis; fall
@@ -3507,15 +3561,18 @@ async def run_method(
     fallback_title = f"Assessment for {target_id or 'target'}"
     try:
         finding = _coerce_finding(content, fallback_title=fallback_title)
-    except OutputContractError:
-        # V-N1 DEGRADE-NOT-FABRICATE. The model returned nothing a reader could
-        # use — an empty completion, or pure tool-plan / JSON scaffolding. Fail
-        # the run the same way an LLM error fails it (the runtime classifies and
-        # DLQs), rather than persisting a row that every layer above reads as
-        # analysis. Stamped as its OWN step kind so the rate is countable from
-        # traces instead of only findable by reading findings.
-        steps.append({"phase": "reflect", "kind": "output_contract_violation"})
+    except OutputContractError as exc:
+        # V-N1 DEGRADE-NOT-FABRICATE. Nothing a reader could use came back — an
+        # empty completion, a bare tool call, or pure JSON scaffolding. Fail the
+        # way an LLM error fails (the runtime classifies and DLQs). The receipt
+        # names WHICH shape and quotes the raw head; the ``output_contract_
+        # violation`` step it replaces named neither.
+        steps.append(unreadable_answer_step(content, exc, hypothesis_id=assignment_question_id))
         raise
+
+    # THE NARRATION IS NOT A FINDING (2026-09-08) — the decision, its receipt
+    # and its raise live together in ``planner_action.refuse_narration``.
+    refuse_narration(finding.body, _GATHER_TOOLS, assignment_question_id, steps)
 
     # P0-T1 (cite the prose): parse the [N] markers the synthesis prose already
     # carries (the prompt asks every key-development claim to cite its signal [N])
@@ -3555,6 +3612,24 @@ async def run_method(
         if fallback:
             citations = fallback
             citations_fallback = True
+    # V3/P2 — the ``event:<uuid>`` ref kind (spec §2.5, LEGBA_EVENT_CITATIONS
+    # + a wired ``deps.pg``): each token in the body / ``evidence`` expands
+    # through ``signal_event_links`` into ordinary per-signal entries
+    # numbered past the render index; the body token is rewritten to the new
+    # [K] markers so the floor's bridge resolves unchanged and the event's
+    # own summary is never emitted. Flag off ⇒ ordinary text, byte-identical.
+    event_derived_ids: list[UUID] = []
+    event_expanded = 0
+    event_stats: dict[str, int] = {}
+    if event_citations_enabled() and getattr(deps, "pg", None) is not None:
+        finding, _event_entries, event_derived_ids = await _expand_event_refs(
+            deps.pg, finding,
+            start_ordinal=(max(citation_index) + 1 if citation_index else 1),
+            stats=event_stats,
+        )
+        if _event_entries:
+            citations.extend(_event_entries)
+            event_expanded = len(_event_entries)
     if citations:
         citation_data = dict(finding.data) if isinstance(finding.data, dict) else {}
         citation_data["citations"] = citations
@@ -3624,6 +3699,11 @@ async def run_method(
         # A2 — whether the persisted citations came from the unmarked-basis
         # fallback rather than a resolved [N] marker (see above).
         "citations_fallback": citations_fallback,
+        # V3/P2 — event-ref expansions this run (flag off ⇒ 0) + the degrade
+        # counts (an expansion that raised; one that resolved to no member).
+        "event_citations": event_expanded,
+        "event_expand_failed": event_stats.get("event_expand_failed", 0),
+        "event_unresolved": event_stats.get("event_unresolved", 0),
         # R-1 — whether this run resolved a backlog answer-link (see above).
         "backlog_question_addressed": backlog_question_id is not None,
     })
@@ -3642,6 +3722,12 @@ async def run_method(
     # queried) extend the lineage so the finding cites what it investigated.
     full_derived = list(derived_from)
     for r in gather_refs:
+        if r not in full_derived:
+            full_derived.append(r)
+    # V3/P2 — the event id AND its expanded signal ids both ride derived_from
+    # (spec §2.5 rule 4), so the lineage walk resolves either way and
+    # output_consumption still names the load-bearing rows.
+    for r in event_derived_ids:
         if r not in full_derived:
             full_derived.append(r)
     # R-1: the resolved backlog question's hypothesis id extends derived_from
@@ -3770,6 +3856,9 @@ class InlineTargetRunner:
         llm_narrate: LLMHandlerLike | None = None,
         narrate_max_tokens: int | None = None,
         gather_reasoning_high: bool = False,
+        # V3/P2 — optional substrate pool/conn for the event-citation
+        # expansion (LEGBA_EVENT_CITATIONS).
+        pg: Any | None = None,
     ) -> None:
         self._deps = InlineTargetDeps(
             llm=llm,
@@ -3784,6 +3873,7 @@ class InlineTargetRunner:
             invoke_timeout_seconds=invoke_timeout_seconds,
             budget_precheck=budget_precheck,
             gather_reasoning_high=gather_reasoning_high,
+            pg=pg,
         )
 
     async def __call__(

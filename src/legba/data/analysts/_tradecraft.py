@@ -116,7 +116,197 @@ BANNED_PHRASE_MARKERS: tuple[str, ...] = (
 )
 
 
-def _body_shape(sections: str) -> str:
+#: The UNIT-layer TITLE rule — byte-identical to what ``_body_shape`` has
+#: rendered since V-1 (``96a6e1e6``, 2026-08-03). Hoisted out of the function
+#: body UNCHANGED by TITLE-FRAME-FIX (2026-09-01) so the composition layer can
+#: be given a different one without moving a single byte of the nine pasted
+#: descriptor copies (``UNIT_READ_CONTRACT``), the MA4 splice anchor below, or
+#: the ``test_voice4_flip_kit`` digests that cover them.
+#:
+#: WHY THE UNIT LAYER KEEPS THE OLD WORDING. ``VOICE_ORGANIC_REVIEW_2026-09-01``
+#: §2.a settles it with the desks' own numbers: this contract is IDENTICAL on
+#: all nine desks and their frame rates run 0.0% (military_posture,
+#: proliferation_watch) to 80.8% (escalation). A constant cannot explain a
+#: spread it does not vary with. What DOES vary — and predicts each desk
+#: exactly — is the per-desk ``"title"`` schema hint in the descriptor, which is
+#: where the unit-layer half of this train lands instead.
+_TITLE_RULE_UNIT: str = (
+    "TITLE. 'title' is a headline of AT MOST 90 characters. It must NOT "
+    "repeat the BLUF sentence, must NOT begin with 'BLUF', and must NOT be "
+    "the body: it names the subject and the verdict in a few words. The "
+    "body text belongs in 'body' and nowhere else."
+)
+
+#: The COMPOSITION-layer TITLE rule — TITLE-FRAME-FIX, 2026-09-01.
+#:
+#: THE DEFECT IT REPLACES. ``_TITLE_RULE_UNIT``'s "it names the subject and the
+#: verdict in a few words" sits one sentence away from
+#: :data:`COMPOSITION_BODY_SHAPE` §2's "the single most consequential thing",
+#: and in the assembled prompt the two render as one contiguous run. Read as the
+#: model reads it: ``title = subject + verdict``, ``subject = the single most
+#: consequential thing``, verdict domain = escalation risk. The measured result
+#: (review §1.1) is the ``<subject> <driving verb> <risk noun>`` frame on
+#: **54/58 (93.1%)** of world reads in the four weeks after V-1 shipped, against
+#: **0/60** before it — while the body went the OTHER way (title-subject
+#: paragraph coverage 0.662 → 0.458, 17.2 named entities per body). The lock is
+#: therefore a HEADLINE lock sitting on a plural body: a misrepresentation
+#: defect, not a coverage one.
+#:
+#: WHY IT IS NOT A BAN. ``_tradecraft.py``'s own D2 note (see
+#: :data:`BANNED_PHRASE_MARKERS` above) records what a bare ban buys: "a ban on
+#: its own produces 'the principal vector', which is the same defect with a
+#: thesaurus". The frame already rotates 24+ verbs and 27 subjects while holding
+#: its grammar, so banning the words would move nothing. The replacement SHAPES
+#: ship in the same breath as the prohibition, exactly as ``UNIT_VERDICT_RULE``
+#: does.
+#:
+#: WHY IT KEEPS THE ANTI-ROLL-CALL FLOOR. V-1 was itself the cure for a real
+#: defect — E0's 60 world reads titled ``World situational assessment —
+#: <date>``, naming no entity at all (review §1.1: "no named entity 100.0%").
+#: Un-crowning without a floor walks straight back into it, so the rule carries
+#: an explicit second failure mode and requires at least one concrete named
+#: subject in every headline.
+#:
+#: THE SHAPE LABELS WERE DELETED, NOT BANNED — and it took two replays to get
+#: that right. Replay 1 returned *"Tension: Ukrainian strikes vs Russian Kyiv
+#: raids amid multiple regional flare-ups"*: the model printed this rule's own
+#: label as a headline prefix. The first fix was a ban — *"never print
+#: 'Tension', 'Pattern' … in the headline"* — and replay 2 returned *"Pattern:
+#: Haiti gang carnage and Russia mobilization elevate global escalation"*
+#: anyway. That is ``_tradecraft.py:112-117``'s own lesson landing on this
+#: train: **banning a phrase while still handing it over produces the phrase.**
+#: So the four ALL-CAPS tags are gone from the shape list entirely — each shape
+#: is now described rather than named — and what remains is a rule about the
+#: FORM (no label-and-colon opener) rather than about three words the model
+#: would otherwise still be reading.
+#:
+#: TWO MORE CLAUSES THE REPLAYS EARNED, both against real arm-B output:
+#:
+#: * AN ABSTRACTION IS NOT A SUBJECT. Replay 1 returned *"Energy-security
+#:   pressures and kinetic triggers heighten global escalation risk"* — plural,
+#:   un-crowned, and naming nobody: the empty universal reached by a different
+#:   road. The floor said "at least ONE concrete subject" and the model read
+#:   "concrete" as satisfiable by an abstract noun phrase, so the floor now says
+#:   what kind of thing a subject IS and names three abstractions as failures.
+#:   ``_title_frame_gauge.entity_tokens`` gained the matching fix in the same
+#:   pass, because it had scored that headline as naming somebody.
+#: * PREDICATE ON THE WORLD, AND A LONGER SUBJECT IS NOT A PLURAL HEADLINE.
+#:   **The most instructive result of the whole train.** Replay 2 — with the
+#:   concreteness floor and the brevity clause in place — un-crowned the read
+#:   exactly as intended (``crowned_rate`` 0.625 → 0.312) and the strict frame
+#:   rate went straight back UP, 0.375 → 0.750, because the model satisfied
+#:   every new constraint at once with *"Iran, Israel, Turkey, and Saudi Arabia
+#:   drive rising regional escalation risk"*: plural, concrete, inside the cap —
+#:   and the identical grammar with a longer subject. The crown was gone and the
+#:   formula was not. Two clauses answer it: the compound-subject loophole is
+#:   named and banned explicitly, and the underlying cause is addressed — the
+#:   frame survives because the VERB is about the reader's alarm rather than
+#:   about the world, so the rule now asks for a verb the event owns. This is
+#:   also why the gauge grew ``crowned_rate``: without it, replay 2 would have
+#:   read as a pure regression rather than as two thirds of a cure.
+#:
+#: WHY IT CARRIES A BREVITY CLAUSE. Measured, not guessed. The first replay of
+#: this contract (16 real world/region runs, ``planning/TITLE_FRAME_FIX_
+#: 2026-09-01.md`` §5) did what it was built to do — strict frame 80% → 30% on
+#: the region arm, subjects per title 2.2 → 3.1 — and paid for it in characters:
+#: mean title length 72.8 → 87.1 and over-90-char titles 2/10 → 4/10. Naming
+#: three subjects costs room, and the model bought that room by keeping the
+#: connective padding and running past the cap. So PLURAL IS NOT LONGER ships
+#: with an ORDER of cuts (padding first, risk noun next, a subject last) rather
+#: than as a bare restatement of the cap, which the prompt already carried and
+#: which was not what failed. It also names ``amid`` specifically: §1.6 measured
+#: it at 22.4% of world titles and 63.5% of country ones, and identifies it as
+#: "the grammatical device that lets a ≤90-char single-subject headline gesture
+#: at everything it just demoted" — under a plural contract it becomes the
+#: cheapest way to blow the cap.
+#:
+#: WHY IT IS UNDER TRACEABILITY. Review §5.1's stated objection to retargeting
+#: the title — "asks for a judgment ('the day's shape') that no evidence block
+#: states, so it needs a TRACEABILITY carve-out or it will fabricate". The last
+#: clause is that carve-out: the headline may only name what a cited block
+#: already carries, so a shape claim is a claim ABOUT the shown blocks and never
+#: a new fact about the world.
+#:
+#: THIS IS THE THIRD OF SIX DRAFTS, AND IT WAS SELECTED ON MEASUREMENT, NOT
+#: TASTE. ``planning/TITLE_FRAME_FIX_2026-09-01.md`` §5 replays six versions of
+#: this constant over the same 16 real world/region runs against the same
+#: reconstructed user prompts. Three further drafts were written and REJECTED,
+#: and what they rejected is worth keeping:
+#:
+#: * v4 added "the headline does not END on a risk word" and v5 replaced it with
+#:   "the main verb takes a WORLD object". Both drove the crown lower still
+#:   (crowned 0.125 / 0.267 against this draft's 0.250) and both bought it by
+#:   busting the character cap — over-90-char titles 5/16 and 6/15 against this
+#:   draft's 3/16, which is the LIVE baseline. A headline contract whose titles
+#:   overflow the ``<h1>`` a third of the time has traded one product defect for
+#:   another.
+#: * v6 collapsed the accreted clauses back to near-minimal on the theory that
+#:   instruction load was itself the problem. It produced the longest titles of
+#:   any arm (91.8 mean chars) and did not recover v1's frame rate.
+#:
+#: So the accretion stops here: this draft is the one that removes the most
+#: crowning while holding cap compliance at the live baseline, and it is the
+#: first draft in the series with ZERO shape-label leaks and ZERO roll-call
+#: titles. The three later drafts are recorded in the git history of this file
+#: (``0c491e65``, ``63ec3806``, ``20e49a53``) so nobody has to re-run them.
+_TITLE_RULE_COMPOSITION: str = (
+    "TITLE. 'title' is a headline of AT MOST 90 characters. It must NOT "
+    "repeat the BLUF sentence, must NOT begin with 'BLUF', and must NOT be "
+    "the body: the body text belongs in 'body' and nowhere else. "
+    "NAME THE SHAPE OF THE WINDOW, NOT ONE DRIVER. The headline says what "
+    "KIND of window these blocks show, and that is usually more than one "
+    "thing. Pick the shape the evidence actually fits, and pick it fresh: "
+    "(i) two or three subjects named together, with what they share or where "
+    "they part; (ii) two named subjects moving OPPOSITE ways, one worsening "
+    "while another eases or holds; (iii) the thing several theatres have in "
+    "common, with those theatres NAMED — a count with no names is a shrug, "
+    "not a finding; (iv) one subject alone, which is right when the evidence "
+    "genuinely concentrates there, and then you name the SPECIFIC "
+    "development rather than the category it belongs to. "
+    "Those four are SHAPES, NOT LABELS. Never open the headline with a label "
+    "and a colon — no \"Tension:\", no \"Pattern:\", no \"Update:\". The "
+    "headline opens on the world. "
+    "CONCENTRATION IS EARNED, NOT ASSUMED: take shape (iv) when one block "
+    "plainly outweighs the rest, and where two or more shown blocks carry "
+    "comparable stakes, name more than one of them. Never crown a subject "
+    "merely to make the sentence shorter. "
+    "PLURAL IS NOT LONGER. The 90-character cap does not relax because you "
+    "named three things. Name each subject by its shortest identifying word, "
+    "cut the connective scaffolding (\"amid\", \"as\", \"while <X> "
+    "continues\"), and drop the risk noun before you drop a subject. A "
+    "headline that runs past 90 characters has chosen padding over a name. "
+    "NO STANDING FORMULA. A subject, a driving verb and a risk noun — "
+    "\"<X> drives <risk>\", \"<X> sustains elevated <risk>\" — is BANNED AS A "
+    "HABIT. A risk word may appear where it is the most accurate word "
+    "available; it may NEVER be the grammar you reach for by default, and "
+    "swapping the verb or the risk word does not make it a different "
+    "headline. Where a prior read is shown to you, do not rebuild its "
+    "headline with today's nouns. "
+    "A LONGER SUBJECT IS NOT A PLURAL HEADLINE. \"<X>, <Y> and <Z> drive "
+    "<risk>\" is the SAME banned formula with three names in front of one "
+    "abstract verb; you have lengthened the subject, not changed the "
+    "sentence. "
+    "PREDICATE ON THE WORLD, NOT ON THE RISK. The verb belongs to the EVENT: "
+    "say what a subject DID or what happened to it — struck, closed, "
+    "resigned, halted, widened, held, reopened — never what it does to a "
+    "risk level. A reader learns something from a verb about the world and "
+    "nothing from a verb about their own alarm. "
+    "IT MUST STILL SAY SOMETHING. The opposite failure is a headline that "
+    "names nobody and asserts nothing — a masthead with a date, or a "
+    "universal that would be true on any day of the year. Every headline "
+    "names at least ONE concrete subject A READER COULD POINT AT — a place, "
+    "an actor, a government, an institution — in the words the shown blocks "
+    "use. An abstraction is not a subject: \"energy-security pressures\", "
+    "\"kinetic triggers\", \"regional flashpoints\" name nobody in more "
+    "words, and a headline built out of them has un-crowned the driver "
+    "without saying anything in its place. "
+    "THE HEADLINE IS UNDER TRACEABILITY: every subject, place, figure and "
+    "date in it must appear in a block you cite in the body, and it states no "
+    "fact the body has not already grounded."
+)
+
+
+def _body_shape(sections: str, *, title_rule: str = _TITLE_RULE_UNIT) -> str:
     """The ONE body-structure spec, rendered for one layer's section list.
 
     The MECHANICS (header placement, no glued headers, no bold pseudo-headers,
@@ -127,6 +317,15 @@ def _body_shape(sections: str) -> str:
     coordination finding whose body landed in the title field. Only the SECTION
     LIST differs, because a unit answers a bounded question and a composition
     argues across units.
+
+    TITLE-FRAME-FIX (2026-09-01) adds ONE more axis of difference:
+    ``title_rule``. The title MECHANICS above are still shared and still
+    byte-identical — the 90-char cap, "not the BLUF", "not the body" appear
+    verbatim in both rules — but WHAT THE HEADLINE IS FOR now differs by layer,
+    because the two layers have measurably different headline defects (review
+    §2.a vs §1.7) and one of them is a nine-descriptor paste that this train
+    deliberately does not move. Defaulting to :data:`_TITLE_RULE_UNIT` keeps
+    every existing caller byte-identical.
     """
     return (
         "BODY SHAPE. Emit exactly these parts, in this order, and NO section "
@@ -135,11 +334,7 @@ def _body_shape(sections: str) -> str:
         "it — NEVER glued to the end of the preceding sentence, NEVER replaced "
         "by a bold pseudo-header ('**Key points**'), and NEVER emitted at a "
         "deeper level ('###'). Do NOT run the whole body together as a single "
-        "paragraph with inline labels. "
-        "TITLE. 'title' is a headline of AT MOST 90 characters. It must NOT "
-        "repeat the BLUF sentence, must NOT begin with 'BLUF', and must NOT be "
-        "the body: it names the subject and the verdict in a few words. The "
-        "body text belongs in 'body' and nowhere else."
+        f"paragraph with inline labels. {title_rule}"
     )
 
 
@@ -180,10 +375,38 @@ UNIT_BODY_SHAPE: str = _body_shape(
 #: LEDGER, which is the only surface that actually knows which class a
 #: dimension is in. ``UNIT_BODY_SHAPE`` is deliberately NOT changed: a unit
 #: really does have a slice, and its coverage semantics differ.
+#:
+#: TITLE-FRAME-FIX (2026-09-01) changes TWO things here and nothing else.
+#:
+#: (a) The TITLE rule becomes :data:`_TITLE_RULE_COMPOSITION` — see that
+#: constant for the measurement. This is a COMPOSITION-ONLY swap;
+#: :data:`UNIT_BODY_SHAPE` above keeps ``_TITLE_RULE_UNIT`` byte-for-byte.
+#:
+#: (b) §2's BLUF slot stops MANDATING one thread. The old wording — "ONE
+#: sentence naming the single most consequential thing" — is the sentence that
+#: sits adjacent to the TITLE rule in the assembled prompt and supplies the
+#: singular subject the frame then predicates on (review §2.a). Retargeting the
+#: title while leaving this line intact would have the model resolve the
+#: contradiction toward the more emphatic of the two, so the pair moves
+#: together.
+#:
+#: WHAT §2 DELIBERATELY DOES NOT DO. It does not become "list the threads".
+#: Review §5.1 Option 2's own stated risk is that "an unranked N-thread head is
+#: worse than one wrong driver — it re-creates W6's 'coverage instead of
+#: judgment' in a new costume", and §3.4 C3 rules that refusing to state a
+#: bottom line "abdicates a read". So the slot still demands a BOTTOM LINE and
+#: now demands WEIGHTS: threads carry relative weight against each other, the
+#: earned single-thread state stays legal, and an unweighted list is named as
+#: the failure it is.
 COMPOSITION_BODY_SHAPE: str = _body_shape(
     "(1) the as-of line, in italics, alone on the first line; "
-    "(2) '**BLUF:**' — ONE sentence naming the single most consequential thing "
-    "on this desk and why it matters; "
+    "(2) '**BLUF:**' — the bottom line in ONE or TWO sentences: the two or "
+    "three things that most define this window and how they WEIGH against "
+    "each other, or ONE thing alone where the evidence genuinely concentrates "
+    "there. Weighted, never merely listed — say which carries more and why; an "
+    "unranked roll of threads is a roll call, not a bottom line. \"No single "
+    "thread dominates this cycle\" is itself a legitimate bottom line when the "
+    "shown blocks say so; "
     "(3) '## The picture' — AT MOST THREE paragraphs of connected argument, "
     "ordered by consequence, saying what these blocks TOGETHER show that none "
     "shows alone. Not a paragraph per block, not a bullet per block, and never "
@@ -192,7 +415,8 @@ COMPOSITION_BODY_SHAPE: str = _body_shape(
     "plainly that they agree; "
     "(5) '## Coverage' — a SINGLE closing line naming the shown blocks whose "
     "read was unremarkable and the ones with no verified read carried this "
-    "cycle."
+    "cycle.",
+    title_rule=_TITLE_RULE_COMPOSITION,
 )
 
 #: D2 — ask for the JUDGMENT, not the sentence. Ships the replacement SHAPE
@@ -583,6 +807,7 @@ SEVERITY_STATE_READ_RULE: str = (
 
 __all__ = [
     "ANALYTIC_PREAMBLE",
+    "ASSESSMENT_STANDARDS",
     "BANNED_PHRASE_MARKERS",
     "BANNED_TEMPLATE_PHRASES",
     "COMPOSITION_BODY_SHAPE",
@@ -602,3 +827,29 @@ __all__ = [
     "with_preamble",
     "with_preamble_if_absent",
 ]
+
+
+#: THE ASSESSMENT CHANNEL'S ANALYTIC STANDARDS — one text, every Assessment
+#: voice. It lived in ``assessment_prompts`` while there was one file holding
+#: every voice; STEP E gave the world's v4 voice its own leaf module
+#: (``assessment_prompt_world_v4``), and a standards block that two voice files
+#: both interpolate is a fact about the CHANNEL rather than about either voice.
+#: So it moves here, to the module that already holds every cross-layer prompt
+#: constant, BYTE-IDENTICAL — the three system prompts that interpolate it are
+#: unchanged to the character, which a hash test pins.
+ASSESSMENT_STANDARDS: str = (
+    "ANALYTIC STANDARDS, in this channel's terms. "
+    "(1) SEPARATE OBSERVATION FROM JUDGMENT — what the record STATES is "
+    "observed; what you make of it is assessed, and the sentence says which. "
+    "(2) CALIBRATE — 'likely' where one block carries it, 'possibly' where the "
+    "block is thin or below the floor, and never precision the record does not "
+    "carry. The blocks show you their own verify scores; a block at 0.36 is not "
+    "a block at 1.00 and your LANGUAGE must be able to tell them apart — the "
+    "hedge is the place that difference shows, never a sentence about the "
+    "score. "
+    "(3) MIND TIME — every block carries its own produced-at and age. An older "
+    "block is not today's news, and the record's as-of line is not each block's. "
+    "(4) BE HONEST ABOUT GAPS — where the record is thin, say so plainly rather "
+    "than padding; where two blocks disagree, surface the disagreement rather "
+    "than averaging it away."
+)

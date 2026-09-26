@@ -88,7 +88,8 @@ import { useBatchedTail } from '@/lib/liveTail'
 import type { PanelProps } from '@/types'
 import { selectRow, useSelection } from '@/state/selection'
 import { useExportBasket } from '@/state/exportBasket'
-import { FEED_VIEW_RESTORED, useFeedView } from '@/state/feedView'
+import { useFeedView } from '@/state/feedView'
+import { scopeParams, useScope } from '@/state/scope'
 import { useCountryVerdicts } from '@/v4/world/countryVerdicts'
 import { useSupplyChainDesks } from '@/v4/world/supplyChainDesks'
 import { buildProducerOptions, exactProducerIds } from '@/lib/feedProducers'
@@ -109,7 +110,6 @@ import {
 import {
   FINDINGS_SERVER_FACETS,
   SIGNALS_SERVER_FACETS,
-  chipValue,
   deriveRowVerdict,
   loadFeedViews,
   matchesFilter,
@@ -219,37 +219,33 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
     writeViewHash({ stream, sort, query: serializeFilter(filter) })
   }, [stream, sort, filter])
 
-  // ---- selection ⇄ feed, with the two directions DELIBERATELY asymmetric ----
+  // ---- SCOPE filters, FOCUS highlights (WORKSTATION_V2_FLOW_DESIGN §3) -------
   //
-  // IN  (desk → feed): a desk selection SEEDS the `target:` chip. Subscribed
-  //     imperatively rather than through a render dependency so that re-picking
-  //     the SAME desk after the operator cleared the chip by hand seeds it
-  //     again (a fresh click is a fresh instruction), while a no-op re-render
-  //     never rewrites a filter the operator has since changed.
-  // OUT (feed → Inspector): `openRow` moves the global selection and NOTHING
-  //     else. Selecting a finding does not filter the feed — that coupling is
-  //     the bug this panel was carrying.
-  useEffect(() => {
-    const seed = (sel: ReturnType<typeof useSelection.getState>['selection']) => {
-      if (sel?.kind !== 'target' || !sel.id) return
-      const view = useFeedView.getState()
-      // Already the active desk filter? Nothing to do — never churn the store.
-      if (chipValue(view.filter.chips, 'target') === sel.id) return
-      view.seedDeskFilter(sel.id)
-    }
-    // Adopt a target that was already selected when the panel mounted ONLY on a
-    // pristine feed (fresh session, no `#view=`): that is the deep-link /
-    // cold-boot case the keystone "pick a desk → see its findings" flow needs.
-    // A session where the operator has been driving the filters is never
-    // retro-seeded out from under them.
-    if (!FEED_VIEW_RESTORED) seed(useSelection.getState().selection)
-    return useSelection.subscribe((s) => seed(s.selection))
-  }, [])
+  // The old asymmetry — a `target` selection seeded a `target:` chip once via
+  // `feedView.seedDeskFilter`, a `finding` selection only highlighted — was the
+  // right fix for the wrong problem. One slot was doing two jobs, so "what am I
+  // scoped to" could not survive "what am I reading". It now does:
+  //
+  //   IN  (scope → feed): the scope's `target_id` + `since` merge into the
+  //       server params below and render as a REMOVABLE pinned chip, so the
+  //       operator can always widen back out. A scope is set by a deliberate
+  //       act (the Navigator, a desk click, ⌘K) and survives every row click.
+  //   OUT (feed row → Inspector): `openRow` moves FOCUS and nothing else. It
+  //       does not touch the scope, the filters, the paging or the scroll —
+  //       which is the defect this panel was carrying.
+  //
+  // `seedDeskFilter` is deleted, not disabled: a hidden write into the feed's
+  // own filter store was only ever a workaround for the missing scope channel.
+  const scope = useScope((s) => s.scope)
+  const clearScope = useScope((s) => s.clear)
 
   const selection = useSelection((s) => s.selection)
   /** The row the Inspector is showing, so the feed can highlight it in place. */
   const selectedRowId =
-    selection && (selection.kind === 'finding' || selection.kind === 'signal') ? selection.id : null
+    selection &&
+    (selection.kind === 'finding' || selection.kind === 'signal' || selection.kind === 'report')
+      ? selection.id
+      : null
 
   // ---- REST paging + live buffers (per active stream) ----
   /** The committed REST page — what the list actually renders. */
@@ -339,8 +335,12 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
   const exactAnalysts = useMemo(() => exactProducerIds(seenProducers), [seenProducers])
   const producerOptions = useMemo(() => buildProducerOptions(seenProducers), [seenProducers])
 
+  // Scope first, the operator's own chips second: an explicitly-typed
+  // `target:` chip WINS over the scope's desk, because a chip the operator can
+  // see and edit must never be silently overridden by an ambient one.
   const findingsParams = useMemo(() => {
     const p = new URLSearchParams({ limit: '50' })
+    for (const [k, v] of Object.entries(scopeParams(scope))) p.set(k, v)
     const pushed = serverFilterParams(filter, {
       supports: FINDINGS_SERVER_FACETS,
       exactTargets,
@@ -348,14 +348,15 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
     })
     for (const [k, v] of Object.entries(pushed)) p.set(k, v)
     return p
-  }, [filter, exactTargets, exactAnalysts])
+  }, [scope, filter, exactTargets, exactAnalysts])
 
   const signalsParams = useMemo(() => {
     const p = new URLSearchParams({ limit: '50' })
+    for (const [k, v] of Object.entries(scopeParams(scope))) p.set(k, v)
     const pushed = serverFilterParams(filter, { supports: SIGNALS_SERVER_FACETS, exactTargets })
     for (const [k, v] of Object.entries(pushed)) p.set(k, v)
     return p
-  }, [filter, exactTargets])
+  }, [scope, filter, exactTargets])
 
   // ---- REST queries — only the ACTIVE stream fetches (hard separation) ----
   // `keepPreviousData` is load-bearing: a 30s poll (or a filter change) must
@@ -758,6 +759,29 @@ export default function FindingsFeedPanel({ registration }: PanelProps) {
         else signalsQ.refetch()
       }}
     >
+      {/* THE SCOPE CHIP — pinned AHEAD of the filter bar, and removable.
+          Scope is ambient (set by the Navigator, a desk click, ⌘K), so it must
+          be visible and reversible: an invisible server filter the operator
+          cannot see or clear is the failure mode `seedDeskFilter` was written
+          to avoid, and this is the honest version of the same promise. */}
+      {scope && (
+        <div className="mb-1 flex items-center gap-1" data-testid="feed-scope-chip">
+          <span className="inline-flex max-w-full items-center gap-1 truncate rounded border border-line-strong bg-surf-3 px-2 py-0.5 text-label text-ink-1">
+            <span className="truncate">Scoped: {scope.label}</span>
+            <button
+              type="button"
+              onClick={clearScope}
+              aria-label="Clear scope"
+              title="Clear the scope — widen the feed back out"
+              className="shrink-0 text-ink-3 hover:text-ink-1"
+              data-testid="feed-scope-clear"
+            >
+              ✕
+            </button>
+          </span>
+        </div>
+      )}
+
       <FeedFilterBar
         parsed={filter}
         onChange={setFilter}

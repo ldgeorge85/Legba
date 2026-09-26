@@ -58,7 +58,7 @@ method:
   # consults (~150-250k tokens each across 10 rounds); raised to 5M for headroom
   # (the wall-clock loop budget also trims per-consult usage). Tune to taste —
   # this is a real Opus cost ceiling.
-  budget_tokens_per_day: 5000000
+  budget_tokens_per_day: 0
 
 cadence:
   # On-demand only — no fallback_schedule.  A per-actor cooldown floor serves

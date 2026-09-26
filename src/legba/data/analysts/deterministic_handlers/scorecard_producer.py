@@ -327,6 +327,10 @@ def build_scorecard_payload(
         tags=tags,
         data={
             "sub_handler": SUB_HANDLER_NAME,
+            # H12 — the instrument revision the bands were computed under
+            # (scorecard_banding.METHOD_VERSION), stamped beside them so a band
+            # diff across a method change reads as a revision, not a world move.
+            "method_version": scorecard_banding.METHOD_VERSION,
             # THE product — the T1 band_target verdict VERBATIM (already carries
             # target_id / generated_at / floors / dimensions / composition, now
             # T5-extended with the per-dimension eval block).
@@ -450,6 +454,7 @@ def _build_summary(
         tags=["deterministic", "scorecard_producer"],
         data={
             "sub_handler": SUB_HANDLER_NAME,
+            "method_version": scorecard_banding.METHOD_VERSION,
             "countries": countries,
             "written": written,
             "banded_dims": banded_dims,

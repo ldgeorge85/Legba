@@ -27,6 +27,7 @@ import type { PanelProps } from '@/types'
 import { cn } from '@/lib/cn'
 import { selectRow } from '@/state/selection'
 import { humanizeAnalystId } from '@/lib/analystNames'
+import { requestCrossFraming } from '@/lib/crossFramingLink'
 import {
   claimSeverities,
   toClaims,
@@ -234,6 +235,7 @@ export default function TargetClaimsPanel({ registration, scope }: PanelProps) {
             <ClaimItem
               key={c.id}
               claim={c}
+              targetId={target_id}
               tags={tagsById.get(c.id) ?? []}
               expanded={open === c.id}
               onToggle={() => setOpen(open === c.id ? null : c.id)}
@@ -247,11 +249,14 @@ export default function TargetClaimsPanel({ registration, scope }: PanelProps) {
 
 function ClaimItem({
   claim: c,
+  targetId,
   tags,
   expanded,
   onToggle,
 }: {
   claim: Claim
+  /** The desk this claim was published on — the cross-framing panel's scope. */
+  targetId: string | undefined
   tags: string[]
   expanded: boolean
   onToggle: () => void
@@ -321,6 +326,31 @@ function ClaimItem({
               lower-cased server-side via `?subject=`. Renders nothing when the
               subject has no live dispute (the common case → zero noise). */}
           <ContestedBadge subject={c.statement} />
+
+          {/* Wave P lane B — CROSS-FRAMING. The contested badge above answers
+              "does anything outside the tower disagree with this claim"; this
+              answers the question beside it, which no surface answered:
+              "what do the desk's OTHER units say about the same evidence, and
+              which of them are silent". Parks the claim and fires the open
+              event (`lib/crossFramingLink`), so the panel picks the subject up
+              whether it is already mounted or opened afterwards from ⌘K. */}
+          {targetId && (
+            <button
+              type="button"
+              onClick={() =>
+                requestCrossFraming({
+                  targetId,
+                  claimText: c.statement,
+                  origin: 'target.claims',
+                })
+              }
+              className="text-[10px] underline text-accent-info"
+              data-testid={`target-claim-cross-framing-${c.id}`}
+              title="put this claim against the desk's other bounded units, and see which of them are silent"
+            >
+              cross-framing ▸
+            </button>
+          )}
 
           {/* P1-T6 why-NOT (verify path): the faithfulness verify pass flagged
               span(s) of this claim's prose as unsupported — surfaced inline,

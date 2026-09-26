@@ -44,6 +44,9 @@ from typing import Any, Mapping, Sequence
 
 import networkx as nx
 
+from ...graph_projection import (
+    projection_state as graph_projection_state,
+)
 from ...provenance.models import FindingPayload
 from ....runtime.analyst_method import AnalystMethodResult
 from ._graph_metrics_sink import write_graph_metric
@@ -409,6 +412,21 @@ async def _augment_from_age(
 #: `cooccurrence` is not a claim at all. Both are excluded.
 BALANCE_FAMILIES = ("relation", "structural")
 
+#: Pre-P4b substrate read, kept verbatim for the flag-off state (see the
+#: ``projection_disabled`` branch below; 2026-09-23 P4b review).
+_LEGACY_AUGMENT_SQL = """
+                SELECT sp.canonical_name AS subject,
+                       dp.canonical_name AS object,
+                       e.polarity, e.edge_type AS rel_type
+                  FROM entity_edges e
+                  JOIN entity_profiles sp ON sp.id = e.src_id
+                  JOIN entity_profiles dp ON dp.id = e.dst_id
+                 WHERE e.valid_until IS NULL AND e.superseded_by IS NULL
+                   AND e.polarity <> 0
+                   AND e.edge_family = ANY($1::text[])
+                 LIMIT 20000
+"""
+
 
 async def _augment_from_nexuses(
     deps: Any, families: Sequence[str] | None = None,
@@ -434,6 +452,14 @@ async def _augment_from_nexuses(
     Endpoints are named by joining ``entity_profiles`` on the foreign keys, so
     two surfaces of one actor can no longer appear as two nodes of a triad —
     which would have made a triangle out of a line.
+
+    V3/P4b — READS THE PROJECTION, NOT THE SUBSTRATE. The snapshot now comes
+    from ``graph_arcs WHERE plane='world' AND src_table='entity_edges'`` — the
+    same rows the ``/graph/arcs`` API serves. The projection folds supersession
+    into ``valid_until`` at build time, so ``a.valid_until IS NULL`` alone is
+    the open predicate here. When the projection is disabled, empty or stale
+    the augment contributes nothing and says why — a reader never silently
+    answers from a table that is not there (spec §4.2 rule 5).
     """
     pool = getattr(deps, "pg_pool", None) if deps is not None else None
     if pool is None:
@@ -441,17 +467,34 @@ async def _augment_from_nexuses(
     fams = list(families) if families else list(BALANCE_FAMILIES)
     try:
         async with pool.acquire() as conn:
+            # P4b refusal contract: disabled/empty/stale projections are named
+            # states, never a silently-empty graph.
+            state, _meta = await graph_projection_state(conn)
+            if state == "projection_disabled":
+                # V3/P4b flag-off identity (review, 2026-09-23): while
+                # LEGBA_GRAPH_PROJECTION is off the projection is not this
+                # reader's declared source, so the pre-P4b substrate read runs
+                # byte-for-byte. Spec §4.2 rule 5 (never answer silently from
+                # a table that is not there) binds only once the flag names
+                # graph_arcs as the source — then empty/stale contribute nothing.
+                state = "legacy"
+            elif state != "ok":
+                logger.info("structural_balance.edge.projection_state=%s", state)
+                return []
             rows = await conn.fetch(
-                """
+                _LEGACY_AUGMENT_SQL if state == "legacy" else """
                 SELECT sp.canonical_name AS subject,
                        dp.canonical_name AS object,
-                       e.polarity, e.edge_type AS rel_type
-                  FROM entity_edges e
-                  JOIN entity_profiles sp ON sp.id = e.src_id
-                  JOIN entity_profiles dp ON dp.id = e.dst_id
-                 WHERE e.valid_until IS NULL AND e.superseded_by IS NULL
-                   AND e.polarity <> 0
-                   AND e.edge_family = ANY($1::text[])
+                       a.polarity, a.arc_type AS rel_type
+                  FROM public.graph_arcs a
+                  JOIN entity_profiles sp ON sp.id = a.from_id
+                  JOIN entity_profiles dp ON dp.id = a.to_id
+                 WHERE a.plane = 'world'
+                   AND a.src_table = 'entity_edges'
+                   AND a.arc_type <> 'via'
+                   AND a.valid_until IS NULL
+                   AND a.polarity <> 0
+                   AND a.family = ANY($1::text[])
                  LIMIT 20000
                 """,
                 fams,

@@ -1,0 +1,308 @@
+# CURATED — layer_map_ru, reviewed from the generator's DRAFT
+# (planning/LAYER_MAP_DRAFTS_2026-09-24/layer_map_ru.yaml).
+#
+# Country note (Russia): the domestic press layer is the hard one. Meduza is
+# exile media (Riga) — moved here from domestic_press to foreign_press, which
+# leaves domestic_press with zero entries; the apertures block below declares
+# that empty layer `absent` and says why. Kremlin.ru and any TASS-class feed
+# are the state's own voice: Kremlin.ru is present as `official`
+# (source_class: official, scope.geo=[RU]); no standalone TASS/state-wire
+# RSS or API source is registered anywhere in descriptors/source_*.yaml at
+# this pin — TASS appears only as one Telegram channel (tassagency_en) inside
+# the shared, multi-country source.telegram.org_channels descriptor, which
+# stays social_digest by kind/mechanism regardless of who posts. RFE/RL
+# (source.rferl.news) is USAGM/foreign-funded with a statutory editorial
+# firewall — foreign_press, unchanged from the draft.
+#
+# CHANGES vs the draft (full table also in the commit body / final report):
+#   - source.meduza.english      : domestic_press -> foreign_press (exile media)
+#   - source.gdelt.bigquery      : foreign_press  -> public_data   (structured
+#     CAMEO event rows, not editorial prose — same shape as ACLED)
+#   - source.gdelt.files         : foreign_press  -> public_data   (ditto)
+#   - source.kremlin.english     : layer unchanged (official); reason curated
+#   - source.telegram.org_channels: layer unchanged (social_digest); reason
+#     curated to name whose channels are RU-relevant
+# Every other entry's layer is unchanged; its `derived:` reason is kept with
+# " — confirmed" appended per source review instructions.
+
+identity:
+  id: layer_map_ru
+  name: RU layer map (curated, reviewed)
+  schema_uri: legba/layer_map/1.0.0
+  kind: layer_map
+  owner: curate_ru
+  created: '2026-09-24T00:00:00Z'
+  state: reviewed
+country: RU
+map_version: layer_map_ru.v1
+entries:
+- source_id: source.acled.conflict
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.aljazeera.world
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.armscontrol.news
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.bbc.world
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.breakingdefense.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.common_crawl.news
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.defensenews.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.dfrlab.reports
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.discord.default
+  layer: social_digest
+  reason: 'derived: kind=discord_webhook — always relevant regardless of country — confirmed'
+- source_id: source.dw.world
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.euronews.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.euvsdisinfo.cases
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.firecrawl.default
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.france24.afrique
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.gdelt.bigquery
+  layer: public_data
+  reason: 'curated: the descriptor''s own docstring says it plainly — "Structured
+    CAMEO event rows — model-free ingest." Despite source_class: reporting, the
+    artifact is a coded conflict/political-event dataset (event type, actors,
+    geography — no article prose, no editorial voice), the same shape as
+    source.acled.conflict, which this same draft already buckets public_data.
+    Changed foreign_press -> public_data to match the vocabulary''s own
+    "conflict-event datasets" example under public_data (docs/LAYERS.md). Not
+    RU-specific — the same reclassification would apply in any country''s map.'
+- source_id: source.gdelt.files
+  layer: public_data
+  reason: 'curated: same reasoning as source.gdelt.bigquery above — "GDELT also
+    publishes its raw 2.0 event stream ... structured event stream (same class
+    as gdelt_query)" per the descriptor''s own comment. Changed foreign_press ->
+    public_data.'
+- source_id: source.generic_webhook.default
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.guardian.world
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.intelmq.cisa_kev
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO
+    feed — confirmed'
+- source_id: source.isw.assessments
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed
+    (the descriptor''s own scope note names an "Escalation unit: RU/UA" — ISW
+    covers Russia by name, but analysis-class sources still fold to public_data
+    under this vocabulary, platform-wide, not a country-specific call)'
+- source_id: source.kremlin.english
+  layer: official
+  reason: 'curated: source.kremlin.english (President of Russia — Events,
+    English) is scope.geo=[RU], source_class: official — the working Russian
+    government primary-source publisher (the descriptor''s own note: the RU
+    MFA''s own feed is bot-walled, so this is the operative channel). Read as
+    the state''s own voice/framing, not neutral fact — the registrar seeded it
+    at a deliberately low credibility (0.35/gov) for exactly that reason. This
+    is RU''s `official` layer.'
+- source_id: source.malijet.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.maritimeexecutive.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.mediacloud.world
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.meduza.english
+  layer: foreign_press
+  reason: 'curated: Meduza is scope.geo=[RU], source_class: reporting, and the
+    descriptor''s own comment calls it "Independent exiled Russian outlet" —
+    it has operated from exile (Riga, Latvia) since Russia forced it out and
+    designated it an "undesirable organization" in 2022/2023. It is not a
+    masthead headquartered in and operating from Russia, so under this layer''s
+    country-scoped reading (which is about where the newsroom sits and who it
+    answers to, not the source_class field) it is exile/foreign-based coverage
+    of Russia, not domestic press. Changed domestic_press -> foreign_press.
+    See the domestic_press aperture below for what this leaves.'
+- source_id: source.middleeasteye.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.navalnews.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.northernminer.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.oilprice.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.opensanctions.api
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO
+    feed — confirmed'
+- source_id: source.opensanctions.bulk
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO
+    feed — confirmed'
+- source_id: source.reliefweb.reports
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO
+    feed — confirmed'
+- source_id: source.rferl.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed
+    (the descriptor''s own comment names the beat: "Russia/Ukraine/Iran/Central
+    Asia", USAGM-funded with a statutory editorial firewall — foreign-funded,
+    editorially independent, correctly foreign_press for RU)'
+- source_id: source.rigzone.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.rsshub.apnews.world
+  layer: foreign_press
+  reason: 'derived: wire/agency feed — descriptors/wire_map.yaml same_publisher[''ap''] — confirmed
+    (AP is not Russia''s state wire, so foreign_press is right per the "wire
+    copies -> foreign_press unless the wire is the state''s" rule)'
+- source_id: source.rsshub.rfa.korea
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.rsshub.rfi.afrique
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.rsshub.rfi.ameriques
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.sahelintelligence.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.splash247.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.telegram.org_channels
+  layer: social_digest
+  reason: 'curated: a shared, multi-country Telegram channel monitor
+    (kind=telegram_channel — social_digest by mechanism regardless of who
+    posts). For RU specifically, descriptors/source_telegram_monitor.yaml''s
+    config.channels carries real RU-adjacent channels: tassagency_en (TASS,
+    Russian state news agency) and MFARussia (Russian Ministry of Foreign
+    Affairs) under its STATE category, plus meduzalive (Meduza, independent/
+    exiled) and rferl (RFE/RL) under INDEPENDENT — genuine channel-level
+    coverage, not a generic placeholder. These are curated official- and
+    media-organization channels, not a monitor of ordinary Russian public
+    Telegram discourse — see the social_digest aperture below for the
+    regime-public gap this leaves.'
+- source_id: source.theloadstar.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.un.press
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO
+    feed — confirmed'
+- source_id: source.un_news.africa
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO
+    feed — confirmed'
+- source_id: source.un_news.middle_east
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO
+    feed — confirmed'
+- source_id: source.un_news.peace_security
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO
+    feed — confirmed'
+- source_id: source.usgs.earthquakes
+  layer: physical
+  reason: 'derived: kind=geojson — always relevant regardless of country — confirmed'
+- source_id: source.who.disease_outbreak_news
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO
+    feed — confirmed'
+- source_id: source.worldnuclearnews.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.wto.news
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO
+    feed — confirmed'
+apertures:
+- layer: official
+  declared: present
+  reason: 'curated: source.kremlin.english is RU''s own government primary-source
+    publisher, present in this corpus. But the layer is thin: no standalone
+    RU state-wire (TASS-class) RSS/API source is registered anywhere in
+    descriptors/source_*.yaml at this pin — TASS shows up only as one channel
+    (tassagency_en) inside the shared source.telegram.org_channels descriptor,
+    which is classed social_digest by kind/mechanism, not official. Present,
+    not absent or unmeasured: one real primary-source feed exists, it is just
+    narrower than "the state''s own voice" might suggest.'
+- layer: domestic_press
+  declared: absent
+  reason: 'curated: no source in this corpus is a masthead headquartered in and
+    operating inside Russia under independent editorial control. The one
+    candidate, Meduza, is exile media (Riga) and is now classed foreign_press
+    above. This tracks a real condition, not only a source-corpus gap: after
+    Russia''s March 2022 "fake news" law and the mass "undesirable
+    organization" / "foreign agent" designations that followed, outlets that
+    stayed inside Russia and kept an independent editorial line (Novaya
+    Gazeta suspended, TV Rain/Dozhd forced to relocate, Ekho Moskvy shut down)
+    were suspended, closed, or driven into exile — genuinely domestic
+    independent press in Russia is now a narrow, high-risk residual, not a
+    layer this platform could realistically source and sustain today.
+    Declared absent, not unmeasured, because this is a checkable state of the
+    media environment, not a polling gap nobody has looked at yet.'
+- layer: foreign_press
+  declared: present
+  reason: 'curated: abundant. Every generic international-press/wire feed with
+    no country scope (BBC, Guardian, DW, Al Jazeera, Euronews, the trade/
+    sector press, AP wire via rsshub) reads Russia from outside by default;
+    RFE/RL (source.rferl.news — USAGM-funded, statutory editorial firewall,
+    an explicit Russia/Ukraine/Central Asia beat) and Meduza (exile,
+    reclassified above) add RU-focused foreign-based coverage specifically.'
+- layer: social_digest
+  declared: present
+  reason: 'curated: source.telegram.org_channels carries real RU-adjacent
+    channel-level coverage — tassagency_en (TASS) and MFARussia under STATE,
+    meduzalive and rferl under INDEPENDENT (see the entry above). Regime-
+    public gap: every one of those is an official-institution or professional-
+    media channel — this platform has no digest of ordinary Russian public
+    Telegram discourse (the grassroots RU-Telegram layer, as distinct from
+    state/media/IGO accounts), so this aperture reads institutional voices,
+    not the regime-public pulse. Present but narrow. source.discord.default is
+    also social_digest by kind but is KEYED/unconfigured (no registered
+    Discord app, no channel list) and contributes nothing RU-specific yet.'
+- layer: public_data
+  declared: present
+  reason: 'curated: broad. ACLED and GDELT (reclassified above) both code RU/UA
+    conflict events; OpenSanctions'' bulk + API catalogs carry Russian PEP/
+    sanctions entities; EUvsDisinfo curates pro-Kremlin disinformation cases
+    specifically; ISW''s analysis desk names an explicit RU/UA escalation
+    unit; arms-control, UN, WHO, and WTO feeds apply globally, Russia
+    included.'
+- layer: physical
+  declared: present
+  reason: 'curated: source.usgs.earthquakes is a global, no-country-scope
+    GeoJSON feed — it captures Russian seismic events (e.g. Kamchatka, one of
+    the most seismically active regions on Earth) the same as anywhere else.
+    No RU-specific gap.'

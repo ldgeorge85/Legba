@@ -1,0 +1,574 @@
+/* mobile.css — the phone surface's own layer.
+ *
+ * Tokens come from `globals.css` (imported by the entry, not redefined here):
+ * `--surf-*`, `--ink-*`, `--line-*`, `--sev-*`. Duplicating them would create
+ * exactly the drift the token system exists to prevent, so every colour below
+ * is a var reference and the light/dark flip comes for free.
+ *
+ * Two rules shape everything here:
+ *   1. TAP TARGETS ARE 44 px. Every interactive element clears Apple's and
+ *      Google's minimum. Dense type is fine; dense HIT AREAS are not.
+ *   2. ONE COLUMN, ALWAYS. Designed at 390 px. Larger phones and tablets get
+ *      a wider readable measure, never a second column — the whole point of
+ *      this surface is that it is a page, not a workspace.
+ */
+
+.m-app {
+  min-height: 100vh;
+  background: var(--surf-base);
+  color: var(--ink-1);
+  /* The consult bar is fixed; keep the last row clear of it. */
+  padding-bottom: 4.5rem;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.m-screen {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 0.75rem 0.875rem 1.5rem;
+}
+
+/* ── masthead ─────────────────────────────────────────────────────────── */
+
+.m-masthead {
+  padding: 0.5rem 0 0.75rem;
+  border-bottom: 1px solid var(--line-1);
+  margin-bottom: 0.75rem;
+}
+
+.m-title {
+  font-size: 1.25rem;
+  line-height: 1.3;
+  font-weight: 600;
+  margin: 0.25rem 0;
+  color: var(--ink-1);
+}
+
+.m-sub,
+.m-verify,
+.m-aperture {
+  margin: 0.125rem 0;
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+}
+
+.m-aperture {
+  color: var(--ink-3);
+}
+
+.m-cached {
+  margin: 0.375rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--sev-medium);
+}
+
+.m-back {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 0.5rem 0 0;
+  background: none;
+  border: 0;
+  color: var(--accent);
+  font-size: 0.9375rem;
+  cursor: pointer;
+}
+
+/* ── date navigation ──────────────────────────────────────────────────── */
+
+.m-datenav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.m-daylabel {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+  font-size: 0.875rem;
+}
+
+.m-btn {
+  min-height: 44px;
+  padding: 0 0.875rem;
+  background: var(--surf-2);
+  color: var(--ink-1);
+  border: 1px solid var(--line-1);
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.m-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ── groups + rows ────────────────────────────────────────────────────── */
+
+.m-group {
+  margin-bottom: 1.25rem;
+}
+
+.m-subgroup {
+  margin-bottom: 0.75rem;
+}
+
+.m-heading {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+}
+
+.m-subheading {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  margin: 0.5rem 0 0.375rem;
+  font-weight: 500;
+}
+
+.m-count {
+  display: inline-block;
+  margin-left: 0.375rem;
+  padding: 0 0.375rem;
+  border-radius: 0.75rem;
+  background: var(--surf-3);
+  color: var(--ink-2);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.m-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.m-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 100%;
+  min-height: 44px;
+  padding: 0.75rem;
+  text-align: left;
+  background: var(--surf-1);
+  border: 1px solid var(--line-1);
+  border-radius: 0.625rem;
+  color: inherit;
+  cursor: pointer;
+}
+
+.m-row:active {
+  background: var(--surf-2);
+}
+
+.m-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.m-row-target {
+  font-weight: 600;
+  font-size: 0.9375rem;
+  color: var(--ink-1);
+}
+
+.m-row-meta {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+}
+
+.m-row-lead {
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  /* Two lines is the most a navigator row may spend on prose. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ── chips ────────────────────────────────────────────────────────────── */
+
+.m-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.75rem;
+  background: var(--surf-3);
+  border: 1px solid var(--line-1);
+  color: var(--ink-2);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.m-chip-ok {
+  color: var(--state-ok);
+  border-color: var(--state-ok);
+}
+
+.m-chip-warn {
+  color: var(--sev-medium);
+  border-color: var(--sev-medium);
+}
+
+.m-chip-quiet {
+  color: var(--ink-3);
+}
+
+.m-chip-tap {
+  min-height: 44px;
+  padding: 0 0.75rem;
+  cursor: pointer;
+  font-size: 0.8125rem;
+}
+
+.m-chip-on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.m-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.m-sev-critical {
+  border-color: var(--sev-critical);
+  color: var(--sev-critical);
+}
+.m-sev-high {
+  border-color: var(--sev-high);
+  color: var(--sev-high);
+}
+.m-sev-medium,
+.m-sev-elevated,
+.m-sev-moderate {
+  border-color: var(--sev-medium);
+  color: var(--sev-medium);
+}
+.m-sev-low,
+.m-sev-none {
+  border-color: var(--line-1);
+  color: var(--ink-3);
+}
+
+/* ── the record ───────────────────────────────────────────────────────── */
+
+.m-record {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.m-block {
+  padding: 0.75rem;
+  background: var(--surf-1);
+  border: 1px solid var(--line-1);
+  border-radius: 0.625rem;
+}
+
+.m-block-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  margin: 0 0 0.375rem;
+  color: var(--ink-1);
+}
+
+.m-ordinal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 0.25rem;
+  background: var(--surf-3);
+  color: var(--ink-3);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.m-block-q {
+  font-size: 0.8125rem;
+  color: var(--ink-3);
+  margin: 0 0 0.5rem;
+  font-style: italic;
+}
+
+.m-block-meta {
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  color: var(--ink-3);
+}
+
+/* Citation chips come from the shared CitedProse; give them a phone-sized
+   hit area without touching the workstation's own rule. */
+.m-record [data-testid='citation-chip'],
+.m-record [data-testid='citation-unresolved'] {
+  min-height: 32px;
+  padding: 0 0.375rem;
+}
+
+/* ── sections ─────────────────────────────────────────────────────────── */
+
+.m-section {
+  border: 1px solid var(--line-1);
+  border-radius: 0.625rem;
+  margin-bottom: 0.625rem;
+  background: var(--surf-1);
+  overflow: hidden;
+}
+
+.m-section-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 0.875rem;
+  background: var(--surf-2);
+  border: 0;
+  color: var(--ink-1);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.m-caret {
+  margin-left: auto;
+  color: var(--ink-3);
+}
+
+.m-section-body {
+  padding: 0.75rem 0.875rem;
+}
+
+.m-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1875rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--line-1);
+}
+
+.m-item:last-child {
+  border-bottom: 0;
+}
+
+.m-item-title {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--ink-1);
+}
+
+.m-item-meta {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+}
+
+.m-item-body {
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+}
+
+.m-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.m-note {
+  margin: 0 0 0.625rem;
+  font-size: 0.75rem;
+  color: var(--ink-3);
+}
+
+.m-quiet {
+  color: var(--ink-3);
+  font-size: 0.8125rem;
+}
+
+.m-empty {
+  padding: 2rem 0;
+  text-align: center;
+  color: var(--ink-3);
+}
+
+.m-error {
+  color: var(--sev-critical);
+  font-size: 0.8125rem;
+}
+
+.m-filterbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+  background: var(--surf-2);
+  border: 1px solid var(--accent);
+  border-radius: 0.5rem;
+  font-size: 0.8125rem;
+}
+
+/* ── the consult sheet ────────────────────────────────────────────────── */
+
+.m-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  background: var(--surf-2);
+  border-top: 1px solid var(--line-2);
+  /* Clear the iOS home indicator. */
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+.m-sheet-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 52px;
+  padding: 0 0.875rem;
+  background: none;
+  border: 0;
+  color: var(--ink-1);
+  cursor: pointer;
+  text-align: left;
+}
+
+.m-sheet-label {
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.m-sheet-pin {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.m-sheet-open .m-sheet-body {
+  display: flex;
+  flex-direction: column;
+  max-height: 60vh;
+}
+
+.m-sheet-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 0.875rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.m-turn {
+  padding: 0.5rem 0.625rem;
+  border-radius: 0.5rem;
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+}
+
+.m-turn-user {
+  background: var(--surf-3);
+  align-self: flex-end;
+  max-width: 85%;
+}
+
+.m-turn-assistant {
+  background: var(--surf-1);
+  border: 1px solid var(--line-1);
+}
+
+.m-turn-pending {
+  background: var(--surf-1);
+  opacity: 0.7;
+}
+
+.m-model-row {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.875rem 0;
+}
+
+.m-model-select {
+  min-height: 32px;
+  padding: 0.125rem 0.375rem;
+  background: var(--surf-1);
+  border: 1px solid var(--line-1);
+  border-radius: 0.375rem;
+  color: var(--ink-1);
+  font-size: 0.8125rem;
+  font-family: inherit;
+}
+
+.m-sheet-compose {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.625rem 0.875rem 0.875rem;
+  border-top: 1px solid var(--line-1);
+}
+
+.m-input {
+  flex: 1;
+  min-height: 44px;
+  padding: 0.5rem 0.625rem;
+  background: var(--surf-1);
+  border: 1px solid var(--line-1);
+  border-radius: 0.5rem;
+  color: var(--ink-1);
+  /* 16px keeps iOS Safari from zooming the viewport on focus. */
+  font-size: 16px;
+  font-family: inherit;
+  resize: none;
+}
+
+.m-send {
+  min-width: 64px;
+  min-height: 44px;
+  padding: 0 0.875rem;
+  background: var(--accent);
+  border: 0;
+  border-radius: 0.5rem;
+  color: #fff;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.m-send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

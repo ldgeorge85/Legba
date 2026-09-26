@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 from uuid import uuid4
 
+from ..pinned_context import normalize_pinned_context
 from ..provenance.kinds import OutputKind as _OutputKind
 
 logger = logging.getLogger(__name__)
@@ -176,6 +177,13 @@ async def run_method(
         max_analyze_tokens=int(deps.max_analyze_tokens),
         emit_facts=bool(deps.emit_facts),
         emit_hypotheses=bool(deps.emit_hypotheses),
+        # Records the operator pinned to the conversation. Normalized ONCE
+        # here, at submit — the registry already validated them, but the actor
+        # input is JSON off a queue, and the workflow input is DURABLE, so the
+        # clamped rows are what gets persisted rather than whatever arrived.
+        # Empty when no pins were sent, so every pre-pin workflow input stays
+        # byte-identical to today's.
+        pinned_context=normalize_pinned_context(first.get("pinned_context")),
     )
 
     # Instance id grammar: deep_consult.<scope>.<short> — NO '::' (D8).

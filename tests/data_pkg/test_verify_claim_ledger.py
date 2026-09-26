@@ -31,6 +31,7 @@ import inspect
 from typing import Any
 from uuid import uuid4
 
+import legba.data.provenance.assembly_arms as assembly_arms
 import legba.data.provenance.composition_integrity as composition_integrity
 import legba.data.provenance.judge_input_checks as judge_input_checks
 import legba.data.provenance.judge_verdict_parsing as judge_verdict_parsing
@@ -202,6 +203,38 @@ def test_fail_class_mapping_table() -> None:
         # in that desk's cited read. Soft — a provenance defect, not a
         # fabricated world fact.
         "attribution_ungrounded_quote": FAIL_CLASS_SOFT,
+        # D-3 (2026-09-03): THE ASSEMBLY ARMS — four deterministic auditors over
+        # the ``assembly.v1`` payload. ALL SIXTEEN ARE HARD, and the argument is
+        # one sentence: they grade a GENERATED document, so none of them can
+        # express "the model outran its evidence" — each says "the record does
+        # not say what it says it says", which is the house definition of hard.
+        # A fire is a BROKEN CONSTRUCTOR (the assembler self-checks every span
+        # and raises rather than emitting one that does not resolve), which is
+        # why every one of them logs at ERROR and names the generator.
+        #
+        # ARM 1 — quote fidelity. Precedence order: a truncated capture explains
+        # a bad offset, and a drifted body explains both.
+        "quote_origin_truncated": FAIL_CLASS_HARD,
+        "quote_origin_drift": FAIL_CLASS_HARD,
+        "quote_offset_mismatch": FAIL_CLASS_HARD,
+        "quote_not_contained": FAIL_CLASS_HARD,
+        # ARM 2 — scope preservation, both directions (this class has
+        # false-positived three times, so the replay covers the way it fails).
+        "scope_truncated": FAIL_CLASS_HARD,
+        "scope_widened": FAIL_CLASS_HARD,
+        # ARM 3 — attribution equality: desk / target / date / head id against
+        # the captured origin record.
+        "attribution_head_unresolved": FAIL_CLASS_HARD,
+        "attribution_desk_mismatch": FAIL_CLASS_HARD,
+        "attribution_target_mismatch": FAIL_CLASS_HARD,
+        "attribution_date_mismatch": FAIL_CLASS_HARD,
+        # ARM 4 — selection honesty: the coverage ledger and the drop ledger.
+        "coverage_unit_missing": FAIL_CLASS_HARD,
+        "coverage_unit_duplicated": FAIL_CLASS_HARD,
+        "coverage_status_invalid": FAIL_CLASS_HARD,
+        "drop_count_mismatch": FAIL_CLASS_HARD,
+        "drop_why_unknown": FAIL_CLASS_HARD,
+        "drop_order_violation": FAIL_CLASS_HARD,
     }
     # Unknown reasons degrade conservatively (soft, never a fabricated hard).
     assert fail_class_for_reason("some_future_reason") == FAIL_CLASS_SOFT
@@ -213,7 +246,14 @@ def _reason_literals(node: ast.AST) -> tuple[set[str], bool]:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return {node.value}, False
     if isinstance(node, ast.Name):
-        for mod in (verify, judge_input_checks, composition_integrity):
+        # 2026-09-03 (D-3): ``assembly_arms`` joins the resolver, not only the
+        # tree list. D-1 §3.7 offered the alternative — spell every new reason
+        # as a bare literal at its emission site — and it is the worse one: the
+        # sixteen assembly reasons carry a paragraph of rationale EACH, beside
+        # the constant, and a literal at the emission site would put the name
+        # and its argument in two places. Widening the resolver can only ever
+        # make the guard see MORE, which is the safe direction for a guard.
+        for mod in (verify, judge_input_checks, composition_integrity, assembly_arms):
             resolved = getattr(mod, node.id, None)
             if isinstance(resolved, str):
                 return {resolved}, False
@@ -265,6 +305,14 @@ def test_fail_class_drift_guard() -> None:
     # module-size ceiling. ``stale_leader``, ``stale_leader_vs_facts`` and
     # ``cross_target_leak`` are emitted THERE now — three HARD classes that would
     # all have reported DEAD the moment the family changed house.
+    # 2026-09-03 (D-3, THE ASSEMBLY ARMS): the sixth module, and the one D-1
+    # §3.7 warned about BY NAME — "a new arm module must be appended to ``trees``
+    # or its reasons are silently uncollected and the bidirectional
+    # unmapped/dead assert passes over a hole". ``assembly_arms`` emits all
+    # sixteen assembly classes and arrives in verify's table the way H2's do
+    # (``**assembly_arms.FAIL_CLASSES``), so without this line every one of them
+    # would report DEAD while the arms fired in production. The design counted
+    # three hand edits for a new class; it is FOUR, and this is the fourth.
     trees = [
         ast.parse(inspect.getsource(mod))
         for mod in (
@@ -273,6 +321,7 @@ def test_fail_class_drift_guard() -> None:
             composition_integrity,
             judge_verdict_parsing,
             world_knowledge_guards,
+            assembly_arms,
         )
     ]
     emitted: set[str] = set()

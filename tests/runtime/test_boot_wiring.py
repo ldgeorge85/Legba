@@ -414,15 +414,46 @@ async def test_boot_wiring_registers_triggers_and_marks_dirty(
     )
     trigger_durable = f"legba-trigger-bootwire-{run}"
 
-    handles = await bring_up_source_first_planes(
-        pg_store=pg_store,
-        nats_store=nats_store,
-        standard_deps=object(),  # held by the source-deps resolver, not called
-        registry_client=registry_client,
-        run_loops=False,
-        job_queue=job_queue,
-        trigger_durable=trigger_durable,
-    )
+    # G2 agency streams (`legba_channels` / `legba_governor_events`) plus the
+    # 2026-09-06 `legba_analyst_outputs` addition are fixed-name, idempotent
+    # infrastructure (not per-run namespaced like job_queue/trigger_durable
+    # above) — bring_up_source_first_planes provisions them on the SAME
+    # shared dev-rig NATS this fixture already touches. Spy on the instance's
+    # ensure_stream so we can assert the REAL call shape (name + subjects)
+    # without depending on JetStream's current stream_info state, while still
+    # delegating to the real implementation so bring-up behaves unchanged.
+    ensure_stream_calls: list[tuple[str, list[str]]] = []
+    _real_ensure_stream = nats_store.ensure_stream
+
+    async def _recording_ensure_stream(name, subjects, **kwargs):
+        ensure_stream_calls.append((name, list(subjects)))
+        return await _real_ensure_stream(name, subjects, **kwargs)
+
+    nats_store.ensure_stream = _recording_ensure_stream
+    try:
+        handles = await bring_up_source_first_planes(
+            pg_store=pg_store,
+            nats_store=nats_store,
+            standard_deps=object(),  # held by the source-deps resolver, not called
+            registry_client=registry_client,
+            run_loops=False,
+            job_queue=job_queue,
+            trigger_durable=trigger_durable,
+        )
+    finally:
+        nats_store.ensure_stream = _real_ensure_stream
+
+    # G2 block coverage — the three agency/output streams bring-up MUST bind,
+    # by (name, subjects). A regression here silently reproduces the
+    # corpus_researcher/cross_doc_corroborator "nats: timeout" incident: no
+    # stream bound == every publish on that subject family awaits an ack that
+    # never comes.
+    assert ("legba_channels", ["channels.>"]) in ensure_stream_calls
+    assert (
+        "legba_governor_events", ["governor.events.>"],
+    ) in ensure_stream_calls
+    assert ("legba_analyst_outputs", ["analyst.>"]) in ensure_stream_calls
+
     engine = handles.trigger_engine
     try:
         # ---- (a) trigger registrations > 0 for EVERY subscribed pair ----

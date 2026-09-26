@@ -84,6 +84,47 @@ def test_listed_ref_missing_from_span_is_appended() -> None:
     assert doc.endswith("[1]")
 
 
+def test_fact_span_keeps_only_its_cited_sentences() -> None:
+    """§10 by construction (2026-09-25): the narrator's fact spans swallow the
+    perspective sentence beside the cited one; only the cited sentence may
+    reach the judge."""
+    a = uuid4()
+    doc, refs = build_journal_verify_inputs(_P([
+        _fact(
+            f"The carrier group persists in the Gulf [[ref:{a}]]. Under this "
+            "prior, the deployment translates into fuel and personnel costs "
+            "while its stated aim shows no measurable effect.",
+            [a],
+        ),
+    ]))
+    assert refs == [str(a).lower()]
+    assert doc == "The carrier group persists in the Gulf [1]."
+    assert "Under this prior" not in doc
+
+
+def test_fact_span_with_two_cited_sentences_keeps_both() -> None:
+    a, b = uuid4(), uuid4()
+    doc, refs = build_journal_verify_inputs(_P([
+        _fact(
+            f"Strikes hit the port [[ref:{a}]]. The blockade resumed "
+            f"[[ref:{b}]]. That is the pattern this prior privileges.",
+            [a, b],
+        ),
+    ]))
+    assert doc == "Strikes hit the port [1]. The blockade resumed [2]."
+    assert refs == [str(a).lower(), str(b).lower()]
+
+
+def test_fact_span_without_any_marker_keeps_its_first_sentence() -> None:
+    a = uuid4()
+    doc, refs = build_journal_verify_inputs(_P([
+        _fact("Marker-less first sentence. A second, also marker-less.", [a]),
+    ]))
+    # The listed ref is still appended (as before) — to the FIRST sentence only.
+    assert doc == "Marker-less first sentence. [1]"
+    assert refs == [str(a).lower()]
+
+
 def test_all_perspective_entry_yields_empty_doc() -> None:
     doc, refs = build_journal_verify_inputs(_P([_persp("Pure reflection.")]))
     assert doc == "" and refs == []

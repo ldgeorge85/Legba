@@ -567,7 +567,7 @@ INSERT INTO signals (
     payload, canonical_url, language_hint, raw_provenance,
     language, geo, tags, entity_classes, source_credibility,
     content_hash, canonical_signal_id, derived_from, schema_uri,
-    last_seen_at
+    access_class, last_seen_at
 )
 VALUES (
     $1, $2, $3, $4, $5,
@@ -576,7 +576,7 @@ VALUES (
     $15::jsonb, $16, $17, $18::jsonb,
     $19, $20::text[], $21::text[], $22::text[], $23,
     $24, $25, $26::uuid[], $27,
-    $6
+    $28, $6
 )
 ON CONFLICT (id) DO NOTHING
 RETURNING id
@@ -702,10 +702,18 @@ async def write_canonical_signal(
     *,
     source_version: str,
     owner_tenant: str,
+    access_class: str = "restricted",
     dedup_stats: dict[str, int] | None = None,
 ) -> Any | None:
     """Insert ONE canonical, target-agnostic signal into the new ``signals``
     table. Stamps provenance (source-origin) + tenant from the descriptor.
+
+    ``access_class``: Wave-E — the source descriptor's ``scope.access_class``
+    (data/provenance/access.py's closed vocabulary), stamped onto the row's
+    ``access_class`` column (migration 0216). Defaults fail-closed to
+    ``"restricted"`` for callers that don't resolve a descriptor (e.g. the
+    seed/manual-batch path); the real source-actor ingest path always passes
+    the descriptor's own value.
 
     Returns the inserted row id, or ``None`` if the write was a no-op — either a
     row with that id already existed (the uuid4-id ON CONFLICT backstop) OR (S-4)
@@ -792,6 +800,7 @@ async def write_canonical_signal(
         signal.canonical_signal_id,
         list(signal.derived_from),
         signal.schema_uri,
+        access_class,
     )
     return row["id"] if row else None
 
@@ -1040,6 +1049,7 @@ class SourceCore:
             enriched,
             source_version=self.descriptor.identity.version,
             owner_tenant=self.descriptor.scope.owner_tenant,
+            access_class=self.descriptor.scope.access_class,
             dedup_stats=dedup_stats,
         )
         if written_id is None:

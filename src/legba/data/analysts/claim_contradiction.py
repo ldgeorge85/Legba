@@ -473,9 +473,101 @@ def render_tension_block(contradictions: Sequence[ClaimContradiction]) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# The PUBLIC polarity surface (7a)
+# ---------------------------------------------------------------------------
+#
+# The contrary-evidence pass (Program 7a) formulates a counter-query by
+# NEGATING a claim's position in this module's vocabulary, and derives a
+# retrieved page's stance the same way. It needs the polarity machinery, and it
+# needs this module's calibration to travel with it.
+#
+# These are thin re-exports of the private helpers above, deliberately: a
+# SECOND polarity vocabulary is the failure that matters here. The calibration
+# note under ``_POLARITY_GROUPS`` — 57 false pairs pruned to 0 — is a property
+# of THIS table, and a copy of it in another module would drift away from the
+# measurement that justifies it within a release. Nothing below changes any
+# behaviour on the detection path; every function is the identity over the
+# helper it wraps.
+
+#: The polarity group names, sorted — a stable, closed set for a schema CHECK,
+#: a test, or a reader that has to enumerate them.
+POLARITY_GROUPS: tuple[str, ...] = tuple(sorted(_POLARITY_GROUPS))
+
+#: The negators and the window a negator reaches over, re-exported so a caller
+#: that has to reason about "P vs not-P" uses this module's answer and not its
+#: own guess about which words flip a sign.
+NEGATORS: frozenset[str] = _NEGATORS
+NEGATION_WINDOW: int = _NEGATION_WINDOW
+
+#: A claim longer than this is not a single proposition (see the constant's own
+#: note). Any caller assigning ONE polarity to ONE sentence inherits the rule.
+MAX_CLAIM_CHARS: int = _MAX_CLAIM_CHARS
+
+#: How near a shared subject token a polarity term must sit to count.
+SUBJECT_PROXIMITY: int = _SUBJECT_PROXIMITY
+
+#: The pair-formation floor, re-exported for the stance rules that reuse it.
+MIN_SUBJECT_OVERLAP: int = _MIN_SUBJECT_OVERLAP
+
+
+def tokenize(text: str) -> tuple[str, ...]:
+    """This module's tokenizer — citation markers stripped, lowercased."""
+    return tuple(_tokenize(text))
+
+
+def polarity_of(text: str, *, anchors: frozenset[str] | None = None) -> dict[str, int]:
+    """``{group: sign}`` for every polarity group ``text`` takes a side on.
+
+    ``+1`` asserts the group's positive state, ``-1`` denies it; a negator in
+    front of the term flips it, and a sentence landing on both signs of one
+    group DROPS that group rather than guessing. ``anchors`` restricts the
+    reading to polarity terms sitting within :data:`SUBJECT_PROXIMITY` of a
+    shared subject token — "this sentence takes a position on THAT subject"
+    rather than "this sentence contains that word somewhere".
+    """
+    return _polarity_of(_tokenize(text), anchors=anchors)
+
+
+def subject_tokens_of(text: str) -> frozenset[str]:
+    """The identity words — what a claim is ABOUT, with the stopwords, the
+    negators and the polarity terms (what it DISAGREES with) removed."""
+    return _subject_tokens(_tokenize(text))
+
+
+def proper_tokens_of(text: str) -> frozenset[str]:
+    """Lowercased tokens that appeared Capitalized away from a sentence
+    opening — the tokens that name a specific thing."""
+    return _proper_tokens(text)
+
+
+def polarity_side_terms(group: str, sign: int) -> frozenset[str]:
+    """Every term on one SIDE of one group. ``sign > 0`` is the positive side.
+
+    Empty for an unknown group, so a caller cannot silently read an empty
+    vocabulary as "no terms apply" on a group that does not exist.
+    """
+    pair = _POLARITY_GROUPS.get(str(group))
+    if pair is None:
+        return frozenset()
+    positive, negative = pair
+    return positive if sign > 0 else negative
+
+
 __all__ = [
+    "MAX_CLAIM_CHARS",
     "MAX_CONTRADICTIONS",
+    "MIN_SUBJECT_OVERLAP",
+    "NEGATION_WINDOW",
+    "NEGATORS",
+    "POLARITY_GROUPS",
+    "SUBJECT_PROXIMITY",
     "ClaimContradiction",
     "detect_contradictions",
+    "polarity_of",
+    "polarity_side_terms",
+    "proper_tokens_of",
     "render_tension_block",
+    "subject_tokens_of",
+    "tokenize",
 ]

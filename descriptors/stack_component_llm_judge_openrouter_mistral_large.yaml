@@ -1,0 +1,165 @@
+# THE THIRD-FAMILY GRADER — Mistral Large 3 on OpenRouter (kind: llm_provider).
+#
+# It replaces the UNFUNDED Cerebras Gemma slot. `llm.judge.cerebras_gemma4_31b`
+# was the ruled third family for external grading at width, for the attention
+# plane's desk_reference, and it is R4's F2 lane. On 2026-09-05 the R4
+# reachability probe found the Cerebras key returns **402 (unfunded)**: F2
+# completed **0 of 12** graded calls at rate. A grader that cannot complete a
+# call is not a cheaper grader, it is an UNMEASURED number, so the slot moves
+# rather than degrades.
+#
+# The same probe completed **12 of 12** against OpenRouter with the model id
+# below, at the round's intended rate, for **$0.000404** total
+# (`planning/PROOF_ROUND_2026-09-12/xfamily/probe_ledger.json`, key label
+# recorded, key never printed). That is the evidence this component exists on.
+#
+# ⚠ THIS FILE IS THE REVIEWABLE HOME OF THE COMPONENT BODY, and it is the ONLY
+# one: scripts/bringup_register_stack.py LOADS this YAML rather than carrying a
+# second copy of the config, so the tree and the registrar cannot drift. Same
+# convention as `stack_component_search_brave.yaml`; the other llm_provider
+# bodies still live inline in the registrar and predate it.
+#
+# ─── MODEL FAMILY — the property this component is FOR ───────────────────────
+#
+# Family: **MISTRAL** (Mistral AI, France; Apache-2.0 lineage). It is DISTINCT
+# from all three planes the external-grader fence measures against:
+#
+#   * the WRITER   — `llm.primary.openai_compat`, the self-hosted core-plane model (gpt-oss-120b)
+#                    (gpt-oss-120b lineage), family `openai_oss`
+#   * the JUDGE    — `llm.judge.openrouter_nemotron120b.openai_compat` /
+#                    `nvidia/nemotron-3-super-120b-a12b:free`, family `nvidia`
+#   * ANTHROPIC    — consult-only, never scheduled (a HARD standing rule)
+#
+# ⚠ THE FAMILY IS NOT DECLARED IN THIS FILE, AND IT CANNOT BE.
+# `LLMProviderConfig` and `StackComponentBase` are both `extra="forbid"`
+# (src/legba/data/schemas/stack.py), so a `family:` key here would be a
+# validation error at register time, not an annotation. The family is declared
+# where the fence actually reads it: `GRADER_FAMILY_BY_COMPONENT` in
+# src/legba/runtime/external_grader_route.py, which is hand-maintained on
+# purpose — *"a family inferred from a substring is a fence that fails open the
+# day somebody names a component well."* This component's entry is
+# `"llm.judge.openrouter_mistral_large.openai_compat": "mistral"`, and
+# `tests/data_pkg/test_external_grading_width.py` pins that the fence ACCEPTS it
+# while refusing the nemotron judge and the core plane. Registering this
+# component WITHOUT that map entry would still pass the fence — by id equality,
+# with family `""` — which is exactly the silent, unargued pass the R2 void was
+# made of. The map entry is the point.
+#
+# NAMING IS LOAD-BEARING. The id ENDS with `.openai_compat` so
+# `infer_llm_subprovider` routes it to the vLLM handler (OpenAI
+# Chat-Completions + Bearer — the wire shape OpenRouter speaks). Do NOT rename
+# it to contain `.openai.` — that routes to the OpenAI handler, which rewrites
+# max_tokens and injects reasoning_effort. This mirrors
+# `llm.judge.openrouter_nemotron120b.openai_compat` exactly.
+#
+# ⚠ METERED, AND THIS ONE IS NOT A FREE LANE. The two Nemotron OpenRouter
+# components are `:free` and pin their prices to 0. Mistral Large 3 is PAID, so
+# `price_input_per_m` / `price_output_per_m` carry OpenRouter's list numbers and
+# `daily_burn_alert_usd` is set — an unmetered paid lane on a third-party router
+# is an open tab. VERIFY the two prices at https://openrouter.ai/models before
+# trusting any burn figure: a stale price table under-reports silently.
+#
+# KEYED — activation gating (the S-2 convention):
+#   * state is DRAFT. Nothing resolves a draft component into a live handler, so
+#     this file is committable and registrable while changing nothing. The
+#     operator flips it active.
+#   * config.api_key is a VAULT REF (a vault id, never the plaintext) and it is
+#     the SAME ref every OpenRouter component already uses:
+#     `llm.judge.openrouter.api_key`, loaded by scripts/bringup_vault_load.py
+#     from `.env` OPENROUTER_API_KEY. No new secret, no new account.
+#
+# OPERATOR FLIP (to go live) — the key already exists, so only three steps:
+#   1. Register the component:
+#        python3 scripts/bringup_register_stack.py
+#   2. Transition draft -> active:
+#        POST {registry}/api/v1/registry/stack/
+#             llm.judge.openrouter_mistral_large.openai_compat/transition
+#             {"to_state": "configured"}   then   {"to_state": "active"}
+#   3. Repoint the three refs that name the Cerebras slot today. They are listed
+#      with their exact PUT bodies in
+#      `planning/PROOF_ROUND_2026-09-12/GRADER_REPOINT.md`:
+#        (a) analyst_standing_auditor  method.llm.grader   (external grading at width)
+#        (b) analyst_desk_reference    method.llm.primary   (attention / desk_reference)
+#        (c) the R4 F3 lane            xfamily/validity_check.py FAMILIES["F3"]
+#      Until step 3 the component is registered and INERT: nothing points at it.
+#
+# ⚠ R4 FREEZE INTERACTION. Repointing this GRADER is NOT a judge-route change.
+# FZ-4 freezes `LEGBA_JUDGE_STACK_REF` / the resolved judge component; the
+# grader plane is deliberately a separate env
+# (`LEGBA_EXTERNAL_GRADER_STACK_REF`) precisely so the two are repointable
+# independently — *"or the fence at (c) is unenforceable."* Do the repoint
+# BEFORE T0 all the same: a grader change inside the measurement window is an
+# instrument event that would have to be disclosed.
+#
+# Verify after the flip:
+#   POST {registry}/api/v1/registry/stack/
+#        llm.judge.openrouter_mistral_large.openai_compat/healthcheck
+
+id: llm.judge.openrouter_mistral_large.openai_compat
+name: OpenRouter Mistral Large 3 (third-family external grader)
+schema_uri: legba/stack/llm_provider/1.0.0
+# Placeholder — the registry stamps the content hash at register time.
+version: "0000000000000000"
+state: draft
+owner: lewis@local
+
+config:
+  # Base host. `_chat_endpoint_path()` prepends `/v1/...` and the base client
+  # strips a trailing `/v1` defensively (llm/base.py: `while
+  # base_url.endswith("/v1")`), so this normalizes to
+  # https://openrouter.ai/api/v1/chat/completions on the wire — the exact URL
+  # the R4 probe completed 12/12 against. Mirrors
+  # `llm.judge.openrouter_nemotron120b.openai_compat`.
+  api_endpoint:
+    factory_kind: text
+    raw: https://openrouter.ai/api/v1
+
+  # VAULT REF, never the plaintext. The SAME ref the Nemotron and Llama
+  # OpenRouter components use — one key, one account.
+  api_key:
+    factory_kind: secret
+    raw: llm.judge.openrouter.api_key
+
+  # Mistral Large 3. This exact string is what the R4 probe graded with; the
+  # xfamily validity check derives the family root `mistral` from it, and
+  # assertion (d) — no two lanes share a `model_name` — is checked against it.
+  model_name:
+    factory_kind: text
+    raw: mistralai/mistral-medium-3.1   # 2026-09-20: mistral-large-2512 removed upstream 09-18; repointed live 09-20
+
+  # Grading output is a small structured verdict, not prose. Sized like the
+  # llama audit rater's 4096 rather than the judge lanes' 16384. Feeds the
+  # BudgetEnforcer estimate; the vllm handler does not put it on the wire
+  # unless the caller opts in.
+  max_tokens:
+    factory_kind: number
+    raw: 4096
+
+  # Matches every other OpenRouter lane. The probe's slowest call landed well
+  # inside this.
+  timeout_seconds:
+    factory_kind: number
+    raw: 120
+
+  tier:
+    factory_kind: dropdown_static
+    raw: cheap
+    options: [primary, fallback, cheap]
+
+  # OpenRouter list price for mistral-medium-3.1 (0.40 / 2.00), USD per 1M tokens — the same
+  # two numbers the R4 probe costed its ledger with. RE-VERIFY at
+  # openrouter.ai/models before trusting a burn figure.
+  price_input_per_m:
+    factory_kind: number
+    raw: 0.40
+  price_output_per_m:
+    factory_kind: number
+    raw: 2.00
+
+  # Daily page ceiling for the `llm_daily_burn` gauge. The width program's
+  # measured shape is ~329 double-graded claims/week plus the daily sweep;
+  # against the probe's measured ~$0.0000337/call that is cents/day. $3 pages
+  # on a runaway (a ~100x fault), never on normal volume.
+  daily_burn_alert_usd:
+    factory_kind: number
+    raw: 3.0

@@ -104,6 +104,10 @@ method:
   # bounds the model to the leadership-transition question only and pins the
   # STRICT JSON FindingPayload contract so cite-the-prose [N] markers + the
   # verify gate keep working.
+  # F-3 — the same bounded question, quote-derived to one interrogative
+  # sentence, as an explicit field so the assembly's block header can render
+  # it without re-parsing this prose (DEMOTION_D1_SPEC §7 F-3, §1.2).
+  bounded_question: "How likely, and on what timing, is a change in this country's top leadership in the near term, and by what mechanism?"
   system_prompt: |
     WHO YOU ARE. You are the LEADERSHIP-TRANSITION RISK unit of an automated
     open-source intelligence platform. The platform reads the wire so a
@@ -220,7 +224,7 @@ method:
     Produce EXACTLY ONE finding. Respond with STRICT JSON and nothing else — no
     prose before or after, no code fences:
     {
-      "title": "<short headline naming the country + its transition-risk level — see TITLE in the HOUSE READ CONTRACT below>",
+      "title": "<short headline: the country + what this window actually shows about who holds power and what is testing that hold — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name what is HOLDING it — see TITLE in the HOUSE READ CONTRACT below>",
       "body": "<github-markdown, in exactly the shape the HOUSE READ CONTRACT
         below specifies, with every claim cited [N] and dated. The BLUF gives
         the bottom-line transition likelihood + timing (timing in days or
@@ -455,7 +459,7 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     max_tokens: 4096
-  budget_tokens_per_day: 30000000
+  budget_tokens_per_day: 0
   # If the per-analyst cap is projected to be crossed on a signal-dense day,
   # pause THIS unit until the next UTC budget bucket rather than demoting to a
   # paid fallback (the primary is the self-hosted core plane; no cheap fallback

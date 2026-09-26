@@ -12,6 +12,15 @@ beside the report/ledger types and the severity table it must agree with).
 * ``_JudgeVerdictError`` — the shape a malformed verdict set takes: raised so
   the caller fails to the deterministic floor rather than silently
   zip-truncating a partial pass that hides ungraded claims.
+* ``align_verdicts`` / ``partial_verdict_budget`` (2026-09-20/1) — WHICH claim
+  each returned verdict belongs to. A full-length response aligns by position
+  exactly as it always did; a SHORT one aligns only by the claim number its
+  entries name, and the claims nobody named are left ``_VERDICT_UNCHECKED``
+  rather than guessed at. See the block above them for the whole argument.
+  ``align_verdicts`` also returns ``aligned_by`` (H3, 2026-09-25/1) —
+  :data:`ALIGNED_BY_CLAIM_INDEX` or :data:`ALIGNED_BY_POSITIONAL` — so the
+  caller can persist HOW a verdict was matched to its claim, not just that it
+  was.
 * ``_judge_reason`` / ``_judge_detail`` — the ONE mapping from a raw verdict
   token to its span/ledger REASON and its persisted evidence-quote DETAIL
   (W2), shared by ``unsupported_spans`` and ``claim_verdicts`` so the two
@@ -277,3 +286,260 @@ def _is_uncited_world_baseline(claim: str) -> bool:
     # baseline the analyst supplied from memory, which is the shape under test.
     # Only a baseline that names the EVIDENCE SET as its referent is exempt.
     return not _EVIDENCE_REFERENT_RE.search(core)
+
+
+# ---------------------------------------------------------------------------
+# PARTIAL VERDICT SETS (2026-09-20/1) — the ALIGNMENT contract
+# ---------------------------------------------------------------------------
+# THE DEFECT, measured live. ~1.5% of judge calls end with
+# ``verify.faithfulness.judge_failed err=judge returned 22 verdicts for 23
+# claims`` (15 on 2026-09-19, 4 on 2026-09-20; also 73 for 74) — the model drops
+# ONE verdict out of twenty-odd and the WHOLE row falls to the deterministic
+# floor, labelled ``judge-unavailable:judge_error`` and capped at the
+# PROVISIONAL 0.85 ceiling. Twenty-two adjudicated claims are discarded to
+# punish one missing one, which is the same amplifier PARTITION-PRESERVE
+# (2026-09-08/1) removed one level up.
+#
+# WHAT IS AND IS NOT SALVAGEABLE, and the line is IDENTITY. A verdict list is a
+# POSITIONAL protocol: ``{"verdicts": [...]}``, one token per numbered claim, in
+# order. When an entry carries no claim identity and one is missing, there is no
+# way to know WHICH claim went ungraded — every verdict after the drop point may
+# belong to the claim before it — so a positional short list is not a partial
+# answer, it is an unreadable one, and it keeps today's hard failure.
+#
+# What IS readable is a response whose entries NAME their claim: the judge is
+# shown ``1. <claim>`` … ``N. <claim>`` and may answer with that number attached
+# (``{"claim": 3, "verdict": "supported"}``, or a parallel ``"claim_indices"``
+# array). Those align by ID, never by position, and the claims no entry names
+# are left UNCHECKED — not unsupported, not supported, not graded at all. An
+# unchecked claim leaves the judged population exactly the way a floored
+# partition's claims already do (``residual_floor_spans`` folds in whatever the
+# DETERMINISTIC floor found about it; ``carried_ledger`` carries its floor row),
+# so no verdict is ever fabricated for a claim nobody graded.
+#
+# AND IT IS BOUNDED. A response missing more than
+# :func:`partial_verdict_budget` of its verdicts is not a judge that skipped a
+# line, it is a judge that answered a different question — that keeps today's
+# failure too.
+#
+# The ID arm also repairs a silent defect of its own: an entry that arrived as
+# ``{"claim": 3, "verdict": "supported"}`` at the RIGHT length used to be
+# stringified whole (``str({...})``), miss the four-token vocabulary, and coerce
+# to ``unsupported``. A labelled verdict is now read as the verdict it is.
+#
+# 2026-09-24/1 (H3) arms this arm from the PROMPT side: the reply contract in
+# ``judge_quote_rules._judge_reply_contract`` asks every verdict entry to name
+# its claim as ``claim_index``, so the machinery below is what the judge is
+# actually asked for — before that stamp it fired only when a model volunteered
+# ids unprompted.
+
+#: The slot a graded claim carries when the judge returned NO verdict for it.
+#: NOT a grade: it is neither in the numerator nor in the judged denominator,
+#: and it never reaches the severity chain or the ledger.
+_VERDICT_UNCHECKED = "unchecked"
+
+#: H3 (2026-09-25/1) — HOW :func:`align_verdicts` matched a verdict to its
+#: claim, persisted on every ledger row so the id arm (armed by
+#: ``2026-09-20/1``, finally ASKED FOR by the ``2026-09-24/1`` reply contract)
+#: can be MEASURED rather than merely trusted to have fired. Exactly one value
+#: per call: the two branches below are mutually exclusive (either every entry
+#: named a distinct claim, or none did and the full-length list zipped
+#: positionally), so there is no response that mixes the two.
+ALIGNED_BY_CLAIM_INDEX = "claim_index"
+ALIGNED_BY_POSITIONAL = "positional"
+
+
+def partial_verdict_budget(n_claims: int) -> int:
+    """How many verdicts ONE response may drop and still be read as partial.
+
+    ``max(2, ceil(0.1 * N))`` — two is the floor because a 3-claim partition
+    dropping one is the same clerical slip a 30-claim partition dropping three
+    is, and 10% is the ceiling because a response missing more than a tenth of
+    its answers is not a slip.
+    """
+    return max(2, -(-max(0, int(n_claims)) // 10))
+
+
+#: Keys a judge may hang the CLAIM NUMBER off. Read in order; a key that is
+#: present but not a claim ordinal (``{"claim": "<the claim text>"}``) is
+#: skipped rather than failing the entry.
+_VERDICT_ID_KEYS: tuple[str, ...] = (
+    "claim", "claim_index", "claim_id", "claim_no", "claim_number",
+    "index", "idx", "number", "no", "n", "id", "i",
+)
+#: Keys carrying the VERDICT token itself on an object-form entry.
+_VERDICT_VALUE_KEYS: tuple[str, ...] = (
+    "verdict", "value", "label", "grade", "result", "v",
+)
+#: Keys carrying an entry's OWN evidence quote (V-D), which wins over the
+#: parallel ``quotes`` array for that claim — it cannot be misaligned.
+_VERDICT_QUOTE_KEYS: tuple[str, ...] = ("quote", "evidence", "span")
+#: Top-level arrays parallel to ``verdicts`` that name each entry's claim.
+_VERDICT_ID_SIDECARS: tuple[str, ...] = (
+    "claim_indices", "claim_ids", "claim_numbers", "claims", "indices",
+)
+
+#: A claim ordinal as a judge may write it: ``3``, ``"3"``, ``"3."``, ``"#3"``.
+_CLAIM_ORDINAL_RE = re.compile(r"^[#\s]*(\d{1,4})\s*[.):\]]?$")
+
+
+def _claim_ordinal(value: Any, n_claims: int) -> int | None:
+    """The 1-based claim number in ``value`` as a 0-based index, or ``None``.
+
+    ``None`` for anything that is not an in-range ordinal — a claim's TEXT, a
+    float, a bool, an out-of-range number — so a mis-read can only ever cost the
+    salvage, never mis-attribute a verdict.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        n = value
+    elif isinstance(value, str):
+        m = _CLAIM_ORDINAL_RE.match(value.strip())
+        if not m:
+            return None
+        n = int(m.group(1))
+    else:
+        return None
+    return n - 1 if 1 <= n <= n_claims else None
+
+
+def _entry_verdict(entry: Any) -> Any:
+    """The raw verdict token of one entry — the entry itself, or its field."""
+    if isinstance(entry, dict):
+        for key in _VERDICT_VALUE_KEYS:
+            if key in entry:
+                return entry[key]
+        return ""
+    return entry
+
+
+def _entry_quote(entry: Any) -> str | None:
+    """An object-form entry's OWN quote, or ``None`` to use the parallel array."""
+    if isinstance(entry, dict):
+        for key in _VERDICT_QUOTE_KEYS:
+            quote = entry.get(key)
+            if isinstance(quote, str):
+                return quote
+    return None
+
+
+def _entry_index(entry: Any, n_claims: int) -> int | None:
+    """The claim this entry NAMES, 0-based, or ``None`` when it names none."""
+    if not isinstance(entry, dict):
+        return None
+    for key in _VERDICT_ID_KEYS:
+        if key in entry:
+            idx = _claim_ordinal(entry[key], n_claims)
+            if idx is not None:
+                return idx
+    return None
+
+
+def _verdict_claim_indices(
+    raw: list[Any], parsed: dict[str, Any], n_claims: int
+) -> list[int] | None:
+    """One claim index per entry, or ``None`` when identity is not complete.
+
+    ALL-OR-NOTHING by design, twice over: every entry must name a claim (a
+    half-labelled list is ambiguous exactly where it matters), and the names
+    must be DISTINCT (two verdicts for one claim is not an alignment, it is a
+    contradiction). Either failure returns ``None`` and the caller falls back to
+    the strict positional contract.
+    """
+    if not raw:
+        return None
+    per_entry = [_entry_index(entry, n_claims) for entry in raw]
+    idx: list[int] | None = None
+    if all(i is not None for i in per_entry):
+        idx = [int(i) for i in per_entry]  # type: ignore[arg-type]
+    else:
+        for key in _VERDICT_ID_SIDECARS:
+            sidecar = parsed.get(key)
+            if not isinstance(sidecar, list) or len(sidecar) != len(raw):
+                continue
+            cand = [_claim_ordinal(v, n_claims) for v in sidecar]
+            if all(c is not None for c in cand):
+                idx = [int(c) for c in cand]  # type: ignore[arg-type]
+                break
+    if idx is None or len(set(idx)) != len(idx):
+        return None
+    return idx
+
+
+def alignment_audit_fields(
+    claim_verdicts: list[Any], miscount_claims: int, judge_partial: int | None
+) -> dict[str, int]:
+    """H3 (2026-09-25/1) — the ``verification`` block's alignment-AUDIT
+    fragment: how many persisted ledger rows :func:`align_verdicts` matched by
+    id vs by position, the reply-count mismatch summed across every judge
+    partition, and the claims a NAMED reply never named at all — the same
+    population ``judge_partial`` already tracks. All four are 0 on a
+    floor-only pass: no fold outside the judge path ever sets ``aligned_by``.
+    """
+    return {
+        "miscount_claims": miscount_claims,
+        "aligned_by_id": sum(
+            getattr(cv, "aligned_by", None) == ALIGNED_BY_CLAIM_INDEX
+            for cv in claim_verdicts
+        ),
+        "aligned_positionally": sum(
+            getattr(cv, "aligned_by", None) == ALIGNED_BY_POSITIONAL
+            for cv in claim_verdicts
+        ),
+        "unmatched_claims": judge_partial or 0,
+    }
+
+
+def align_verdicts(
+    raw: list[Any], parsed: dict[str, Any], n_claims: int
+) -> tuple[list[tuple[Any, str] | None], list[int], str]:
+    """``(slots, missing, aligned_by)`` — one slot per claim, in claim order.
+
+    ``slots[i]`` is ``(raw verdict, quote)`` for every claim the judge graded and
+    ``None`` for every claim it did not; ``missing`` lists the ``None`` ones
+    (0-based). A full-length positional response — the healthy case and the
+    overwhelming majority — yields the same pairs the pre-2026-09-20 ``zip``
+    produced, in the same order.
+
+    ``aligned_by`` (H3, 2026-09-25/1) is :data:`ALIGNED_BY_CLAIM_INDEX` when
+    every entry named a distinct claim (the id arm decided ``ids``) and
+    :data:`ALIGNED_BY_POSITIONAL` for the full-length positional fallback —
+    the caller stamps it onto every ledger row this call produces, so HOW a
+    verdict was matched to its claim is a persisted fact, not an inference.
+
+    Raises :class:`_JudgeVerdictError`, exactly as before, when the count does
+    not match AND the response carries no usable claim identity, and when a
+    labelled response drops more than :func:`partial_verdict_budget` verdicts.
+    """
+    ids = _verdict_claim_indices(raw, parsed, n_claims)
+    if ids is None:
+        if len(raw) != n_claims:
+            raise _JudgeVerdictError(
+                f"judge returned {len(raw)} verdicts for {n_claims} claims"
+            )
+        ids = list(range(n_claims))
+        aligned_by = ALIGNED_BY_POSITIONAL
+    else:
+        dropped = n_claims - len(raw)
+        budget = partial_verdict_budget(n_claims)
+        if dropped > budget:
+            raise _JudgeVerdictError(
+                f"judge returned {len(raw)} verdicts for {n_claims} claims "
+                f"— {dropped} unchecked is over the partial budget of {budget}"
+            )
+        aligned_by = ALIGNED_BY_CLAIM_INDEX
+    # V-D: the parallel quote array, unchanged — honoured only at the length of
+    # the verdict list it parallels, and overridden per-entry by an object-form
+    # entry's own quote (which cannot be misaligned).
+    quotes_raw = parsed.get("quotes")
+    quotes: list[str] = (
+        [q if isinstance(q, str) else "" for q in quotes_raw]
+        if isinstance(quotes_raw, list) and len(quotes_raw) == len(raw)
+        else [""] * len(raw)
+    )
+    slots: list[tuple[Any, str] | None] = [None] * n_claims
+    for entry, quote, i in zip(raw, quotes, ids):
+        own = _entry_quote(entry)
+        slots[i] = (_entry_verdict(entry), own if own is not None else quote)
+    return slots, [i for i, slot in enumerate(slots) if slot is None], aligned_by

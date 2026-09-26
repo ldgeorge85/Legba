@@ -261,18 +261,34 @@ async def test_migration_0034_schema(pg_conn):
         "VALUES ('t','t','seed') RETURNING id"
     )
     fid = uuid4()
-    await pg_conn.execute(
-        "INSERT INTO facts (id, subject, predicate, value, source_type, "
-        "valid_from, seed_batch_id) "
-        "VALUES ($1,'S','P','V','backfill', now(), $2)",
-        fid,
-        batch_id,
-    )
-    got = await pg_conn.fetchrow(
-        "SELECT source_type, seed_batch_id FROM facts WHERE id=$1", fid
-    )
-    assert got["source_type"] == "backfill"
-    assert got["seed_batch_id"] == batch_id
+    try:
+        await pg_conn.execute(
+            "INSERT INTO facts (id, subject, predicate, value, source_type, "
+            "valid_from, seed_batch_id) "
+            "VALUES ($1,'S','P','V','backfill', now(), $2)",
+            fid,
+            batch_id,
+        )
+        got = await pg_conn.fetchrow(
+            "SELECT source_type, seed_batch_id FROM facts WHERE id=$1", fid
+        )
+        assert got["source_type"] == "backfill"
+        assert got["seed_batch_id"] == batch_id
+    finally:
+        # This row is column-existence scratch data only — the INSERT above
+        # deliberately omits `origin_class`, so it lands on the table's
+        # DEFAULT ('live', migration 0209) while carrying a non-NULL
+        # `seed_batch_id`. `migrated_pg` is session-scoped (conftest.py), so
+        # an uncleaned row here is globally visible to every later test in
+        # the session — and tests/data_pkg/test_origin_class.py's
+        # ``test_seed_batch_through_the_driver_reads_back_seed`` asserts a
+        # GLOBAL invariant over the whole table (``seed_batch_id IS NOT NULL
+        # => origin_class = 'seed'``, deliberately NOT scoped to its own
+        # batch — see that file's docstring on why), so this row failed it
+        # under a shuffle order that ran this test first. Delete both rows
+        # this test minted so the shared DB is exactly as this test found it.
+        await pg_conn.execute("DELETE FROM facts WHERE id = $1", fid)
+        await pg_conn.execute("DELETE FROM seed_batches WHERE id = $1", batch_id)
 
 
 # ---------------------------------------------------------------------------

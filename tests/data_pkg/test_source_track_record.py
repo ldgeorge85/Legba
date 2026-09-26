@@ -32,6 +32,9 @@ from uuid import UUID, uuid4
 import pytest
 
 from legba.data.analysts.deterministic_handlers import fact_contention_arbiter as arb
+from legba.data.analysts.deterministic_handlers import (
+    fact_contention_earned_weights_batch as ewb,
+)
 from legba.data.analysts.deterministic_handlers import source_track_record as str_mod
 
 
@@ -326,6 +329,155 @@ def test_attach_earned_weights_degrades_on_error(monkeypatch):
         arb._attach_earned_weights(_BoomConn(), [a], contention_id=uuid4(), now=NOW)
     )
     assert a.earned_weight == 0.0
+
+
+# ===========================================================================
+# 5b. h4 — the batched earned-weights path
+#     (fact_contention_earned_weights_batch.EarnedWeightsBatch /
+#     .fetch_earned_weights_batch): ONE query for a whole pass's worth of
+#     groups instead of one per group, byte-identical decisions.
+# ===========================================================================
+
+
+class _RecordingBatchConn:
+    """Answers ONLY the h4 combined batch query and counts every ``.fetch()``
+    call — proves ``_attach_earned_weights(..., batch=...)`` never touches
+    ``conn`` again once the batch is in hand."""
+
+    def __init__(self, batch_rows: list[dict[str, Any]]) -> None:
+        self._batch_rows = batch_rows
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    async def fetch(self, sql: str, *params: Any) -> Any:
+        self.calls.append((sql, params))
+        assert "cutoff_resolved" in sql, f"unexpected query: {sql[:80]!r}"
+        return self._batch_rows
+
+
+def test_earned_weights_batch_issues_one_query_for_n_groups():
+    """The batch fetch is ONE round trip that then serves MULTIPLE groups —
+    each group's own resolved history is excluded from its OWN weights
+    (acyclicity) while an external group's history still counts, exactly as
+    the per-group ``exclude_contention`` query would have decided it."""
+    fa1, fb1, fa2, fd2 = uuid4(), uuid4(), uuid4(), uuid4()
+    cid1, cid2 = uuid4(), uuid4()
+    cid_hist_a, cid_hist_b, cid_hist_c = uuid4(), uuid4(), uuid4()
+
+    batch_rows = [
+        # fact -> source, for THIS pass's open facts (both groups).
+        {"contention_id": None, "fact_id": fa1, "source_id": "source.a",
+         "on_winning_side": None, "on_losing_side": None},
+        {"contention_id": None, "fact_id": fb1, "source_id": "source.b",
+         "on_winning_side": None, "on_losing_side": None},
+        {"contention_id": None, "fact_id": fa2, "source_id": "source.c",
+         "on_winning_side": None, "on_losing_side": None},
+        {"contention_id": None, "fact_id": fd2, "source_id": "source.d",
+         "on_winning_side": None, "on_losing_side": None},
+        # resolved outcomes: a SELF-referential row for each group's own
+        # contention_id (must be excluded when deciding THAT group), plus
+        # genuinely external history (must still count for both groups).
+        {"contention_id": cid1, "fact_id": None, "source_id": "source.a",
+         "on_winning_side": True, "on_losing_side": False},
+        {"contention_id": cid2, "fact_id": None, "source_id": "source.d",
+         "on_winning_side": False, "on_losing_side": True},
+        {"contention_id": cid_hist_a, "fact_id": None, "source_id": "source.a",
+         "on_winning_side": True, "on_losing_side": False},
+        {"contention_id": cid_hist_b, "fact_id": None, "source_id": "source.b",
+         "on_winning_side": False, "on_losing_side": True},
+        {"contention_id": cid_hist_c, "fact_id": None, "source_id": "source.c",
+         "on_winning_side": True, "on_losing_side": False},
+    ]
+    conn = _RecordingBatchConn(batch_rows)
+
+    async def _run() -> tuple[list[arb._ValueAgg], list[arb._ValueAgg]]:
+        batch = await ewb.fetch_earned_weights_batch(
+            conn, [fa1, fb1, fa2, fd2], cutoff=NOW,
+        )
+        proven1 = _agg("de-escalating", distinct=2, cred=1.0, types=1, fact_ids=[fa1])
+        weak1 = _agg("clashes ongoing", distinct=2, cred=1.0, types=1, fact_ids=[fb1])
+        await arb._attach_earned_weights(
+            conn, [proven1, weak1], contention_id=cid1, now=NOW, batch=batch,
+        )
+        proven2 = _agg("de-escalating-2", distinct=2, cred=1.0, types=1, fact_ids=[fa2])
+        weak2 = _agg("clashes-2", distinct=2, cred=1.0, types=1, fact_ids=[fd2])
+        await arb._attach_earned_weights(
+            conn, [proven2, weak2], contention_id=cid2, now=NOW, batch=batch,
+        )
+        return [proven1, weak1], [proven2, weak2]
+
+    group1, group2 = asyncio.run(_run())
+    proven1, weak1 = group1
+    proven2, weak2 = group2
+
+    # ONE query total, covering BOTH groups.
+    assert len(conn.calls) == 1
+
+    # source.a: cid1's OWN win is excluded from cid1's own decision; the
+    # external cid_hist_a win still counts -> 1 win / 0 losses.
+    assert proven1.earned_weight == pytest.approx(str_mod.earned_side_weight(1, 0))
+    # source.b: only the external loss counts (nothing self-referential here).
+    assert weak1.earned_weight == pytest.approx(str_mod.earned_side_weight(0, 1))
+    # source.c: the external win counts, untouched by cid2's exclusion.
+    assert proven2.earned_weight == pytest.approx(str_mod.earned_side_weight(1, 0))
+    # source.d: cid2's OWN loss is excluded from cid2's own decision, leaving
+    # no history at all -> the neutral zero signal.
+    assert weak2.earned_weight == 0.0
+
+
+def test_earned_weights_batch_matches_the_per_group_path():
+    """The batched result equals what the original per-group query path
+    (``_EarnedConn`` above, unchanged) computes for the same wins/losses —
+    batching changes the round-trip count, never the decision."""
+    fa, fb = uuid4(), uuid4()
+    cid = uuid4()
+    cid_hist = uuid4()
+
+    # Per-group (unbatched) path — ground truth, same fixture shape as
+    # test_attach_earned_weights_populates_side_from_best_carrier above.
+    unbatched_conn = _EarnedConn(
+        fact_sources={fa: "source.proven", fb: "source.weak"},
+        aggregates=[
+            {"source_id": "source.proven", "wins": 1, "losses": 0,
+             "corroborated": 0, "corroboration_total": 0},
+            {"source_id": "source.weak", "wins": 0, "losses": 1,
+             "corroborated": 0, "corroboration_total": 0},
+        ],
+    )
+    proven_u = _agg("de-escalating", distinct=2, cred=1.0, types=1, fact_ids=[fa])
+    weak_u = _agg("clashes ongoing", distinct=2, cred=1.0, types=1, fact_ids=[fb])
+    asyncio.run(
+        arb._attach_earned_weights(unbatched_conn, [proven_u, weak_u], contention_id=cid, now=NOW)
+    )
+
+    # Batched path — same 1 win / 1 external loss, reached via the combined
+    # query plus a self-referential row for `cid` the exclusion must drop.
+    batch_rows = [
+        {"contention_id": None, "fact_id": fa, "source_id": "source.proven",
+         "on_winning_side": None, "on_losing_side": None},
+        {"contention_id": None, "fact_id": fb, "source_id": "source.weak",
+         "on_winning_side": None, "on_losing_side": None},
+        {"contention_id": cid, "fact_id": None, "source_id": "source.proven",
+         "on_winning_side": True, "on_losing_side": False},   # self-row: excluded
+        {"contention_id": cid_hist, "fact_id": None, "source_id": "source.proven",
+         "on_winning_side": True, "on_losing_side": False},   # external: kept
+        {"contention_id": cid_hist, "fact_id": None, "source_id": "source.weak",
+         "on_winning_side": False, "on_losing_side": True},   # external: kept
+    ]
+    batched_conn = _RecordingBatchConn(batch_rows)
+    proven_b = _agg("de-escalating", distinct=2, cred=1.0, types=1, fact_ids=[fa])
+    weak_b = _agg("clashes ongoing", distinct=2, cred=1.0, types=1, fact_ids=[fb])
+
+    async def _run() -> None:
+        batch = await ewb.fetch_earned_weights_batch(batched_conn, [fa, fb], cutoff=NOW)
+        await arb._attach_earned_weights(
+            batched_conn, [proven_b, weak_b], contention_id=cid, now=NOW, batch=batch,
+        )
+
+    asyncio.run(_run())
+
+    assert len(batched_conn.calls) == 1
+    assert proven_b.earned_weight == pytest.approx(proven_u.earned_weight)
+    assert weak_b.earned_weight == pytest.approx(weak_u.earned_weight)
 
 
 # ===========================================================================

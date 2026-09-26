@@ -8,8 +8,10 @@ an **empty knowledge base** unless you provide your own seed files in this
 directory.
 
 To seed real starting knowledge you supply your own files here — start from the
-format example ([`world_baseline.example.yaml`](world_baseline.example.yaml),
-the one file this directory ships).
+format examples, which are the only data files this directory ships:
+[`world_baseline.example.yaml`](world_baseline.example.yaml),
+[`source_ratings.example.yaml`](source_ratings.example.yaml) and
+[`exemplar_shelf.example.yaml`](exemplar_shelf.example.yaml).
 
 ## What a seed does
 
@@ -127,3 +129,38 @@ Format (with inline field comments):
 sources in it are FAKE. Same graceful degrade: a missing file is a warn +
 no-op. Ratings are display/weighting metadata only — they never touch the
 faithfulness score.
+
+## Exemplar shelf (curated pattern-thread index)
+
+`seeds/exemplar_shelf.yaml` (curated, gitignored) is the **exemplar shelf** —
+the curated index of pattern-threads. A pattern-thread is a *warning problem*
+(UK JDP 2-00): a named standing monitor with a watch condition that emits on
+critical-indicator change rather than on cadence. The shelf says which warning
+problems exist, at what stage, and how ids that have left it still resolve.
+
+It writes **nothing** to the substrate — no facts, no nexuses, no ratings — so
+it is not a `SeedSource` adapter and there is no `scripts/seed_*.py` for it. It
+is read in-process:
+
+```python
+from legba.data.seed.exemplar_shelf import load_shelf
+
+shelf = load_shelf()          # defaults to seeds/exemplar_shelf.yaml
+shelf.offered_ids()           # the active shelf, and nothing else
+shelf.resolve("some_old_id")  # merged / retired / active / None
+```
+
+Format (with inline field comments):
+[`exemplar_shelf.example.yaml`](exemplar_shelf.example.yaml) — the example
+patterns in it are FAKE. Same graceful degrade: a missing file is a warn plus
+an empty shelf that offers nothing (it never invents patterns). A file that is
+*present but malformed* raises `ExemplarShelfError` instead of half-loading.
+
+**The one rule the loader exists to enforce:** a pattern removed from the
+active shelf must stay **resolvable** and must **never be offered**. Curation
+removes patterns two ways — *merged* (the id joins the survivor's `aliases` and
+its `merged_from`, normally with a `variants` entry carrying the framing and
+indicators it contributed) and *retired* (the id moves to `retired:` with the
+deciding document's reason quoted). `slot` numbers are never renumbered, so a
+cull leaves holes on purpose: an old reference to a cut slot cannot silently
+become a different pattern.

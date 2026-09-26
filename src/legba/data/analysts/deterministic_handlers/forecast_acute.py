@@ -112,6 +112,55 @@ degenerate — i.e. the share of GENUINELY UNCERTAIN calls (p strictly inside
 probabilistic forecasting, so the producer ABSTAINS (issues nothing) rather than
 minting a certainty vector that would earn unearned skill against climatology."""
 
+#: H12 — the METHOD/SCALE version every minted forecast was computed under,
+#: stamped ``acute_forecasts.method_version`` beside the ``method`` column it
+#: versions (the row carried a method name but never its revision). Covers
+#: ``EVENT_CLASS`` / ``HAZARD_SEVERE_SOURCES``, the rate model
+#: (``RECENT_RATE_LOOKBACK_DAYS``, ``CLIMATOLOGY_WEEKS``, ``derate_lambda``),
+#: the honesty clamps (``P_EPSILON``, ``CLIMATOLOGY_SHRINK_W``,
+#: ``DEGENERACY_ABSTAIN_SHARE``) and the resolver window (``RESOLUTION_*
+#: grace``) — bump it when any of them moves, so a Brier diff across the
+#: change reads as an instrument revision, not a skill change.
+METHOD_VERSION = "forecast_acute/2026-09.1"
+
+#: K3 — the SCALE ``p`` and ``p_base`` are expressed ON (docs/ANALYSIS.md
+#: §10.9), stamped ``acute_forecasts.scale_version`` beside the method version.
+#: Both numbers are probabilities in the OPEN interval
+#: ``(P_EPSILON, 1 - P_EPSILON)`` — the clamp is what makes them a scale rather
+#: than a set of assertions, because an unclamped ``{0, 1}`` certainty has no
+#: finite log-loss and is not comparable with anything.
+#:
+#: ``2026-07`` is the era the D9 epsilon-clamp opened: migration 0075
+#: (2026-07-04) voided the 19 pre-clamp degenerate rows issued 2026-06-24 and
+#: the resolver has excluded them ever since. A pre-clamp ``p`` is not a reading
+#: on this scale, which is exactly why it was voided rather than re-graded.
+SCALE_VERSION = "acute_probability/2026-07"
+
+#: H13 — a due-but-still-unresolved row's mark: ``window_end + grace`` has
+#: passed and the resolver could not grade it (unmappable geo, a count that
+#: threw, or backlog beyond the fetch cap). DISTINCT from ``VOID_PREFIX``: a
+#: voided row is WITHDRAWN from grading deliberately; an expired row is merely
+#: unanswered — the resolver keeps fetching it (the mark is not ``voided:*``),
+#: a late real resolution overwrites it, and until then the scoreboard holds it
+#: in the ``brier_all`` denominator at maximum penalty.
+UNRESOLVED_EXPIRED = "unresolved:expired"
+
+#: H13 — the resolution test, frozen as TEXT on every minted row
+#: (``acute_forecasts.resolution_test``, migration 0212): the event class, the
+#: exogenous column/join the resolver counts on, the threshold and the window —
+#: the falsifiable contract, readable off the row without the code that issued
+#: it. Rows minted before the column existed carry this same text prefixed
+#: ``retro: `` (stamped at backfill, never under it — the migration file and
+#: this constant are drift-tested in test_sealed_forecast_ledger).
+RESOLUTION_TEST = (
+    f"class={EVENT_CLASS}; "
+    f"o=1 iff >=1 signal with source_id IN ({', '.join(HAZARD_SEVERE_SOURCES)}) "
+    "geo-overlapping the region's geo codes and timed by the UPSTREAM event "
+    "stamp (usgs origin ms / eonet event date / fetched_at fallback) inside "
+    "[window_start, window_end); "
+    f"window=7d weekly; resolver grace={RESOLUTION_GRACE_DAYS}d"
+)
+
 # The UPSTREAM event timestamp per source — quake origin time (epoch ms), NWS
 # alert onset/effective, NASA EONET event date — NEVER fetched_at. This is what
 # makes the resolution exogenous and removes the ingest-rate artifact.
@@ -397,14 +446,19 @@ async def issue_weekly_forecasts(
                         """
                         INSERT INTO acute_forecasts
                             (region, event_class, window_start, window_end,
-                             p, p_base, method, lambda_model)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                             p, p_base, method, method_version, scale_version,
+                             lambda_model, resolution_test)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                         ON CONFLICT (region, event_class, window_start)
                             DO NOTHING
                         """,
                         s["region"], EVENT_CLASS, window_start, window_end,
                         s["p"], s["p_base"], "recent_rate_poisson_shrunk",
-                        s["lam_eff"],
+                        # K3 — the probability SCALE beside the revision: the
+                        # clamped open interval these two numbers live in.
+                        METHOD_VERSION, SCALE_VERSION, s["lam_eff"],
+                        # H13 — the resolution test frozen at mint.
+                        RESOLUTION_TEST,
                     )
                     if res and res.endswith("1"):
                         issued += 1
@@ -467,6 +521,7 @@ async def resolve_open_acute_forecasts(
     skipped_no_geo = 0
     count_failed = 0
     due = 0
+    newly_expired = 0
     try:
         async with pool.acquire() as conn:
             open_rows = await conn.fetch(
@@ -528,12 +583,38 @@ async def resolve_open_acute_forecasts(
                     row["id"], outcome, int(cnt), RESOLVED_BY, now,
                 )
                 resolved += 1
+            # H13 — the honest denominator: every row past window_end + grace
+            # that is STILL unresolved after this pass (skipped_no_geo /
+            # count_failed / unfetched backlog beyond the fetch's LIMIT — this
+            # UPDATE's predicate is the fetch's own minus the cap) is marked
+            # 'unresolved:expired'. The mark is NOT voided:*, so the fetch
+            # above keeps retrying it each tick and a late real resolution
+            # overwrites the mark; until then it stays in the brier_all
+            # denominator at maximum penalty. Idempotent — already-marked rows
+            # are skipped by the IS DISTINCT FROM guard. ``due == 0`` means the
+            # predicate found nothing, so the write is skipped entirely (the
+            # nothing-due idle tick stays a zero-write tick).
+            if due:
+                expired_res = await conn.execute(
+                    """
+                    UPDATE acute_forecasts
+                    SET resolved_by = $2
+                    WHERE resolved_outcome IS NULL
+                      AND window_end < $1::timestamptz
+                      AND (resolved_by IS NULL OR resolved_by NOT LIKE 'voided:%')
+                      AND resolved_by IS DISTINCT FROM $2
+                    """,
+                    cutoff, UNRESOLVED_EXPIRED,
+                )
+                if isinstance(expired_res, str) and expired_res.split()[-1].isdigit():
+                    newly_expired = int(expired_res.split()[-1])
             # SELF-CHECK — gradeable rows still unresolved AFTER the pass. The
             # resolver grades every row it fetches, so a non-zero count here
             # means the leg is genuinely failing, not merely idle. VOIDED rows
             # are excluded: they are unresolved BY DESIGN and would otherwise
             # pin this counter above zero forever (that permanent 19 is exactly
-            # what read as a dead resolver from the outside).
+            # what read as a dead resolver from the outside). H13: this set IS
+            # the expired backlog — the marker above labels the same rows.
             stale = await conn.fetchrow(
                 """
                 SELECT count(*)::int AS n,
@@ -572,6 +653,7 @@ async def resolve_open_acute_forecasts(
         resolved=resolved,
         skipped_no_geo=skipped_no_geo,
         count_failed=count_failed,
+        newly_expired=newly_expired,
         stale_unresolved=stale_n,
         stale_oldest_days=stale_days,
     )
@@ -614,6 +696,33 @@ async def _region_geo(conn: Any, region: str) -> list[str]:
         pass
     suffix = region.rsplit("_", 1)[-1].upper() if region else ""
     return [suffix] if len(suffix) == 2 and suffix.isalpha() else []
+
+
+async def pull_expired_forecast_count(
+    deps: Any, options: Mapping[str, Any],
+) -> int:
+    """H13 — the expired backlog: rows marked ``unresolved:expired`` that are
+    STILL unanswered (a late real resolution clears the mark, so the count is
+    the live set, not a cumulative tally). Read-only; the ``brier_all``
+    denominator floor."""
+    pool = getattr(deps, "pg_pool", None) if deps is not None else None
+    if pool is None:
+        return 0
+    try:
+        async with pool.acquire() as conn:
+            n = await conn.fetchval(
+                """
+                SELECT count(*)::int
+                FROM acute_forecasts
+                WHERE resolved_outcome IS NULL
+                  AND resolved_by = $1
+                """,
+                UNRESOLVED_EXPIRED,
+            )
+        return int(n or 0)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("forecast_acute.expired_count_failed err=%s", exc)
+        return 0
 
 
 async def pull_resolved_acute_forecasts(
@@ -664,6 +773,11 @@ __all__ = [
     "EVENT_CLASS",
     "HAZARD_SEVERE_SOURCES",
     "RESOLVED_BY",
+    "METHOD_VERSION",
+    "SCALE_VERSION",
+    "RESOLUTION_TEST",
+    "UNRESOLVED_EXPIRED",
+    "pull_expired_forecast_count",
     "P_EPSILON",
     "CLIMATOLOGY_SHRINK_W",
     "DEGENERACY_ABSTAIN_SHARE",

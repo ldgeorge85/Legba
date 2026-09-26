@@ -81,8 +81,9 @@ export function reportToMarkdown(doc: ReportDoc): string {
   return lines.join('\n')
 }
 
-/** Escape a string for safe HTML text content. */
-function esc(s: string): string {
+/** Escape a string for safe HTML text content. Exported because every
+ *  self-contained print document this repo builds needs exactly this one. */
+export function esc(s: string): string {
   return s
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -90,63 +91,116 @@ function esc(s: string): string {
     .replace(/"/g, '&quot;')
 }
 
+/** Inline markdown → HTML. Escaped FIRST, so this can never inject markup. */
+function inlineMd(s: string): string {
+  return esc(s)
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+}
+
+/** Leading-whitespace width of a line, tabs counted as four columns. */
+function indentOf(raw: string): number {
+  return (/^[ \t]*/.exec(raw)?.[0] ?? '').replace(/\t/g, '    ').length
+}
+
 /**
  * A minimal, dependency-free Markdown→HTML for the print document. Handles the
- * subset compositions actually emit — ATX headings, bold/italic, bullet &
- * ordered lists, and paragraphs. Everything is HTML-escaped first, so this can
- * never inject markup. Not a full CommonMark engine — intentionally small.
+ * subset compositions and `export_api.render_markdown` actually emit — ATX
+ * headings, bold/italic/code, bullet & ordered lists (INDENT-NESTED, because
+ * the export writes its spine-hop and tracked-event lines as indented
+ * sub-bullets), block quotes (the export's provenance note), thematic breaks,
+ * and paragraphs. Everything is HTML-escaped first, so this can never inject
+ * markup. Not a full CommonMark engine — intentionally small.
  */
 export function miniMarkdownToHtml(md: string): string {
-  const inline = (s: string): string =>
-    esc(s)
-      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
   const out: string[] = []
-  let list: 'ul' | 'ol' | null = null
-  const closeList = () => {
-    if (list) {
-      out.push(`</${list}>`)
-      list = null
+  // One entry per OPEN list level, outermost first. `liOpen` lets a deeper
+  // level nest INSIDE the item that introduced it, so the output is valid
+  // `<ul><li>a<ul><li>b</li></ul></li></ul>` rather than sibling lists.
+  const stack: Array<{ tag: 'ul' | 'ol'; indent: number; liOpen: boolean }> = []
+  let quoting = false
+  const closeTop = () => {
+    const lvl = stack.pop()
+    if (!lvl) return
+    if (lvl.liOpen) out.push('</li>')
+    out.push(`</${lvl.tag}>`)
+  }
+  const closeListsDeeperThan = (indent: number) => {
+    while (stack.length && stack[stack.length - 1].indent > indent) closeTop()
+  }
+  const closeAllLists = () => {
+    while (stack.length) closeTop()
+  }
+  const closeQuote = () => {
+    if (quoting) {
+      out.push('</blockquote>')
+      quoting = false
     }
   }
   for (const raw of (md ?? '').split(/\r?\n/)) {
     const line = raw.trimEnd()
     if (line.trim() === '') {
-      closeList()
+      closeAllLists()
+      closeQuote()
+      continue
+    }
+    if (/^ {0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      closeAllLists()
+      closeQuote()
+      out.push('<hr>')
+      continue
+    }
+    const quote = /^\s*>\s?(.*)$/.exec(line)
+    if (quote) {
+      closeAllLists()
+      if (!quoting) {
+        out.push('<blockquote>')
+        quoting = true
+      }
+      out.push(`<p>${inlineMd(quote[1])}</p>`)
       continue
     }
     const h = /^(#{1,6})\s+(.*)$/.exec(line)
     if (h) {
-      closeList()
+      closeAllLists()
+      closeQuote()
       const level = h[1].length
-      out.push(`<h${level}>${inline(h[2])}</h${level}>`)
+      out.push(`<h${level}>${inlineMd(h[2])}</h${level}>`)
       continue
     }
     const ul = /^\s*[-*+]\s+(.*)$/.exec(line)
-    if (ul) {
-      if (list !== 'ul') {
-        closeList()
-        out.push('<ul>')
-        list = 'ul'
+    const ol = ul ? null : /^\s*\d+[.)]\s+(.*)$/.exec(line)
+    const item = ul ?? ol
+    if (item) {
+      closeQuote()
+      const tag: 'ul' | 'ol' = ul ? 'ul' : 'ol'
+      const indent = indentOf(raw)
+      closeListsDeeperThan(indent)
+      let top = stack[stack.length - 1]
+      if (!top || indent > top.indent) {
+        out.push(`<${tag}>`)
+        stack.push({ tag, indent, liOpen: false })
+      } else if (top.tag !== tag) {
+        closeTop()
+        out.push(`<${tag}>`)
+        stack.push({ tag, indent, liOpen: false })
       }
-      out.push(`<li>${inline(ul[1])}</li>`)
+      top = stack[stack.length - 1]
+      if (top.liOpen) {
+        out.push('</li>')
+        top.liOpen = false
+      }
+      out.push(`<li>${inlineMd(item[1])}`)
+      top.liOpen = true
       continue
     }
-    const ol = /^\s*\d+[.)]\s+(.*)$/.exec(line)
-    if (ol) {
-      if (list !== 'ol') {
-        closeList()
-        out.push('<ol>')
-        list = 'ol'
-      }
-      out.push(`<li>${inline(ol[1])}</li>`)
-      continue
-    }
-    closeList()
-    out.push(`<p>${inline(line)}</p>`)
+    closeAllLists()
+    closeQuote()
+    out.push(`<p>${inlineMd(line)}</p>`)
   }
-  closeList()
+  closeAllLists()
+  closeQuote()
   return out.join('\n')
 }
 

@@ -188,6 +188,7 @@ def _render_user_prompt(
     *,
     run_date: str | None = None,
     window_hours: int | None = None,
+    spread_block: str | None = None,
 ) -> str:
     """Render the (already ORIENTed) substrate slice into a user prompt.
 
@@ -218,6 +219,17 @@ def _render_user_prompt(
 
     Absent values degrade to absent LINES (never a fabricated default), so a
     caller that wires neither renders the pre-Phase-V header plus a run date.
+
+    ``spread_block`` (lane narrative, Program 7 piece 7e) is the
+    ``narrative_coordination`` unit's pre-computed SPREAD BLOCK text
+    (:func:`legba.data.analysts.spread_block.build_spread_block`) — a
+    deterministic, code-computed statement about cross-source near-verbatim
+    reuse, synchrony and class mix, cited by the SAME ``[N]`` ordinals the
+    signal blocks below carry. ``None`` (every caller but that one unit) adds
+    NOTHING to the header — byte-identical to the pre-existing render, same
+    contract as ``window_hours``. When the caller DOES engage it, the line
+    renders even when no reuse was found (an explicit "none found" line, not
+    a silently-omitted one) so the model always reads the same block shape.
     """
     header_lines = [f"Target: {target_id or 'unspecified'}"]
     header_lines.append(
@@ -232,6 +244,8 @@ def _render_user_prompt(
     # machine-coded-row marker must survive the Phase-V header restructure.
     if any(_row_is_cameo_coded(r) for r in inputs):
         header_lines.append(_CAMEO_LEGEND.strip("\n"))
+    if spread_block is not None:
+        header_lines.append(spread_block)
     header = "\n".join(header_lines) + "\n\n"
     body_lines = [_render_signal(i, row) for i, row in enumerate(inputs, start=1)]
     return header + "\n".join(body_lines)

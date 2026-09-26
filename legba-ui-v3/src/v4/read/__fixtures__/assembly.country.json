@@ -1,0 +1,1018 @@
+{
+ "_provenance": "COUNTRY tier, country_watch_tw, 2026-09-03 11:40Z. Built from the live country_composition head's own citations[] -> origin desk heads. Exercises the earned_single lead and two carried_pair tensions on one target.",
+ "id": "bf9409e6-80cd-4098-8ed3-d6263fa993fe",
+ "kind": "finding",
+ "analyst_id": "country_composition",
+ "target_id": "country_watch_tw",
+ "title": "Watch — Taiwan, Province of China read · 3 Sep — “Continued Chinese Coast Guard law‑enforcement patrols east of Taiwan sustain an elevated escalation risk, with no…”",
+ "body": null,
+ "severity": "elevated",
+ "confidence": 1.0,
+ "produced_at": "2026-09-03 11:40:46.345114+00",
+ "derived_from": [],
+ "data": {
+  "data": {
+   "meta": true,
+   "assembly": {
+    "schema": "assembly.v1",
+    "regime": "assembly",
+    "tier": "country",
+    "as_of": "2026-09-03 11:40:46.345114+00",
+    "lead": {
+     "kind": "earned_single",
+     "block_ordinals": [
+      1
+     ],
+     "test": {
+      "key": "cited_mass.v1",
+      "top_share": 0.5385,
+      "ratio_12": 2.3333,
+      "bar_share": 0.15,
+      "bar_ratio": 1.5,
+      "earned": true,
+      "n_candidates": 8
+     }
+    },
+    "blocks": [
+     {
+      "ordinal": 1,
+      "finding_id": "ca7f3025-ee75-4607-8201-ac90395e370b",
+      "desk": "escalation",
+      "target_id": "country_watch_tw",
+      "target_name": "Watch — Taiwan, Province of China",
+      "question": "Is the risk of armed escalation rising, holding or falling here — and on what evidence?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-02 19:11:58.571124+00",
+      "evidence_age_h": 16.48,
+      "tier": "basis",
+      "severity": "elevated",
+      "verify": {
+       "overall_score": 0.8,
+       "effective_confidence": 0.65,
+       "checkable_claims": 6,
+       "supported_claims": 5,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.65,
+       "cited_mass": 0.15,
+       "n_above": 0,
+       "n_cited_scored": 1,
+       "legacy_magnitude": 0.75
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "Continued Chinese Coast Guard law‑enforcement patrols east of Taiwan sustain an elevated escalation risk, with no new provocations to raise it further.",
+        "origin": {
+         "head_id": "ca7f3025-ee75-4607-8201-ac90395e370b",
+         "start": 87,
+         "end": 240,
+         "body_sha256": "d516b599d2ebf87a0163ecfc61a9559a812efc7d582f52f0743412330c44009d",
+         "body_len": 1808
+        },
+        "markers": [],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "A new report confirms that two China Coast Guard ships have maintained a month‑long patrol in Taiwan’s claimed EEZ east of the island, with a fresh pair arriving on 4 August and the previous vessels relieved on 1 July, marking the first sustained, continuous CCG presence in that area [32].",
+        "origin": {
+         "head_id": "ca7f3025-ee75-4607-8201-ac90395e370b",
+         "start": 260,
+         "end": 558,
+         "body_sha256": "d516b599d2ebf87a0163ecfc61a9559a812efc7d582f52f0743412330c44009d",
+         "body_len": 1808
+        },
+        "markers": [
+         "[32]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "This confirmation updates the prior assessment, but the overall situation remains unchanged from the previous read, which already noted sustained CCG activity [92].",
+        "origin": {
+         "head_id": "ca7f3025-ee75-4607-8201-ac90395e370b",
+         "start": 561,
+         "end": 725,
+         "body_sha256": "d516b599d2ebf87a0163ecfc61a9559a812efc7d582f52f0743412330c44009d",
+         "body_len": 1808
+        },
+        "markers": [
+         "[92]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "**border-force-buildup:** triggered (see [32])",
+        "origin": {
+         "head_id": "ca7f3025-ee75-4607-8201-ac90395e370b",
+         "start": 1725,
+         "end": 1771,
+         "body_sha256": "d516b599d2ebf87a0163ecfc61a9559a812efc7d582f52f0743412330c44009d",
+         "body_len": 1808
+        },
+        "markers": [
+         "[32]"
+        ],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[32]",
+        "signal_id": "8e8690ad-4a33-4a1e-8808-0adfe4bcec00",
+        "source_id": "source.isw.assessments",
+        "title": "The PRC Normalizes “Law Enforcement” East of Taiwan",
+        "url": "https://understandingwar.org/research/china-taiwan/the-prc-normalizes-law-enforcement-east-of-taiwan/",
+        "age_h": 45.2,
+        "salience_magnitude": 0.65,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_tw"
+         }
+        ]
+       },
+       {
+        "marker": "[92]",
+        "signal_id": null,
+        "source_id": null,
+        "title": "PRC coast guard patrols sustain Taiwan's elevation of escalation risk",
+        "url": null,
+        "age_h": null,
+        "salience_magnitude": null,
+        "also_cited_by": []
+       }
+      ],
+      "corroboration": {
+       "n_sources": 1,
+       "n_desks_sharing": 1
+      }
+     },
+     {
+      "ordinal": 2,
+      "finding_id": "66e253d0-f675-4a5e-9d91-e22df1f4ca72",
+      "desk": "escalation",
+      "target_id": "country_watch_tw",
+      "target_name": "Watch — Taiwan, Province of China",
+      "question": "Is the risk of armed escalation rising, holding or falling here — and on what evidence?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 07:12:17.137952+00",
+      "evidence_age_h": 4.47,
+      "tier": "periphery",
+      "severity": "elevated",
+      "verify": {
+       "overall_score": 0.2857,
+       "effective_confidence": 0.2857,
+       "checkable_claims": 8,
+       "supported_claims": 3,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.65,
+       "cited_mass": 0.15,
+       "n_above": 0,
+       "n_cited_scored": 1,
+       "legacy_magnitude": 0.7
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "Continuous China Coast Guard law‑enforcement patrols in Taiwan’s eastern exclusive economic zone keep the island’s escalation risk elevated, with no new actions to raise or lower the threat level.",
+        "origin": {
+         "head_id": "66e253d0-f675-4a5e-9d91-e22df1f4ca72",
+         "start": 87,
+         "end": 289,
+         "body_sha256": "f7e7e738cbce6afc2fbcef1904bfa6f3f2afdb7429c2afe2d4e28a0de849b921",
+         "body_len": 2256
+        },
+        "markers": [],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "A detailed report confirms that two China Coast Guard ships have maintained a month‑long patrol in the waters east of Taiwan, the first sustained presence of this kind, and that a fresh pair of vessels arrived on 4 August after the previous ships were rotated out on 1 July. This updates the factual record of the patrol but does not alter the overall risk assessment, which already noted the ongoing CCG activity [43].",
+        "origin": {
+         "head_id": "66e253d0-f675-4a5e-9d91-e22df1f4ca72",
+         "start": 309,
+         "end": 734,
+         "body_sha256": "f7e7e738cbce6afc2fbcef1904bfa6f3f2afdb7429c2afe2d4e28a0de849b921",
+         "body_len": 2256
+        },
+        "markers": [
+         "[43]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "**Border‑force‑buildup:** Ongoing China Coast Guard patrols east of Taiwan (triggered) – horizon 2026‑09‑10 – first seen 2026‑09‑03 – citations: [43]",
+        "origin": {
+         "head_id": "66e253d0-f675-4a5e-9d91-e22df1f4ca72",
+         "start": 1770,
+         "end": 1937,
+         "body_sha256": "f7e7e738cbce6afc2fbcef1904bfa6f3f2afdb7429c2afe2d4e28a0de849b921",
+         "body_len": 2256
+        },
+        "markers": [
+         "[43]"
+        ],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[43]",
+        "signal_id": "8e8690ad-4a33-4a1e-8808-0adfe4bcec00",
+        "source_id": "source.isw.assessments",
+        "title": "The PRC Normalizes “Law Enforcement” East of Taiwan",
+        "url": "https://understandingwar.org/research/china-taiwan/the-prc-normalizes-law-enforcement-east-of-taiwan/",
+        "age_h": 45.2,
+        "salience_magnitude": 0.65,
+        "also_cited_by": []
+       }
+      ],
+      "corroboration": {
+       "n_sources": 1,
+       "n_desks_sharing": 0
+      }
+     },
+     {
+      "ordinal": 3,
+      "finding_id": "402aed55-0cc8-4360-a7b8-f77e39b88538",
+      "desk": "energy_security",
+      "target_id": "country_watch_tw",
+      "target_name": "Watch — Taiwan, Province of China",
+      "question": "Is this country's energy supply or price under new strain — and is it a flow constraint or a volume constraint?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 04:12:16.866003+00",
+      "evidence_age_h": 7.47,
+      "tier": "basis",
+      "severity": "elevated",
+      "verify": {
+       "overall_score": 0.8,
+       "effective_confidence": 0.7,
+       "checkable_claims": 5,
+       "supported_claims": 4,
+       "judge_status": "deterministic",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.45,
+       "cited_mass": 0.0,
+       "n_above": 0,
+       "n_cited_scored": 2,
+       "legacy_magnitude": 0.75
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "Taiwan’s energy‑security pressure remains elevated, driven by a modest rise in electricity‑generation fuel costs and higher airline fuel surcharges, with no new supply disruptions reported.",
+        "origin": {
+         "head_id": "402aed55-0cc8-4360-a7b8-f77e39b88538",
+         "start": 87,
+         "end": 282,
+         "body_sha256": "1e0f1919edb141e7bb38926d01b55dd884b0beb9122c736560855f314057302b",
+         "body_len": 2075
+        },
+        "markers": [],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "The prior read already described elevated pressure with no new disruptions, and this window confirms the same condition [94].",
+        "origin": {
+         "head_id": "402aed55-0cc8-4360-a7b8-f77e39b88538",
+         "start": 302,
+         "end": 427,
+         "body_sha256": "1e0f1919edb141e7bb38926d01b55dd884b0beb9122c736560855f314057302b",
+         "body_len": 2075
+        },
+        "markers": [
+         "[94]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "CPC Corp announced a 5.83 % increase in natural‑gas rates for electricity generators to offset higher LNG costs, adding cost pressure on power generation [15].",
+        "origin": {
+         "head_id": "402aed55-0cc8-4360-a7b8-f77e39b88538",
+         "start": 430,
+         "end": 593,
+         "body_sha256": "1e0f1919edb141e7bb38926d01b55dd884b0beb9122c736560855f314057302b",
+         "body_len": 2075
+        },
+        "markers": [
+         "[15]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "Taiwan’s civil aviation authority approved higher international fuel surcharges for airlines, reflecting higher aviation fuel benchmark prices [1].",
+        "origin": {
+         "head_id": "402aed55-0cc8-4360-a7b8-f77e39b88538",
+         "start": 596,
+         "end": 745,
+         "body_sha256": "1e0f1919edb141e7bb38926d01b55dd884b0beb9122c736560855f314057302b",
+         "body_len": 2075
+        },
+        "markers": [
+         "[1]"
+        ],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[94]",
+        "signal_id": null,
+        "source_id": null,
+        "title": "Energy‑security pressure stays elevated as electricity‑generation costs rise modestly",
+        "url": null,
+        "age_h": null,
+        "salience_magnitude": null,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[15]",
+        "signal_id": "07864d76-5098-46e8-845c-bea663267d7c",
+        "source_id": "source.rsshub.focustaiwan.news",
+        "title": "Natural gas prices to consumers, industry to remain unchanged",
+        "url": "https://focustaiwan.tw/business/202608310022",
+        "age_h": 25.4,
+        "salience_magnitude": 0.45,
+        "also_cited_by": [
+         {
+          "desk": "energy_security",
+          "target_id": "country_watch_tw"
+         }
+        ]
+       },
+       {
+        "marker": "[1]",
+        "signal_id": "b302ec8c-1756-4230-940a-fd962c3122df",
+        "source_id": "source.rsshub.focustaiwan.news",
+        "title": "Taiwan airlines to raise international fuel surcharges Sept. 7",
+        "url": "https://focustaiwan.tw/business/202609010011",
+        "age_h": 9.4,
+        "salience_magnitude": 0.38,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_tw"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_tw"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_watch_tw"
+         }
+        ]
+       }
+      ],
+      "corroboration": {
+       "n_sources": 1,
+       "n_desks_sharing": 3
+      }
+     },
+     {
+      "ordinal": 4,
+      "finding_id": "480c5f6e-3064-4a92-840e-9d0a6c8387bd",
+      "desk": "military_posture",
+      "target_id": "country_watch_tw",
+      "target_name": "Watch — Taiwan, Province of China",
+      "question": "Has force posture materially changed here — deployments, readiness, or basing?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 05:12:05.145867+00",
+      "evidence_age_h": 6.48,
+      "tier": "basis",
+      "severity": "moderate",
+      "verify": {
+       "overall_score": 0.8333,
+       "effective_confidence": 0.8333,
+       "checkable_claims": 6,
+       "supported_claims": 5,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.4,
+       "cited_mass": 0.0,
+       "n_above": 0,
+       "n_cited_scored": 2,
+       "legacy_magnitude": 0.7
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "No material change: Taiwan’s drone procurement remains stalled, keeping its military posture unchanged.",
+        "origin": {
+         "head_id": "480c5f6e-3064-4a92-840e-9d0a6c8387bd",
+         "start": 87,
+         "end": 192,
+         "body_sha256": "5c14b72c08773a498d36d09f40ae0bdc7dbe1e8ca3e9969e46031135a00156f4",
+         "body_len": 1601
+        },
+        "markers": [],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[80]",
+        "signal_id": "1b6b0149-91a0-4dba-96ab-b9e27dd522e2",
+        "source_id": "source.rsshub.focustaiwan.news",
+        "title": "New drone act could slow Taiwan military procurement: Analysts",
+        "url": "https://focustaiwan.tw/politics/202608280022",
+        "age_h": 69.4,
+        "salience_magnitude": 0.25,
+        "also_cited_by": [
+         {
+          "desk": "internal_stability",
+          "target_id": "country_watch_tw"
+         }
+        ]
+       },
+       {
+        "marker": "[86]",
+        "signal_id": "7a59787b-3be9-4fc9-be75-348570060dc3",
+        "source_id": "source.digitimes.news",
+        "title": "Taiwan drone bill dispute leaves NT$240 billion procurement plan in limbo",
+        "url": "https://www.digitimes.com/news/a20260828PD241/taiwan-government-funding-2027-security.html",
+        "age_h": 72.9,
+        "salience_magnitude": 0.4,
+        "also_cited_by": [
+         {
+          "desk": "internal_stability",
+          "target_id": "country_watch_tw"
+         }
+        ]
+       },
+       {
+        "marker": "[96]",
+        "signal_id": null,
+        "source_id": null,
+        "title": "Taiwan’s drone procurement remains stalled, posture unchanged",
+        "url": null,
+        "age_h": null,
+        "salience_magnitude": null,
+        "also_cited_by": []
+       }
+      ],
+      "corroboration": {
+       "n_sources": 2,
+       "n_desks_sharing": 1
+      }
+     },
+     {
+      "ordinal": 5,
+      "finding_id": "f72b7b0c-19e3-4f6a-bcfe-71a2d4791653",
+      "desk": "economic_coercion",
+      "target_id": "country_watch_tw",
+      "target_name": "Watch — Taiwan, Province of China",
+      "question": "Is economic pressure being applied to or by this country — sanctions, tariffs, or export control?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 09:11:35.333862+00",
+      "evidence_age_h": 2.49,
+      "tier": "basis",
+      "severity": "moderate",
+      "verify": {
+       "overall_score": 1.0,
+       "effective_confidence": 0.93,
+       "checkable_claims": 6,
+       "supported_claims": 6,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.0,
+       "cited_mass": 0,
+       "n_above": 0,
+       "n_cited_scored": 0,
+       "legacy_magnitude": 0.7
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "No new economic‑coercion measures were reported in this window; Taiwan continues to enforce AI‑server export bans on China without further tightening [94][95].",
+        "origin": {
+         "head_id": "f72b7b0c-19e3-4f6a-bcfe-71a2d4791653",
+         "start": 87,
+         "end": 252,
+         "body_sha256": "6039a30c03d2628f3e003a9903650c205c39030c62e5bbf4b283bc847fb6f134",
+         "body_len": 1369
+        },
+        "markers": [
+         "[94]",
+         "[95]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "Punitive trade measure (AI‑server export bans) – triggered, citations: [95]",
+        "origin": {
+         "head_id": "f72b7b0c-19e3-4f6a-bcfe-71a2d4791653",
+         "start": 1289,
+         "end": 1368,
+         "body_sha256": "6039a30c03d2628f3e003a9903650c205c39030c62e5bbf4b283bc847fb6f134",
+         "body_len": 1369
+        },
+        "markers": [
+         "[95]"
+        ],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[94]",
+        "signal_id": null,
+        "source_id": null,
+        "title": "Taiwan faces ongoing AI‑server export bans—no new coercive moves detected",
+        "url": null,
+        "age_h": null,
+        "salience_magnitude": null,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[95]",
+        "signal_id": null,
+        "source_id": null,
+        "title": "Window ledger (this unit's trailing 14-day record)",
+        "url": null,
+        "age_h": null,
+        "salience_magnitude": null,
+        "also_cited_by": []
+       }
+      ],
+      "corroboration": {
+       "n_sources": 0,
+       "n_desks_sharing": 0
+      }
+     },
+     {
+      "ordinal": 6,
+      "finding_id": "d6c29a2d-af49-4e4e-adf6-c174500a2f4a",
+      "desk": "narrative_coordination",
+      "target_id": "country_watch_tw",
+      "target_name": "Watch — Taiwan, Province of China",
+      "question": "Is a coordinated narrative emerging across this country's sources — and around what — versus organic coverage?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 10:11:18.371574+00",
+      "evidence_age_h": 1.49,
+      "tier": "basis",
+      "severity": "low",
+      "verify": {
+       "overall_score": 0.8571,
+       "effective_confidence": 0.6,
+       "checkable_claims": 7,
+       "supported_claims": 6,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.7,
+       "cited_mass": 0.35,
+       "n_above": 1,
+       "n_cited_scored": 6,
+       "legacy_magnitude": 0.7
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "No coordinated narrative is evident in Taiwan’s media over the past three days; reporting remains largely organic and centered on the SEMICON Taiwan trade show and routine domestic topics.",
+        "origin": {
+         "head_id": "d6c29a2d-af49-4e4e-adf6-c174500a2f4a",
+         "start": 87,
+         "end": 277,
+         "body_sha256": "49968c8524393df36110de68156f5b6b5e87194e8d441b440f96ddb265ecad03",
+         "body_len": 2064
+        },
+        "markers": [],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "The prior read reported no coordinated narrative [95]; the current slice likewise finds no coordination, but adds new isolated developments such as the state‑linked CNA launching an AI data‑feed service on 31 Aug 2026 [32].",
+        "origin": {
+         "head_id": "d6c29a2d-af49-4e4e-adf6-c174500a2f4a",
+         "start": 297,
+         "end": 528,
+         "body_sha256": "49968c8524393df36110de68156f5b6b5e87194e8d441b440f96ddb265ecad03",
+         "body_len": 2064
+        },
+        "markers": [
+         "[95]",
+         "[32]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "Multiple technology outlets covered the SEMICON Taiwan 2026 event with overlapping themes on AI‑driven semiconductor investment and supply‑chain shifts, e.g., Nvidia‑MediaTek deal boosting the Taiex [4], President Lai’s remarks on the semiconductor ecosystem [8], Nvidia and Micron’s NT$4.4 trn investment [28], TSMC’s AI integration comments [41], and broader SEMICON AI‑supply‑chain analysis [73]. These reports reflect organic news flow rather than lockstep messaging.",
+        "origin": {
+         "head_id": "d6c29a2d-af49-4e4e-adf6-c174500a2f4a",
+         "start": 531,
+         "end": 1020,
+         "body_sha256": "49968c8524393df36110de68156f5b6b5e87194e8d441b440f96ddb265ecad03",
+         "body_len": 2064
+        },
+        "markers": [
+         "[4]",
+         "[8]",
+         "[28]",
+         "[41]",
+         "[73]"
+        ],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[95]",
+        "signal_id": null,
+        "source_id": null,
+        "title": "No coordinated narrative detected; coverage is routine and event‑driven",
+        "url": null,
+        "age_h": null,
+        "salience_magnitude": null,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[32]",
+        "signal_id": "536723f2-fa4c-44ef-8c8b-cdb23562c393",
+        "source_id": "source.rsshub.focustaiwan.news",
+        "title": "CNA launches subscription-based MCP service for AI applications",
+        "url": "https://focustaiwan.tw/sci-tech/202608310016",
+        "age_h": 27.4,
+        "salience_magnitude": 0.2,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[4]",
+        "signal_id": "d4a626e6-32eb-467b-b8a2-e943b34dcf57",
+        "source_id": "source.rsshub.focustaiwan.news",
+        "title": "Taiex soars to 2-month closing high on Nvidia-MediaTek deal",
+        "url": "https://focustaiwan.tw/business/202609010019",
+        "age_h": 3.4,
+        "salience_magnitude": 0.5,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_tw"
+         },
+         {
+          "desk": "disruption_status",
+          "target_id": "flow_semiconductors"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_tw"
+         }
+        ]
+       },
+       {
+        "marker": "[8]",
+        "signal_id": "542d5957-d500-4678-ac40-ac110366c9bc",
+        "source_id": "source.rsshub.focustaiwan.news",
+        "title": "Taiwan's chips link global partners, strengthen supply chain: President",
+        "url": "https://focustaiwan.tw/business/202609010013",
+        "age_h": 7.4,
+        "salience_magnitude": 0.6,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_tw"
+         },
+         {
+          "desk": "disruption_status",
+          "target_id": "flow_semiconductors"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_tw"
+         },
+         {
+          "desk": "disruption_status",
+          "target_id": "flow_semiconductors"
+         }
+        ]
+       },
+       {
+        "marker": "[28]",
+        "signal_id": "21c7a465-d8ee-489c-bf68-2660cc95eca9",
+        "source_id": "source.digitimes.news",
+        "title": "Nvidia and Micron top NT$4.4T in Taiwan investment",
+        "url": "https://www.digitimes.com/news/a20260902PD237/taiwan-micron-nvidia-investment-2026.html",
+        "age_h": 26.9,
+        "salience_magnitude": 0.7,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[41]",
+        "signal_id": "ecb3aad4-d8fa-4be5-863a-522b708f14db",
+        "source_id": "source.rsshub.focustaiwan.news",
+        "title": "AI growth to hinge on integrated systems: TSMC executive",
+        "url": "https://focustaiwan.tw/sci-tech/202608310006",
+        "age_h": 31.4,
+        "salience_magnitude": 0.2,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[73]",
+        "signal_id": "3f1b13fe-7bcf-4464-91c8-ad385fe81b16",
+        "source_id": "source.digitimes.news",
+        "title": "SEMICON Taiwan 2026 to spotlight AI-driven semiconductor supply chain shifts",
+        "url": "https://www.digitimes.com/news/a20260901PD216/taiwan-2026-market-technology-materials.html",
+        "age_h": 56.9,
+        "salience_magnitude": 0.55,
+        "also_cited_by": []
+       }
+      ],
+      "corroboration": {
+       "n_sources": 2,
+       "n_desks_sharing": 3
+      }
+     },
+     {
+      "ordinal": 7,
+      "finding_id": "47a72454-9a06-4a6a-9e02-d9caeb5f2567",
+      "desk": "leadership_transition",
+      "target_id": "country_watch_tw",
+      "target_name": "Watch — Taiwan, Province of China",
+      "question": "Is leadership continuity in question here — succession, removal, or contested legitimacy?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 01:12:54.351502+00",
+      "evidence_age_h": 10.46,
+      "tier": "basis",
+      "severity": "low",
+      "verify": {
+       "overall_score": 1.0,
+       "effective_confidence": 0.6,
+       "checkable_claims": 3,
+       "supported_claims": 3,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.3,
+       "cited_mass": 0.0,
+       "n_above": 0,
+       "n_cited_scored": 3,
+       "legacy_magnitude": 0.75
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "The likelihood of any change in Taiwan’s top leadership (President Lai Ching‑te or Premier Cho Jung‑tai) within the next 30 days is low.",
+        "origin": {
+         "head_id": "47a72454-9a06-4a6a-9e02-d9caeb5f2567",
+         "start": 87,
+         "end": 239,
+         "body_sha256": "ae7e2e890bad8036bb12c1ed3faaf48c7920f0b6a221ebe3f192ae15e82300b8",
+         "body_len": 1315
+        },
+        "markers": [],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[94]",
+        "signal_id": null,
+        "source_id": null,
+        "title": "Taiwan leadership remains stable; no transition signals emerge",
+        "url": null,
+        "age_h": null,
+        "salience_magnitude": null,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[2]",
+        "signal_id": "9a8940b0-d2de-4673-ba79-2e8b83b0bc74",
+        "source_id": "source.japantimes.news",
+        "title": "Taiwan needs a new deterrence strategy",
+        "url": "https://www.japantimes.co.jp/commentary/2026/09/03/world/taiwan-deterrence-strategy/",
+        "age_h": 11.9,
+        "salience_magnitude": 0.2,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_tw"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_tw"
+         }
+        ]
+       },
+       {
+        "marker": "[4]",
+        "signal_id": "b3709803-fa21-4fda-8f3f-edaa535d4627",
+        "source_id": "source.warontherocks.all",
+        "title": "Is Taiwanese Society Prepared for a China Contingency?",
+        "url": "https://warontherocks.com/is-taiwanese-society-prepared-for-a-china-contingency/",
+        "age_h": 15.6,
+        "salience_magnitude": 0.2,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[14]",
+        "signal_id": "16ad73c9-8e54-4480-bfc9-7e0835a35d78",
+        "source_id": "source.rsshub.focustaiwan.news",
+        "title": "Tropical Storm Saudel to make a comeback, with little impact on Taiwan",
+        "url": "https://focustaiwan.tw/society/202608310023",
+        "age_h": 25.4,
+        "salience_magnitude": 0.3,
+        "also_cited_by": []
+       }
+      ],
+      "corroboration": {
+       "n_sources": 3,
+       "n_desks_sharing": 2
+      }
+     },
+     {
+      "ordinal": 8,
+      "finding_id": "d893c8b1-7126-488c-b746-709599ddc8f4",
+      "desk": "internal_stability",
+      "target_id": "country_watch_tw",
+      "target_name": "Watch — Taiwan, Province of China",
+      "question": "Is domestic order under strain — and is the strain governmental, economic, or communal?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 02:12:25.192233+00",
+      "evidence_age_h": 9.47,
+      "tier": "basis",
+      "severity": "low",
+      "verify": {
+       "overall_score": 0.5,
+       "effective_confidence": 0.5,
+       "checkable_claims": 4,
+       "supported_claims": 2,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.4,
+       "cited_mass": 0.0,
+       "n_above": 0,
+       "n_cited_scored": 1,
+       "legacy_magnitude": 0.75
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "Taiwan’s internal stability remains anchored by modest elite political friction, keeping coup risk low [94][80]\n\n## What changed\n\n- No material change since the prior read on 2 September 2026; the drone‑procurement legislative deadlock and related elite disputes continue without new escalation [94]\n\n## Why it matters\n\n- The historical base‑rate for coups in Taiwan is very low, and the absence of mass mobilisation or security‑force dissent means the structural risk stays minimal.",
+        "origin": {
+         "head_id": "d893c8b1-7126-488c-b746-709599ddc8f4",
+         "start": 87,
+         "end": 582,
+         "body_sha256": "561f9141b176884328ebedb772a37e4fb1ce729386d9eec6a8442120d5befd9c",
+         "body_len": 1452
+        },
+        "markers": [
+         "[94]",
+         "[80]",
+         "[94]"
+        ],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[94]",
+        "signal_id": null,
+        "source_id": null,
+        "title": "Taiwan’s elite political friction stays modest, coup risk low",
+        "url": null,
+        "age_h": null,
+        "salience_magnitude": null,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[80]",
+        "signal_id": "7a59787b-3be9-4fc9-be75-348570060dc3",
+        "source_id": "source.digitimes.news",
+        "title": "Taiwan drone bill dispute leaves NT$240 billion procurement plan in limbo",
+        "url": "https://www.digitimes.com/news/a20260828PD241/taiwan-government-funding-2027-security.html",
+        "age_h": 72.9,
+        "salience_magnitude": 0.4,
+        "also_cited_by": [
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_tw"
+         }
+        ]
+       }
+      ],
+      "corroboration": {
+       "n_sources": 1,
+       "n_desks_sharing": 1
+      }
+     }
+    ],
+    "tensions": [
+     {
+      "kind": "carried_pair",
+      "a": {
+       "ordinal": 4,
+       "span_index": 0
+      },
+      "b": {
+       "ordinal": 8,
+       "span_index": 0
+      },
+      "b_ref": null,
+      "statement": "Blocks 4 and 8 describe Watch — Taiwan, Province of China and Watch — Taiwan, Province of China within the same target inside the same 72-hour window and point in opposite directions.",
+      "statement_source": "template",
+      "detector": "direction_conflict",
+      "detector_version": "composition_integrity.v1",
+      "same_target": true,
+      "same_window_h": 72
+     },
+     {
+      "kind": "carried_pair",
+      "a": {
+       "ordinal": 5,
+       "span_index": 0
+      },
+      "b": {
+       "ordinal": 8,
+       "span_index": 0
+      },
+      "b_ref": null,
+      "statement": "Blocks 5 and 8 describe Watch — Taiwan, Province of China and Watch — Taiwan, Province of China within the same target inside the same 72-hour window and point in opposite directions.",
+      "statement_source": "template",
+      "detector": "direction_conflict",
+      "detector_version": "composition_integrity.v1",
+      "same_target": true,
+      "same_window_h": 72
+     }
+    ],
+    "tension_checked": {
+     "pairs_examined": 28,
+     "pairs_found": 2,
+     "scope": "shown_and_dropped",
+     "scope_note": "BLUF-grain; ambivalent pairs declined"
+    },
+    "drops": {
+     "shown_not_carried": [],
+     "not_selected": [],
+     "trimmed": [],
+     "below_floor": [],
+     "no_head": [],
+     "counts": {
+      "shown": 8,
+      "carried": 8,
+      "shown_not_carried": 0,
+      "candidates": 8,
+      "not_selected": 0,
+      "trimmed": 0,
+      "below_floor": 0,
+      "no_head": 0,
+      "invisible_heads": 0
+     },
+     "why_classes": [
+      "shown_not_selected",
+      "not_selected",
+      "cap_trimmed",
+      "below_floor",
+      "no_head_in_horizon",
+      "superseded",
+      "correlated_duplicate",
+      "not_a_candidate"
+     ]
+    },
+    "coverage": [],
+    "connectives": {
+     "vocabulary_version": "connective.v1"
+    }
+   }
+  }
+ },
+ "verification": {
+  "overall_score": 1.0,
+  "score_state": "scored",
+  "judge_status": "deterministic",
+  "assembly_arms": {
+   "gate": "passed",
+   "schema": "assembly_arms.v1",
+   "quote_fidelity": 1.0,
+   "scope_preservation": 1.0,
+   "attribution_equality": 1.0,
+   "coverage_completeness": 1.0,
+   "spans": 19,
+   "failed_ordinals": []
+  }
+ }
+}

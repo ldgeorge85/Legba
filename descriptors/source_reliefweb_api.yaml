@@ -44,6 +44,7 @@ scope:
   languages: [en]
   tags: [humanitarian, crisis, disaster, global, news]
   source_class: official           # S1-T8 — UN OCHA (IGO primary humanitarian source)
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

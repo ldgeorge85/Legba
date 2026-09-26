@@ -9,10 +9,21 @@ rows). Covers the honesty/degrade contract the readers clone from
 ``search_context`` / ``vector_search``:
 
   * no store wired  → ``no_corpus_wired`` (never connects);
-  * canned rows     → the ``{rows, count, query, filters, size}`` shape;
+  * canned rows     → the ``{rows, refs, count, query, filters, size}`` shape;
   * filter hygiene  → non-whitelisted / None-valued keys are dropped;
   * size clamp      → ``[1, _SEARCH_CORPUS_MAX_SIZE]``;
   * read_document   → ``found`` / ``not_found`` / (backend) ``error``.
+
+2026-09-16 REVIEW. These readers used to return the raw OpenSearch payload —
+hits with no ``refs`` key and the whole ``_source`` per row — which is how a
+live consult got ``count 5-8, refs 0`` on every ``search_corpus`` call and
+``count 0, refs 0`` on the document its whole answer rested on. The shape
+assertions below moved with that repair: every result now carries ``refs``,
+rows are the citable projection (see ``runtime/corpus_read_projection``), and
+``read_document`` requires a substrate UUID and falls back across the id
+namespaces. The invariant itself is pinned in
+``tests/runtime/test_consult_retrieval_tools.py``; this file keeps the
+pack-surface and filter/clamp coverage it always had.
 
 Also exercises the pack-handler wrapping (``search_corpus_tool`` /
 ``read_document_tool`` → ``ToolResult``) so the governed consult surface is
@@ -32,14 +43,21 @@ from legba.data.analysts.agency.substrate_read import (
     search_corpus_tool,
 )
 from legba.data.analysts.agency.tools import ToolCall, ToolContext, ToolRegistry
-from legba.runtime.substrate_query_port import (
-    _SEARCH_CORPUS_MAX_SIZE,
-    PostgresQdrantSubstrateQueryPort,
+from legba.runtime.substrate_corpus_readers import (
+    SEARCH_CORPUS_MAX_SIZE as _SEARCH_CORPUS_MAX_SIZE,
 )
+from legba.runtime.substrate_query_port import PostgresQdrantSubstrateQueryPort
 
 # asyncio_mode = "auto" (pyproject) collects the async tests below without a
 # marker; the one sync test (drift alignment) stays sync — so no module-level
 # asyncio mark (that would warn on the sync test).
+
+
+#: ``read_document`` now requires a substrate UUID — the corpus doc ``_id`` IS
+#: the ``signals.id``, so "s1" was never a reachable document in the first
+#: place; it only looked like one because the old reader never checked.
+_DOC_ID = "3f69f001-e65c-48ac-b5a3-99f128ecbcee"
+_MISSING_ID = "00000000-0000-4000-8000-000000000999"
 
 
 class _FakeOpenSearchStore:
@@ -108,6 +126,9 @@ async def test_search_corpus_no_corpus_wired():
     out = await _port(None).search_corpus(query="iran nuclear")
     assert out == {
         "rows": [],
+        # Carried even on the degrade shapes, so no consumer has to
+        # special-case them to find out it got nothing citable.
+        "refs": [],
         "count": 0,
         "query": "iran nuclear",
         "filters": {},
@@ -117,8 +138,21 @@ async def test_search_corpus_no_corpus_wired():
 
 
 async def test_read_document_no_corpus_wired():
-    out = await _port(None).read_document(doc_id="abc")
-    assert out == {"status": "no_corpus_wired", "doc_id": "abc"}
+    """Neither namespace reachable (no store AND no pool) → unavailable, which
+    is NOT the same answer as ``not_found``."""
+    out = await _port(None).read_document(doc_id=_DOC_ID)
+    assert out == {
+        "status": "no_corpus_wired", "doc_id": _DOC_ID, "refs": [], "count": 0,
+    }
+
+
+async def test_read_document_rejects_a_non_uuid_doc_id():
+    """A planner that passes a title or a URL is told so, rather than getting a
+    ``not_found`` that reads as "no such document"."""
+    out = await _port(None).read_document(doc_id="the Vance interview")
+    assert out["status"] == "invalid_doc_id"
+    assert out["refs"] == [] and out["count"] == 0
+    assert "substrate UUID" in out["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -127,11 +161,18 @@ async def test_read_document_no_corpus_wired():
 
 
 async def test_search_corpus_returns_shape():
-    rows = [{"id": "s1", "score": 4.2, "source": {"title": "Iran brief"}}]
+    rows = [{"id": _DOC_ID, "score": 4.2, "source": {"title": "Iran brief"}}]
     store = _FakeOpenSearchStore(rows=rows)
     out = await _port(store).search_corpus(query="  iran nuclear  ", size=5)
 
-    assert out["rows"] == rows
+    # The row is the CITABLE projection, not the raw hit: the id is lifted into
+    # ``refs`` (the whole point of the repair) and the facets are flattened
+    # onto the row with the raw body kept under ``source`` for the GATHER
+    # citation path.
+    assert out["refs"] == [_DOC_ID]
+    assert out["rows"][0]["id"] == _DOC_ID
+    assert out["rows"][0]["score"] == 4.2
+    assert out["rows"][0]["title"] == "Iran brief"
     assert out["count"] == 1
     # the ORIGINAL (unstripped) query is echoed back
     assert out["query"] == "  iran nuclear  "
@@ -148,11 +189,18 @@ async def test_search_corpus_returns_shape():
 async def test_read_document_found():
     doc = {"title": "Iran brief", "raw_body": "the full article text", "geo": ["ir"]}
     store = _FakeOpenSearchStore(doc=doc)
-    out = await _port(store).read_document(doc_id="s1")
+    out = await _port(store).read_document(doc_id=_DOC_ID)
 
-    assert out == {"status": "found", "doc_id": "s1", "document": doc}
+    assert out["status"] == "found"
+    assert out["doc_id"] == _DOC_ID
+    # The document it read is the document it can cite — the single line whose
+    # absence cost the live run its provenance analysis.
+    assert out["refs"] == [_DOC_ID]
+    assert out["count"] == 1
+    assert out["document"]["body"] == "the full article text"
+    assert out["document"]["title"] == "Iran brief"
     assert store.connects == 1
-    assert store.got[0] == {"index": "legba_signals_corpus", "doc_id": "s1"}
+    assert store.got[0] == {"index": "legba_signals_corpus", "doc_id": _DOC_ID}
 
 
 async def test_search_corpus_filter_only_browse():
@@ -226,14 +274,16 @@ async def test_search_corpus_size_clamping(requested, expected):
 
 async def test_read_document_not_found():
     store = _FakeOpenSearchStore(doc=None)
-    out = await _port(store).read_document(doc_id="missing")
-    assert out == {"status": "not_found", "doc_id": "missing"}
+    out = await _port(store).read_document(doc_id=_MISSING_ID)
+    assert out == {
+        "status": "not_found", "doc_id": _MISSING_ID, "refs": [], "count": 0,
+    }
 
 
 async def test_search_corpus_backend_error_folds():
     store = _FakeOpenSearchStore(raise_on="search")
     out = await _port(store).search_corpus(query="x", filters={"geo": "ir"})
-    assert out["rows"] == [] and out["count"] == 0
+    assert out["rows"] == [] and out["count"] == 0 and out["refs"] == []
     assert out["filters"] == {"geo": "ir"}  # clean filters preserved on the error shape
     assert out["size"] == 10
     assert out["error"].startswith("corpus_search_failed:")
@@ -241,9 +291,10 @@ async def test_search_corpus_backend_error_folds():
 
 async def test_read_document_backend_error_folds():
     store = _FakeOpenSearchStore(raise_on="get")
-    out = await _port(store).read_document(doc_id="x")
+    out = await _port(store).read_document(doc_id=_DOC_ID)
     assert out["status"] == "error"
-    assert out["doc_id"] == "x"
+    assert out["doc_id"] == _DOC_ID
+    assert out["refs"] == [] and out["count"] == 0
     assert out["error"].startswith("read_document_failed:")
 
 
@@ -254,7 +305,7 @@ async def test_read_document_backend_error_folds():
 
 
 async def test_search_corpus_tool_wraps_port_output():
-    store = _FakeOpenSearchStore(rows=[{"id": "s1", "score": 1.0, "source": {}}])
+    store = _FakeOpenSearchStore(rows=[{"id": _DOC_ID, "score": 1.0, "source": {}}])
     call = ToolCall(
         pack_id="substrate_read",
         tool_name="search_corpus",
@@ -270,12 +321,16 @@ async def test_search_corpus_tool_wraps_port_output():
 async def test_read_document_tool_wraps_port_output():
     store = _FakeOpenSearchStore(doc={"title": "T", "raw_body": "full body"})
     call = ToolCall(
-        pack_id="substrate_read", tool_name="read_document", args={"doc_id": "s1"},
+        pack_id="substrate_read", tool_name="read_document",
+        args={"doc_id": _DOC_ID},
     )
     res = await read_document_tool(call, None, ToolContext(substrate=_port(store)))
     assert res.status == "completed"
     assert res.output["status"] == "found"
+    assert res.output["document"]["body"] == "full body"
+    # The RAW field survives under its own name for the citation builder.
     assert res.output["document"]["raw_body"] == "full body"
+    assert res.output["refs"] == [_DOC_ID]
 
 
 async def test_pack_tool_no_substrate_wired_fails():

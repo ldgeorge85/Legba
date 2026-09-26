@@ -73,7 +73,7 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     max_tokens: 1400           # one batched verdict array per ~10 pairs
-    temperature: 0.0           # deterministic adjudication
+    temperature: 1.0           # deterministic adjudication
     # --- kind-specific options (read by _build_entity_researcher) ------------
     merge_mode: apply             # LIVE MERGES (flipped 2026-07-12 after E5 gate + clean dry-run + E1 proof)
     max_pairs: 80                 # hard per-run candidate cap (incremental sweep;
@@ -165,7 +165,7 @@ method:
                                   # reclassify_max's own 0->150 flip
                                   # (`9b53f00`). NOT flipped tonight per the
                                   # live-stack freeze; integration flips it.
-  budget_tokens_per_day: 1000000
+  budget_tokens_per_day: 0
   retry:
     budget:
       strategy: pause_until_next_window

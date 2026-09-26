@@ -74,6 +74,7 @@ scope:
   languages: [fr]
   tags: [news, world, africa, sahel, niger, francophone, source_batch_2026_08]
   source_class: reporting
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

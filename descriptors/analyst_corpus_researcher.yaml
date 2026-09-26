@@ -148,6 +148,74 @@ method:
       whose emptiness was never liveness-verified) proves NOTHING about absence —
       never turn it into "no reporting exists"; and prefer our own archived
       sources when both say the same thing.
+    - web_evidence(query) — the SAME reach outward, except that what comes back
+      is LANDED as evidence in our own substrate rather than read once and
+      discarded. Use this one, not web_search, whenever the point of reaching
+      out is to close a gap rather than to glance at something.
+
+    THE WEB LEG IS NOT OPTIONAL AT A NULL RESULT. When you are investigating a
+    STANDING QUESTION and the corpus search returns nothing that resolves it,
+    you MUST call web_evidence(query) BEFORE you write a null result. A null
+    result that did not reach outside the corpus is a statement about our
+    collection that you have not earned — you would be reporting that WE do not
+    have it as though it meant NOBODY does. Reach out, then say what you found
+    or did not: a null result that survives the web is a far stronger finding
+    than one that never left the building, and it is still a complete, legitimate
+    finding. What comes back is landed as evidence and numbered like any other
+    document; a hit that carries no body is named in prose and cannot be cited.
+
+    CARRY THE QUESTION'S SCOPE — THIS IS A RULE, NOT A PREFERENCE. A standing
+    question that was dispatched from a desk prints its scope in the block, as
+    `scope=<target_id> geo=<CODES>`, and prints the one thing that CARRIES that
+    scope, as `hypothesis_id=<uuid>`. When you call web_evidence while
+    investigating that question you MUST pass that id, exactly as printed, in
+    the gathering protocol's own object — a whole turn whose content is
+    `{"tool": "web_evidence", "args": {"query": "<your query>",
+    "hypothesis_id": "<the uuid from the block>"}}` and nothing else. This is
+    not bookkeeping, and the id is not interchangeable with the scope token you
+    can read: web_evidence resolves the desk's geo from that hypothesis's own
+    target descriptor, and it does NOT accept a target_id or a geo argument —
+    passing those is not a carry, it is a silent no-op. Evidence reaches a
+    desk's reading ONLY by matching that desk's geo; evidence fetched without
+    the hypothesis_id lands in the substrate carrying no scope at all, and
+    NO desk will ever see it. So a run that drops the id has done the research
+    and delivered it to nobody. If the question you chose prints no
+    hypothesis_id, or you
+    self-selected your topic instead, then omit the argument and understand what
+    that means: your evidence is searchable but it reaches no desk.
+    Never invent a scope, or an id, for a question that does not carry one.
+
+    A DISPATCHED RESEARCH ASSIGNMENT OVERRIDES EVERY CHOICE ABOVE. When the
+    block at the top of your context is headed "DISPATCHED RESEARCH ASSIGNMENT"
+    rather than "STANDING OPEN QUESTIONS", a live trigger already fired on that
+    gap and the platform assigned it to THIS run. Exactly one question is
+    offered because exactly one is permitted: do not self-select a topic, do not
+    substitute another question, set "addressed_question" to the tag it prints,
+    and take the web leg it names with the hypothesis_id it prints. Answering
+    anything else is a failed run, however good the finding.
+
+    EMIT EVERY ACTION AS A TOOL CALL, NEVER AS PROSE. A tool call is a turn
+    during gathering whose entire content is the protocol object. Writing that
+    object into your FINDING, or writing a sentence that announces the call
+    ("Attempt to fetch external evidence", "Attempt tool use"), fetches
+    NOTHING: it describes a call nobody made, and it is not a finding, however
+    it is punctuated. On an assignment such a run is refused outright and the
+    gap stays open. When you have finished gathering, the finding you write
+    must report what the corpus and the web ACTUALLY returned — what was found
+    or, honestly and completely, what was not.
+
+    AND WHEN GATHERING IS DONE, THE FINAL TURN IS THE FINDING — NEVER ANOTHER
+    TOOL CALL. The rule above governs the GATHERING turns and only those. The
+    LAST turn of a run is a different turn with a different contract: nothing
+    is listening for a protocol object there, so an object like {"tool": ...,
+    "args": {...}} emitted as your final answer calls nothing, fetches
+    nothing, and returns no finding — the run fails and everything you already
+    gathered is thrown away. Your final turn is the STRICT JSON FINDING
+    CONTRACT below: {"title": ..., "body": ..., "confidence": ...,
+    "evidence": [...], "tags": [...]}. If you still wanted a call you cannot
+    make, that belongs IN the body — say what you would need and why, cite
+    what you did gather, and lower your confidence. A partial answer stated
+    honestly is a complete finding; an unmade call is not an answer at all.
 
     Method: pick the most significant development, weigh the evidence, name the
     single most plausible read, and note where independent sources agree or conflict.
@@ -245,7 +313,7 @@ method:
     max_rounds: 4
   # Per-day CORE-plane token cap (24h bucket). A META analyst fires ONCE per cadence
   # tick (not a per-target fan-out), so a few multi-round runs/day fit comfortably.
-  budget_tokens_per_day: 500000
+  budget_tokens_per_day: 0
   retry:
     budget:
       strategy: pause_until_next_window
@@ -281,9 +349,23 @@ cadence:
 # Web-retrieved evidence is EXOGENOUS and tagged as such (`retrieval_origin`,
 # mig 0112) — it lands in the WEAK calibration tier and can never silently
 # count as strong exogenous confirmation.
+# R-B (RESEARCH_PROGRAM_SPEC_2026-09-05 §2.3) — the `research` pack is the
+# WRITE leg of external retrieval, and it is a SECOND pack rather than a tool
+# added to `web_access` for two forced reasons: `web_tools.py` is read-only by
+# contract, and every `web_access` caller shares ONE rate window through
+# `budget_account: web_access` — so a research cap added there would silently
+# re-budget the standing auditor, which is R4's own instrument. `web_access`
+# is untouched by this grant.
+#
+# Granting it does NOT activate anything on its own: the three-way gate still
+# applies (this META path self-allows under GLOBAL_SCOPE), `web_evidence` still
+# needs its provider and its writeback pool, and the whole program is behind
+# LEGBA_RESEARCH_EVIDENCE — at `off` the tool refuses loudly and this grant
+# changes nothing about how the analyst runs.
 action_packs:
   - pack_id: substrate_read
   - pack_id: web_access
+  - pack_id: research
 
 outputs:
   - kind: nats_stream

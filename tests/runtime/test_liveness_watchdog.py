@@ -27,6 +27,7 @@ import pytest_asyncio
 
 from datetime import datetime, timedelta, timezone
 
+from legba.runtime import llm_route_liveness as _llm_route
 from legba.runtime.liveness_watchdog import (
     STALL_ALERT_SUBJECT,
     LivenessWatchdog,
@@ -209,6 +210,11 @@ class _FakeConn:
     async def fetch(self, sql, *args, **_k):
         if "alert_sink_deliveries" in sql:
             return list(self._pg.state_rows)
+        if "budget_demotion_events" in sql:
+            # R2-FIX: the cadence check asks which analysts are on a BUDGET
+            # pause before it calls any of them stalled. Empty by default, so
+            # every pre-existing test keeps alerting exactly as it did.
+            return list(self._pg.budget_rows)
         return list(self._pg.rows)
 
     async def execute(self, sql, *args):
@@ -224,9 +230,11 @@ class _FakePg:
     same watchdog (the seeded state map lives on the watchdog, not the pool).
     ``executed`` accumulates every durable INSERT."""
 
-    def __init__(self, rows, *, state_rows=None, fail_execute=False):
+    def __init__(self, rows, *, state_rows=None, fail_execute=False,
+                 budget_rows=None):
         self.rows = rows
         self.state_rows = state_rows or []
+        self.budget_rows = budget_rows or []
         self.executed: list[tuple] = []
         self.fail_execute = fail_execute
 
@@ -272,13 +280,14 @@ class _RecordingSinks:
         self.payloads.append(payload)
 
 
-def _cadence_watchdog(rows, *, is_leader=None, state_rows=None, alert_sinks=None):
+def _cadence_watchdog(rows, *, is_leader=None, state_rows=None, alert_sinks=None,
+                      budget_rows=None):
     nats = _RecordingNats()
     cfg = WatchdogConfig(
         stall_after_s=900.0, realert_every_s=1800.0,
         check_interval_s=60.0, cadence_stall_factor=2.0,
     )
-    pg = _FakePg(rows, state_rows=state_rows)
+    pg = _FakePg(rows, state_rows=state_rows, budget_rows=budget_rows)
     wd = LivenessWatchdog(
         nats, cfg, pg_store=pg, is_leader=is_leader, alert_sinks=alert_sinks,
     )
@@ -1421,3 +1430,347 @@ def test_empty_streak_fetch_window_default_exceeds_shipped_threshold() -> None:
     window = wd._empty_streak_fetch_window()
     assert window > cfg.honest_quiet_streak_threshold
     assert window == 41  # 36 + _EMPTY_STREAK_WINDOW_SLACK(5) — today's binding constraint
+
+
+# ---------------------------------------------------------------------------
+# R2-FIX — a BUDGET PAUSE is not a stall (ops 2026-09-17)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_budget_paused_analyst_is_not_reported_as_a_cadence_stall() -> None:
+    """THE 02:43Z FALSE ALARM. `reference_builder` burned its per-day token
+    bucket on one run, so the next tick's precall check returned `exhausted` and
+    the actor took a one-hour BUDGET_THROTTLED cooldown. Every tick inside that
+    window returns `noop reason=cooldown scope=global` and writes NO
+    `analyst_traces` row — it returns before the run body — so this check sees
+    the newest SUCCESSFUL run getting older and calls the analyst dark. It was
+    not dark. It was out of budget, which is the budget working, and the alert
+    sent the operator to "check actor activation, descriptor head version, deps
+    resolution" for a condition none of those explain."""
+    rows = [_row("reference_builder", "43 * * * *", _NOW - timedelta(hours=3))]
+    wd, nats, _pg = _cadence_watchdog(
+        rows,
+        budget_rows=[{"analyst_id": "reference_builder", "since_s": 600.0}],
+    )
+    assert await wd.check_analyst_cadence_once(now_monotonic=1000.0) == []
+    assert nats.published == []
+
+
+@pytest.mark.asyncio
+async def test_a_chronic_budget_exhaustion_still_alerts_once_the_window_lapses(
+) -> None:
+    """BOUNDED, on purpose. Being out of budget every day IS worth knowing, and
+    this suppression must not become the way that fact hides — so a demotion
+    older than the cooldown window does not suppress anything. (The query does
+    the windowing; an empty result is what 'older than the window' looks like
+    from here.)"""
+    rows = [_row("reference_builder", "43 * * * *", _NOW - timedelta(hours=9))]
+    wd, nats, _pg = _cadence_watchdog(rows, budget_rows=[])
+    assert await wd.check_analyst_cadence_once(now_monotonic=1000.0) == [
+        "reference_builder"
+    ]
+    assert len(nats.published) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_budget_gate_suppresses_ONLY_the_analyst_it_explains() -> None:
+    """One analyst's pause is not another's. A gate that suppressed the whole
+    pass would be worse than the false alarm it fixes."""
+    rows = [
+        _row("reference_builder", "43 * * * *", _NOW - timedelta(hours=3)),
+        _row("world_assessor", "0 */6 * * *", _NOW - timedelta(hours=25)),
+    ]
+    wd, nats, _pg = _cadence_watchdog(
+        rows,
+        budget_rows=[{"analyst_id": "reference_builder", "since_s": 60.0}],
+    )
+    assert await wd.check_analyst_cadence_once(now_monotonic=1000.0) == [
+        "world_assessor"
+    ]
+    assert len(nats.published) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failing_budget_lookup_ALERTS_rather_than_going_quiet() -> None:
+    """This gate may only ever SUPPRESS, so a broken read must degrade to
+    alerting. A monitor that falls silent when its own query breaks is worse
+    than no monitor: it reports health it did not measure."""
+    rows = [_row("reference_builder", "43 * * * *", _NOW - timedelta(hours=3))]
+    wd, nats, pg = _cadence_watchdog(rows)
+
+    class _Boom(_FakeConn):
+        async def fetch(self, sql, *args, **_k):
+            if "budget_demotion_events" in sql:
+                raise RuntimeError("boom-budget-read")
+            return await super().fetch(sql, *args, **_k)
+
+    class _BoomAcq:
+        async def __aenter__(self_inner):
+            return _Boom(pg)
+
+        async def __aexit__(self_inner, *exc):
+            return False
+
+    pg.acquire = lambda: _BoomAcq()          # type: ignore[assignment]
+    assert await wd.check_analyst_cadence_once(now_monotonic=1000.0) == [
+        "reference_builder"
+    ]
+    assert len(nats.published) == 1
+
+
+# ---------------------------------------------------------------------------
+# L1 — DEAD LLM ROUTE (2026-09-20)
+# ---------------------------------------------------------------------------
+#
+# THE FAILURE THIS CHANNEL EXISTS FOR. OpenRouter removed
+# ``mistralai/mistral-large-2512`` on 2026-09-18. The standing external
+# auditor's grader pointed at it, every call 404'd, and NOBODY WAS PAGED FOR
+# 2.7 DAYS — because a dead route is the one fault every other check on this
+# loop reads as health: the analyst kept running on cadence (so the per-analyst
+# check saw nothing), the fleet kept publishing (so the global stall check saw
+# nothing), and the auditor kept writing rows. The only trace was a WARNING.
+#
+# The evidence was already on disk the whole time: the provider plane writes
+# one receipt per call into ``analyst_traces.llm_calls`` carrying
+# ``component_id``, ``model`` and ``status``. These tests drive the verdict off
+# that shape.
+
+
+def _route_row(component, *, calls, successes, model="m", last_error="error",
+               http_status=None):
+    return {
+        "component_id": component, "calls": calls, "successes": successes,
+        "model": model, "last_error": last_error, "http_status": http_status,
+    }
+
+
+class _RouteConn(_FakeConn):
+    """Routes the L1 receipts query to its own rows; everything else keeps the
+    shared double's behaviour (the B0-12 alert-state seed in particular)."""
+
+    async def fetch(self, sql, *args, **_k):
+        if "llm_calls" in sql:
+            if self._pg.fail_route_read:
+                raise RuntimeError("boom-route-read")
+            return list(self._pg.route_rows)
+        return await super().fetch(sql, *args, **_k)
+
+
+class _RoutePg(_FakePg):
+    def __init__(self, route_rows, *, state_rows=None, fail_route_read=False):
+        super().__init__([], state_rows=state_rows)
+        self.route_rows = route_rows
+        self.fail_route_read = fail_route_read
+
+    def acquire(self):
+        pg = self
+
+        class _Acq:
+            async def __aenter__(self_inner):
+                return _RouteConn(pg)
+
+            async def __aexit__(self_inner, *exc):
+                return False
+
+        return _Acq()
+
+
+def _route_watchdog(route_rows, *, state_rows=None, is_leader=None,
+                    alert_sinks=None, fail_route_read=False):
+    nats = _RecordingNats()
+    cfg = WatchdogConfig(
+        stall_after_s=900.0, realert_every_s=1800.0, check_interval_s=60.0,
+    )
+    pg = _RoutePg(route_rows, state_rows=state_rows,
+                  fail_route_read=fail_route_read)
+    wd = LivenessWatchdog(
+        nats, cfg, pg_store=pg, is_leader=is_leader, alert_sinks=alert_sinks,
+    )
+    wd._started_at = 0.0  # type: ignore[attr-defined]
+    return wd, nats, pg
+
+
+def test_evaluate_dead_routes_needs_volume_AND_near_total_failure():
+    """Both gates, and both directions.
+
+    ``min_calls`` keeps a rarely-used component's three failures out of the
+    channel; ``success_floor`` keeps a bad afternoon of 429s out of it. What
+    is left is a route that does not exist any more.
+    """
+    rows = [
+        _route_row("dead", calls=212, successes=0),        # the 09-18 shape
+        _route_row("quiet", calls=3, successes=0),         # too few calls
+        _route_row("flaky", calls=100, successes=40),      # bad, not dead
+        _route_row("edge", calls=100, successes=5),        # exactly at floor
+        _route_row("", calls=100, successes=0),            # no component id
+    ]
+    dead = _llm_route.evaluate_dead_routes(
+        rows, min_calls=20, success_floor=0.05
+    )
+    assert [r["component_id"] for r in dead] == ["dead"]
+    assert dead[0]["success_rate"] == 0.0
+    # The floor is inclusive-at-healthy: exactly 5% is NOT dead.
+    assert _llm_route.evaluate_dead_routes(
+        [_route_row("edge", calls=100, successes=4)],
+        min_calls=20, success_floor=0.05,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_dead_route_writes_a_HIGH_severity_liveness_row() -> None:
+    """The LOUD path: an ``alert_sink_deliveries`` row, severity high,
+    ``sink_kind='liveness_watchdog'``, naming the component AND the model."""
+    wd, _nats, pg = _route_watchdog([
+        _route_row(
+            "llm.judge.openrouter_mistral_large.openai_compat",
+            calls=212, successes=0,
+            model="mistralai/mistral-large-2512", http_status="404",
+        )
+    ])
+    alerted = await wd.check_llm_route_liveness_once(now_monotonic=1000.0)
+    assert alerted == ["llm.judge.openrouter_mistral_large.openai_compat"]
+    rows = _delivery_rows(pg)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["channel"] == "llm_route_dead"
+    assert row["sink_kind"] == "liveness_watchdog"
+    assert row["target"] == "llm.judge.openrouter_mistral_large.openai_compat"
+    assert row["severity"] == "high"
+    assert row["payload"]["state"] == "entered"
+    assert row["payload"]["model"] == "mistralai/mistral-large-2512"
+    assert row["payload"]["calls"] == 212
+    assert row["payload"]["successes"] == 0
+    # The row asserts its own liveness class, so the exemption travels with it.
+    assert row["payload"]["page_budget_exempt"] is True
+    assert "mistral-large-2512" in row["payload"]["body"]
+
+
+@pytest.mark.asyncio
+async def test_the_dead_route_alert_logs_at_ERROR(caplog) -> None:
+    wd, _nats, _pg = _route_watchdog([
+        _route_row("llm.judge.x", calls=50, successes=0, model="dead-model")
+    ])
+    with caplog.at_level("ERROR"):
+        await wd.check_llm_route_liveness_once(now_monotonic=1000.0)
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert errors, "a dead route must be LOUD in the log, not a WARNING"
+    joined = "\n".join(r.getMessage() for r in errors)
+    assert "llm_route_dead" in joined
+    assert "llm.judge.x" in joined and "dead-model" in joined
+
+
+@pytest.mark.asyncio
+async def test_a_dead_route_fans_out_and_then_goes_QUIET() -> None:
+    """Transition-edge, like every other durable channel: one alert on entry,
+    silence while it persists. ~1.2k ERROR lines/day is how an alert plane
+    loses an operator permanently."""
+    sinks = _RecordingSinks()
+    wd, _nats, pg = _route_watchdog(
+        [_route_row("llm.judge.x", calls=50, successes=0)], alert_sinks=sinks,
+    )
+    assert await wd.check_llm_route_liveness_once(1000.0) == ["llm.judge.x"]
+    assert await wd.check_llm_route_liveness_once(2000.0) == []
+    assert await wd.check_llm_route_liveness_once(3000.0) == []
+    assert len(sinks.payloads) == 1
+    assert len(_delivery_rows(pg)) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_recovered_route_closes_its_episode() -> None:
+    wd, _nats, pg = _route_watchdog(
+        [_route_row("llm.judge.x", calls=50, successes=0)]
+    )
+    await wd.check_llm_route_liveness_once(1000.0)
+    # The operator repointed the component; the route answers again.
+    pg.route_rows = [_route_row("llm.judge.x", calls=50, successes=50)]
+    assert await wd.check_llm_route_liveness_once(2000.0) == []
+    rows = _delivery_rows(pg)
+    assert [r["payload"]["state"] for r in rows] == ["entered", "recovered"]
+    assert rows[-1]["severity"] == "info"
+
+
+@pytest.mark.asyncio
+async def test_an_ongoing_condition_does_not_refire_after_a_restart() -> None:
+    """Restart-safe: the durable ledger re-seeds the state map, so a process
+    bounce cannot re-page an operator for a route they already know about."""
+    wd, _nats, pg = _route_watchdog(
+        [_route_row("llm.judge.x", calls=50, successes=0)],
+        state_rows=[{
+            "channel_name": "llm_route_dead", "sink_target": "llm.judge.x",
+            "state": "entered",
+        }],
+    )
+    assert await wd.check_llm_route_liveness_once(1000.0) == []
+    assert _delivery_rows(pg) == []
+
+
+@pytest.mark.asyncio
+async def test_the_route_check_is_leader_gated_and_boot_graced() -> None:
+    rows = [_route_row("llm.judge.x", calls=50, successes=0)]
+    wd, _nats, pg = _route_watchdog(rows, is_leader=lambda: False)
+    assert await wd.check_llm_route_liveness_once(1000.0) == []
+    assert _delivery_rows(pg) == []
+    # Boot grace: a cold rig has no receipts, and a thin window is not a
+    # verdict about a route.
+    wd2, _n2, pg2 = _route_watchdog(rows)
+    assert await wd2.check_llm_route_liveness_once(100.0) == []
+    assert _delivery_rows(pg2) == []
+
+
+@pytest.mark.asyncio
+async def test_a_broken_receipts_read_is_silent_not_fatal() -> None:
+    """The watchdog observes faults; it must never become one. No verdict
+    this pass beats a wrong verdict — the next pass is 60s away."""
+    wd, _nats, pg = _route_watchdog(
+        [_route_row("llm.judge.x", calls=50, successes=0)],
+        fail_route_read=True,
+    )
+    assert await wd.check_llm_route_liveness_once(1000.0) == []
+    assert _delivery_rows(pg) == []
+
+
+def test_the_route_channel_is_seeded_on_restart() -> None:
+    """A channel missing from ``_TRANSITION_CHANNELS`` is a channel whose
+    state is never re-seeded, which silently re-fires every restart."""
+    from legba.runtime import liveness_watchdog as lw
+
+    assert lw.ALERT_CHANNEL_LLM_ROUTE in lw._TRANSITION_CHANNELS
+
+
+def test_a_liveness_class_is_EXEMPT_from_the_daily_page_budget() -> None:
+    """The budget caps how much of the WORLD an operator is asked to read. It
+    must never defer the alert that says the instrument reading it is broken —
+    the deferral would be silent while the broken thing kept writing rows."""
+    from legba.data.analysts.deterministic_handlers import _daily_page_budget as dpb
+    from legba.runtime import liveness_watchdog as lw
+
+    assert dpb.is_page_budget_exempt(lw.ALERT_CHANNEL_LLM_ROUTE)
+    assert not dpb.is_page_budget_exempt("verified_finding")
+
+    class _Cand:
+        def __init__(self, trigger_class, severity, title):
+            self.trigger_class = trigger_class
+            self.severity = severity
+            self.title = title
+            self.data: dict = {}
+
+    # The day's budget is ALREADY SPENT — every ordinary candidate defers.
+    liveness = _Cand(lw.ALERT_CHANNEL_LLM_ROUTE, "high", "route dead")
+    ordinary = _Cand("verified_finding", "critical", "a finding")
+    deferred = dpb.apply_daily_page_budget(
+        [liveness, ordinary], already_paged_today=5, budget=5,
+    )
+    assert liveness.data["budget_deferred"] is False
+    assert ordinary.data["budget_deferred"] is True
+    assert deferred == 1  # the liveness row is not counted as deferred
+
+    # And it does not EAT a slot either: with one slot left, the ordinary
+    # candidate still pages alongside it.
+    liveness2 = _Cand(lw.ALERT_CHANNEL_LLM_ROUTE, "high", "route dead")
+    ordinary2 = _Cand("verified_finding", "medium", "a finding")
+    dpb.apply_daily_page_budget(
+        [liveness2, ordinary2], already_paged_today=4, budget=5,
+    )
+    assert liveness2.data["budget_deferred"] is False
+    assert ordinary2.data["budget_deferred"] is False

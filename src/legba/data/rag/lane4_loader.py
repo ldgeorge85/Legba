@@ -46,6 +46,13 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol
 from uuid import UUID, uuid5
 
+from ..seed.exemplar_shelf import (
+    RESOLVED_ACTIVE,
+    RESOLVED_MERGED,
+    RESOLVED_RETIRED,
+    ExemplarShelf,
+    load_shelf as load_exemplar_shelf,
+)
 from ..seed.manual_schema import BatchMode, ManualDocRecord, ValidatedBatch
 from .chunker import chunk_text
 
@@ -57,13 +64,18 @@ logger = logging.getLogger(__name__)
 _LANE4_NS = UUID("6f2b1e4a-7c3d-5a8e-9b0f-1d2c3e4f5a6b")
 
 #: corpus name → the QdrantStore ensure-method + config attr for its collection.
-#: The two provisioned RAG corpora (RAG plan §B). A batch whose ``docs`` declare
-#: any OTHER corpus is refused (the loader never silently mints an arbitrary
-#: collection — the vector plane is exactly these curated corpora).
+#: The three provisioned RAG corpora (RAG plan §B + EXEMPLAR_SHELF_DRAFT
+#: §4 step 4). A batch whose ``docs`` declare any OTHER corpus is refused (the
+#: loader never silently mints an arbitrary collection — the vector plane is
+#: exactly these curated corpora).
 CORPUS_COLLECTIONS: dict[str, tuple[str, str]] = {
     "world_context": ("ensure_world_context_collection", "world_context_collection"),
     "tradecraft": ("ensure_tradecraft_collection", "tradecraft_collection"),
+    "exemplar": ("ensure_exemplar_collection", "exemplar_collection"),
 }
+
+#: The one corpus whose docs carry shelf-derived, per-pattern metadata.
+EXEMPLAR_CORPUS = "exemplar"
 
 # seed_batches classification for a vector-lane import.
 _SOURCE_PREFIX = "manual_vector"
@@ -213,6 +225,84 @@ class VectorLoadResult:
 
 
 # ---------------------------------------------------------------------------
+# The `exemplar` corpus's shelf-backed id check
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ExemplarIdCheck:
+    """Outcome of validating one ``exemplar`` corpus doc's ``exemplar_id``.
+
+    ``doctrine_source`` / ``research_ref`` are lifted straight from the
+    shelf row — never fabricated, never operator-supplied — so a chunk's
+    provenance always matches what the shelf itself claims for that pattern
+    (even when the id given was an alias of a merged-away pattern; then the
+    survivor's fields are used).
+    """
+
+    ok: bool
+    doctrine_source: str | None = None
+    research_ref: str | None = None
+    error: str | None = None
+
+
+def check_exemplar_id(shelf: ExemplarShelf, exemplar_id: str | None) -> ExemplarIdCheck:
+    """Validate one id against the exemplar shelf for corpus ingest.
+
+    Valid = a ``shelf.ready_ids()`` member OR a resolvable alias (a
+    merged-away id whose survivor is offered) — EXEMPLAR_SHELF_DRAFT §4 step
+    4's "template source class" material may only attach to a pattern the
+    shelf currently offers as ready, or to one of its merged aliases.
+
+    A RETIRED id is refused with the shelf's own reversal note (never
+    silently dropped — the operator needs to know a re-admit is possible and
+    how). A HELD id (``status: hold``, e.g. an unclosed authoring gate) is
+    refused too: it is offered but not yet ready to receive corpus material.
+    An unknown id is refused with a plain "not on the shelf" message.
+    """
+    if not exemplar_id or not exemplar_id.strip():
+        return ExemplarIdCheck(ok=False, error="exemplar corpus doc is missing exemplar_id")
+    exemplar_id = exemplar_id.strip()
+
+    resolution = shelf.resolve(exemplar_id)
+    if resolution is None:
+        return ExemplarIdCheck(
+            ok=False, error=f"exemplar_id {exemplar_id!r} is not on the shelf"
+        )
+
+    if resolution.status == RESOLVED_RETIRED:
+        retired = resolution.retired
+        reason = resolution.reason or (retired.reason if retired else "") or "no reason stated"
+        msg = f"exemplar_id {exemplar_id!r} is retired: {reason}"
+        reversal = retired.reversal if retired else None
+        msg += f" — reversal: {reversal}" if reversal else " — no reversal stated"
+        return ExemplarIdCheck(ok=False, error=msg)
+
+    if resolution.status == RESOLVED_ACTIVE and not (
+        resolution.pattern is not None and resolution.pattern.is_ready
+    ):
+        pattern = resolution.pattern
+        gate = (pattern.authoring_gate if pattern else None) or "no authoring_gate stated"
+        return ExemplarIdCheck(
+            ok=False,
+            error=(
+                f"exemplar_id {exemplar_id!r} is on hold, not ready for corpus "
+                f"ingest ({gate})"
+            ),
+        )
+
+    # RESOLVED_ACTIVE + ready, or RESOLVED_MERGED (an alias) — either way
+    # ``resolution.pattern`` is the offered pattern whose doctrine_source /
+    # research_ref the chunk inherits.
+    pattern = resolution.pattern
+    return ExemplarIdCheck(
+        ok=True,
+        doctrine_source=pattern.doctrine_source if pattern else None,
+        research_ref=pattern.research_ref if pattern else None,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
 
@@ -322,31 +412,47 @@ def _build_payload(
     chunk_part: int,
     chunk_text_body: str,
     seed_batch_id: UUID | None,
+    extra: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble the RAG-plan chunk metadata payload.
 
     License / source_url fall back to the manifest's batch-level defaults when
     the record omits them (BatchManifest's inherited provenance defaults).
+
+    ``extra`` seeds the payload BEFORE the usual chunk/provenance fields (the
+    exemplar corpus's shelf-derived ``exemplar_id`` / ``doctrine_source`` /
+    ``research_ref`` / ``source_class``, plus the record's own free-form
+    ``data`` bag for every corpus) — the core RAG-plan fields below always win
+    on a key collision, so extra metadata can never clobber ``text``,
+    ``corpus``, etc.
     """
     eff = rec.effective_date.isoformat() if rec.effective_date else None
-    return {
-        "corpus": rec.corpus,
-        "doc_id": rec.doc_id,
-        "chunk_seq": rec.chunk_seq,
-        "chunk_part": chunk_part,
-        "title": rec.title,
-        "section": section or rec.section,
-        "countries": list(rec.countries),
-        "topics": list(rec.topics),
-        "lang": rec.lang,
-        "license": rec.license or getattr(manifest, "license", None),
-        "source_url": rec.source_url or getattr(manifest, "source_url", None),
-        "effective_date": eff,
-        "batch_id": getattr(manifest, "batch_id", None),
-        "provenance": str(getattr(getattr(manifest, "default_provenance", ""), "value", "")),
-        "seed_batch_id": str(seed_batch_id) if seed_batch_id else None,
-        "text": chunk_text_body,
-    }
+    payload: dict[str, Any] = dict(rec.data)
+    if extra:
+        payload.update(extra)
+    payload.update(
+        {
+            "corpus": rec.corpus,
+            "doc_id": rec.doc_id,
+            "chunk_seq": rec.chunk_seq,
+            "chunk_part": chunk_part,
+            "title": rec.title,
+            "section": section or rec.section,
+            "countries": list(rec.countries),
+            "topics": list(rec.topics),
+            "lang": rec.lang,
+            "license": rec.license or getattr(manifest, "license", None),
+            "source_url": rec.source_url or getattr(manifest, "source_url", None),
+            "effective_date": eff,
+            "batch_id": getattr(manifest, "batch_id", None),
+            "provenance": str(
+                getattr(getattr(manifest, "default_provenance", ""), "value", "")
+            ),
+            "seed_batch_id": str(seed_batch_id) if seed_batch_id else None,
+            "text": chunk_text_body,
+        }
+    )
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +470,7 @@ async def load_vector_batch(
     mode: BatchMode | None = None,
     dry_run: bool = False,
     corpus_collections: Mapping[str, tuple[str, str]] | None = None,
+    shelf: ExemplarShelf | None = None,
     max_tokens: int = 800,
     target_tokens: int = 512,
     overlap_tokens: int = 64,
@@ -382,6 +489,14 @@ async def load_vector_batch(
     (the documented DELETE-EXCEPTION). ``merge`` is treated as ``skip`` for the
     vector lane (chunks have no partial fields to merge — a changed doc is a
     force reload).
+
+    ``shelf`` is the loaded :class:`~legba.data.seed.exemplar_shelf.ExemplarShelf`
+    consulted for every ``exemplar``-corpus doc's ``exemplar_id`` (see
+    :func:`check_exemplar_id`). When the batch carries no exemplar-corpus docs
+    it is never touched; when it does and ``shelf`` is ``None`` the default
+    curated shelf (``seeds/exemplar_shelf.yaml``) is loaded lazily — a missing
+    file degrades to an empty shelf (per :func:`~..seed.exemplar_shelf.load_shelf`),
+    so every exemplar_id is refused rather than silently accepted.
     """
     manifest = batch.manifest
     resolved_mode = mode or manifest.mode
@@ -467,6 +582,11 @@ async def load_vector_batch(
             result.counts["deleted_points"] += int(deleted)
             result.counts["deleted_docs"] += 1
 
+    # The exemplar shelf is only loaded when the batch actually carries
+    # exemplar-corpus docs (never for a world_context/tradecraft-only batch).
+    if EXEMPLAR_CORPUS in corpora and shelf is None:
+        shelf = load_exemplar_shelf()
+
     # Chunk → embed → upsert, buffering per collection.
     pending: dict[str, list[tuple[str, list[float], dict[str, Any]]]] = {}
 
@@ -481,6 +601,23 @@ async def load_vector_batch(
 
     for rec in docs:
         collection = collection_for[rec.corpus]
+
+        exemplar_extra: dict[str, Any] = {}
+        if rec.corpus == EXEMPLAR_CORPUS:
+            check = check_exemplar_id(shelf, rec.data.get("exemplar_id"))
+            if not check.ok:
+                result.counts["skipped_docs"] += 1
+                msg = f"doc ({rec.corpus}/{rec.doc_id}#{rec.chunk_seq}): {check.error}"
+                logger.warning("lane4.doc.skipped %s", msg)
+                result.errors.append(msg)
+                continue
+            exemplar_extra = {
+                "exemplar_id": rec.data.get("exemplar_id"),
+                "doctrine_source": check.doctrine_source,
+                "research_ref": check.research_ref,
+                "source_class": "template",
+            }
+
         try:
             text = _resolve_text(rec, batch_dir)
         except ValueError as exc:
@@ -505,6 +642,7 @@ async def load_vector_batch(
                 chunk_part=chunk.seq,
                 chunk_text_body=chunk.text,
                 seed_batch_id=seed_batch_id,
+                extra=exemplar_extra,
             )
             if dry_run:
                 result.counts["chunks"] += 1
@@ -537,8 +675,11 @@ async def load_vector_batch(
 
 __all__ = [
     "CORPUS_COLLECTIONS",
+    "EXEMPLAR_CORPUS",
+    "ExemplarIdCheck",
     "SeedBatchLedger",
     "VectorLoadResult",
+    "check_exemplar_id",
     "contextual_embedding_input",
     "load_vector_batch",
     "pg_seed_batch_ledger",

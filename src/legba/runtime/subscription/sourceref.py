@@ -170,6 +170,7 @@ async def resolve_source_refs(
     target_id: str,
     target_tenant: str,
     source_refs: list[SourceRef],
+    preloaded_heads: list[SourceRow] | None = None,
 ) -> list[ResolvedBinding]:
     """Resolve a target's ``list[SourceRef]`` into concrete bindings.
 
@@ -183,8 +184,16 @@ async def resolve_source_refs(
     Locked sources (``allowlist``/``grant``) NEVER auto-wire via selector; an
     explicit ref to a locked source is still RESOLVED here (the policy layer
     decides whether the subscription may register).
+
+    ``preloaded_heads`` lets a caller that resolves MANY targets against the
+    same source set in one pass (the selector auto-wire sweep in
+    :mod:`legba.data.discovery.autowire`) fetch ``source_descriptors`` ONCE
+    and reuse it, instead of every call re-querying + re-parsing every head
+    source row. Per-target callers (e.g. ``SubscriptionEngine.register_target``)
+    leave this ``None`` and get the original per-call fetch — behavior for
+    every other caller is unchanged.
     """
-    heads = await _load_source_heads(pg)
+    heads = preloaded_heads if preloaded_heads is not None else await _load_source_heads(pg)
     by_id = {h.source_id: h for h in heads}
     bindings: list[ResolvedBinding] = []
     seen: set[str] = set()

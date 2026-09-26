@@ -112,7 +112,11 @@ from .judge_assessability import (
     is_json_syntax_claim,
     is_labeled_scaffold,
 )
-from .judge_quote_rules import _JUDGE_QUALIFIER_RULE, _JUDGE_QUOTE_RULE
+from .judge_quote_rules import (
+    _JUDGE_QUALIFIER_RULE,
+    _JUDGE_QUOTE_RULE,
+    _judge_reply_contract,
+)
 
 __all__ = [
     "ABSENCE_PROFILE_VERSION",
@@ -258,7 +262,10 @@ def nonproposition_is_earned(claim: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 #: The profile version stamped onto ``data.verification.branch_versions``.
-ABSENCE_PROFILE_VERSION = "absence.v4"
+# H3 (2026-09-24/1): v4 -> v5 — the reply contract now asks every verdict entry
+# for its ``claim_index`` (the named-claim contract, judge_quote_rules), so a
+# short or reordered reply on this route aligns by id too. Doctrine unchanged.
+ABSENCE_PROFILE_VERSION = "absence.v5"
 
 #: The absence-route system prompt. Blocks, in order: identity → what each error
 #: costs (BOTH directions — the doctrine's over-correction fence) → what a
@@ -393,9 +400,9 @@ _ABSENCE_JUDGE_SYSTEM = (
     "a marker.\n"
     "- When the evidence carries the negative the verdict is 'supported', not "
     "a softer failure. Severity is for claims that genuinely fail.\n\n"
-    'Output strict JSON only: {"verdicts": ["supported"|"contradicted"|'
-    '"unsupported"|"not_a_proposition", ...]} with one verdict per claim, in '
-    "order."
+    + _judge_reply_contract(
+        '"supported"|"contradicted"|"unsupported"|"not_a_proposition"'
+    )
     + _JUDGE_QUOTE_RULE
     + _JUDGE_QUALIFIER_RULE
     + " Output only the JSON object."

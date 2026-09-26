@@ -346,8 +346,15 @@ class PackGovernorEnforcer:
         outcome: str,
         cost_usd: float | None = None,
         units: int | None = None,
+        duration_ms: int | None = None,
     ) -> None:
-        """Stamp the final outcome (+ true cost/units) onto an invocation row."""
+        """Stamp the final outcome (+ true cost/units) onto an invocation row.
+
+        ``duration_ms`` (migration 0208) is the wall-clock duration of the
+        invocation — what graph-engine trigger gauge E2's p95 reads. Optional
+        so a pre-0208 caller still compiles; a settled row without it simply
+        does not count toward the latency window.
+        """
         sets = ["outcome = $2"]
         params: list[Any] = [invocation_id, outcome]
         if cost_usd is not None:
@@ -356,6 +363,9 @@ class PackGovernorEnforcer:
         if units is not None:
             params.append(units)
             sets.append(f"units = ${len(params)}")
+        if duration_ms is not None:
+            params.append(duration_ms)
+            sets.append(f"duration_ms = ${len(params)}")
         await conn.execute(
             f"UPDATE action_pack_invocations SET {', '.join(sets)} WHERE id = $1",
             *params,

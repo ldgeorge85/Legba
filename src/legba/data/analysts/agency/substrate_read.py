@@ -33,6 +33,7 @@ the conversation so the planner can recover).
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from ...schemas.action_pack import ActionPack
@@ -72,6 +73,14 @@ SUBSTRATE_READ_TOOLS = (
     "list_findings",
     "list_situations",
     "query_predictions",
+    # V3/P3 — the decision-time register: "what did Legba believe on date D"
+    # (spec §3.4). Read-only; reuses this pack's kind.
+    "belief_as_of",
+    # V3/P6 — the event surface (spec §6.1): the filtered bounded-occurrence
+    # list and the one-event dossier (signals / actors / edges / tracking
+    # situations / lifecycle ledger). Read-only; reuses this pack's kind.
+    "query_events",
+    "inspect_event",
     # Navigation readers — consult-surface ONLY (the GATHER assessors do NOT
     # offer these: an assessor already has its target_id). They MUST still be
     # pack tools, because the production consult loop is GOVERNED through this
@@ -79,6 +88,17 @@ SUBSTRATE_READ_TOOLS = (
     # consult path. (Not added to inline_target._GATHER_READ_TOOLS by design.)
     "list_targets",
     "list_sources",
+    # 7g-2 — the COLLECTION series reads. HISTORY, not now: the only tools in
+    # this pack that reach `observations` (the bitemporal store a curated
+    # holding loads once and nothing schedules), and the only ones whose rows
+    # are not live substrate. They stay in THIS pack because the production
+    # consult loop is governed through it — a tool absent from the pack is
+    # blocked as unknown_tool — and because they are reads like every other
+    # tool here. What makes them different is stated in their own rows, not in
+    # a second pack: every row carries its valid period, its record time and
+    # the sha256 of the file the number came from.
+    "series_history",
+    "series_compare",
 )
 
 
@@ -97,6 +117,22 @@ def _families(args: Any) -> list[str] | None:
         return None
     out = [str(x).strip() for x in raw if str(x).strip()]
     return out or None
+
+
+def _subjects(args: Any) -> list[str]:
+    """The subject list for ``series_compare``, off an untyped tool-call arg.
+
+    Accepts a list, or a single string (a planner that wrote ``subjects:
+    "US"`` meant one subject, and refusing that would spend a round teaching
+    it JSON). Anything else yields ``[]``, which the port turns into a NAMED
+    refusal rather than a silent all-subjects read.
+    """
+    raw = args.get("subjects")
+    if isinstance(raw, str):
+        raw = [p for p in re.split(r"[,\s]+", raw) if p]
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [str(x).strip() for x in raw if str(x).strip()]
 
 
 async def _call_port(
@@ -122,6 +158,7 @@ async def _call_port(
                 predicate=args.get("predicate"),
                 value=args.get("value"),
                 limit=int(args.get("limit", 30)),
+                as_of=args.get("as_of"),
             )
         elif name == "inspect_entity":
             out = await port.inspect_entity(name=str(args.get("name", "")))
@@ -158,6 +195,7 @@ async def _call_port(
                     else None
                 ),
                 limit=int(args.get("limit", 30)),
+                as_of=args.get("as_of"),
             )
         elif name == "query_hypotheses":
             out = await port.query_hypotheses(
@@ -170,6 +208,8 @@ async def _call_port(
             out = await port.get_timeline(
                 subject=str(args.get("subject", "")),
                 limit=int(args.get("limit", 40)),
+                since=args.get("since"),
+                until=args.get("until"),
             )
         elif name == "compare_targets":
             raw_targets = args.get("target_ids") or []
@@ -184,6 +224,7 @@ async def _call_port(
                 polarity_product=int(pp) if pp is not None else None,
                 limit=int(args.get("limit", 30)),
                 families=_families(args),
+                as_of=args.get("as_of"),
             )
         elif name == "find_proxy_chains":
             pp = args.get("polarity_product")
@@ -194,6 +235,7 @@ async def _call_port(
                 polarity_product=int(pp) if pp is not None else None,
                 limit=int(args.get("limit", 30)),
                 families=_families(args),
+                as_of=args.get("as_of"),
             )
         elif name == "query_brokers":
             raw_a = args.get("camp_a") or []
@@ -204,6 +246,7 @@ async def _call_port(
                 max_hops=int(args.get("max_hops", 3)),
                 limit=int(args.get("limit", 50)),
                 families=_families(args),
+                as_of=args.get("as_of"),
             )
         elif name == "list_findings":
             out = await port.list_findings(
@@ -221,6 +264,7 @@ async def _call_port(
                     args.get("include_superseded", False)
                 ).lower() in ("true", "1"),
                 limit=int(args.get("limit", 20)),
+                believed_as_of=args.get("believed_as_of"),
             )
         elif name == "list_situations":
             out = await port.list_situations(
@@ -232,6 +276,42 @@ async def _call_port(
                     else None
                 ),
                 limit=int(args.get("limit", 20)),
+                as_of=args.get("as_of"),
+            )
+        elif name == "belief_as_of":
+            out = await port.belief_as_of(
+                as_of=str(args.get("as_of", "")),
+                target_id=args.get("target_id"),
+                fold_verdicts=str(args.get("fold_verdicts", "as_of")),
+                limit=int(args.get("limit", 20)),
+            )
+        elif name == "query_events":
+            raw_geo = args.get("geo")
+            raw_origin = args.get("include_origin")
+            out = await port.query_events(
+                target_id=args.get("target_id"),
+                geo=(
+                    [str(g) for g in raw_geo]
+                    if isinstance(raw_geo, list)
+                    else (str(raw_geo) if raw_geo is not None else None)
+                ),
+                category=args.get("category"),
+                lifecycle_state=args.get("lifecycle_state"),
+                entity=args.get("entity"),
+                since=args.get("since"),
+                until=args.get("until"),
+                as_of=args.get("as_of"),
+                include_origin=(
+                    [str(c) for c in raw_origin]
+                    if isinstance(raw_origin, list)
+                    else None
+                ),
+                situation_id=args.get("situation_id"),
+                limit=int(args.get("limit", 20)),
+            )
+        elif name == "inspect_event":
+            out = await port.inspect_event(
+                event_id=str(args.get("event_id", "")),
             )
         elif name == "query_predictions":
             out = await port.query_predictions(
@@ -248,6 +328,26 @@ async def _call_port(
                 active_only=bool(args.get("active_only", True)),
                 silent_only=bool(args.get("silent_only", False)),
                 silent_hours=int(args.get("silent_hours", 48)),
+            )
+        elif name == "series_history":
+            out = await port.series_history(
+                series_id=str(args.get("series_id", "")),
+                subject=str(args.get("subject", "")),
+                since=args.get("from") or args.get("since"),
+                until=args.get("to") or args.get("until"),
+                as_of=args.get("as_of"),
+                collection_id=args.get("collection_id"),
+                limit=int(args.get("limit", 500)),
+            )
+        elif name == "series_compare":
+            out = await port.series_compare(
+                series_id=str(args.get("series_id", "")),
+                subjects=_subjects(args),
+                since=args.get("from") or args.get("since"),
+                until=args.get("to") or args.get("until"),
+                as_of=args.get("as_of"),
+                collection_id=args.get("collection_id"),
+                limit=int(args.get("limit", 500)),
             )
         else:  # pragma: no cover — registry only maps the known names
             return ToolResult(status="failed", error=f"unknown substrate tool {name!r}")
@@ -359,6 +459,24 @@ async def query_predictions_tool(
     return await _call_port(call, ctx, "query_predictions")
 
 
+async def belief_as_of_tool(
+    call: ToolCall, pack: ActionPack, ctx: ToolContext
+) -> ToolResult:
+    return await _call_port(call, ctx, "belief_as_of")
+
+
+async def query_events_tool(
+    call: ToolCall, pack: ActionPack, ctx: ToolContext
+) -> ToolResult:
+    return await _call_port(call, ctx, "query_events")
+
+
+async def inspect_event_tool(
+    call: ToolCall, pack: ActionPack, ctx: ToolContext
+) -> ToolResult:
+    return await _call_port(call, ctx, "inspect_event")
+
+
 async def list_targets_tool(
     call: ToolCall, pack: ActionPack, ctx: ToolContext
 ) -> ToolResult:
@@ -369,6 +487,18 @@ async def list_sources_tool(
     call: ToolCall, pack: ActionPack, ctx: ToolContext
 ) -> ToolResult:
     return await _call_port(call, ctx, "list_sources")
+
+
+async def series_history_tool(
+    call: ToolCall, pack: ActionPack, ctx: ToolContext
+) -> ToolResult:
+    return await _call_port(call, ctx, "series_history")
+
+
+async def series_compare_tool(
+    call: ToolCall, pack: ActionPack, ctx: ToolContext
+) -> ToolResult:
+    return await _call_port(call, ctx, "series_compare")
 
 
 def register_substrate_read_tools(registry: ToolRegistry) -> None:
@@ -394,9 +524,17 @@ def register_substrate_read_tools(registry: ToolRegistry) -> None:
     registry.register("list_findings", list_findings_tool)
     registry.register("list_situations", list_situations_tool)
     registry.register("query_predictions", query_predictions_tool)
+    # V3/P3 — the decision-time register.
+    registry.register("belief_as_of", belief_as_of_tool)
+    # V3/P6 — the event surface readers.
+    registry.register("query_events", query_events_tool)
+    registry.register("inspect_event", inspect_event_tool)
     # Navigation readers (consult-surface only; still pack-governed).
     registry.register("list_targets", list_targets_tool)
     registry.register("list_sources", list_sources_tool)
+    # 7g-2 — the collection series reads.
+    registry.register("series_history", series_history_tool)
+    registry.register("series_compare", series_compare_tool)
 
 
 __all__ = [
@@ -420,6 +558,11 @@ __all__ = [
     "list_findings_tool",
     "list_situations_tool",
     "query_predictions_tool",
+    "belief_as_of_tool",
+    "query_events_tool",
+    "inspect_event_tool",
     "list_targets_tool",
     "list_sources_tool",
+    "series_history_tool",
+    "series_compare_tool",
 ]

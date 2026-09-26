@@ -96,8 +96,8 @@ is resolved by the real dispatcher, the tool call lands a real
 for the shape).
 
 The cost of ignoring this is written into `deploy/deploy.sh` §(e) and
-`scripts/deploy_smoke_cold_activation.sh`: a descriptor-parse bug took the fleet
-down on 2026-08-01 while every one of ten-thousand-odd tests stayed green,
+`scripts/deploy_smoke_cold_activation.sh`: a descriptor-parse bug once took the fleet
+down while every one of ten-thousand-odd tests stayed green,
 because they all built descriptors *in process* and none traversed
 registry-fetch → parse → activate → run against a live sidecar.
 
@@ -154,8 +154,9 @@ Two families fail *only* in a worktree and are not your fault:
 and the seed tests (the curated seed *data* under `seeds/` is gitignored — the
 adapters ship, the data does not, so it is absent from a clone).
 
-Run **targeted** paths while iterating. The full suite is ~16 minutes and shares
-one Postgres.
+Run **targeted** paths while iterating. The full suite is about half an hour and shares
+one Postgres. In a worktree or a clone, set `PYTHONPATH=src` on every invocation: the
+editable install's `.pth` otherwise imports the main checkout.
 
 ## What CI does and does not cover
 
@@ -164,7 +165,7 @@ scope: it runs the ruff ratchet and the structural gates (size, no-stubs,
 dspy/litellm hot-path guard, strict-mode gate) — the checks that need nothing
 but the source tree. It does **not** run the suite that matters most: everything
 touching Postgres/AGE, Qdrant, OpenSearch, NATS or a Dapr sidecar is out of
-reach of a hosted runner, which is the great majority of the ~10,000 tests.
+reach of a hosted runner, which is the great majority of the 14,000-odd tests.
 
 A green CI badge here means "the tree is lint-clean and structurally sound",
 not "the tests pass". The real gate is the nightly suite

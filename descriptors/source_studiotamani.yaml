@@ -1,0 +1,117 @@
+# Sahel coverage pass — Mali desk (country_watch_ml) — 2026-09-07. Ships DRAFT.
+#
+# See source_aib_burkina.yaml's header for the full WHY-THIS-BATCH-EXISTS note.
+# This descriptor is Studio Tamani's — the batch's Fondation Hirondelle
+# up-country quality lane for Mali, the direct sibling of
+# source_studiokalangou.yaml (Niger) and source_studioyafa.yaml (Burkina Faso).
+#
+# Studio Tamani (studiotamani.org) — Fondation Hirondelle's Mali newsroom,
+# based in Bamako since 2013 (see source_studiokalangou.yaml's header for the
+# organisation background). Produces daily bulletins ("Titres du...") plus
+# region-datelined reporting (Ségou, Koulikoro, Tombouctou, Diré, Bandiagara).
+#
+# WHY IT EARNS A SLOT NEXT TO AMAP/MALIJET. Same reasoning as
+# source_studioyafa.yaml on the Burkina desk: it reports OUT of specific
+# Malian localities with humanitarian/service-delivery depth (flood-response
+# aid distributions, water-access mobilisation, a rumour-debunking piece —
+# "Non, Mamadou Hawa Gassama n'est pas décédé") rather than wire-style
+# dispatches, AND it does the assessor's job of correcting misinformation
+# in-feed. Lower volume than AMAP/Malijet, priced accordingly — a quality
+# lane, not a volume one.
+#
+# VERIFIED LIVE 2026-09-07 by direct fetch + feedparser:
+# `https://www.studiotamani.org/feed/` -> HTTP 301 to
+# `https://www.studiotamani.org/feed` (no trailing slash) -> HTTP 200,
+# `application/rss+xml; charset=UTF-8`, feedparser bozo=False, 10 items,
+# newest item 2026-09-05T18:01:25Z (1 day old at fetch time), all 10 within
+# the 7-day window. ALL 10 items are Mali-domestic, no crossover observed
+# (including a Mali women's-basketball item, still domestic) — see the geo
+# note. WordPress feed, keyless, no auth wall; `config.url` below is the
+# `/feed/` form (the handler follows the redirect).
+#
+# NOT A DUPLICATE: no head row in source_descriptors points at
+# studiotamani.org.
+#
+# geo: [ML] = publisher origin, honest and useful, same call as
+# source_studiokalangou.yaml for Niger and source_studioyafa.yaml for Burkina
+# Faso: a Malian station writing about Mali, so the post-enrichment fallback
+# in data/sources/baseline.py correctly rescues domestic stories whose bodies
+# name only a locality (Ségou, Koulikoro, Tombouctou, Diré, Bandiagara) and
+# never the country name itself.
+#
+# source_class: reporting — an independent non-profit newsroom, same
+# treatment as source_studiokalangou.yaml and source_studioyafa.yaml. Not
+# `official` (Hirondelle is an NGO operator, not a government/IGO publisher)
+# and not `state_media`, though donor/institutional-funded rather than
+# commercial.
+#
+# LICENCE/ROBOTS POSTURE: `robots.txt` present (Yoast SEO default block),
+# `User-agent: * / Disallow:` (nothing disallowed) — no restriction observed.
+# No machine-readable licence declaration found on-site. `scope.license_class`
+# left UNSET (honest absence, the LIC-2 default), which lands ingested
+# signals at teaser depth until an operator reviews it.
+#
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after the route is
+# re-verified live on the instance.
+
+identity:
+  id: source.studiotamani.news
+  name: Studio Tamani — Mali (Fondation Hirondelle)
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: source_batch_2026_09
+  created: "2026-09-07T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [ML]
+  # The station's web feed publishes in French; language_detect below
+  # confirms per signal rather than trusting this.
+  languages: [fr]
+  tags: [news, world, africa, sahel, mali, francophone, local, source_batch_2026_09]
+  source_class: reporting
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  # Hourly, staggered minute offset. Low-volume feed (10 items/7d observed),
+  # so most polls are 304s — near-free with the handler's conditional GET.
+  schedule:
+    factory_kind: cron
+    raw: "38 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 60
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.studiotamani.org/feed/"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

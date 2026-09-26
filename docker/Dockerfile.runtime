@@ -84,6 +84,12 @@ RUN pip install --prefix=/install \
         "statsforecast>=1.7" \
         "feedparser>=6.0" \
         "trafilatura>=1.8" \
+        # FETCH_REVIEW (a): browser-fingerprint impersonation for the page
+        # fetcher, behind LEGBA_FETCH_IMPERSONATE (default off). Listed HERE
+        # as well as in pyproject because the project itself is installed
+        # `--no-deps` below — pyproject's dependency list is the spec, this
+        # line is what actually lands in the image.
+        "curl_cffi>=0.16" \
         "pycountry>=24.6" \
         "geopy>=2.4" \
         "aiohttp>=3.9" \

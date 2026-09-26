@@ -1,0 +1,60 @@
+# receipt_anchor — H13 external timestamp on the analyst_traces receipt chain.
+#
+# A `deterministic`-kind META analyst (sub_handler=receipt_anchor). Once daily
+# it computes a Merkle root over the LATEST analyst_traces.receipt_hash per
+# analyst (sorted by analyst_id; leaf = sha256(analyst_id || receipt_hash)),
+# POSTs the 32-byte digest to two OpenTimestamps public calendars, and lands
+# one receipt_anchors row per (day, calendar): 'submitted' with the proof
+# bytes, or 'pending' when a calendar is unreachable (retried on the next
+# tick, never a run failure). Read surface:
+# GET /api/v1/v3/system/receipt-anchors.
+#
+# HONESTY: this anchors EXISTENCE, not correctness — it proves a chain head
+# existed before a timestamp, nothing more. Verification is deliberately
+# out-of-tree (operator-side `ots` CLI; docs/ANALYSIS.md §measurement).
+#
+# META analyst: no subscription.targets → a SINGLE global run per cadence
+# tick; reads/writes analyst_traces + receipt_anchors directly via
+# deps.pg_pool and ignores the materialized input slice. The returned
+# FindingPayload is a per-run counts receipt, TRACE_ONLY in deterministic.py —
+# never a finding on a trust surface.
+#
+# State: draft in-tree — registration + the operator's activate flip are
+# deploy steps (migration 0212 must be applied first).
+
+identity:
+  id: receipt_anchor
+  name: Receipt-Chain Anchor (daily OpenTimestamps attestation)
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: h13_sealed_ledger
+
+subscription:
+  # META analyst: one global anchor per tick over the whole receipt chain.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: receipt_anchor
+  budget_tokens_per_day: 0      # no LLM — pure SQL + two calendar POSTs
+
+cadence:
+  fallback_schedule: "10 0 * * *"   # daily at 00:10Z — after midnight boundary
+  cooldown_seconds: 79200           # 22h (strictly below the 24h interval)
+
+# The receipt_anchors rows are side-written by the handler; the returned
+# summary is a TRACE_ONLY receipt. Nothing is a declared output.
+outputs: []

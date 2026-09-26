@@ -81,10 +81,50 @@
 # classes. Nothing in the handler changes: the row already carries trigger_class
 # in its tags and in routing_hint.
 #
-# VOLUME. ONE global sweep per day. Worst case ~10 core-plane calls (1 extraction
-# per sampled head + 1 verdict per audited claim) and ~6 web_search invocations.
-# A rounding error against the fleet, and that is the point — the value here is
-# CONTINUITY, not volume.
+# VOLUME (FLAG OFF). ONE global sweep per day. Worst case ~10 core-plane calls
+# (1 extraction per sampled head + 1 verdict per audited claim) and ~6
+# web_search invocations. A rounding error against the fleet, and that is the
+# point — the value there is CONTINUITY, not volume.
+#
+# ── WIDTH: LEGBA_EXTERNAL_GRADING_WIDTH (default 0 = OFF) ────────────────────
+#
+# The demotion changed what a read IS, and that changes what this analyst can
+# be. Under assembly.v1 a composition is a list of VERBATIM quoted spans with
+# byte-exact origins, so the claim population is no longer something a model has
+# to extract — it is a FIELD in the payload. With the flag on:
+#
+#   * the CLAIM SOURCE becomes data.data.assembly.blocks[].spans[] (plus the
+#     Assessment channel's sentences), enumerated deterministically with ZERO
+#     LLM calls and a claim_key stable across a replay a month later —
+#     sha256(fold(text) || origin_head_id || start || end);
+#   * a deterministic PRE-FILTER answers ~9% of claims before any query is
+#     issued (scope_bounded / provenance / perspective — claims with no world
+#     truth-maker), because searching for one of those returns NOT_FOUND and
+#     quietly deflates the headline;
+#   * the run becomes an HOURLY DRAIN over a durable claim queue riding this
+#     plane's existing alert_trigger_watermarks partition under
+#     watermark_key='_queue' — no new table;
+#   * the GRADER moves off the $0 core plane onto a THIRD model family
+#     (method.llm.grader, fenced — see below), because the writer's own family
+#     grading the writer is not an external check;
+#   * verdicts land in external_grades (migration 0190), append-only, and the
+#     critique becomes ONE ROW PER GRADED READ instead of one per claim — 470
+#     per-claim critique rows a day would shift every fleet critique aggregate
+#     by ~80% against ~580 faithfulness rows;
+#   * budget exhaustion DEGRADES TO A SAMPLED MODE, hash-gated and replayable,
+#     with the fraction stamped on the heartbeat, on every ledger row and on
+#     every published number. A partial day is never published as a whole one.
+#
+# WHAT THE NUMBER MEANS, and it must be said on every surface that shows it:
+# the assembly AUTHORS NOTHING — it quotes its desks verbatim and its own
+# construction error is 1.0 by arithmetic — so grading the assembly grades the
+# DESKS. Anyone reading it as "the composition tier's accuracy" is reading it
+# wrong.
+#
+# FLAG OFF IS BYTE-IDENTICAL. No external_grades row, no grader call, no queue
+# row, the old pipeline stamp, and a heartbeat carrying exactly the keys it
+# carried yesterday — pinned field-for-field by
+# test_width_flag_off_is_the_shipped_sweep.
 #
 # State: draft in-tree. Registration
 # (scripts/bringup_register_standing_auditor.py) and the operator's activate flip
@@ -133,13 +173,80 @@ method:
     max_claims_per_head: 2
     max_claims_total: 6
     search_limit: 5
+    # -- WIDTH KNOBS (read only when LEGBA_EXTERNAL_GRADING_WIDTH is on) ----
+    # With the flag OFF these are inert and the analyst runs the 6-claim daily
+    # sweep above, byte-identically. With it ON the run becomes an hourly DRAIN
+    # over a durable claim queue, and these five bound its whole cost.
+    #
+    # max_claims_per_tick is CLAMPED IN CODE to the LIVE web_access governor,
+    # not to a copy of it: the clamp reads
+    # `action_pack_web_access.yaml: max_invocations_per_hour` off the resolved
+    # binding and divides by the three egress calls one claim can spend
+    # (primary query + one reformulation + one span-verification fetch). A PUT
+    # may lower this knob; nothing can raise it past the governor, because
+    # exceeding the governor does not slow a tick — it BLOCKS one, and the
+    # blocked claims come back UNCHECKED and deflate the decided rate for
+    # reasons that have nothing to do with the world.
+    #
+    # 2026-09-20 — THE STARVATION THESE NUMBERS FIX. The clamp was a hard-coded
+    # 120/h (120 / 3 = 40) and stayed there when the operator lifted the pack
+    # to 1,000,000/h, so the auditor drained ~13 claims/h, hit `max_claims_per_day`
+    # by ~06Z, went quiet 06–12Z and 17–00Z, and returned ~85% of its claims as
+    # "searched: 0 / unchecked" against a search plane that was wide open. The
+    # clamp now resolves; these four caps are the operator-facing knobs and they
+    # are sized for the measured population (~545 claims/day) with real margin
+    # rather than for a governor that no longer exists.
+    max_claims_per_tick: 200
+    # 24 x 200 = 4800 tick capacity against max_claims_per_day 5000, so the day
+    # cap — not the tick clamp — is the binding ceiling, and it sits ~9x over the
+    # measured population. On exhaustion the loop still degrades to a hash-gated
+    # SAMPLED mode: the fraction is stamped on the heartbeat, on every ledger row
+    # and on every published number, and a partial day is never published as a
+    # whole one.
+    max_claims_per_day: 5000
+    # 5000 claims x 3 worst-case egress calls = 15000; 10000 is the honest
+    # ceiling for a population that spends well under the worst case, and the
+    # SERP budget degrades through the SAME sampled ladder when it binds first
+    # (sample_reason then names serp_budget_exhausted, not the claim budget).
+    max_serp_per_day: 10000
+    # Safety valve, not a target: a day that backs up drops its LOWEST-priority
+    # claims (never its newest) and counts the drop on the heartbeat.
+    max_queue_depth: 20000
+    # THE SERP LADDER. One rung today, and that is a statement about what
+    # exists rather than a placeholder: a live probe measured 6 of ~13 SearXNG
+    # engines already degraded AT SIX QUERIES A DAY (bot detection on a
+    # datacentre IP, not our volume), and SearXNG cannot return
+    # supports_absence_claim=true at any volume — so 16-41% of every read, the
+    # absence stratum, is ungradable until a rung that can verify its own
+    # emptiness is appended here. That is what the paid rung buys: not volume,
+    # the right to grade a sixth of the read.
+    #
+    # THE RUNG NOW EXISTS AND THIS VALUE IS DELIBERATELY UNCHANGED.
+    # `descriptors/stack_component_search_serper.yaml` ships the component and
+    # `_external_audit_width.escalate_to_paid_rung` is wired to it, but the
+    # code reads THIS list to decide whether a paid rung exists — so with one
+    # rung here the escalation is INERT and every tick is byte-identical to
+    # today's. The operator flips it by PUTting this descriptor with:
+    #
+    #     serp_provider_order: [searxng, serper]
+    #
+    # ...and only after the web_access pack declares `max_cost_usd_per_day`
+    # (without it the metered-rung brake refuses every serper call) and lists
+    # `search.serper.paid` in the web_search ToolSpec's `fallback_providers`
+    # (without it the pin is a loud `search_provider_not_declared`, never a
+    # silent fall back to rung 0). Rung 0 stays SearXNG for every caller: the
+    # paid rung is reached ONLY on the absence-claim path, for a claim rung 0
+    # answered and could not decide, at most ONE query per claim.
+    serp_provider_order:
+      - searxng
+      - serper   # 2026-09-20 operator: paid absence rung (search.serper.paid)
   llm:
     # THE $0 CORE PLANE, and nothing else. The deterministic deps-builder's
     # shared _wire_deterministic_llm hard-refuses an Anthropic component for any
     # deterministic sub-handler, so this ref cannot be repointed onto the billed
     # plane by a descriptor PUT — consult / deep_consult remain the only
     # sanctioned Anthropic users. Both legs (claim extraction, verdict) run here.
-    temperature: 0.0        # an auditor is not a writer; reproducibility wins
+    temperature: 1.0        # an auditor is not a writer; reproducibility wins
     primary:
       factory_kind: stack_ref
       raw: llm.primary.openai_compat
@@ -149,23 +256,78 @@ method:
     # safety net rather than the live control; the handler's own per-call caps
     # (EXTRACT_MAX_TOKENS / JUDGE_MAX_TOKENS) are what actually bound the reply.
     max_tokens: 1200
+    # THE GRADER — a THIRD model family, and the fence that keeps it one.
+    #
+    # The R2 record correction is why this is a separate key with its own
+    # refusals rather than a comment: "The R2 'cross-family independence' lane
+    # was VOID, not open. It graded with nvidia/nemotron-3-super-120b — the same
+    # model family as the production judge … The independence property the lane
+    # exists to test was therefore never tested."
+    #
+    # resolve_grader_route() refuses this ref if it (a) is Anthropic (HARD
+    # standing rule: consult-only, never scheduled), (b) is the same plane as
+    # method.llm.primary — the WRITER cannot grade itself, or (c) is the same
+    # plane as the live LEGBA_JUDGE_STACK_REF — the judge. Three refusals, three
+    # tests. On refusal the analyst runs, writes a heartbeat naming the gap, and
+    # grades NOTHING; it never silently substitutes a model.
+    #
+    # Mistral Large 3 on OpenRouter (Cerebras Gemma was the first pick; unfunded 09-05): cross-family from the core-plane writer (gpt-oss-120b) and from
+    # the judge (nemotron), already registered active, already priced
+    # ($0.99/$1.49 per M ≈ $1.89/day at width), and already characterised on
+    # this corpus — it WAS the verify judge 2026-07-30 → 08-15.
+    #
+    # NOT the $0 core plane: that is the writer's own family. This is the one
+    # place in the deterministic fleet where a billed model is the correct
+    # answer, because the number it produces is worthless if it is the writer
+    # marking its own homework.
+    grader:
+      factory_kind: stack_ref
+      raw: llm.judge.openrouter_mistral_large.openai_compat   # third family; Cerebras Gemma was the first pick, its key unfunded (HTTP 402) 2026-09-05
+      expected_family: llm_provider
+    # THE FOURTH FAMILY — the audit rater, for instrument validity.
+    #
+    # R3 died at raw overlap 0.7451 < 0.75 on 51 shared items, after R2 called
+    # its 0.804 "the round's methodological result". It did not replicate. So a
+    # hash-gated 10% of each day's searched claims PLUS 100% of CONTRADICTED are
+    # re-graded here, over the BYTE-IDENTICAL cached evidence envelope (the
+    # control R3 lacked: its own bias #5 measured search access moving the
+    # number by 0.070, so an overlap over two different result sets measures the
+    # SEARCH, not the graders). ~329 double-graded claims/week = 6x R3's
+    # overlap n of 51.
+    #
+    # Below 0.75 raw agreement, every number published that week carries
+    # instrument_limited and renders as a SENTENCE rather than a number.
+    # Unwired ⇒ the overlap reports UNMEASURED, which is NOT agreement.
+    audit_rater:
+      factory_kind: stack_ref
+      raw: llm.audit.openrouter_llama33_70b.openai_compat
+      expected_family: llm_provider
   # Per-day CORE-plane token cap (24h bucket). Sized well above the worst case
   # (~10 bounded calls) so a legitimately long world read never truncates, and
   # far below anything that could crowd the shared gateway.
-  budget_tokens_per_day: 120000
+  budget_tokens_per_day: 0
   retry:
     budget:
       strategy: pause_until_next_window
 
 cadence:
-  # Daily at 05:12 UTC — AFTER the 03:xx deterministic maintenance block
-  # (calibration_tracking :20, unit_correctness_scorer :30) and after the
-  # overnight compositions have landed their heads, so the auditor reads a
-  # settled tower rather than racing it. Its own minute, so it never co-fires.
-  fallback_schedule: "12 5 * * *"
-  # 22h — below the 24h interval, so an organic daily tick is never swallowed by
-  # its own cooldown (the alert_trigger_scan 0.8x ratio).
-  cooldown_seconds: 79200
+  # HOURLY AT :07. The original argument was the pack governor (~990 outbound
+  # calls a day against 120/hour meant a single daily sweep needed 8.2 HOURS AT
+  # THE CAP); the operator lifted that cap to 1,000,000/h on 2026-09-20, so the
+  # surviving argument is LATENCY and freshness: reads land across the whole
+  # day, and an hourly drain grades a high-severity lead-block claim within one
+  # or two ticks of its read landing instead of up to 24 hours later.
+  #
+  # :07 is its own minute — after the :00 composition block and clear of the
+  # :20/:30 deterministic maintenance analysts, so it never co-fires.
+  #
+  # WITH THE FLAG OFF this cadence changes only WHEN the shipped 6-claim sweep
+  # runs, not what it does: the sweep is idempotent per day in effect (the same
+  # date seeds the same rotation) and its own caps bound every tick.
+  fallback_schedule: "7 * * * *"
+  # 3000s (50 min) — below the 3600s interval, so an organic hourly tick is
+  # never swallowed by its own cooldown (the alert_trigger_scan 0.8x ratio).
+  cooldown_seconds: 3000
 
 # THE AGENCY GRANT. `web_access` is the ONLY way this analyst reaches outside the
 # substrate: there is no ad-hoc HTTP anywhere in its path and no httpx import in

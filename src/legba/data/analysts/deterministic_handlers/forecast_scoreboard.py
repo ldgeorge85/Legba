@@ -57,29 +57,68 @@ SUB_HANDLER_NAME = "forecast_scoreboard"
 # ---------------------------------------------------------------------------
 
 
+def brier_of(rows: list[dict[str, Any]]) -> float | None:
+    """Mean (p - o)^2 over the pulled resolved rows — the honest-null Brier:
+    ``None`` on an empty population, never a fabricated 0."""
+    vals = [
+        (float(r["claimed_confidence"]) - int(r["outcome"])) ** 2
+        for r in rows
+        if r.get("claimed_confidence") is not None and r.get("outcome") is not None
+    ]
+    return sum(vals) / len(vals) if vals else None
+
+
+def brier_all_of(rows: list[dict[str, Any]], expired_count: int) -> float | None:
+    """H13 — the honest denominator: the answered Brier's numerator plus every
+    expired (due-but-never-resolved) row at MAXIMUM penalty (1.0), over the
+    answered + expired population. ``None`` when that population is empty."""
+    vals = [
+        (float(r["claimed_confidence"]) - int(r["outcome"])) ** 2
+        for r in rows
+        if r.get("claimed_confidence") is not None and r.get("outcome") is not None
+    ]
+    n = len(vals) + int(expired_count)
+    if n == 0:
+        return None
+    return (sum(vals) + float(expired_count)) / n
+
+
 def build_receipt(
     *,
     issued: int,
     resolved: int,
     resolved_total: int,
     warnings: list[str],
+    brier_answered: float | None = None,
+    brier_all: float | None = None,
+    expired_count: int = 0,
+    hypothesis_minters: list[dict[str, Any]] | None = None,
 ) -> FindingPayload:
-    """Assemble the per-run TRACE_ONLY receipt (counts only, no forecast values).
+    """Assemble the per-run TRACE_ONLY receipt (counts + instrument numbers).
 
     The receipt reports what the writers DID this tick — how many forecasts were
     issued (``0`` on an idempotent no-op OR a D9 abstain — both honest), how many
-    closed windows were graded, and the running total of resolved pilot calls. It
-    carries NO probability / claim / finding text: the forecast values live ONLY
-    in ``acute_forecasts`` + the T4 scoreboard, never here.
+    closed windows were graded, and the running total of resolved pilot calls.
+    H13 adds the honest denominator side by side: ``brier_answered`` (the
+    answered-only Brier, today's number), ``brier_all`` (expired rows held at
+    maximum penalty) and ``expired_count`` — plus the per-minter hypothesis
+    open/resolved counts, where selection bias would show. It carries NO
+    probability / claim / finding text: the forecast values live ONLY in
+    ``acute_forecasts`` + the T4 scoreboard, never here.
     """
     head = (
         f"Forecast scoreboard: issued={issued} resolved={resolved} "
-        f"(resolved_total={resolved_total}, class={forecast_acute.EVENT_CLASS})"
+        f"(resolved_total={resolved_total}, expired={expired_count}, "
+        f"class={forecast_acute.EVENT_CLASS})"
     )
     body = (
         f"issued={issued}\n"
         f"resolved={resolved}\n"
         f"resolved_total={resolved_total}\n"
+        f"expired_count={expired_count}\n"
+        f"brier_answered={brier_answered}\n"
+        f"brier_all={brier_all}\n"
+        f"hypothesis_minters={hypothesis_minters or []}\n"
         f"event_class={forecast_acute.EVENT_CLASS}\n"
         f"warnings={warnings}\n"
     )
@@ -94,10 +133,46 @@ def build_receipt(
             "issued": int(issued),
             "resolved": int(resolved),
             "resolved_total": int(resolved_total),
+            # H13 — the sealed-ledger denominator trio, side by side so
+            # answered-only skill can never hide an unresolved backlog.
+            "brier_answered": brier_answered,
+            "brier_all": brier_all,
+            "expired_count": int(expired_count),
+            # H13 — hypotheses by MINTER (analyst_id): open vs resolved. The
+            # units mint ~1.5k rows nobody resolves; this is where that shows.
+            "hypothesis_minters": hypothesis_minters or [],
             "event_class": forecast_acute.EVENT_CLASS,
             "warnings": warnings,
         },
     )
+
+
+#: H13 — the selection-bias meter: hypotheses grouped by MINTER
+#: (``analyst_id``), open vs resolved. ``resolved_outcome`` (migration 0038) is
+#: the exogenous-resolution stamp; NULL = still open.
+_HYPOTHESIS_MINTER_SQL = """
+SELECT COALESCE(analyst_id, 'unattributed') AS analyst_id,
+       count(*) FILTER (WHERE resolved_outcome IS NULL)::int     AS open,
+       count(*) FILTER (WHERE resolved_outcome IS NOT NULL)::int AS resolved
+  FROM hypotheses
+ GROUP BY analyst_id
+ ORDER BY analyst_id
+"""
+
+
+async def _pull_hypothesis_minter_counts(pool: Any) -> list[dict[str, Any]]:
+    """Per-minter open/resolved hypothesis counts — where selection bias in
+    resolution would show up as a number."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(_HYPOTHESIS_MINTER_SQL)
+    return [
+        {
+            "analyst_id": r["analyst_id"],
+            "open": int(r["open"]),
+            "resolved": int(r["resolved"]),
+        }
+        for r in rows
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -189,20 +264,46 @@ async def handle(
             f"oldest_days={resolve_receipt.get('stale_oldest_days')})"
         )
 
-    # PULL — receipt-only count of resolved pilot calls (read-only). The
-    # segregated Brier / Brier-skill-score itself is computed DOWNSTREAM by
-    # calibration_tracking, never here — this handler only drives + counts.
+    # PULL — resolved pilot calls (read-only). H13: the rows now ALSO feed the
+    # receipt's brier_answered (the answered-only Brier, today's number).
     resolved_total = 0
+    resolved_rows: list[dict[str, Any]] = []
+    brier_answered: float | None = None
     try:
-        rows = await forecast_acute.pull_resolved_acute_forecasts(deps, options)
-        resolved_total = len(rows)
+        resolved_rows = await forecast_acute.pull_resolved_acute_forecasts(
+            deps, options
+        )
+        resolved_total = len(resolved_rows)
+        brier_answered = brier_of(resolved_rows)
     except Exception as exc:  # noqa: BLE001
         logger.warning("forecast_scoreboard.pull_failed err=%s", exc)
         warnings.append("forecast_scoreboard.pull_failed")
 
+    # H13 — the expired backlog (due-but-never-resolved rows) and the honest
+    # brier_all that holds them at maximum penalty. Both best-effort.
+    expired_count = 0
+    try:
+        expired_count = await forecast_acute.pull_expired_forecast_count(
+            deps, options
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("forecast_scoreboard.expired_failed err=%s", exc)
+        warnings.append("forecast_scoreboard.expired_failed")
+    brier_all = brier_all_of(resolved_rows, expired_count)
+
+    # H13 — hypotheses by minter: the units mint ~1,500 rows nobody resolves;
+    # the published open-vs-resolved split is where that bias shows.
+    hypothesis_minters: list[dict[str, Any]] = []
+    try:
+        hypothesis_minters = await _pull_hypothesis_minter_counts(pool)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("forecast_scoreboard.minters_failed err=%s", exc)
+        warnings.append("forecast_scoreboard.minters_failed")
+
     logger.info(
-        "forecast_scoreboard.tick issued=%d resolved=%d resolved_total=%d class=%s",
-        issued, resolved, resolved_total, forecast_acute.EVENT_CLASS,
+        "forecast_scoreboard.tick issued=%d resolved=%d resolved_total=%d "
+        "expired=%d class=%s",
+        issued, resolved, resolved_total, expired_count, forecast_acute.EVENT_CLASS,
     )
     return AnalystMethodResult(
         finding=build_receipt(
@@ -210,9 +311,19 @@ async def handle(
             resolved=resolved,
             resolved_total=resolved_total,
             warnings=warnings,
+            brier_answered=brier_answered,
+            brier_all=brier_all,
+            expired_count=expired_count,
+            hypothesis_minters=hypothesis_minters,
         ),
         usage={"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0},
     )
 
 
-__all__ = ["handle", "build_receipt", "SUB_HANDLER_NAME"]
+__all__ = [
+    "handle",
+    "build_receipt",
+    "brier_of",
+    "brier_all_of",
+    "SUB_HANDLER_NAME",
+]

@@ -1,640 +1,471 @@
+<!-- SPDX-FileCopyrightText: 2026 Lewis George -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+
 # Acquisition — how data enters Legba and reaches analysis
 
-This document covers the source handler, the canonical signal, baseline
-enrichment, fan-out and subscription, cross-source dedup, and discovery. For
-what happens *after* a signal reaches a target — coalescing, analysts,
-findings — see `ANALYSIS.md`. For the substrate stores see `ARCHITECTURE.md`;
-for the hosted NLP/translation models see `AI_MODELS.md`. New here? Start with
-the [README](../README.md) and the [Tour](TOUR.md).
+The acquisition plane owns everything from "a source produces an observation" to "that observation is
+matched against every interested target". Its governing principle is **source-first**: a source
+ingests an observation once, enriches it once, and publishes it once; the fan-out plane then routes
+that single canonical observation to the many targets whose predicates select it. Signals are
+observations — target-agnostic — not per-target interpretations.
 
-The **acquisition plane** is the first of Legba's four planes. It owns
-everything from "a source produces an observation" to "that observation is
-matched against every interested target". Its governing principle is
-**source-first**: a source ingests an observation *once*, enriches it *once*,
-and publishes it *once*; the fan-out plane then routes that single canonical
-observation to the *many* targets whose predicates select it. Signals are
-observations — target-agnostic facts — not per-target interpretations.
+For what happens after a matched signal reaches a desk, see `ANALYSIS.md`. For the substrate stores
+see `ARCHITECTURE.md` and `DATA_MODEL.md`; for the hosted NLP models see `AI_MODELS.md`; for the
+source catalogue itself see `DATA_SOURCES.md`; for every threshold and budget named below see
+`TUNABLES.md`.
 
-**Contents:**
-[1 The SourceActor](#1-the-sourceactor) ·
-[2 The canonical Signal](#2-the-canonical-signal) ·
-[3 Baseline enrichment](#3-baseline-enrichment-once-at-the-source) ·
-[4 Fan-out and subscription](#4-fan-out-and-subscription) ·
-[5 Cross-source dedup](#5-cross-source-dedup) ·
-[6 Discovery](#6-discovery) ·
-[6.1 Collection requirements](#61-collection-requirements--a-gap-becomes-an-object-2026-07-28) ·
-[7 End-to-end, in one line](#7-end-to-end-in-one-line)
+**Contents:** [1 The SourceActor](#1-the-sourceactor) · [2 The canonical signal](#2-the-canonical-signal) ·
+[3 Baseline enrichment](#3-baseline-enrichment) · [4 Fan-out and subscription](#4-fan-out-and-subscription) ·
+[5 Dedup](#5-dedup) · [6 The evidence archive](#6-the-evidence-archive) · [7 Discovery](#7-discovery) ·
+[8 Collection requirements](#8-collection-requirements) · [9 End to end](#9-end-to-end)
 
 ---
 
 ## 1. The SourceActor
 
-A source is a declarative `SourceDescriptor`
-(`src/legba/data/schemas/source.py`). The Dapr virtual-actor runtime turns one
-descriptor into one **`SourceActor`** (`src/legba/runtime/source_actor.py`).
-The actor owns acquisition for that source regardless of how many targets
-consume it: it pulls or receives *once*, runs the baseline *once*, writes one
-canonical signal, and publishes it once.
+A source is a declarative `SourceDescriptor` (`data/schemas/source.py`). The Dapr virtual-actor
+runtime turns one descriptor into one `SourceActor` (`runtime/source_actor.py`), which owns
+acquisition for that source regardless of how many targets consume it.
 
-The mechanism lives in a plain, directly-testable class — **`SourceCore`** —
-and the thin `SourceActor` Dapr wrapper delegates to it, so the production
-path and the tested path are the same code. The actor holds no cursor state in
-Dapr; cursor and provisioning state live in a crash-safe `FilterStateStore`
-(the Postgres `actor_filter_state` table), so a pull is idempotent across
-sidecar restarts.
+The mechanism lives in a plain, directly testable class, `SourceCore`; the thin `SourceActor` Dapr
+wrapper delegates to it, so the production path and the tested path are the same code. Cursor and
+provisioning state live in a crash-safe `FilterStateStore` (the Postgres `actor_filter_state` table)
+rather than in Dapr actor state, so a pull is idempotent across sidecar restarts.
 
-The descriptor's `acquisition` field selects one of two modes:
+The descriptor's `acquisition` field selects one of two modes.
 
-### 1.1 Poll (Dapr Reminder)
+### 1.1 Poll
 
-For `acquisition: "poll"` the actor, at activation, derives a **durable Dapr
-Reminder** named `poll_<source_id>` from `cadence.schedule` (a cron). The
-reminder survives sidecar restarts. Each fire calls `SourceCore.pull_once`,
-which:
+**Reads** the persisted cursor (`last_pulled_at`) and the source's own upstream. **Writes** one
+canonical signal per surviving entry plus one `source_poll_outcomes` row per poll. **Cadence** is the
+descriptor's `cadence.schedule` cron, which the actor turns into a durable Dapr reminder named
+`poll_<source_id>` at activation; the reminder survives sidecar restarts. An active, non-discovery
+poll source must declare a schedule, enforced by the descriptor validator. Constant-period crons map
+cleanly onto a reminder; variable-period schedules are a declared seam.
 
-1. builds the source-kind handler (see §1.3),
-2. loads the persisted cursor (`last_pulled_at`) and passes it as `since`,
-3. iterates `handler.pull(ctx, since)`, running the baseline → write path per
-   yielded signal,
-4. advances the cursor (only on a clean pull),
-5. publishes every written signal to the fan-out plane.
+Each fire calls `SourceCore.pull_once`, which builds the source-kind handler, loads the cursor and
+passes it as `since`, iterates `handler.pull(ctx, since)` running the baseline and write path per
+yielded signal, publishes each written signal as it is written, and advances the cursor.
 
-An active, non-discovery poll source *must* declare a `cadence.schedule`
-(enforced by the descriptor validator). Constant-period crons map cleanly to a
-Reminder; variable-period schedules are a future seam (Dapr Jobs).
+A stored cursor dated in the future is discarded as poisoned and the window re-scanned, because dedup
+absorbs the overlap and a poisoned cursor otherwise marches forward forever.
 
-### 1.1.1 Poll liveness — quiet vs. broken, graded honestly (2026-07)
+**Poll bounds** resolve descriptor config first, then the handler's own advertisement
+(`poll_budget_seconds` / `max_entries_per_poll`), then a generic default, each clamped to a ceiling —
+so a handler that knows its own shape (Telegram's channel walk) is not truncated by a bound written
+for feeds. Per-entry enrichment is separately time-boxed.
 
-Two additions let the watchdog and the operator tell a *quiet* feed apart from
-a *broken* cursor, instead of one undifferentiated "silent":
+**Cursor advance** runs in a `finally`, so it always happens, and has three branches, each closing a
+distinct silent-stall class:
 
-- **`newest_entry_ts`** (migration 0092). On every parsed HTTP-200 poll the RSS
-  handler records the newest entry timestamp it *saw* — **before** the
-  since-filter, so a poisoned cursor still observes what the feed is serving.
-  A future-skew clamp (+26h) rejects junk dates, and an HTTP-304 carries the
-  prior observation forward so a 304 streak stays classifiable. The value lands
-  on the `source_poll_outcomes` row. The liveness watchdog's empty-streak
-  classifier then distinguishes **`honest_quiet`** (the feed itself has served
-  nothing new — no alert), **`cursor_fault`** (the feed *is* serving entries
-  newer than our last ingest but we store none — a distinct high-severity
-  alert), and **`unknown`** (no observation — the legacy behavior, no
-  regression). Per-source and per-analyst stall alerts fire on state
-  **transitions only** (`entered` / `recovered`) — the durable
-  `alert_sink_deliveries` ledger doubles as the state store, so a restart
-  cannot re-fire a standing alert as a repeating level.
-- **Freshness grades** (`registry/source_freshness.py`, surfaced on
-  `GET /api/v1/v3/system/source-firing`). Each active source is graded
-  `ok | stale | warn | empty | ungraded` against a **cadence-derived budget**:
-  the descriptor's cron is walked (croniter) for its *maximum* fire-to-fire
-  gap, × a 4× grace multiple, floored at 30 minutes (`warn` beyond 3× the
-  budget). A source with no parseable cadence — or a non-active head — reads
-  `ungraded`, never a fake `ok`; an active, budgeted source that has never
-  produced reads `empty`.
+- a hard error keeps the prior `since` and retries the window;
+- one or more entries consumed advances to the last consumed entry's logical timestamp — not to now,
+  which would skip the backlog past the entry cap. A future-dated feed timestamp is clamped to now
+  for cursor purposes only; the persisted signal keeps its own value;
+- zero entries leaves the cursor unchanged, because advancing to now on a dropped window makes
+  `since` march irreversibly forward into a permanent silent stall.
 
-### 1.2 Push (webhook)
+Bulk sources additionally carry a high-water resume offset so a capped walk resumes rather than
+restarts.
 
-For `acquisition: "push"` the actor registers no reminder. The source's
-handler is bound to the shared inbound-webhook router; an inbound POST wakes
-the handler, which emits each raw `Signal` through an `emit_signal` callback
-the actor supplies (`SourceCore.make_emit_callback`). That callback runs the
-*same* baseline → write → publish path as the poll branch — one webhook POST
-is one short transaction. A push source is never polled; calling `run` on one
-is a no-op.
+### 1.2 Push
 
-### 1.3 Source handlers (the kind library)
+For `acquisition: "push"` the actor registers no reminder. The handler is bound to the shared inbound
+webhook router; a POST to `/api/v1/webhooks/<source_id>`, optionally gated by a shared-secret header,
+wakes the handler, which emits each raw signal through an `emit_signal` callback the actor supplies.
+That callback runs the same baseline → write → publish path as the poll branch, so one POST is one
+short transaction. A push source is never polled.
 
-Every source kind is a handler satisfying the structural-typing contract in
-`src/legba/data/sources/_contract.py` (`SourceHandler`): it declares its `kind`
-/ `schema_version` / `config_schema` and exposes `pull(ctx, since) ->
-AsyncIterator[Signal]` plus `health_check(ctx) -> SourceHealth`. Handlers are
-plain Protocol/Pydantic — no base class to inherit.
+### 1.3 Source handlers
 
-The reference, fully-wired handler is **RSS/Atom**
-(`src/legba/data/sources/rss.py`):
+Every source kind is a handler satisfying the structural-typing contract in `data/sources/_contract.py`:
+it declares its `kind` / `schema_version` / `config_schema` and exposes `pull(ctx, since)` yielding
+signals plus `health_check(ctx)`. Handlers are plain Protocol and pydantic types — there is no base
+class to inherit, so a handler can be tested without a runtime.
 
-- fetches via `httpx` honouring a stored `(ETag, Last-Modified)` cursor
-  persisted in `ctx.state_store` (`If-None-Match` / `If-Modified-Since`);
-  HTTP 304 yields an empty iterator;
-- parses via `feedparser`, yielding one `Signal` per entry whose
-  `published_at` is strictly after `since`;
-- maps each entry into a target-agnostic `Signal` (title/link/summary/author/
-  tags/body in `payload`, a SHA-256 `content_hash` over external-id+title+body,
-  `canonical_url` from the entry link, `language_hint` from the feed);
-- has clear failure semantics: transient network/5xx → one retry then empty;
-  4xx (≠304) → unhealthy; parse failure → degraded; a single bad pull never
-  loses cursor history.
+`rss` is the reference poll handler: it fetches over `httpx` honouring a stored `(ETag,
+Last-Modified)` cursor, parses with `feedparser`, yields one signal per entry published after `since`,
+maps each entry into a target-agnostic signal with a SHA-256 `content_hash`, and has explicit failure
+semantics — transient network or 5xx retries once then yields empty, a 4xx other than 304 is
+unhealthy, a parse failure is degraded, and a single bad pull never loses cursor history.
+`generic_webhook` is the reference push kind.
 
-Additional handlers ship in the same package (GDELT, MediaCloud, ACLED,
-OpenSanctions, IntelMQ, Telegram, Discord, Firecrawl, Common Crawl, a generic
-webhook, scrapers, a generic polled `json_api` for JSON/CSV HTTP APIs, and a
-model-free `geojson` GIS handler). Each conforms to the same contract.
+Handlers ship for feeds and APIs (`rss`, `json_api`, `geojson`), bulk and event archives (`gdelt_files`,
+`gdelt_query`, `acled`, `ucdp`, `common_crawl_news`), curated data (`mediacloud`, `opensanctions`),
+messaging (`telegram_channel`, `discord_webhook`), crawling (`firecrawl`, `scraper`), and the
+`intelmq_collector_bridge`. `DATA_SOURCES.md` carries the per-source catalogue; `RELEASE_STATE.md`
+carries the live registered count, which is generated rather than hand-typed.
 
-The **Telegram** poller is hardened with five bounded guards (2026-07, additive
-to the earlier flood-control work): a 60s startup delay, a 15s per-channel
-deadline, a 180s whole-cycle cap (per-channel budgets clamp to it), a
-`FLOOD_WAIT` abort that persists the server-imposed deadline across polls
-(honored on the next cycle rather than hammered), and a stale poll-lock
-force-clear (single-flight lock, cleared past 300s) — so one slow or
-rate-limited channel can never wedge the cycle or the actor. Since 2026-07-31
-polls also **rotate** through the channel list with a write-ahead resume
-pointer (the generic poll budget had been truncating the walk before its tail
-— the newest channels had produced one signal ever; post-fix they produced
-dozens in hours at a 0% poll-cap rate), handlers advertise their own poll
-bounds, and chat text is a first-class corpus field so what arrives is
-searchable. A `config.classes` per-channel override lets individual channels
-carry their honest `source_class` (two Ansar Allah channels are pinned
-`state_media`) without a second Telegram session.
+The Telegram poller carries five bounded guards, each logging when it trips, because one slow or
+rate-limited channel must never wedge the cycle or the actor: a startup delay (a fresh MTProto client
+racing a lingering old container trips an auth-key duplication that permanently kills the session), a
+flood-wait abort that persists the server-imposed deadline across polls rather than hammering it, a
+single-flight poll lock with a stale-lock force-clear, a whole-cycle cap, and a per-channel deadline
+clamped to the cycle deadline. Polls rotate through the channel list with a write-ahead resume
+pointer, and a per-channel override lets an individual channel carry its own honest `source_class`
+without a second Telegram session.
 
-The 3-feed RSS set (BBC, Deutsche Welle, Al Jazeera) is the **minimal
-cold-start verification set** — the smallest loop that proves the path from
-empty volumes. It is *not* the deployed scope. A fresh instance reaches
-**current/full scope** by running `scripts/bringup_register_source_catalog.py`,
-which registers the **46-entry** source catalog (43 `rss` + 3 `geojson`
-handler integrations); the standalone state-media feeds (IRNA / PressTV /
-Ukrinform) and the UCDP GED adapter (**retired** pending an operator-held
-access token) are registered as separate descriptor files, and each source now
-carries a `source_class` taxonomy tag (`reporting` / `analysis` / `official` /
-`state_media`). A representative running deployment has **over a hundred
-distinct sources producing signals** (the 46 catalog integrations plus the
-state-media feeds, the activated breadth batches, and seed / world-baseline
-curated sources — the active-registered count is generated: `RELEASE_STATE.md`)
-over a substrate on the order of a hundred thousand signals → tens of
-thousands of findings / facts / nexuses. See `DATA_SOURCES.md` for the full
-catalog (the tiered scope model, the per-source table, and the
-handler-kind detail), and `SETUP.md` for the from-zero
-cold-start-to-current-scope deploy commands.
+### 1.4 Poll liveness — quiet against broken
 
-**Two draft breadth lanes (2026-07) — registered, operator-activated.** A
-breadth wave added **51 draft source descriptors** under `descriptors/`, all
-`state: draft` (bulk registration creates no live actor; activation is
-`draft → configured → active`, operator-paced):
+Two mechanisms let the watchdog and the operator tell a quiet feed from a broken cursor rather than
+one undifferentiated silence.
 
-- **Wave-A** — 41 verified no-auth feeds (38 `rss` + 3 `json_api`; 25
-  country-scoped + 16 global), registered by
-  `scripts/bringup_register_wave_a_sources.py` with credibility and
-  state-affiliation seeds.
-- **The RSSHub lane** — 10 descriptors (feeding under-covered watch desks)
-  whose `rss` handler points at a **profile-gated local RSSHub service**
-  (compose profile `sources-extra`, image `diygod/rsshub`, loopback `:1200`,
-  no puppeteer; registered by `scripts/bringup_register_rsshub_sources.py`).
-  Because the RSS fetch path carries an SSRF guard that blocks internal
-  hosts, the guard takes an explicit allowlist —
-  `LEGBA_EGRESS_ALLOW_HOSTS` (comma-separated, exact-name; code default
-  empty, compose default `rsshub`) — so exactly the named internal host is
-  reachable and nothing else.
+`source_poll_outcomes` takes exactly one row per poll, with productivity deciding the outcome: a poll
+that wrote a signal or collapsed an intra-source duplicate is `success`, an escaped exception or an
+unhealthy handler is `error`, and a clean fetch with nothing new is `empty`. Handler health is trusted
+only when the pull ran to a natural conclusion, since a capped pull can leave a stale record. *Why the
+`success` outcome exists:* the table was failure-only on the premise that a productive poll is
+self-evidencing through its signals rows — which holds for a reader inspecting one poll and fails for
+every reader that walks a run, because an absence cannot break a run, so a repaired source kept
+presenting its historical error rows as the leading run and the auto-pause sweep re-paused it
+mid-ingest.
+
+Each row also carries `newest_entry_ts`: the newest entry timestamp the handler *saw*, recorded before
+the since-filter so a poisoned cursor still observes what the feed is serving, with a future-skew
+clamp against junk dates and a 304 carrying the prior observation forward. The liveness watchdog's
+empty-streak classifier reads it and returns exactly three states — `honest_quiet` (the feed served
+nothing new), `cursor_fault` (the feed is serving entries newer than our last ingest and we store
+none), and `unknown` (no observation at all). Per-source and per-analyst stall alerts fire on state
+transitions only; the durable `alert_sink_deliveries` ledger doubles as the state store, so a restart
+cannot re-fire a standing alert as a repeating level.
+
+Separately, `registry/source_freshness.py` grades each source `ok | stale | warn | empty | ungraded`
+against a cadence-derived budget: the descriptor's cron is walked for its *maximum* fire-to-fire gap
+(so a clustered cron is not read by its naive step), multiplied by a grace factor and floored at a
+minimum. A source with no parseable cadence, or a non-active head, reads `ungraded` rather than a fake
+`ok`; an active, budgeted source that has never produced reads `empty`. One grading implementation
+serves both readers.
 
 ---
 
-## 2. The canonical Signal
+## 2. The canonical signal
 
-`Signal` (`src/legba/data/sources/_contract.py`) is the one shape a source
-produces. It is **target-agnostic and modality-first**: it carries no
-`target_id` — interpretation is target-owned and lives only on derived analyst
-outputs; observation is source-owned and shared. `payload` is an open dict;
-the field set is `extra="forbid"` so new structured facts are declared on the
-model rather than smuggled into the payload. The substrate write
-(`write_canonical_signal`) inserts exactly one row into the `signals` table.
+`Signal` (`data/sources/_contract.py`) is the one shape a source produces. It is target-agnostic and
+modality-first: it carries no `target_id`, because interpretation is target-owned and lives only on
+derived analyst outputs while observation is source-owned and shared. The field set is `extra="forbid"`,
+so a new structured fact is declared on the model rather than smuggled into the payload. The substrate
+write inserts exactly one row into `signals`.
 
-Key fields:
+| Group | Fields | Note |
+|---|---|---|
+| Provenance | `source_id`, `source_version`, `produced_by_id`, `produced_by_kind`, `derived_from`, `fetched_at`, `last_seen_at`, `owner_tenant` | `produced_by_kind` is `source` for a raw row, `job` / `analyst` / `deterministic` / `system` for a derived one; `owner_tenant` is the indexed tenancy seam |
+| Modality | `modality`, `mime_type`, `media_ref`, `embedding_ref` | `media_ref` is a reference, never inlined bytes |
+| Retention | `retention_class`, `media_ref_expires_at`, `object_ref` | §6 |
+| Content | `payload`, `canonical_url`, `language_hint`, `raw_provenance` | `payload` is the one open dict |
+| Filter columns | `language`, `geo`, `tags`, `entity_classes`, `source_credibility` | populated once by the baseline, indexed for subscription push-down |
+| Dedup | `content_hash`, `canonical_signal_id` | §5 |
+| Contract | `schema_uri` | versions the shape |
 
-**Provenance / ownership**
-- `source_id` — the **origin** `SourceDescriptor.id`.
-- `source_version` — content-hash of the source descriptor.
-- `produced_by_id` / `produced_by_kind` — what produced *this row*:
-  `source` (a raw source row; `produced_by_id` null), or `job` / `analyst` /
-  `deterministic` / `system` for derived rows.
-- `derived_from` — list of upstream signal ids (lineage; empty for a raw row).
-- `fetched_at` — ingest timestamp (the fan-out read order key).
-- `owner_tenant` — from `SourceDescriptor.scope.owner_tenant`; indexed
-  tenancy seam.
-
-**Modality**
-- `modality` — `text | image | audio | video | structured | binary`.
-- `mime_type`, `media_ref` (object-store URI / external URL — a *reference*,
-  never inlined bytes), `embedding_ref` (Qdrant point id for cross-modal
-  retrieval), plus a media `retention_class` and `object_ref` for retained
-  copies.
-
-**Content + structured-filter columns** (populated once by the baseline,
-indexed on `signals` for subscription push-down)
-- `payload` (open dict), `canonical_url`, `language_hint`, `raw_provenance`.
-- `language` (scalar), `geo` / `tags` / `entity_classes` (arrays),
-  `source_credibility` (a per-signal score; per-target floor thresholds are
-  evaluated at read time, not stored here).
-
-**Dedup**
-- `content_hash` — the dedup key.
-- `canonical_signal_id` — set by the dedup analyst to alias a duplicate to its
-  canonical row; **never** a destructive collapse (raw rows are preserved and
-  linked).
-
-- `schema_uri` — versions the contract (`iglu:legba/signal/jsonschema/3-0-0`).
-
-**Intra-source exact-duplicate collapse at write (2026-07).** A live audit
-found ~41% of stored rows were *intra-source* exact-hash duplicates — feeds
-re-serving the same entry poll after poll (one earthquake bulletin stored
-194×). `write_canonical_signal` (`runtime/source_actor.py`) now runs an atomic
-pre-insert check keyed on `(source_id, content_hash, owner_tenant)` inside a
-168h window (`LEGBA_INTRASOURCE_DEDUP_WINDOW_HOURS`): on a hit it **bumps the
-existing row's `fetched_at` forward and skips the insert** — recency is
-preserved, no second row lands. The bump targets the *most-recent* matching
-row, so the "earliest `fetched_at` = canonical" rule the dedup analysts rely
-on stays stable. It is strictly **intra-source** (cross-source linking remains
-§5's alias machinery, never a skipped insert), provably lossless for an exact
-hash, and gated by `LEGBA_INTRASOURCE_DEDUP` (**default ON**; empty
-`content_hash` is never a dedup key). A skipped-because-duplicate poll is
-counted so the liveness watchdog does not read a healthy re-serving feed as an
-empty streak. No migration — it rides the existing indexes; the historical
-duplicate pool is an operator cleanup previewed by the read-only
-`scripts/report_intrasource_dupes.py`.
-
-**Retention + the evidence archive (2026-07).** Two fields close the loop
-from citation to preserved evidence. At ingest the source's declared
-`SourceScope.license_class` is stamped into `payload.license_class`. Later —
-*after* a finding that cites the signal clears the faithfulness verify floor —
-the `evidence_archiver` deterministic analyst fetches the signal's original
-bytes and stores them content-addressed; the signal's `object_ref` becomes
-`cas:sha256/<hex>` and its `retention_class` is upgraded to `evidence_hold`.
-The fetch path is deliberately narrow and guarded: **verified-cited-only**
-selection (never bulk crawling), the SSRF egress guard, per-host politeness
-(2s), a hard 20 MB cap, and the **LIC-2 license gate** — a forbidden
-`license_class` (`anti_ai_walled` / `tos_restrictive` / `personal_use_only`)
-is *skipped with a recorded counter*, an unknown class archives with the
-class recorded. Outcomes land in the `evidence_archive` sidecar (mig 0104:
-`archived` / `failed` / `skipped_license` / `skipped_size`), and extracted
-full text is marked for re-indexing into the search corpus. See
-`ARCHITECTURE.md` §8.6 and `SEAMS.md` #42 for the store and its declared
-non-features.
+**Intra-source exact-duplicate collapse.** Before inserting, the write path looks for an existing row
+with the same `(source_id, content_hash, owner_tenant)` inside a lookback window. On a hit it advances
+that row's `last_seen_at` in one atomic statement, counts the re-serve, and skips the insert —
+returning nothing, so nothing is fanned out. It advances `last_seen_at` and never `fetched_at`,
+because bumping `fetched_at` made frozen feeds report themselves as fresh. It is strictly
+intra-source: a cross-source same-hash duplicate is kept and alias-linked instead (§5), and an empty
+`content_hash` is never a dedup key. *Why it exists:* feeds re-serve the same entry poll after poll,
+and a collapse that is provably lossless for an exact hash is the cheapest place to stop it. The
+skipped poll is counted so the liveness watchdog does not read a healthy re-serving feed as an empty
+streak.
 
 ---
 
-## 3. Baseline enrichment (once, at the source)
+## 3. Baseline enrichment
 
-The baseline runs **once per signal, at the source**, before the write — not
-per consuming target. This is the "enrich once, read many" property the
-source-first model buys. It is driven by the descriptor's
-`pipeline` block (`SourcePipeline`) and implemented in
-`src/legba/data/sources/baseline.py` (`run_baseline`).
+The baseline runs once per signal, at the source, before the write — not per consuming target. This is
+the "enrich once, read many" property the source-first model buys. It is driven by the descriptor's
+`pipeline` block and implemented in `data/sources/baseline.py`.
 
-Two tiers run inline:
+**Tier 1 — structured enrichment.** Always, cheap, no external call. Fills the typed indexed columns a
+subscriber's predicate matches on without re-deriving: `language` from the source or payload hint,
+`tags` lifted and normalised from the payload, and a backstop `content_hash` keyed the same way the
+dedup tiers key theirs. The source's origin country is parked in the payload rather than written
+straight to `geo` — see the geo gates below.
 
-1. **Structured-filter enrichment (always, cheap, deterministic).**
-   `_enrich_structured` fills the typed indexed columns so a subscriber's
-   predicate can match without re-deriving: `language` from the source/payload
-   hint, `geo` from the source scope hints, `tags` lifted and normalised from
-   the payload, and a backstop `content_hash` when the handler didn't set one.
+**Tier 2 — media.** `pipeline.media` is `reference` (default: keep `media_ref` as a pointer, fetch no
+bytes) or `eager` (dispatch by modality to a registered `MediaExtractor` and transcribe, caption or
+OCR at ingest, for sources where the media content *is* the value). Eager is a declared seam: only a
+text passthrough extractor ships, and an eager media signal with no registered extractor raises a
+typed error with no row written, rather than fabricating one. Production extractors register against
+the same protocol. The on-demand `process_media` tier is the async job plane, not the baseline.
 
-2. **Media tier (`pipeline.media`).**
-   - `reference` (default) — keep `media_ref` as a pointer; do not fetch bytes.
-   - `eager` — for sources where the media content *is* the value, dispatch by
-     modality to a registered `MediaExtractor` to transcribe/caption/OCR at
-     ingest. The mechanism is complete and exercised end-to-end by a working
-     in-process extractor; **production hosted Whisper/VLM/OCR extractors
-     are a future seam** that register against the same `MediaExtractor`
-     protocol. (Tier 3 — on-demand analyst-driven `process_media` — is the
-     async job plane, not the baseline; see `ANALYSIS.md`.)
+**Tier 3 — the enrichment filter chain.** Optional and descriptor-ordered. Each stage is a
+stream-resident filter handler (`data/filters/`) satisfying `transform(signal, ctx) -> Signal | None`,
+where `None` drops the signal. Each declares an `output_contract` the registry checks at
+pipeline-registration time, before activation. The chain most sources declare is
+`language_detect → ner_multilingual → geocode` — language first so NER uses the detected language — with
+`fact_extractor` inserted before `geocode` on the sources whose bodies carry extractable relations.
+These stages call the hosted `legba-models` service; `ner_multilingual` hard-requires it, while
+`fact_extractor` uses it only as an optional fallback. Entity extraction is translate-then-NER for
+non-Latin scripts, which otherwise yield essentially no spans.
 
-   The `MediaExtractor` registry is the ingest half of the modality →
-   {extractor, renderer} registry (`DESIGN.md` §7.5); the UI renderer is the
-   other half.
+Two stages write somewhere other than the signal row: `fact_extractor` appends to `facts` with
+`source_type='ingestion'`, and `ingest_dedupe` appends a `signal_aliases` row and sets
+`canonical_signal_id`. Everything else mutates the one row in place.
 
-After the two tiers, an optional **enrichment filter chain** runs — the
-`pipeline.enrichment` stage list. Each stage is a stream-resident filter
-handler (`src/legba/data/filters/`, contract in `_contract.py`:
-`StreamHandler.transform(signal, ctx) -> Signal | None`, returning `None` to
-drop). The baseline NLP chain is:
-
-- `language_detect` (`legba/filter.language_detect/1-0-0`) — promotes a
-  detected `language`;
-- `geocode` (`legba/filter.geocode/1-0-0`) — promotes resolved place codes
-  into `geo`;
-- `ner_multilingual` (`legba/filter.ner_multilingual/1-0-0`) — promotes
-  entity classes into `entity_classes`.
-
-These handlers call the hosted `legba-models` service (NLLB translation +
-spaCy/GLiREL NER, BAAI/bge-m3 embeddings) — see `AI_MODELS.md`. The chain is
-built and stack-configured by the runtime host and threaded into `SourceCore`
-as the `enrichment_stage`; when no chain is wired, tier-1 structured
-enrichment alone still produces a filterable signal. The net effect:
-payload-and-hint data is promoted into indexed columns (`language`, `geo`,
-`tags`, `entity_classes`) so the fan-out plane can push matching down to SQL
-and NATS subjects.
-
-**Geo honesty — two contamination fixes (2026-07).** A full-layer sweep found
-two mechanisms mistagging signals with the *publisher's* geography instead of
-the *story's*; both are now precision-improving gates, and both prefer
-**untagged over mistagged** (a missing geo only under-includes; a wrong one
-actively misroutes a signal to the wrong desk):
-
-- **Publisher-origin fallback is content-corroborated** (`baseline.py`,
-  `_origin_corroborated_by_content`). The source's origin country is parked in
-  the payload and reaches `signal.geo` only when the *content* attests it —
-  the country appears in the title/body text or the NER country entities.
-  A Singapore outlet's world-news story no longer tags `SG`.
-- **Dateline subject-guard** (`geocode.py`). An NER `location` entity is
-  treated as the story's *subject* only if it appears in the **title**;
-  body-only locations (datelines, "reported from…") are demoted below the
-  in-body country sweep. A wire item datelined in one capital about another
-  country no longer tags the dateline.
-
-The gates apply forward; re-geocoding historical rows is a separate
-operator-gated backfill.
+**Geo honesty.** Two gates prefer untagged over mistagged, because a missing geo only under-includes a
+signal while a wrong one actively misroutes it to the wrong desk. The publisher's origin country
+reaches the indexed `geo` column only when the *content* corroborates it — the country appears in the
+title or body text, or in the NER country entities — so a Singapore outlet's world-news story does not
+tag `SG`. And an NER location is treated as the story's subject only when it appears in the title;
+body-only locations (datelines, "reported from…") are demoted below the in-body country sweep, so a
+wire item datelined in one capital about another country does not tag the dateline. Both apply
+forward; re-geocoding historical rows is a separate operator-gated backfill.
 
 ---
 
 ## 4. Fan-out and subscription
 
-A written signal is published once; the subscription plane routes it to every
-interested target. The split is deliberate: **coarse** routing on NATS
-subjects, **exact** matching downstream on SQL + Starlark. JetStream filters
-subjects, not arbitrary JSON, so a subject only ever encodes coarse axes.
+A written signal is published once; the subscription plane routes it to every interested target. The
+split is deliberate: **coarse** routing on NATS subjects, **exact** matching downstream on SQL plus
+Starlark. JetStream filters subjects, not arbitrary JSON, so a subject only ever encodes coarse axes.
 
 ### 4.1 The coarse subject taxonomy
 
-Acquisition publishes one message per signal
-(`SourceCore._publish`, subject built by `signal_subject` in
-`src/legba/data/nats.py`) to:
+Acquisition publishes one message per signal to
 
 ```
 legba.signals.<tenant>.<source_token>.<modality>.<event_class>
 ```
 
-- `tenant` — `scope.owner_tenant`;
-- `source_token` — the source id with reserved chars (notably `.`) flattened
-  to `_`, so the id is a single NATS token;
-- `modality` — the signal modality;
-- `event_class` — `raw` for a source row, `derived` for a job/analyst-produced
-  row.
+where `source_token` is the source id with reserved characters (notably `.`) flattened to `_` so the
+id is a single NATS token, and `event_class` is `raw` for a source row or `derived` for a
+job- or analyst-produced one. One shared interest stream, `legba_signals`, captures `legba.signals.>`;
+per-target consumers attach subject-filtered. Subjects are never asked to express an arbitrary
+predicate.
 
-One shared interest stream, **`legba_signals`**, captures
-`legba.signals.>`. Per-target consumers attach subject-filtered. Subjects are
-never asked to express an arbitrary predicate.
+### 4.2 Source refs: explicit against selector
 
-### 4.2 SourceRefs: explicit vs selector
+A `TargetDescriptor.sources` entry is exactly one of an **explicit** ref naming one `source_id`
+(resolved by a single head-row lookup), or a **selector** — a coarse query over source-descriptor
+*scope* (`tags ⊇`, `geo ∩`, `languages ∩`, `kinds ∋`, `owner_tenant`, plus an optional Starlark
+residual over source metadata) that binds any source whose advertised scope matches. Resolution
+produces a set of `ResolvedBinding`s, each carrying that ref's `Subscription`.
 
-A `TargetDescriptor.sources` is a `list[SourceRef]`
-(`src/legba/data/schemas/source.py`). Each ref is **exactly one** of:
+A selector matches sources in the target's own tenant or `shared` only, and only `open` sources
+auto-wire by selector: `allowlist` and `grant` sources require explicit opt-in and are never proposed.
+A selector decides which *sources* a target wires to; the subscription decides which *signals* of a
+bound source it wants.
 
-- **explicit** — `source_id` names one source directly; resolution is a single
-  head-row lookup;
-- **selector** — `source_selector` is a coarse query over *source-descriptor
-  scope* (`tags ⊇`, `geo ∩`, `languages ∩`, `kinds ∋`, `owner_tenant`, plus an
-  optional Starlark residual over source metadata). It binds *any* source whose
-  advertised scope matches.
+### 4.3 Structured filter plus Starlark residual
 
-A selector matches sources in the target's own tenant or `shared` only, and
-**only `open` sources auto-wire by selector** — `allowlist`/`grant` sources
-require explicit opt-in and are never proposed by a selector. Resolution lives
-in `src/legba/runtime/subscription/sourceref.py` (`resolve_source_refs`),
-producing a set of `ResolvedBinding`s, each carrying that ref's
-`Subscription` (the signal-level slice).
+Each `Subscription` is a structured filter — `geo` / `languages` / `tags` / `entity_classes` /
+`modalities` — plus an optional Starlark `predicate` and a `canonical_only` flag. Matching is two-stage:
 
-A selector is distinct from a `Subscription`: the selector decides which
-*sources* a target wires to; the `Subscription` decides which *signals* of a
-bound source the target wants.
+1. **Structured to SQL `WHERE`.** Array fields push to GIN indexes as `&&` overlap; scalar lists push
+   to `= ANY(...)`; `source_id` and `owner_tenant` pin the coarse binding facts; `canonical_only` adds
+   the dedup-aware delivery clause. This is both the batch read-slice and the narrowed set the
+   residual runs over.
+2. **Starlark residual.** The long tail (`mentions()`, `severity_at_least()`, `geo_in()`, …) is
+   compiled once through the shared predicate engine and evaluated in Python on the SQL-narrowed rows
+   only. It is never expressed as SQL or as a subject. It fails *closed*: a budget breach or runtime
+   error drops the signal rather than over-delivering.
 
-### 4.3 Structured filter + Starlark residual
-
-Each `Subscription` (`src/legba/data/schemas/source.py`) is a structured
-filter — `geo` / `languages` / `tags` / `entity_classes` / `modalities` — plus
-an optional `predicate` (Starlark) and a `canonical_only` flag. Matching is
-two-stage (`src/legba/runtime/subscription/filter.py`):
-
-1. **Structured → SQL `WHERE`.** Array fields (`geo`/`tags`/`entity_classes`)
-   push to GIN indexes as `&&` (any-of) overlap; scalar lists
-   (`languages`/`modalities`) push to `= ANY(...)`; `source_id` and
-   `owner_tenant` pin the coarse binding facts. `canonical_only` adds the
-   dedup-aware delivery clause (deliver a row only if it is itself canonical).
-   This is the batch read-slice and the narrowed set the residual runs over.
-
-2. **Starlark residual.** The `predicate` — the long tail (`mentions()`,
-   `severity_at_least()`, `geo_in()`, …) — is compiled once via the shared
-   engine (`src/legba/data/predicates/`, `compile_predicate`) and evaluated in
-   Python on the SQL-narrowed rows only. It is **never** expressed as SQL or as
-   a NATS subject. The residual fails *closed*: a budget breach or runtime
-   error drops the signal rather than over-delivering. The same matcher serves
-   the real-time path (re-check one delivered NATS message via `matches`) and
-   the batch path (`read_slice` / `read_target_slice`).
-
-The Starlark predicate DSL is a single-expression, no-I/O, no-recursion
-sandbox with a per-evaluation wall-clock budget; it appears at four descriptor
-surfaces (target scope gate, source-ref filter, analyst→target bind, analyst
-trigger) over one helper catalog.
+The same matcher serves the real-time path (re-check one delivered message) and the batch path. The
+predicate DSL is a single-expression, no-I/O, no-recursion sandbox under a per-evaluation wall-clock
+budget, and it appears at four descriptor surfaces — target scope gate, source-ref filter,
+analyst-to-target bind, analyst trigger — over one helper catalogue.
 
 ### 4.4 Subscription policy
 
-A source declares who may subscribe via
-`SourceDescriptor.subscription_policy`, enforced at **registration** (the
-control plane), not at delivery — the source stays "dumb" and just publishes
-(`src/legba/runtime/subscription/policy.py`):
+A source declares who may subscribe through `SourceDescriptor.subscription_policy`, enforced at
+**registration** in the control plane rather than at delivery, so the source stays dumb and just
+publishes:
 
-- **open** — any target in the same tenant (or a `shared` source) may attach;
-- **allowlist** — only targets in `allowed_targets` / tenants in
-  `allowed_tenants`;
-- **grant** — requires an explicit grant recorded as a `wiring_descriptor`
-  (audit-logged, keyed `(source_id, target_id)`; `write_grant` / `revoke_grant`).
+- **open** — any target in the same tenant, or any target at all for a `shared` source;
+- **allowlist** — only the named targets or tenants;
+- **grant** — an explicit grant recorded as a wiring descriptor, audit-logged and keyed
+  `(source_id, target_id)`.
 
-The cross-tenant default-deny boundary lives here: a target may only subscribe
-to a source in its own tenant or a `shared` source unless an allowlist/grant
-widens it. An unknown policy fails closed. *(The subscription-policy locking and
-action-pack grant operator UIs now ship as `legba-ui-v3` panels.)*
+The cross-tenant default-deny boundary lives here: a target may subscribe only to a source in its own
+tenant or a `shared` source unless an allowlist or grant widens it. An unknown policy fails closed.
 
 ### 4.5 Per-target aggregated consumers
 
-The `SubscriptionEngine`
-(`src/legba/runtime/subscription/engine.py`) ties it together. On
-`register_target` it resolves the refs → enforces policy → plans the coarse
-subject filters (`subject_filters_for`, one filter per binding × modality axis,
-tenant+source pinned, event-class left wildcard) → binds **one per-target
-aggregated** durable PULL consumer (`target_<id>`) onto the union of those
-filters (`NatsStore.ensure_durable_consumer`). One consumer per target, not one
-per `(target, source)`. A refused binding either raises (strict) or is recorded
-on `TargetSubscription.refused` and skipped (non-strict auto-wire). Per-target
-consumer lag (`num_pending`) and stream growth are observable
-(`consumer_lag` / `stream_growth`).
+`SubscriptionEngine.register_target` resolves the refs, enforces policy, plans the coarse subject
+filters (one per binding × modality axis, tenant and source pinned, event class left wildcard), and
+binds **one per-target aggregated** durable pull consumer onto the union of those filters — one
+consumer per target, not one per `(target, source)`. A refused binding either raises, in strict mode,
+or is recorded on the target's `refused` list and skipped. Per-target consumer lag and stream growth
+are observable.
 
-A late-joining target can register with **catch-up + seamless forward**
-(`register_target_with_catch_up`): it captures the stream boundary before
-resolving, replays the matching historical slice through a sink once, then
-re-binds the live consumer just past the boundary so there is no gap or
-duplicate. *(The operator-facing backfill-replay UI now ships as a `legba-ui-v3`
-panel; the backend `POST /registry/targets/{id}/backfill` REST route is still a
-seam.)*
+A late-joining target registers with catch-up and seamless forward: the engine captures the stream
+boundary before resolving, replays the matching historical slice through a sink once, then binds the
+live consumer just past the boundary, so there is neither a gap nor a duplicate.
 
 ### 4.6 From match to analysis
 
-A matched signal does not run an analyst directly. The **trigger plane**
-(`src/legba/runtime/triggers/`) consumes the `legba_signals` stream, re-checks
-each delivered signal against a registration's *full* structured filter +
-residual (`TriggerRegistration.matches_signal` → the same `matches` kernel the
-subscription filter uses), and
-marks the `(analyst, target)` pair **dirty** in a crash-safe accumulator. The
-`Coalescer` then fires on whichever gate trips first — **cadence**,
-**accumulation** threshold, or **severity** gate — all clamped by a
-**cooldown**, with a CAS-guarded fire so two paths never double-dispatch.
-Coalescing on a signal's *canonical* id gives alias-no-double-wake: two
-deliveries of the same observation count once. A new upstream finding (an
-analyst-produced `derived` signal) is just another matching signal on the same
-stream — no special case. Both deterministic *and* LLM-bearing analysts dispatch
-through this coalescing path: the `ActorTriggerRunner` fires either kind on the
-accumulation/severity gates, with the "no per-signal LLM" rule enforced upstream
-in the policy (LLM fires floored to a coalesced batch). The full
-analyst/coalescing/finding model is documented in `ANALYSIS.md`.
+A matched signal does not run an analyst directly. The trigger plane consumes the `legba_signals`
+stream, re-checks each delivered signal against the registration's *full* structured filter and
+residual using the same match kernel, and marks the `(analyst, target)` pair dirty in a crash-safe
+accumulator. The coalescer then fires on whichever gate trips first, clamped by a cooldown and guarded
+by a compare-and-set claim so two paths never double-dispatch. A new upstream finding — an
+analyst-produced `derived` signal — is just another matching signal on the same stream, with no
+special case. `ANALYSIS.md` documents the gates.
 
 ---
 
-## 5. Cross-source dedup
+## 5. Dedup
 
-Two independent sources reporting the same event produce two raw signals.
-Dedup is **alias/canonical and non-destructive**: a duplicate is *linked* to a
-canonical row via `canonical_signal_id`; the raw rows are always preserved.
-(A *same-source exact re-serve* never reaches this machinery at all — the
-write path's intra-source collapse, §2, bumps the existing row and skips the
-insert.)
+Two independent sources reporting the same event produce two raw signals. Dedup across sources is
+alias-and-canonical and **non-destructive**: a duplicate is linked to a canonical row through
+`canonical_signal_id`, and the raw rows are always preserved, so source-level evidence stays
+audit-grade. Three layers do the work:
 
-- A progressive multi-tier dedup filter handler exists
-  (`src/legba/data/filters/dedupe.py`): URL-exact → content-hash →
-  semantic-vector → temporal, marking (not dropping) a hit
-  (`payload.duplicate_of`, `payload.dedupe_tier`). This is the stream-resident
-  filter kind. **Source-side ingest dedupe tiers 1–2** (canonical-URL then
-  content-hash) ship in `data/filters/ingest_dedupe.py`, applied by the source
-  actor's ingest path (`SourceCore`, built from the descriptor's
-  `pipeline.ingestion_filters`) so a duplicate is linked to its canonical at
-  ingest; tiers 3–4 (semantic/temporal) remain the periodic
-  `cross_source_dedup` analyst's job.
-- Delivery is dedup-aware via `Subscription.canonical_only` (default true): the
-  SQL filter delivers a row only when it is itself canonical, so a subscriber
-  sees the observation once.
-- Coalescing keys on the canonical id, so even if two aliases reach a target,
-  the analyst wakes once.
+- **At ingest, in the write connection.** `ingest_dedupe` applies tiers 1 and 2 — canonical-URL hash,
+  then content hash — after the insert, writing a `signal_aliases` row and setting the alias row's
+  `canonical_signal_id`, chaining through to the earliest canonical rather than to another alias. A
+  failure here leaves the row raw for the periodic analyst rather than failing the write.
+- **The intra-source collapse** (§2), the one path that suppresses a row, and only for byte-identical
+  content from the same source.
+- **Periodically.** `cross_source_dedup` sweeps the shared raw pool for content-hash duplicates and,
+  when a Qdrant client and embeddings are present, semantic near-duplicates; `cross_source_coalesce`
+  closes the "same event, different source, different wording, no shared hash" gap over one shared
+  embedding collection. The coalescer has no non-vector fallback, since exact-hash matching is the
+  other analyst's job, so with its embedding service absent it refuses loudly and writes zero aliases
+  rather than fabricating links.
 
-Because canonical linking is additive, the full raw pool stays intact for
-audit and reprocessing; dedup only changes which rows *deliver* and how they
-*coalesce*.
+The canonical is chosen deterministically — earliest `fetched_at`, tie-broken by smallest id — and
+points its own `canonical_signal_id` at itself. Delivery is dedup-aware through
+`Subscription.canonical_only`, so a subscriber sees the observation once, and coalescing keys on the
+canonical id, so even if two aliases reach a desk the analyst wakes once. The identity rules the
+tiers share live in one URL-canonicalisation module, because the ingest engine, the baseline backstop
+and the filter used to disagree about what the same URL is.
 
----
-
-## 6. Discovery
-
-Discovery **materialises sources and targets** rather than ingesting signals:
-an L2/L3 *template* descriptor with a `discovery` block expands into N concrete
-L1 instances. The package is `src/legba/data/discovery/`. Two flavours run
-through the same machinery (`materializer.py`):
-
-- **Target discovery** (`run_target_discovery_cycle`) — a discovery handler
-  emits `CandidateTarget`s; the registry applies the template's deterministic
-  relabel chain (Prometheus-style rewrite rules) to each candidate and
-  materialises a target instance. (This is how the G20 country targets are
-  produced from one template.)
-- **Source discovery** (`run_source_discovery_cycle`) — a discovery handler
-  emits `CandidateSource`s that become `SourceDescriptor`s.
-
-**Validate-before-register** is the source-discovery default
-(`source_validate.py`, `validate_candidate_source`): a candidate becomes a
-registered source only after a real probe — (1) **liveness** (build its handler
-and run `health_check`; `unhealthy` is rejected), and (2) a **trial pull/parse**
-(consume up to a few signals; a handler that raises is rejected; a degraded
-source must prove itself by producing ≥1 signal). The probe uses an in-memory
-state store and discards pulled signals — a pure dry run against the live
-upstream. This keeps the pool clean so selector auto-wire never attracts a dead
-feed.
-
-**Selector auto-wire** (`autowire.py`, `auto_wire_discovered_source`) closes
-the loop: when a new `open` source registers, the existing source-ref matcher
-(`resolve_source_refs`) is *inverted* to ask "which targets' selectors now
-match this source?" An auto-wired source is recorded as an idempotent
-provenance trailer on each matched target body; the target's declared
-SourceRefs are not mutated (the runtime re-resolves the live binding from the
-selector each cycle). The same scope/tenancy/policy gates as live binding apply
-— only `open`, same-tenant-or-`shared`, scope-matching sources wire.
-
-A disappearance policy (`disappearance.py`) classifies retained / new /
-disappeared candidates each cycle and pauses a discovery whose
-disappearance ratio exceeds its threshold, so a flaky upstream listing can't
-silently retire a fleet of materialised instances. The Discovery Pipeline
-operator panel ships in `legba-ui-v3` (it reads the frozen generic registry
-routes — no bespoke discovery REST surface).
-
-**Adjacent but distinct: seed adapters.** Seeds (`data/seed/adapters/`,
-operator-run via `scripts/seed.py`) materialise *facts*, not sources — they
-never touch the signal pipeline (see `ARCHITECTURE.md` §0). One acquisition-
-relevant hardening (2026-07): the officeholder adapter (`wikidata_leaders`)
-now resolves **exactly one current holder per (country, office)** — the
-upstream query drops end-dated statements and the mapper keeps the latest
-term-start per office, with head-of-state and head-of-government on separate
-supersession keys — and stamps `data.as_of` on every emitted fact so upstream
-data-lag is visible. A read-only diagnostic
-(`scripts/diagnose_stale_leaders.py` — SELECT-only, writes nothing) previews
-the re-seed delta first, because the live upstream can carry vandalism the
-heuristic would import; **re-seeding is operator-gated, never automatic**.
-
-### 6.1 Collection requirements — a gap becomes an object (2026-07-28)
-
-Discovery answers *"what else could we acquire?"* This answers the harder
-question in the other direction: *"what did we need and not have?"* — and it
-makes the answer **durable** instead of a sentence inside a monthly finding
-that scrolls away.
-
-`collection_gap` (the deterministic I&W analyst, monthly, no LLM) already
-ranked the starved desk × dimension cells the scorecard banded
-`insufficient-evidence`. It now also **drains a second backlog** — `hypotheses`
-rows with `status='source_request'`, the rows the operator-gated
-`request_source` agency tool lands when an analyst hits a coverage wall — and
-writes both into `collection_requirements` (migration 0113): a durable,
-operator-reviewable requirement carrying its desk/dimension, the topic, the
-rationale, the **evidence** it came from (an analyst output or a hypothesis, by
-id), which `source_class`es would plausibly feed it, and up to five
-**candidate sources**.
-
-The candidates are **deterministic, not proposed by a model**: a plain SQL
-match against the registered `source_descriptors` on declared source class and
-ISO2 geo overlap, preferring already-active sources. Where nothing matches, the
-requirement is stamped `fillable = false` with `unfillable_reason`
-`no_known_feed` — an honest "we do not know of a feed for this", which is a
-more useful operator artifact than a fabricated suggestion. A paired CHECK
-makes an unfillable requirement without a reason a database error.
-
-Bounds and idempotency, per code: at most 50 new requirements per run from the
-gap sweep and 20 from the request backlog; five candidates each; and a
-`natural_key` UNIQUE index (`collection_gap:<desk>:<dimension>` /
-`source_request:<hypothesis id>`) with an insert that does nothing on conflict.
-A cell that stays starved across monthly sweeps stays **one** requirement, not
-a new one each month. Priority rank is inherited from the gap ranking — desks
-with more starved dimensions first, then persistence.
-
-**A proposal is never an activation.** This is the load-bearing constraint, and
-it is enforced structurally rather than by convention:
-
-- The analyst **reads** `source_descriptors` and has no write path to it. It
-  cannot register, activate, or modify a source.
-- The `/v3/collection-requirements` route is **disposition-only**: `GET` list,
-  `GET` one, and a `PATCH` that may set only `status` / `reviewed_by` /
-  `reviewed_at` / `disposition_note`. There is **no POST and no DELETE** (a
-  test asserts both are unroutable), the content columns are write-once, and
-  nothing on the route touches the source registry.
-- The disposition vocabulary is closed — `proposed` / `reviewed` /
-  `registered` / `dismissed` — validated at the route *and* by a DB CHECK. Note
-  what `registered` means: it records that the operator **separately** added a
-  source through the normal registration path. Setting it performs no
-  activation.
-- **Nothing consumes a requirement.** Exactly one writer and one dispositioner
-  reference the table in the whole tree; no job, analyst, or ingest path watches
-  for `registered` and acts on it.
-
-Honest gaps: there is **no UI panel** for the backlog today (it is an API-only
-surface), and the requirement objects are not yet read by anything that would
-close the loop — a requirement is a note to the operator, and the operator is
-the loop.
+Because canonical linking is additive, the full raw pool stays intact for audit and reprocessing;
+dedup only changes which rows *deliver* and how they *coalesce*.
 
 ---
 
-## 7. End-to-end, in one line
+## 6. The evidence archive
 
-Real RSS feeds → `SourceActor` pulls on a Dapr Reminder → one canonical,
-target-agnostic `Signal` per entry, enriched once (language / geo / entity
-classes promoted to indexed columns) → published once to
-`legba.signals.>` → the shared `legba_signals` stream → per-target aggregated
-consumers fan it out by coarse subject, narrowed exactly by SQL `WHERE` +
-Starlark residual → matched signals coalesce per `(analyst, target)` → analysts
-produce findings with full provenance. The same path, from empty volumes,
-brings up cold end-to-end.
+At ingest the signal carries the source's declared `license_class` in its payload and a
+`retention_class` that defaults to reference-only — bytes are not fetched at ingest. Archival is a
+separate deterministic analyst, `evidence_archiver`, sweeping on its own cadence.
+
+**It reads** only cited evidence: signals named in the `derived_from` of a verified, non-superseded
+finding whose folded confidence clears the verify floor, with no archived copy yet and a non-empty
+canonical URL. **It writes** the original bytes content-addressed on a filesystem volume, recorded on
+the signal as `object_ref = cas:sha256/<hex>`, upgrades the signal's `retention_class` to
+`evidence_hold` (exempting it from the retention sweep), sets the corpus dirty marker in the same
+update so the extracted full text replaces the thin teaser in the search corpus, and upserts the
+`evidence_archive` sidecar. **It is measured** by that sidecar's outcome vocabulary.
+
+The fetch path is deliberately narrow and guarded, because a citation-preservation job is the one
+place a platform is tempted into bulk crawling: verified-cited-only selection, the SSRF egress guard,
+per-host politeness, a hard size cap, a bounded per-run fetch budget, and a licence gate under which a
+forbidden `license_class` is skipped with a recorded counter while an unknown class archives with the
+class recorded.
+
+**A block is not an empty web.** A modern bot interstitial is a large page, so a challenge that is not
+detected lands as a thin or failed extraction and reads downstream as *the web had nothing* — a false
+absence, which is the worse defect. The challenge detector classifies at three tiers — extracted text
+with no length cap, the raw body bounded only for cost (for the tells that never survive extraction),
+and the HTTP status for the case where the body was already discarded — and the verdict travels under
+one name, `blocked_by_challenge`. The archiver counts it, tags the run's finding, and records the
+stored interstitial with its tell, because the bytes *are* the evidence of the block; the outbound
+research tool counts it and marks the hit blocked rather than failed. An edge refusal with no body
+stays retryable, since that is exactly the row a future fetch option exists to unblock. A payment
+status is deliberately excluded: a paywall is a licence decision, not a challenge. The licence gate is
+untouched by any of this.
+
+**Browser-fingerprint impersonation** is available behind a flag and ships off. Unset — every shipped
+deployment — the page-fetch client is exactly the guarded client it has always been, structurally: the
+off path is a single statement returning the guarded client with the caller's arguments untouched, and
+does not import the impersonation module at all. Set, it presents a browser TLS fingerprint while
+sending the same identifying user agent, never a browser one, because the robots decision is computed
+for our token and must describe the agent in the publisher's log; the SSRF guard is re-expressed on
+that path as a pre-request host assertion plus a hand-walked redirect loop, and robots.txt itself is
+still fetched with the plain guarded client. It stays off because it was measured and did not work:
+the blocks in question are IP-reputation or genuine challenges, not TLS fingerprinting. Publishers
+that close themselves in robots.txt are never fetched by any option here.
+
+---
+
+## 7. Discovery
+
+Discovery **materialises sources and targets** rather than ingesting signals: a template descriptor
+carrying a `discovery` block expands into concrete instances. Both flavours run through the same
+machinery.
+
+**Target discovery** emits candidate targets; the registry applies the template's deterministic relabel
+chain to each candidate and materialises a target instance. This is how the country desks are produced
+from one template. **Source discovery** emits candidate sources that become source descriptors.
+
+The relabel chain is a closed set of rewrite actions applied by the registry, never by the handler, so
+a discovery kind cannot invent a label shape. Each candidate carries a stable natural key, its raw
+label set, and its evidence.
+
+**Validate-before-register** is the source-discovery default: a candidate becomes a registered source
+only after a real probe — build its handler and run `health_check` (unhealthy is rejected), then a
+trial pull and parse (a handler that raises is rejected; a degraded source must prove itself by
+producing at least one signal). The probe uses an in-memory state store and discards what it pulls, so
+it is a pure dry run against the live upstream. *Why:* this keeps the pool clean, so selector
+auto-wire never attracts a dead feed.
+
+**Selector auto-wire** closes the loop by inverting the source-ref matcher: when a new `open` source
+registers, it asks which targets' selectors now match it. An auto-wired source is recorded as an
+idempotent provenance trailer on each matched target body; the target's declared source refs are never
+mutated, because the runtime re-resolves the live binding from the selector each cycle. The same
+scope, tenancy and policy gates as live binding apply.
+
+A **disappearance policy** classifies retained, new and disappeared candidates each cycle and pauses a
+discovery whose disappearance ratio exceeds its threshold, so a flaky upstream listing cannot silently
+retire a fleet of materialised instances.
+
+**Seed adapters are adjacent but distinct.** Seeds materialise *facts*, not sources, and never touch
+the signal pipeline. One acquisition-relevant property: the officeholder adapter resolves exactly one
+current holder per `(country, office)` — the upstream query drops end-dated statements, the mapper
+keeps the latest term-start per office, and head of state and head of government sit on separate
+supersession keys — and stamps an as-of date on every emitted fact so upstream data lag is visible. A
+read-only diagnostic previews the re-seed delta first, because the live upstream can carry vandalism
+the heuristic would import; re-seeding is operator-gated, never automatic.
+
+---
+
+## 8. Collection requirements
+
+Discovery answers *what else could we acquire?* This answers the harder question in the other
+direction — *what did we need and not have?* — and makes the answer durable rather than a sentence
+inside a monthly finding that scrolls away.
+
+`collection_gap` is a deterministic, no-LLM analyst. **It reads** the persisted scorecard rows, finding
+the desk × dimension cells banded `insufficient-evidence`, and a second backlog of `hypotheses` rows
+with `status='source_request'` — the rows the operator-gated `request_source` tool lands when an
+analyst hits a coverage wall. **It writes** both into `collection_requirements`: the desk and
+dimension, the topic, the rationale, the evidence it came from by id, which source classes would
+plausibly feed it, and up to a few candidate sources. **It is measured** by its own run counters and,
+like every deterministic producer, by a trace receipt. **Its cadence** is monthly, with a daily
+sibling dispatching reference gaps through the same writer rather than forking it.
+
+The candidates are deterministic, not proposed by a model: a plain SQL match against the registered
+source descriptors on declared source class and geo overlap, across *any* lifecycle state, so that
+reuse comes before create — a paused or draft match is a reactivation candidate whose registered URL
+becomes the suggested fetch URL, and an already-active match is an honest quality-gap flag. Where
+nothing matches, the requirement is stamped not fillable with a reason, which is a more useful
+operator artifact than a fabricated suggestion; a paired constraint makes an unfillable requirement
+without a reason a database error.
+
+Idempotency is a unique natural key with an insert that does nothing on conflict, so a cell that stays
+starved across sweeps stays **one** requirement rather than a new one each month. Priority is
+inherited from the gap ranking — desks with more starved dimensions first, then persistence.
+
+**A proposal is never an activation**, and that is enforced structurally rather than by convention.
+The analyst reads the source registry and has no write path to it. The route is disposition-only: list,
+get, and a patch that may set only the status, reviewer and note. There is no create and no delete,
+the content columns are write-once, and nothing on the route touches the source registry. The
+disposition vocabulary is closed and validated at both the route and the database; `registered` records
+that the operator *separately* added a source through the normal registration path, and setting it
+performs no activation. Nothing consumes a requirement: exactly one writer and one dispositioner
+reference the table, and no job, analyst or ingest path watches for a disposition and acts on it. The
+requirement is a note to the operator, and the operator is the loop.
+
+---
+
+## 9. End to end
+
+Real feeds → the `SourceActor` pulls on a Dapr reminder → one canonical, target-agnostic signal per
+entry, enriched once so language, geo and entity classes land in indexed columns → published once to
+`legba.signals.>` → the shared `legba_signals` stream → per-target aggregated consumers fan it out by
+coarse subject, narrowed exactly by a SQL `WHERE` plus a Starlark residual → matched signals coalesce
+per `(analyst, target)` → analysts produce findings with full provenance. The same path brings an
+instance up cold from empty volumes.

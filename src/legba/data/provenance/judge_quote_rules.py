@@ -440,6 +440,34 @@ def _quote_refutes(
 #: that a real refutation of the assertion is not swept up.
 _CARVE_OUT_QUOTE_MIN_SHARED_TERMS = 2
 
+def _judge_reply_contract(
+    verdicts: str = '"supported"|"unsupported"|"contradicted"',
+) -> str:
+    """The judge's REPLY SHAPE (H3, stamped ``2026-09-24/1``) — one entry per
+    claim, and every entry NAMES the claim it grades.
+
+    ``claim_index`` is the number the claim was listed under in this call's
+    CLAIMS block. It is what ``judge_verdict_parsing.align_verdicts`` reads to
+    align a short or reordered reply by ID instead of failing the whole call
+    to the floor: the id arm has existed since ``2026-09-20/1``, but no prompt
+    ever asked for the ids, so it was reachable only by accident of model
+    verbosity. Entries that name nothing still align positionally, so a judge
+    that ignores the field degrades to the pre-H3 contract, and a full-length
+    bare-token reply is still read exactly as it always was.
+
+    ``verdicts`` is the route's own token list — the shared unit/composition
+    lead's three and the absence rubric's four differ, and that is fine: the
+    ENVELOPE is what must not drift between routes (the same discipline
+    ``_JUDGE_QUOTE_RULE`` keeps), so there is ONE renderer for it.
+    """
+    return (
+        ' Answer strict JSON only: {"verdicts": [{"claim_index": <the claim\'s '
+        'number>, "verdict": '
+        + verdicts
+        + '}, ...]} with one entry per claim, in order.'
+    )
+
+
 #: The rubric sentences appended to every judge lead, alongside the quote rule.
 _JUDGE_QUALIFIER_RULE = (
     " Some claims are followed by an indented QUALIFIERS line. Honour it "
@@ -1015,13 +1043,19 @@ def quote_confirms_the_claim(quote: Any, claim: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def claim_is_routed_out(claim: str) -> str | None:
+def claim_is_routed_out(claim: str, *, body: str = "") -> str | None:
     """The V-B router's exclusion CLASS for this claim, or ``None``.
 
     Mirrors ``_fold_absence_slice``'s gate exactly — a scope qualifier, then the
     route exclusion — so the judge path and the slice path answer the same
     question the same way. Never raises.
+
+    ``body`` is threaded through for the same reason it exists on
+    ``_absence_route_exclusion``: o4's aperture class is POSITIONAL, and a judge
+    path that could not see the section would leave the binding rule bypassable
+    on exactly the class V-I5 was written to close. Defaults to ``""`` so a
+    caller that passes none is byte-identical.
     """
     if not isinstance(claim, str) or absence_scope_qualifier(claim) is None:
         return None
-    return _absence_route_exclusion(claim)
+    return _absence_route_exclusion(claim, body=body)

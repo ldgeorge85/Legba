@@ -49,9 +49,16 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from ...provenance.models import FindingPayload
+from ...provenance.origin import origin_class_clause
 from ....runtime.analyst_method import AnalystMethodResult
 
 logger = logging.getLogger(__name__)
+
+#: P7/7g-1 — the origin-class leg on the volume bucket pull (SEAMS #57
+#: sweep; `surge_detection` in the collection firewall). Anomaly is a
+#: departure from a recent arrival rate; a backfill inside the lookback
+#: would BE the anomaly it then reports.
+_LIVE_SIGNALS = origin_class_clause("")
 
 # Defaults — overridable via options.
 _DEFAULT_Z_THRESHOLD = 2.5
@@ -244,7 +251,8 @@ async def _pull_bucketed_signals(
         "  category, "
         "  COUNT(*) AS count "
         "FROM signals "
-        f"WHERE produced_at > NOW() - INTERVAL '{lookback_hours} hours' "
+        f"WHERE {_LIVE_SIGNALS} "
+        f"  AND produced_at > NOW() - INTERVAL '{lookback_hours} hours' "
         "GROUP BY bucket_ts, category "
         "ORDER BY bucket_ts ASC"
     )

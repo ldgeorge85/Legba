@@ -87,7 +87,7 @@ class _RecorderPort:
                 "refs": ["6a3b1a82-0000-4000-8000-000000000001"]}
 
     async def query_facts(self, *, subject=None, predicate=None, value=None,
-                          limit=30):
+                          limit=30, as_of=None):
         self.calls.append(("query_facts", {"subject": subject}))
         return {"rows": [], "refs": []}
 

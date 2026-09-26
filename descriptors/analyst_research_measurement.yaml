@@ -1,0 +1,119 @@
+# research_measurement — the outbound-research program's three counters (R-D).
+#
+# RESEARCH_PROGRAM_SPEC_2026-09-05 §4 in full. A `deterministic`-kind META
+# analyst (sub_handler=research_measurement) that reads the research signals
+# R-A writes — ordinary `signals` rows carrying `retrieval_origin =
+# 'web_search:<component_id>'`, the seam migration 0112 built and that nothing
+# has ever written — and publishes:
+#
+#   * NOVELTY       (§4.1) from R-A's WRITE-TIME stamp, beside the F-9 caveat
+#                   (v1 matches exact url/content_hash, so it OVER-reports) and
+#                   a stricter v1b arm (novel AND the host was not already in
+#                   the desk's slice window) and the conservative near_dup
+#                   companion from the existing dedup fold.
+#   * CORROBORATION (§4.2) over a MATURED 7-day forward window: a later
+#                   NON-research signal (`retrieval_origin IS NULL`) in the same
+#                   canonical fold or at the same canonical_url. The weak
+#                   entity-overlap arm is reported separately and NEVER merged.
+#   * CONSEQUENCE   (§4.3) as an ascending ladder of REACH, not effect:
+#                   cited by any finding -> cited by a DESK head -> that head
+#                   was QUOTED into a composition.
+#
+# Plus §4.5's R4 stratification: every desk head in the window split into
+# has_research_evidence ∈ {true,false}, never pooled.
+#
+# WHY IT IS A FINDING AND NOT A NEW KIND. §4.4: `kind='finding'` +
+# analyst_id='research_measurement', the calibration_tracking precedent
+# (nothing writes kind='calibration'). GET /api/v1/findings?analyst_id=
+# research_measurement therefore serves it on day one with NO API edit.
+# `data.data.meta = true`, so no composition tier can read a measurement row
+# back in as substrate.
+#
+# A GAUGE, NEVER A REPAIR. It COUNTS and NAMES. No UPDATE, no sidecar, no
+# ceiling lift, no LLM. §1.4b's magnitude lift is deliberately NOT built here
+# and is not stubbed: the finding publishes
+# corroboration.ceiling_lift.performed = false with its reason, so the
+# counter's silence can never be mistaken for a lift that happened.
+#
+# HONEST-NULL. Gate G9 (§6.3): every rate carries its `n`, and a rate that
+# cannot be earned publishes as null with a machine-readable reason
+# (no_rows / n_below_minimum / novelty_not_stamped / window_not_matured).
+# This matters more than usual here — §4's own power statement (F-10) puts
+# regime-1 yield at ~20-60 research signals/week, which powers NOVELTY and does
+# NOT power CORROBORATION or CONSEQUENCE. R4 gets a direction, not a verdict,
+# on counters 2 and 3, and this handler is built to say so rather than to
+# publish a small-sample number.
+#
+# REFUSES LOUD: requires a live deps.pg_pool. Zero is also this counter's
+# honest verified baseline (229,945 signals, 100% NULL retrieval_origin at
+# 2026-09-05), so a zeroed finding emitted because the pool was missing would
+# be indistinguishable from the real measurement. It raises instead.
+#
+# STATE: draft. R-A has not merged, so there are no research signals to count
+# and every counter reads its structurally-verified zero. Activate after R-A
+# lands (see planning/RESEARCH_RD_REPORT.md "deploy steps").
+#
+# Target-agnostic META: the subscription declares NO `targets` selector, so the
+# cadence heartbeat is a SINGLE global sweep, and no predicate is declared
+# (the desk_baseline / composition_lineage_sweep shape).
+
+identity:
+  id: research_measurement
+  name: Research Measurement — Novelty / Corroboration / Consequence
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: research_program_rd
+
+subscription:
+  # META analyst: one global sweep per tick. The handler reads the research
+  # signals, the citing findings and the composition assemblies directly via
+  # deps.pg_pool (the calibration_tracking / composition_lineage_sweep shape).
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: research_measurement
+  # No LLM block and no token budget — §4 is explicit that nothing here is a
+  # judge call. Every knob below is declared in
+  # legba.data.analysts.handler_options.HANDLER_OPTIONS["research_measurement"];
+  # the values here are the in-source defaults restated so an operator can see
+  # what is settable without reading the handler. min_n is gate G9's floor and
+  # is the one number worth moving if F-10's volume lever is ever pulled.
+  options:
+    window_days: 7
+    maturation_days: 7
+    corroboration_lookback_hours: 48
+    min_n: 10
+    weak_entity_overlap: 2
+
+cadence:
+  # Daily at 13:47 UTC. Chosen to sit AFTER the day's composition tick so the
+  # CONSEQUENCE ladder's third rung (a desk head QUOTED into an assembly) sees
+  # the day's reads: country_composition 11:30, world_assessor 12:00,
+  # world_assessment 12:15, composition_lineage_sweep 13:20 — this lands after
+  # all four. And it is OFFSET well clear of the daily maintenance band
+  # (calibration_tracking 03:20, desk_baseline / source_track_record 04:23,
+  # fact_decay_scan 04:52, standing_auditor 05:12, narrative_mapper 05:17,
+  # signals_retention 05:18, analyst_traces_retention 05:37) so the counters
+  # never co-fire with a sweep.
+  fallback_schedule: "47 13 * * *"
+  cooldown_seconds: 79200        # 22h (strictly below the 24h interval)
+
+# No extra output sinks: the deterministic kind's per-sub-handler OUTPUT_KIND
+# (FINDING for research_measurement) writes the counter row, and an empty
+# window is suppressed to trace-only by the handler (the collection_gap
+# idempotency precedent) so a quiet week never repeats "nothing to report".
+outputs: []

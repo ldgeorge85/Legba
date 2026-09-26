@@ -58,7 +58,13 @@ class TriggerRunResult:
 
     analyst_id: str
     target_id: str
-    status: str               # "ran" | "skipped" | "failed"
+    # "ran" | "skipped" | "failed" | "coalesced".
+    #
+    # "coalesced" is the fourth outcome and the honest half of what used to be
+    # "failed": the dispatch never completed, but the target actor was inside a
+    # turn across this fire, so the work is the running turn's, not lost. See
+    # :class:`DispatchCoalesced`.
+    status: str
     reason: TriggerReason
     pending_count: int
     detail: dict[str, Any] = field(default_factory=dict)
@@ -72,6 +78,39 @@ class AnalystTriggerRunner(Protocol):
     async def run(self, fire: TriggerFire) -> TriggerRunResult: ...
 
 
+class DispatchCoalesced(Exception):
+    """This fire was absorbed by a turn already occupied on the target actor.
+
+    Raised by the dispatch work callable (``source_first_runtime._work``) in
+    place of re-raising a transport error, when — and only when — the actor
+    turn witness saw that actor id occupied across the fire. It is the typed
+    way for the work callable to say "the invoke did not complete, and here is
+    why that is not an analyst failure", without the trigger plane growing an
+    import of the actor plane to ask the question itself.
+
+    Carries the witness verdict and the underlying transport error so the log
+    line at the catch site can state both: a coalesced fire that is really a
+    sick sidecar should still be diagnosable from one line.
+    """
+
+    def __init__(
+        self,
+        *,
+        analyst_id: str,
+        target_id: str,
+        witness: str,
+        transport: str,
+    ) -> None:
+        super().__init__(
+            f"fire for {analyst_id}/{target_id} coalesced into the running turn "
+            f"(witness={witness}; invoke did not complete: {transport})"
+        )
+        self.analyst_id = analyst_id
+        self.target_id = target_id
+        self.witness = witness
+        self.transport = transport
+
+
 # Method kinds that are pure-code (no LLM in the critical path). Anything else
 # is LLM-bearing and must NOT reach the deterministic runner.
 _DETERMINISTIC_KINDS = frozenset({"deterministic", "stat_forecaster", "dspy_compile"})
@@ -79,6 +118,11 @@ _DETERMINISTIC_KINDS = frozenset({"deterministic", "stat_forecaster", "dspy_comp
 
 def is_llm_method(method_kind: str) -> bool:
     return method_kind not in _DETERMINISTIC_KINDS
+
+
+def _reason_value(reason: Any) -> str:
+    """A fire reason as a log token — enum member or already-plain string."""
+    return reason.value if hasattr(reason, "value") else str(reason)
 
 
 # A thin callable a test / the registry supplies: given a fire, do the analyst's
@@ -162,18 +206,53 @@ class ActorTriggerRunner:
     failed run (the window already reset on the CAS fire-claim, so the next
     window starts fresh and the actor's own per-(analyst, target) cooldown
     dedups against a near-simultaneous cadence run).
+
+    THREE OUTCOMES, NOT TWO. An exception out of the work callable used to mean
+    one thing here — ``trigger.run.failed``, at ERROR. It did not: an actor
+    invoke that does not complete leaves the dispatcher ignorant of the run's
+    outcome, and when the target actor was busy across this fire the run is the
+    running turn's and its trace says ``success``. Those fires now log
+    ``trigger.coalesced_into_turn`` at INFO and carry ``status="coalesced"``;
+    ``run.failed`` is kept for the case where nothing was observed running, so
+    an ERROR on this logger once again means work was actually lost.
+    (:class:`DeterministicTriggerRunner` has no such split on purpose — its work
+    is in-process, so an exception there IS the handler failing.)
     """
 
     def __init__(self, work: DeterministicWork) -> None:
         self._work = work
         self.runs = 0
         self.fires: list[TriggerFire] = []
+        self.coalesced = 0
 
     async def run(self, fire: TriggerFire) -> TriggerRunResult:
         self.fires.append(fire)
         self.runs += 1
         try:
             detail = await self._work(fire)
+        except DispatchCoalesced as absorbed:
+            # NOT a failure: the target actor was inside a turn across this
+            # fire, so the batch is being (or was just) served by that turn. The
+            # accumulator already reset on the CAS claim, and the actor's
+            # per-(analyst, target) cooldown dedups the overlap — exactly the
+            # path a fire landing inside the cooldown takes when the invoke DOES
+            # complete. Logged at INFO with the witness verdict so the rate is
+            # countable without being alarming.
+            self.coalesced += 1
+            logger.info(
+                "trigger.coalesced_into_turn analyst=%s target=%s reason=%s "
+                "pending=%d witness=%s transport=%s",
+                fire.analyst_id, fire.target_id, _reason_value(fire.reason),
+                fire.pending_count, absorbed.witness, absorbed.transport,
+            )
+            return TriggerRunResult(
+                analyst_id=fire.analyst_id,
+                target_id=fire.target_id,
+                status="coalesced",
+                reason=fire.reason,
+                pending_count=fire.pending_count,
+                detail={"witness": absorbed.witness},
+            )
         except Exception as exc:  # a handler/actor crash is non-fatal to the loop
             logger.exception(
                 "trigger.run.failed analyst=%s target=%s: %s",
@@ -204,5 +283,6 @@ __all__ = [
     "DeterministicTriggerRunner",
     "ActorTriggerRunner",
     "DeterministicWork",
+    "DispatchCoalesced",
     "is_llm_method",
 ]

@@ -182,14 +182,28 @@ async def _insert_proposal(
     cited_refs: list[UUID],
     requested_by: str | None,
     pack_id: str,
+    archive_reason: str | None,
 ) -> UUID:
     """The ONE write this whole pack performs: a single parameterised INSERT into
-    ``journal_proposals`` (status defaults to 'pending'). NO provenance writer, NO
-    live substrate table. Stamped with the per-run AnalystContext (the journal run
-    that raised it) so the operator review surface can trace the proposal to its
-    source run. Returns the new proposal id.
+    ``journal_proposals``. NO provenance writer, NO live substrate table.
+    Stamped with the per-run AnalystContext (the journal run that raised it) so
+    the operator review surface can trace the proposal to its source run.
+
+    H10 (make proposals applicable by construction): when ``archive_reason`` is
+    ``None`` the row lands ``status='pending'`` exactly as before. When it is
+    set (``'unapplyable_shape'`` / ``'uncited_world_fact'`` — the caller in
+    :func:`_propose` already ran it past the apply worker's own
+    ``validate_proposal_shape`` / ``check_supersede_fact_grounding``) the row is
+    inserted DIRECTLY as ``status='archived'`` with that ``decision_reason`` —
+    it never occupies a 'pending' slot in the operator's review queue at all,
+    the exact free-form-diff defect that made every one of the 30 pending
+    proposals of 2026-08/09 archive with a ``ProposalApplyError`` on ACCEPT.
+
+    Returns the new proposal id either way — the row is still written (and
+    still traceable to the run that raised it), just never 'pending'.
     """
     ctx = wb.analyst_ctx
+    status = "archived" if archive_reason is not None else "pending"
     async with wb.pg_pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -200,9 +214,10 @@ async def _insert_proposal(
                 rationale,
                 diff,
                 cited_substrate_refs,
-                status
+                status,
+                decision_reason
             )
-            VALUES ($1, $2, $3, $4, $5::jsonb, $6::uuid[], 'pending')
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6::uuid[], $7, $8)
             RETURNING id
             """,
             proposal_kind,
@@ -211,23 +226,35 @@ async def _insert_proposal(
             rationale[:_MAX_RATIONALE_CHARS],
             json.dumps(diff),
             list(cited_refs),
+            status,
+            archive_reason,
         )
     proposal_id = row["id"]
-    logger.info(
-        "journal_propose.queued kind=%s analyst=%s run=%s id=%s requested_by=%s "
-        "pack=%s refs=%d",
-        proposal_kind, ctx.analyst_id, ctx.run_id, proposal_id, requested_by,
-        pack_id, len(cited_refs),
-    )
+    if archive_reason is not None:
+        logger.info(
+            "journal_propose.archived_unapplyable kind=%s analyst=%s run=%s id=%s "
+            "requested_by=%s pack=%s reason=%s",
+            proposal_kind, ctx.analyst_id, ctx.run_id, proposal_id, requested_by,
+            pack_id, archive_reason,
+        )
+    else:
+        logger.info(
+            "journal_propose.queued kind=%s analyst=%s run=%s id=%s requested_by=%s "
+            "pack=%s refs=%d",
+            proposal_kind, ctx.analyst_id, ctx.run_id, proposal_id, requested_by,
+            pack_id, len(cited_refs),
+        )
     return proposal_id
 
 
 async def _propose(
     call: ToolCall, pack: ActionPack, ctx: ToolContext, tool_name: str
 ) -> ToolResult:
-    """The shared propose path: validate the args, then write ONE pending
-    ``journal_proposals`` row. Every ``propose_*`` tool funnels through here so
-    the queue-only guarantee lives in exactly ONE place."""
+    """The shared propose path: validate the args AND the diff SHAPE, then write
+    ONE ``journal_proposals`` row — 'pending' when the diff could ever be
+    applied, 'archived' (H10 — make proposals applicable by construction) when
+    it could not. Every ``propose_*`` tool funnels through here so both the
+    queue-only guarantee and the shape gate live in exactly ONE place."""
     wb = _writeback(ctx)
     if wb is None:
         return ToolResult(
@@ -249,6 +276,36 @@ async def _propose(
     assert diff is not None  # _coerce_diff guarantees this when diff_err is None
     cited_refs = _coerce_refs(args.get("cited_substrate_refs"))
 
+    # H10 — make proposals applicable by construction. Imports the SAME
+    # validator the accept-apply worker calls at accept time (never a
+    # duplicated copy of the shape rules) and runs it HERE, at write time: a
+    # diff that could never apply is archived on arrival instead of occupying
+    # a 'pending' slot an ACCEPT can only fail on.
+    from ...registry.journal_proposals_apply import (
+        ProposalApplyError,
+        UncitedWorldFactError,
+        check_supersede_fact_grounding,
+        validate_proposal_shape,
+    )
+
+    archive_reason: str | None = None
+    try:
+        validate_proposal_shape(proposal_kind, diff)
+    except ProposalApplyError:
+        archive_reason = "unapplyable_shape"
+
+    # The no-new-fact rule (§ H10.3) — a correction's own no-op for anything
+    # other than supersede_fact, so this only ever fires for a shape-valid
+    # supersede_fact diff.
+    if archive_reason is None and proposal_kind == "correction":
+        async with wb.pg_pool.acquire() as conn:
+            try:
+                await check_supersede_fact_grounding(
+                    conn, diff=diff, cited_substrate_refs=cited_refs
+                )
+            except UncitedWorldFactError:
+                archive_reason = "uncited_world_fact"
+
     try:
         proposal_id = await _insert_proposal(
             wb,
@@ -258,10 +315,29 @@ async def _propose(
             cited_refs=cited_refs,
             requested_by=call.requested_by,
             pack_id=pack.identity.id,
+            archive_reason=archive_reason,
         )
     except Exception as exc:  # noqa: BLE001 — a queue write failure folds into the loop
         logger.warning("journal_propose.insert_failed tool=%s err=%s", tool_name, exc)
         return ToolResult(status="failed", error=f"proposal_insert_failed: {exc!s}")
+
+    if archive_reason is not None:
+        return ToolResult(
+            status="completed",
+            output={
+                "proposal_id": str(proposal_id),
+                "proposal_kind": proposal_kind,
+                "status": "archived",
+                "decision_reason": archive_reason,
+                "note": (
+                    "this diff can never be applied — archived immediately, "
+                    "never queued for human review. An observation that fits "
+                    "none of the three proposal shapes belongs in the entry's "
+                    "prose, not a propose call."
+                ),
+            },
+            units=1,
+        )
 
     return ToolResult(
         status="completed",

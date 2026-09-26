@@ -29,7 +29,7 @@ satisfy it with direct queries against:
 The S4 readers honor the same temporal gates as the originals:
 ``query_nexuses`` returns only OPEN nexuses (``valid_until IS NULL AND
 superseded_by IS NULL``), ``get_timeline``'s fact stream and
-``compare_targets``'s fact/nexus counts gate to current rows, and
+``compare_targets``'s fact counts gate to current rows, and
 ``get_timeline`` anchors each item on a single timestamp (fact:
 ``valid_from`` → ``produced_at`` → ``created_at``; signal: ``fetched_at``
 → ``created_at``), skipping any row whose anchor resolves to NULL.
@@ -111,6 +111,21 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
+
+from . import _observations_read as _observations
+from . import substrate_corpus_readers as _corpus
+from . import substrate_frame_reads as _frames
+from . import substrate_graph_walks as _walks
+from . import substrate_temporal as _temporal
+from .target_resolution import stamp_target_resolution, widen_to_member_targets
+from ..data import critic_fold as _critic_fold
+from ..data.provenance import origin as _origin
+
+# Re-exported for existing consumers (tests/runtime/test_graph_walk_cutover.py
+# imports both names from this module — the walk machinery moved to
+# ``substrate_graph_walks`` at V3/P3, the import surface did not).
+from .substrate_graph_walks import _ASSERTING_FAMILIES, _walk_families  # noqa: F401,E402
 
 if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
@@ -127,6 +142,68 @@ __all__ = ["PostgresQdrantSubstrateQueryPort"]
 # wedge a postgres connection.
 _MAX_ROW_LIMIT = 200
 
+
+def critic_folded_findings_sql(
+    where: str, limit_param: int, *, critic_as_of: str = "",
+) -> str:
+    """The critic-folded findings read, SET-BASED (2026-09-24, crossroads
+    proof round).
+
+    The former shape was a ``LEFT JOIN LATERAL (... ORDER BY cr.produced_at
+    DESC LIMIT 1)`` per finding. The planner served that lateral from the
+    ``(kind, produced_at DESC)`` index — walk critiques newest-first, stop at
+    the first whose ``analyzed_output_id`` matches — which is quick for a
+    finding that HAS a recent critique and a full walk of every critique row
+    (~49k, each a jsonb deref) for a finding that has none. The critic
+    samples, so most findings have none: the first forced crossroads run
+    timed both ``list_findings`` and ``get_assessments`` out at 60 s, and a
+    live ``EXPLAIN`` of the 24 h / 200-row read did not finish in 120 s.
+
+    This shape picks the page of findings FIRST (a materialized CTE, at most
+    ``_MAX_ROW_LIMIT`` rows), then fetches the latest scored critique per
+    finding id through the expression index
+    ``idx_analyst_outputs_critique_analyzed_output_id`` (``DISTINCT ON``),
+    and joins the two. Live: 226 ms for the same read. The column list is
+    byte-identical to the lateral form, so every caller's row loop is
+    unchanged, and the SQL still takes its parameters positionally so
+    :func:`widen_to_member_targets` can re-run it with one param swapped.
+
+    ``critic_as_of`` is the optional ``AND cr.produced_at <= $n`` fragment
+    that dates the fold to a decision instant (``believed_as_of``).
+
+    H17: the fold CTE itself is now built by
+    :func:`legba.data.critic_fold.latest_critique_cte`, the ONE definition the
+    other twenty-one reads of "the latest critique for this finding" were moved
+    onto. Two knobs keep this caller's measured plan exactly as it was pinned:
+    ``title_like=None`` (this fold reads ANY scored critique, unlike the
+    faithfulness-pinned reads) and ``ids_as_array=False`` (the ``IN`` form,
+    whose plan is identical here because ``f`` carries a LIMIT and so estimates
+    exactly — see the helper's module docstring).
+    """
+    fold = _critic_fold.latest_critique_cte(
+        "c",
+        "(cr.data->>'overall_score')::real AS critic_score",
+        "SELECT id::text FROM f",
+        title_like=None,
+        extra_where=critic_as_of.strip().removeprefix("AND").strip(),
+        ids_as_array=False,
+    )
+    return (
+        "WITH f AS MATERIALIZED ( "
+        "  SELECT f.id, f.title, f.body, f.confidence, f.severity, "
+        "         f.target_id, f.analyst_id, f.produced_at "
+        "  FROM analyst_outputs f "
+        f" WHERE {where} "
+        "  ORDER BY f.produced_at DESC, f.id DESC "
+        f" LIMIT ${limit_param} "
+        f"), {fold} "
+        "SELECT f.id, f.title, f.body, f.confidence, f.severity, "
+        "       f.target_id, f.analyst_id, f.produced_at, "
+        "       c.critic_score AS critic_score "
+        "FROM f LEFT JOIN c ON c.fid = f.id::text "
+        "ORDER BY f.produced_at DESC, f.id DESC"
+    )
+
 # H-2 (audit W6 / B0-5) — bounds on the journal's scorecard↔composition
 # disagreements reconciliation surfaced on ``get_assessments``. A bounded,
 # fail-safe REFLECTION surface (never a gate): how many distinct countries to
@@ -141,25 +218,12 @@ _SEARCH_CONTEXT_DEFAULT_K = 6
 _SEARCH_CONTEXT_MAX_K = 50
 
 # ``search_corpus`` / ``read_document`` (Stage 1 — the OpenSearch full-text
-# corpus, index ``legba_signals_corpus``, ~106k signal docs): BM25 lexical
-# search over the WHOLE raw signal body + a by-id fetch of one signal's full
-# indexed doc. Default small, hard-capped so a runaway planner can't pull the
-# whole corpus in one round. ``_CORPUS_FILTER_KEYS`` is the keyword-facet subset
-# of the corpus mapping (see :data:`legba.data.opensearch.CORPUS_INDEX_MAPPING`)
-# a planner may term-filter on; any other key is dropped before the query is
-# built (an arbitrary facet would silently match nothing).
-_SEARCH_CORPUS_DEFAULT_SIZE = 10
-_SEARCH_CORPUS_MAX_SIZE = 50
-_CORPUS_FILTER_KEYS = (
-    "geo",
-    "tags",
-    "source_id",
-    "language",
-    "modality",
-    "entity_classes",
-    "retention_class",
-    "license_class",
-)
+# corpus, index ``legba_signals_corpus``): BM25 lexical search over the WHOLE
+# raw signal body + a by-id fetch of one document. Both now live in
+# :mod:`legba.runtime.substrate_corpus_readers`, which owns the size cap and
+# the filter whitelist; the default size is re-exported here because it is this
+# module's public method signature.
+_SEARCH_CORPUS_DEFAULT_SIZE = _corpus.SEARCH_CORPUS_DEFAULT_SIZE
 
 # The LIVE assessment producers the journal + consult reflect OVER when
 # ``get_assessments`` is called with no explicit ``analyst_id``. Replaces the
@@ -177,6 +241,25 @@ _ASSESSMENT_PRODUCER_ANALYSTS: tuple[str, ...] = (
     # Compositions (second-order reads — the platform's headline conclusions).
     "country_composition",
     "world_assessor",
+    # D-6 (2026-09-04) — the three ids this list has been silently missing, and
+    # the new one. `region_composition` and `escalation_composition` have been
+    # live producers since S2-T2/S2-T4 while the comment above still said region
+    # "joins this set when that leg lands"; an unlisted id makes `get_assessments`
+    # answer a confident empty and name it as "not a live assessment producer",
+    # which is a false sentence about a producer writing rows every cycle.
+    "region_composition",
+    "escalation_composition",
+    # The ASSESSMENT CHANNEL (D-1 §2). After the demotion this is the surface
+    # that ARGUES; the compositions above carry their inputs' words. The journal
+    # and consult read this list, and a reflection surface that cannot see the
+    # one interpretive read is reading the record and missing the reading.
+    "world_assessment",
+    # P3 LANE A — the per-COUNTRY interpretive read. Listed for exactly the
+    # reason the comment above gives: an unlisted producer makes
+    # ``get_assessments`` answer a confident empty and NAME it as "not a live
+    # assessment producer", which is a false sentence the moment the channel is
+    # transitioned active.
+    "country_assessment",
     # Bounded P2 units (first-order per-country reads the compositions fuse).
     "leadership_transition",
     "energy_security",
@@ -196,15 +279,6 @@ _INSPECT_RECENT_VERSIONS = 5
 # Default number of current facts (keyed by subject) surfaced by inspect_entity.
 _INSPECT_RECENT_FACTS = 30
 
-# ``get_timeline`` pulls at most this many of each contributing stream
-# (current facts, recent signals) before the merge + clamp to the caller's
-# ``limit`` — bounds the per-stream scan when the merged limit is large.
-_TIMELINE_PER_STREAM_CAP = 200
-# DQ-#70/F5 — per-kind floor on the MERGED timeline. Signals are far denser than
-# facts/situations, so a pure newest-first clamp buries the sparse-but-important
-# kinds. Each kind is guaranteed up to this many of its newest items before the
-# remaining budget is filled by overall recency.
-_TIMELINE_PER_KIND_FLOOR = 6
 # ``compare_targets`` clamps the number of target ids it rolls up in one
 # call so a runaway planner can't fan a rollup across the whole catalog.
 _COMPARE_MAX_TARGETS = 12
@@ -219,172 +293,13 @@ _COMPARE_RECENT_FINDINGS = 5
 # rejected if it is already in the path) to make termination unconditional
 # independent of ``max_hops``. Every walk is additionally bounded by a hard
 # hop cap and a per-query row cap so a dense neighborhood can't explode.
+#
+# V3/P3: the machinery (SQL templates, caps, endpoint resolution, the three
+# walk functions) lives in :mod:`legba.runtime.substrate_graph_walks`; the
+# port methods below delegate. The extraction is the module-size gate's own
+# instruction — the temporal parameters could not fit in the ~150 lines of
+# headroom this file had — and it is what P6's event tools will sit beside.
 # ------------------------------------------------------------------
-
-# Hard ceiling on traversal depth regardless of the caller's request — a
-# 3-hop signed path is the deepest the structural-balance / proxy-chain
-# tradecraft reads, and CTE fan-out is exponential in hops.
-_GRAPH_MAX_HOPS = 3
-# Row cap on the recursive frontier AND on the returned path set — bounds
-# the working set a single traversal can materialize.
-_GRAPH_MAX_PATHS = 100
-# Broker discovery caps how many entities it names on each side of the cut
-# and how many brokers it returns.
-_BROKER_MAX_CAMP = 25
-_BROKER_MAX_RESULTS = 50
-
-#: The families a path walk traverses by DEFAULT — the ones that ASSERT
-#: something. `cooccurrence` is excluded because two entities appearing in one
-#: document is not a relationship, and 8,635 of 12,732 open nexus rows were
-#: exactly that: walking them made the co-mention hairball look like tradecraft.
-#: `structural` joins the default when it is ever populated; it is in the
-#: closed vocabulary (0143) and holds zero rows today.
-_ASSERTING_FAMILIES = ("relation", "reference", "structural")
-
-#: The closed `edge_family` vocabulary (migration 0143's CHECK constraint).
-_EDGE_FAMILIES = frozenset(
-    {"relation", "reference", "cooccurrence", "structural"})
-
-
-def _walk_families(families: list[str] | None) -> list[str]:
-    """Normalize the family filter, dropping unknown values.
-
-    An unknown family is DROPPED rather than raising, because this port is
-    called by LLM tool-use where a hallucinated family must degrade to the
-    default rather than fail a whole consult turn. An all-unknown list falls
-    back to the asserting default for the same reason.
-    """
-    if not families:
-        return list(_ASSERTING_FAMILIES)
-    out = [f for f in (str(x).strip().lower() for x in families)
-           if f in _EDGE_FAMILIES]
-    return out or list(_ASSERTING_FAMILIES)
-
-
-_RESOLVE_ENDPOINTS_SQL = """
-SELECT lower(btrim(t.name)) AS key, public.resolve_entity_name(t.name) AS rid
-  FROM unnest($1::text[]) AS t(name)
-"""
-
-
-async def _resolve_walk_endpoints(conn: Any, names: list[str]) -> dict[str, Any]:
-    """Resolve walk endpoint NAMES to terminal entity ids, in one round trip.
-
-    Goes through ``resolve_entity_name`` (0143) and nowhere else: it matches
-    tombstones so a name the GC merged away lands on its keeper, and it returns
-    NULL for an AMBIGUOUS name rather than picking a profile — the caller warns
-    instead of walking from an entity nobody named.
-    """
-    rows = await conn.fetch(_RESOLVE_ENDPOINTS_SQL, list(names))
-    return {r["key"]: r["rid"] for r in rows}
-
-
-def _endpoint_warnings(slots: dict[str, str], resolved: dict[str, Any]) -> list[str]:
-    """One warning per endpoint that reached no entity. Never a silent empty."""
-    return [
-        f"{slot}_unresolved: {name!r} matches no entity, or matches several "
-        f"(ambiguous) — the walk cannot start from it"
-        for slot, name in slots.items()
-        if resolved.get(name.lower()) is None
-    ]
-
-
-async def _hydrate_node_names(conn: Any, node_ids: Any) -> dict[Any, str]:
-    """id -> canonical_name for the walk's nodes, in one round trip."""
-    ids = [n for n in node_ids if n is not None]
-    if not ids:
-        return {}
-    rows = await conn.fetch(
-        "SELECT id, canonical_name FROM entity_profiles WHERE id = ANY($1::uuid[])",
-        ids)
-    return {r["id"]: r["canonical_name"] for r in rows}
-
-
-#: The signed path walk, id-keyed. `$1` src, `$2` dst, `$3` hops, `$4` families.
-#:
-#: The walk continues FROM the first edge's DST. Seeding `head` with the source
-#: made hop 2+ re-expand from the origin and fabricate chains (64,136 "paths"
-#: where 1,517 existed on live data); the recursive arm always advances to
-#: `e.dst_id`, and so must the seed.
-_PATH_WALK_SQL = """
-WITH RECURSIVE walk AS (
-    SELECT
-        e.dst_id                          AS head,
-        ARRAY[e.src_id, e.dst_id]         AS visited,
-        ARRAY[e.id]                       AS edge_ids,
-        ARRAY[e.src_id, e.dst_id]         AS node_path,
-        ARRAY[e.polarity]::smallint[]     AS polarities,
-        e.polarity::int                   AS pol_product,
-        e.confidence                      AS min_conf,
-        1                                 AS hops
-    FROM entity_edges e
-    WHERE e.valid_until IS NULL
-      AND e.superseded_by IS NULL
-      AND e.src_id = $1
-      AND e.edge_family = ANY($4::text[])
-    UNION ALL
-    SELECT
-        e.dst_id,
-        w.visited || e.dst_id,
-        w.edge_ids || e.id,
-        w.node_path || e.dst_id,
-        w.polarities || e.polarity,
-        w.pol_product * e.polarity,
-        least(w.min_conf, e.confidence),
-        w.hops + 1
-    FROM walk w
-    JOIN entity_edges e ON e.src_id = w.head
-    WHERE e.valid_until IS NULL
-      AND e.superseded_by IS NULL
-      AND e.edge_family = ANY($4::text[])
-      AND w.hops < $3
-      AND w.head <> $2
-      AND NOT (e.dst_id = ANY(w.visited))
-)
-SELECT edge_ids, node_path, polarities, pol_product, min_conf, hops
-FROM walk
-WHERE head = $2
-{pol_clause}
-ORDER BY hops ASC, min_conf DESC
-LIMIT {limit_param}
-"""
-
-#: The broker walk. `$1` camp-A ids, `$2` camp-B ids, `$3` hops, `$4` families,
-#: `$5` row cap.
-_BROKER_WALK_SQL = """
-WITH RECURSIVE walk AS (
-    SELECT
-        e.dst_id                     AS head,
-        ARRAY[e.src_id, e.dst_id]    AS visited,
-        ARRAY[e.id]                  AS edge_ids,
-        ARRAY[e.src_id, e.dst_id]    AS node_path,
-        1                            AS hops
-    FROM entity_edges e
-    WHERE e.valid_until IS NULL
-      AND e.superseded_by IS NULL
-      AND e.src_id = ANY($1::uuid[])
-      AND e.edge_family = ANY($4::text[])
-    UNION ALL
-    SELECT
-        e.dst_id,
-        w.visited || e.dst_id,
-        w.edge_ids || e.id,
-        w.node_path || e.dst_id,
-        w.hops + 1
-    FROM walk w
-    JOIN entity_edges e ON e.src_id = w.head
-    WHERE e.valid_until IS NULL
-      AND e.superseded_by IS NULL
-      AND e.edge_family = ANY($4::text[])
-      AND w.hops < $3
-      AND NOT (w.head = ANY($2::uuid[]))
-      AND NOT (e.dst_id = ANY(w.visited))
-)
-SELECT edge_ids, node_path
-FROM walk
-WHERE head = ANY($2::uuid[])
-LIMIT $5
-"""
 
 
 class PostgresQdrantSubstrateQueryPort:
@@ -542,6 +457,8 @@ class PostgresQdrantSubstrateQueryPort:
         predicate: str | None = None,
         value: str | None = None,
         limit: int = 30,
+        as_of: str | None = None,
+        include_origin: list[str] | None = None,
     ) -> dict[str, Any]:
         """Search the ``facts`` table by subject / predicate / value.
 
@@ -558,6 +475,22 @@ class PostgresQdrantSubstrateQueryPort:
         consult never reasons over a fact that a later assertion has
         replaced or that has explicitly expired.  This is the same "open
         row" predicate the unique-triple index scopes to.
+
+        V3/P3 — ``as_of`` (ISO-8601, validity time) swaps that gate for the
+        canonical as-of predicate (:mod:`substrate_temporal`): the facts
+        that held on date D, INCLUDING rows superseded or expired since. A
+        malformed value refuses rather than silently reading "now". The
+        envelope then carries ``unbounded_start`` — how many returned rows
+        have no recorded ``valid_from`` (over-included by construction).
+
+        V3/P7 — the gate now carries the ORIGIN-CLASS leg (migration 0209):
+        the open read is ``live_gate_sql`` (the 0032 pair +
+        ``origin_class IN ('live','web_retrieval','seed')``), so a history
+        class can never read as current. On the ``as_of`` path
+        ``include_origin`` names the classes the read may see — ``None``
+        means :data:`LIVE_CLASSES`, so a future backfill row is invisible to
+        an as-of read unless the reader asks. An unknown class refuses loud
+        rather than answering empty.
         """
         if subject is None and predicate is None and value is None:
             return {
@@ -568,16 +501,39 @@ class PostgresQdrantSubstrateQueryPort:
                     "predicate, or value"
                 ),
             }
+        try:
+            as_of_dt = (
+                _temporal.parse_instant(as_of, name="as_of")
+                if as_of is not None else None
+            )
+        except _temporal.TemporalParameterError as exc:
+            return {"rows": [], "refs": [], "error": str(exc)}
         clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
 
         # Current-facts gate (Piece-B follow-up): never surface superseded
         # or expired rows.  See migration 0032 — NULL on both columns is the
-        # canonical "open / live" fact.
-        clauses: list[str] = [
-            "superseded_by IS NULL",
-            "valid_until IS NULL",
-        ]
+        # canonical "open / live" fact; migration 0209 (V3/P7) adds the
+        # origin-class leg to it.  With ``as_of`` the gate becomes the
+        # as-of predicate: the open-row pair is deliberately NOT applied
+        # (a row closed today was the answer on D), and ``superseded_by``
+        # drops out because ``valid_until`` alone carries the close.
+        try:
+            origin_clause = _origin.origin_class_clause("", include_origin)
+        except _origin.OriginClassError as exc:
+            return {"rows": [], "refs": [], "error": str(exc)}
+        clauses: list[str] = []
         params: list[Any] = []
+        if as_of_dt is not None:
+            params.append(as_of_dt)
+            clauses.append(_temporal.temporal_predicate("", len(params)))
+            # P7 — the as-of read still defaults to the live classes; a
+            # history-class row answers only when include_origin asks for it.
+            clauses.append(origin_clause)
+        elif include_origin is not None:
+            clauses.extend(["superseded_by IS NULL", "valid_until IS NULL"])
+            clauses.append(origin_clause)
+        else:
+            clauses.append(_origin.live_gate_sql(""))
         if subject is not None:
             params.append(f"%{subject}%")
             clauses.append(f"subject ILIKE ${len(params)}")
@@ -628,7 +584,7 @@ class PostgresQdrantSubstrateQueryPort:
                 "analyst_id": r["analyst_id"],
             })
 
-        return {
+        out: dict[str, Any] = {
             "rows": rows,
             "refs": refs,
             "filters": {
@@ -637,6 +593,13 @@ class PostgresQdrantSubstrateQueryPort:
                 "value": value,
             },
         }
+        if as_of_dt is not None:
+            # The as-of contract's honest counter: how much of this answer
+            # rests on a start date nobody recorded (NULL valid_from is
+            # over-included as '-infinity' by the predicate).
+            out["as_of"] = as_of_dt.isoformat()
+            out["unbounded_start"] = _temporal.unbounded_start(rows)
+        return out
 
     # ------------------------------------------------------------------
     # inspect_entity
@@ -719,16 +682,15 @@ class PostgresQdrantSubstrateQueryPort:
             # Current facts about this entity, keyed by subject = canonical
             # name (the same enumerate-via-subject convention the prior
             # facts_note pointed callers at).  Gated to OPEN rows only —
-            # superseded_by IS NULL AND valid_until IS NULL (migration 0032)
-            # — so inspect_entity never surfaces a replaced/expired fact.
+            # the 0032 pair plus the P7 origin-class leg (live_gate_sql)
+            # — so inspect_entity never surfaces a replaced/expired/history fact.
             fact_rows = await conn.fetch(
-                """
+                f"""
                 SELECT id, subject, predicate, value, confidence, source_type,
                        valid_from, produced_at
                 FROM facts
                 WHERE LOWER(subject) = LOWER($1)
-                  AND superseded_by IS NULL
-                  AND valid_until IS NULL
+                  AND {_origin.live_gate_sql("")}
                 ORDER BY produced_at DESC
                 LIMIT $2
                 """,
@@ -1195,108 +1157,29 @@ class PostgresQdrantSubstrateQueryPort:
     ) -> dict[str, Any]:
         """BM25 lexical search over the OpenSearch signal corpus (Stage 1).
 
-        Runs a multi_match keyword search over the WHOLE raw signal body (index
-        ``self._corpus_index``, ~106k docs) via :meth:`OpenSearchStore.search`,
-        with optional keyword term filters. Complements ``vector_search`` (dense
-        cosine over the analytic slice) and ``search_signals`` (Postgres FTS over
-        title + summary): this is cheap LEXICAL recall over the full text of
-        EVERY ingested signal.
-
-        ``filters`` maps a keyword facet → a scalar (term) or a list (terms);
-        only the whitelisted keys in :data:`_CORPUS_FILTER_KEYS` with a non-None
-        value are honored (any other key is dropped before the query is built).
-        ``size`` is clamped to ``[1, _SEARCH_CORPUS_MAX_SIZE]``. A falsy ``query``
-        is allowed — the store degrades to match_all so a filter-only browse
-        works.
-
-        HONESTY / degrade-not-break (mirrors ``vector_search``'s seam contract):
-        no corpus wired → the honest ``no_corpus_wired`` shape (never connects);
-        a transport/search failure is logged and folded into an ``error`` field
-        rather than raising into the consult loop.
+        Delegates to :func:`legba.runtime.substrate_corpus_readers.search_corpus`
+        — see that module for the shape, the filter whitelist and the citable-ref
+        invariant the 2026-09-16 review put on this reader.
         """
-        clamped = max(1, min(int(size), _SEARCH_CORPUS_MAX_SIZE))
-
-        # No OpenSearch store threaded through the port — honest unavailable
-        # shape, never a connect attempt (the same contract the embedder readers
-        # honor with ``no_embedder_wired``).
-        if self._opensearch is None:
-            return {
-                "rows": [],
-                "count": 0,
-                "query": query,
-                "filters": {},
-                "size": clamped,
-                "status": "no_corpus_wired",
-            }
-
-        # Keep ONLY the whitelisted, non-None filter keys — a planner cannot
-        # term-filter on an arbitrary field (that would silently match nothing).
-        # A non-dict ``filters`` (a mis-emitted string/list) coerces to {} so a
-        # bad shape degrades to an unfiltered search, never an AttributeError
-        # (mirrors compare_targets' isinstance type-guard on container args).
-        raw_filters = filters if isinstance(filters, dict) else {}
-        clean: dict[str, Any] = {
-            k: v
-            for k, v in raw_filters.items()
-            if k in _CORPUS_FILTER_KEYS and v is not None
-        }
-
-        try:
-            await self._opensearch.connect()  # idempotent — no-op if connected
-            rows = await self._opensearch.search(
-                self._corpus_index,
-                (query or "").strip() or None,
-                filters=clean or None,
-                size=clamped,
-            )
-        except Exception as exc:  # noqa: BLE001 — corpus backend surface
-            logger.warning(
-                "substrate_query_port.search_corpus.failed err=%s", exc,
-            )
-            return {
-                "rows": [],
-                "count": 0,
-                "query": query,
-                "filters": clean,
-                "size": clamped,
-                "error": f"corpus_search_failed: {exc!s}",
-            }
-        return {
-            "rows": rows,
-            "count": len(rows),
-            "query": query,
-            "filters": clean,
-            "size": clamped,
-        }
+        return await _corpus.search_corpus(
+            self._opensearch,
+            self._corpus_index,
+            query=query,
+            filters=filters,
+            size=size,
+        )
 
     async def read_document(self, *, doc_id: str) -> dict[str, Any]:
-        """Fetch one signal's full indexed corpus doc by id (Stage 1).
+        """Fetch one document's body by id, across every id namespace (Stage 1).
 
-        Returns the whole stored ``_source`` (including the full ``raw_body``,
-        not a snippet) for one signal via :meth:`OpenSearchStore.get`, so a
-        planner that found a doc through ``search_corpus`` / ``search_signals``
-        can pull its entire article text + facets. Degrade-not-break: no corpus
-        wired → ``no_corpus_wired``; a miss → ``not_found``; a backend failure is
-        logged and folded into an ``error`` field rather than raising.
+        Delegates to
+        :func:`legba.runtime.substrate_corpus_readers.read_document` — see that
+        module for the corpus → signals → canonical-twin → analyst_outputs
+        fallback ladder and the bounded, citable projection.
         """
-        if self._opensearch is None:
-            return {"status": "no_corpus_wired", "doc_id": doc_id}
-
-        try:
-            await self._opensearch.connect()  # idempotent — no-op if connected
-            src = await self._opensearch.get(self._corpus_index, str(doc_id))
-        except Exception as exc:  # noqa: BLE001 — corpus backend surface
-            logger.warning(
-                "substrate_query_port.read_document.failed err=%s", exc,
-            )
-            return {
-                "status": "error",
-                "doc_id": doc_id,
-                "error": f"read_document_failed: {exc!s}",
-            }
-        if src is None:
-            return {"status": "not_found", "doc_id": doc_id}
-        return {"status": "found", "doc_id": doc_id, "document": src}
+        return await _corpus.read_document(
+            self._opensearch, self._corpus_index, self._pool, doc_id=doc_id,
+        )
 
     # ------------------------------------------------------------------
     # query_nexuses (S4-T6)
@@ -1310,6 +1193,7 @@ class PostgresQdrantSubstrateQueryPort:
         rel_type: str | None = None,
         polarity: int | None = None,
         limit: int = 30,
+        as_of: str | None = None,
     ) -> dict[str, Any]:
         """Search the reified ``nexuses`` table (migration 0033).
 
@@ -1327,15 +1211,33 @@ class PostgresQdrantSubstrateQueryPort:
         ``valid_until IS NULL AND superseded_by IS NULL`` (migration
         0033).  A consult never reasons over a superseded or expired
         relationship.
+
+        V3/P3 — ``as_of`` (ISO-8601, validity time) reads the nexuses that
+        held on date D instead: the canonical as-of predicate replaces the
+        open-row gate, so a relationship superseded or expired since D still
+        answers. A malformed value refuses; ``unbounded_start`` in the
+        envelope counts returned rows with no recorded ``valid_from``.
         """
+        try:
+            as_of_dt = (
+                _temporal.parse_instant(as_of, name="as_of")
+                if as_of is not None else None
+            )
+        except _temporal.TemporalParameterError as exc:
+            return {"rows": [], "refs": [], "error": str(exc)}
         clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
 
-        # Open-nexus gate — "what holds now" is the single open row.
-        clauses: list[str] = [
-            "valid_until IS NULL",
-            "superseded_by IS NULL",
-        ]
+        # Open-nexus gate — "what holds now" is the single open row. With
+        # ``as_of`` the gate becomes the as-of predicate: the open-row pair
+        # is deliberately dropped and ``valid_until`` alone carries the
+        # close (spec §3.2).
+        clauses: list[str] = []
         params: list[Any] = []
+        if as_of_dt is not None:
+            params.append(as_of_dt)
+            clauses.append(_temporal.temporal_predicate("", len(params)))
+        else:
+            clauses.extend(["valid_until IS NULL", "superseded_by IS NULL"])
         if subject is not None:
             params.append(f"%{subject}%")
             clauses.append(f"subject ILIKE ${len(params)}")
@@ -1393,7 +1295,7 @@ class PostgresQdrantSubstrateQueryPort:
                 "analyst_id": r["analyst_id"],
             })
 
-        return {
+        out: dict[str, Any] = {
             "rows": rows,
             "refs": refs,
             "filters": {
@@ -1403,6 +1305,10 @@ class PostgresQdrantSubstrateQueryPort:
                 "polarity": polarity,
             },
         }
+        if as_of_dt is not None:
+            out["as_of"] = as_of_dt.isoformat()
+            out["unbounded_start"] = _temporal.unbounded_start(rows)
+        return out
 
     # ------------------------------------------------------------------
     # query_hypotheses (S4-T6)
@@ -1433,14 +1339,22 @@ class PostgresQdrantSubstrateQueryPort:
         surfaced too so a consult can distinguish a hypothesis the world
         subsequently resolved from one still scored only on self-consistent
         evidence balance.
+
+        EMPTY-TARGET RESOLUTION (2026-09-16 review, defect 3). An explicit
+        ``target_id`` that matches no row no longer returns a bare empty set:
+        see :meth:`_resolve_empty_target_rows`. ``situation_iran_war`` has zero
+        hypotheses of its own while its constituent desks have plenty, and
+        "zero" was the most misleading answer this port could give.
         """
         clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
 
         clauses: list[str] = []
         params: list[Any] = []
+        target_param: int | None = None
         if target_id is not None:
-            params.append(target_id)
-            clauses.append(f"target_id = ${len(params)}")
+            params.append([str(target_id)])
+            target_param = len(params)
+            clauses.append(f"target_id = ANY(${len(params)}::text[])")
         if status is not None:
             params.append(status)
             clauses.append(f"status = ${len(params)}")
@@ -1462,8 +1376,13 @@ class PostgresQdrantSubstrateQueryPort:
             f"LIMIT ${len(params)}"
         )
 
+        resolution: dict[str, Any] | None = None
         async with self._pool.acquire() as conn:
             records = await conn.fetch(sql, *params)
+            if not records and target_param is not None:
+                records, resolution = await widen_to_member_targets(
+                    conn, sql, params, target_param, str(target_id),
+                )
 
         rows: list[dict[str, Any]] = []
         refs: list[str] = []
@@ -1490,15 +1409,18 @@ class PostgresQdrantSubstrateQueryPort:
                     if isinstance(r["produced_at"], datetime) else None,
             })
 
-        return {
+        out: dict[str, Any] = {
             "rows": rows,
             "refs": refs,
+            "count": len(rows),
             "filters": {
                 "target_id": target_id,
                 "status": status,
                 "situation_id": situation_id,
             },
         }
+        stamp_target_resolution(out, str(target_id), resolution)
+        return out
 
     # ------------------------------------------------------------------
     # FINISHED INTELLIGENCE readers (the platform's OWN analytical products —
@@ -1516,6 +1438,7 @@ class PostgresQdrantSubstrateQueryPort:
         since_hours: int | None = None,
         include_superseded: bool = False,
         limit: int = 20,
+        believed_as_of: str | None = None,
     ) -> dict[str, Any]:
         """The platform's own recent FINDINGS, with the critic-folded
         ``effective_confidence = min(confidence, critic_score)``.
@@ -1530,15 +1453,48 @@ class PostgresQdrantSubstrateQueryPort:
         finding chain, not a stale double-count. Pass ``include_superseded=True``
         to relax the gate (history/audit reads). This ONE handler serves
         consult + journal_read + deep_consult.
+
+        EMPTY-TARGET RESOLUTION (2026-09-16 review, defect 3). The live consult
+        asked this for ``situation_iran_war`` — an ACTIVE head target that
+        ``list_targets`` had just offered it — and got zero rows, which reads
+        as "the platform sees nothing there" when the truth is "no producer
+        writes for that frame". An explicit ``target_id`` that matches nothing
+        now resolves to its constituent desks and returns THEIR findings (each
+        row still carries its own ``target_id``), or says plainly that the
+        frame is empty. See :meth:`_resolve_empty_target_rows`.
+
+        V3/P3 — ``believed_as_of`` (ISO-8601, DECISION time — the other
+        clock from ``as_of``, spec §3.2): the findings Legba had published
+        and not yet superseded on date D. ``analyst_outputs`` has no
+        ``valid_*`` columns, so the predicate is
+        ``produced_at <= D AND (superseded_at IS NULL OR superseded_at > D)``
+        and the open-row ``superseded_by IS NULL`` gate does not apply (it
+        is superseded TODAY — it was the live head on D). The critic fold
+        also dates to D, so the answer carries the verdict Legba held at
+        the time, not today's. A malformed value refuses.
         """
+        try:
+            believed_dt = (
+                _temporal.parse_instant(believed_as_of, name="believed_as_of")
+                if believed_as_of is not None else None
+            )
+        except _temporal.TemporalParameterError as exc:
+            return {"rows": [], "refs": [], "error": str(exc)}
         clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
         clauses: list[str] = ["f.kind = 'finding'"]
-        if not include_superseded:
-            clauses.append("f.superseded_by IS NULL")
         params: list[Any] = []
+        believed_param: int | None = None
+        if believed_dt is not None:
+            params.append(believed_dt)
+            believed_param = len(params)
+            clauses.append(_temporal.decision_predicate("f", believed_param))
+        elif not include_superseded:
+            clauses.append("f.superseded_by IS NULL")
+        target_param: int | None = None
         if target_id is not None:
-            params.append(target_id)
-            clauses.append(f"f.target_id = ${len(params)}")
+            params.append([str(target_id)])
+            target_param = len(params)
+            clauses.append(f"f.target_id = ANY(${len(params)}::text[])")
         if analyst_id is not None:
             params.append(analyst_id)
             clauses.append(f"f.analyst_id = ${len(params)}")
@@ -1549,25 +1505,22 @@ class PostgresQdrantSubstrateQueryPort:
             params.append(datetime.now(timezone.utc) - timedelta(hours=int(since_hours)))
             clauses.append(f"f.produced_at >= ${len(params)}")
         params.append(clamped_limit)
-        sql = (
-            "SELECT f.id, f.title, f.body, f.confidence, f.severity, "
-            "       f.target_id, f.analyst_id, f.produced_at, "
-            "       c.critic_score AS critic_score "
-            "FROM analyst_outputs f "
-            "LEFT JOIN LATERAL ( "
-            "  SELECT (cr.data->>'overall_score')::real AS critic_score "
-            "  FROM analyst_outputs cr "
-            "  WHERE cr.kind = 'critique' "
-            "    AND cr.data->>'analyzed_output_id' = f.id::text "
-            "    AND cr.data->>'overall_score' IS NOT NULL "
-            "  ORDER BY cr.produced_at DESC, cr.id DESC LIMIT 1 "
-            ") c ON TRUE "
-            f"WHERE {' AND '.join(clauses)} "
-            "ORDER BY f.produced_at DESC, f.id DESC "
-            f"LIMIT ${len(params)}"
+        # believed_as_of dates the critic fold too: the verdict Legba HELD
+        # on D (the latest critique produced by then), not today's.
+        critic_as_of = (
+            f"AND cr.produced_at <= ${believed_param}"
+            if believed_param is not None else ""
         )
+        sql = critic_folded_findings_sql(
+            " AND ".join(clauses), len(params), critic_as_of=critic_as_of,
+        )
+        resolution: dict[str, Any] | None = None
         async with self._pool.acquire() as conn:
             records = await conn.fetch(sql, *params)
+            if not records and target_param is not None:
+                records, resolution = await widen_to_member_targets(
+                    conn, sql, params, target_param, str(target_id),
+                )
 
         rows: list[dict[str, Any]] = []
         refs: list[str] = []
@@ -1594,7 +1547,11 @@ class PostgresQdrantSubstrateQueryPort:
                 "produced_at": r["produced_at"].isoformat()
                     if isinstance(r["produced_at"], datetime) else None,
             })
-        return {"rows": rows, "refs": refs, "count": len(rows)}
+        out: dict[str, Any] = {"rows": rows, "refs": refs, "count": len(rows)}
+        if believed_dt is not None:
+            out["believed_as_of"] = believed_dt.isoformat()
+        stamp_target_resolution(out, str(target_id), resolution)
+        return out
 
     async def list_situations(
         self,
@@ -1603,62 +1560,33 @@ class PostgresQdrantSubstrateQueryPort:
         target_id: str | None = None,
         since_hours: int | None = None,
         limit: int = 20,
+        as_of: str | None = None,
     ) -> dict[str, Any]:
         """First-class ``situations`` (the platform's clustered ongoing frames).
 
         Analysis-derived (clustered from findings), not operator-vetted ground
         truth. Pass a returned ``situation_id`` to ``query_hypotheses`` to pull
         the ACH rows hanging off a situation.
-        """
-        clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
-        clauses: list[str] = []
-        params: list[Any] = []
-        if status is not None:
-            params.append(status)
-            clauses.append(f"status = ${len(params)}")
-        if target_id is not None:
-            params.append(target_id)
-            clauses.append(f"target_id = ${len(params)}")
-        if since_hours is not None:
-            params.append(datetime.now(timezone.utc) - timedelta(hours=int(since_hours)))
-            # Recency = last ACTIVITY, not first creation. produced_at is frozen
-            # at first-cluster (the upsert never bumps it), so filtering it would
-            # silently drop a weeks-old frame that just took a fresh member.
-            # updated_at is refreshed on every re-cluster (NOT NULL, now() default).
-            clauses.append(f"updated_at >= ${len(params)}")
-        where = (" AND ".join(clauses)) if clauses else "TRUE"
-        params.append(clamped_limit)
-        sql = (
-            "SELECT id, name, status, category, "
-            "       event_count, intensity_score, "
-            "       target_id, analyst_id, produced_at, updated_at "
-            "FROM situations "
-            f"WHERE {where} "
-            "ORDER BY updated_at DESC, produced_at DESC "
-            f"LIMIT ${len(params)}"
-        )
-        async with self._pool.acquire() as conn:
-            records = await conn.fetch(sql, *params)
 
-        rows: list[dict[str, Any]] = []
-        refs: list[str] = []
-        for r in records:
-            refs.append(str(r["id"]))
-            rows.append({
-                "id": str(r["id"]),
-                "name": r["name"],
-                "status": r["status"],
-                "category": r["category"],
-                "event_count": r["event_count"],
-                "intensity_score": r["intensity_score"],
-                "target_id": r["target_id"],
-                "analyst_id": r["analyst_id"],
-                "produced_at": r["produced_at"].isoformat()
-                    if isinstance(r["produced_at"], datetime) else None,
-                "updated_at": r["updated_at"].isoformat()
-                    if isinstance(r["updated_at"], datetime) else None,
-            })
-        return {"rows": rows, "refs": refs, "count": len(rows)}
+        V3/P3 — ``as_of`` (ISO-8601, validity time) adds the canonical as-of
+        predicate: the frames that held on date D, INCLUDING frames that have
+        closed since. There is no open-row gate on this read (closed frames
+        are already returned), so ``as_of`` narrows rather than swaps —
+        ``unbounded_start`` counts returned frames with no recorded
+        ``valid_from``. A malformed value refuses.
+
+        V3/P6 — the body lives in ``substrate_frame_reads.list_situations``
+        (the module-size extraction); this method is the Protocol surface.
+        """
+        return await _frames.list_situations(
+            self._pool,
+            status=status,
+            target_id=target_id,
+            since_hours=since_hours,
+            limit=limit,
+            as_of=as_of,
+            max_row_limit=_MAX_ROW_LIMIT,
+        )
 
     async def query_predictions(
         self,
@@ -1767,6 +1695,138 @@ class PostgresQdrantSubstrateQueryPort:
         }
 
     # ------------------------------------------------------------------
+    # belief_as_of (V3/P3) — "what did Legba believe on date D"
+    # ------------------------------------------------------------------
+
+    async def belief_as_of(
+        self,
+        *,
+        as_of: str,
+        target_id: str | None = None,
+        fold_verdicts: str = "as_of",
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """The findings Legba had published and not yet superseded on date D
+        (DATA MODEL V3 §3.4) — a DECISION-time read on ``analyst_outputs``.
+
+        ``analyst_outputs`` has no ``valid_*`` columns (§3.1's correction):
+        its validity interval is ``[produced_at, superseded_at)``, which is
+        what the decision predicate filters. ``as_of`` is REQUIRED — a
+        belief-as-of read with no date is a different tool (``list_findings``).
+
+        The faithfulness VERDICT folds two ways, and the response says which:
+
+        * ``fold_verdicts="as_of"`` (default) — the verdict Legba HELD on D
+          (the latest faithfulness critique produced by then). A finding whose
+          verdict had not yet landed on D comes back
+          ``effective_confidence=None`` and counts toward
+          ``verdict_pending_at_as_of`` — the honest "not yet graded" answer.
+        * ``fold_verdicts="latest"`` — today's verdict for each finding, for
+          "what we believe NOW about what we said THEN".
+
+        The fold NEVER pools into a single score — each row carries its own
+        ``effective_confidence`` and the envelope carries none.
+        """
+        try:
+            as_of_dt = _temporal.parse_instant(as_of, name="as_of")
+        except _temporal.TemporalParameterError as exc:
+            return {"rows": [], "refs": [], "error": str(exc)}
+        fold = (fold_verdicts or "as_of").strip().lower()
+        if fold not in ("as_of", "latest"):
+            return {
+                "rows": [], "refs": [],
+                "error": (
+                    f"fold_verdicts must be 'as_of' or 'latest', "
+                    f"got {fold_verdicts!r}"
+                ),
+            }
+        clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
+
+        clauses: list[str] = [
+            "f.kind = 'finding'",
+            _temporal.decision_predicate("f", 1),
+        ]
+        params: list[Any] = [as_of_dt]
+        if target_id is not None:
+            params.append(target_id)
+            clauses.append(f"f.target_id = ${len(params)}")
+        params.append(clamped_limit)
+
+        # H17 — the two verdict folds are SET-BASED and shared with
+        # `/v3/belief`, which asks the identical question (see
+        # `legba.data.critic_fold.dual_verdict_findings_sql`). Both are pinned
+        # to `title LIKE 'Faithfulness verify%'` so a generic critique can never
+        # win the produced_at race and mask the verify verdict.
+        sql = _critic_fold.dual_verdict_findings_sql(
+            " AND ".join(clauses), len(params),
+        )
+
+        async with self._pool.acquire() as conn:
+            records = await conn.fetch(sql, *params)
+
+        rows: list[dict[str, Any]] = []
+        refs: list[str] = []
+        pending = 0
+        for r in records:
+            refs.append(str(r["id"]))
+            confidence = (
+                float(r["confidence"]) if r["confidence"] is not None else None
+            )
+            score_key = (
+                "verdict_score_as_of" if fold == "as_of"
+                else "verdict_score_latest"
+            )
+            at_key = "verdict_at_as_of" if fold == "as_of" else "verdict_at_latest"
+            verdict_score = (
+                float(r[score_key]) if r[score_key] is not None else None
+            )
+            verdict_at = r[at_key]
+            # verdict_pending_at_as_of is always about DATE D regardless of
+            # fold: did a verdict exist by then. Under fold='latest' a row
+            # graded today still reports that it was ungraded at D.
+            row_pending = r["verdict_score_as_of"] is None
+            if row_pending:
+                pending += 1
+            rows.append({
+                "id": str(r["id"]),
+                "title": r["title"],
+                "body": (r["body"] or "")[:2000],
+                "confidence": confidence,
+                "severity": r["severity"],
+                "target_id": r["target_id"],
+                "analyst_id": r["analyst_id"],
+                "produced_at": r["produced_at"].isoformat()
+                    if isinstance(r["produced_at"], datetime) else None,
+                "verdict_score": verdict_score,
+                "verdict_at": verdict_at.isoformat()
+                    if isinstance(verdict_at, datetime) else None,
+                # min(confidence, verdict) per the findings fold — NULL when
+                # the chosen fold has no verdict (pending), never pooled.
+                "effective_confidence": (
+                    min(confidence, verdict_score)
+                    if confidence is not None and verdict_score is not None
+                    else None
+                ),
+                "verdict_pending_at_as_of": row_pending,
+            })
+
+        return {
+            "rows": rows,
+            "refs": refs,
+            "count": len(rows),
+            "as_of": as_of_dt.isoformat(),
+            "target_id": target_id,
+            # Which verdict clock the scores came from — stamped so a reader
+            # cannot mistake a latest-fold answer for an as-of one.
+            "fold_verdicts": fold,
+            "verdict_pending_at_as_of": pending,
+            "note": (
+                "rows carry their own effective_confidence; no pooled score "
+                "is computed — a belief-as-of read is a register, not a number"
+            ),
+        }
+
+    # ------------------------------------------------------------------
     # NAVIGATION readers (resolve scope — targets / source coverage).
     # ------------------------------------------------------------------
 
@@ -1866,14 +1926,16 @@ class PostgresQdrantSubstrateQueryPort:
         *,
         subject: str,
         limit: int = 40,
+        since: str | None = None,
+        until: str | None = None,
     ) -> dict[str, Any]:
         """Time-ordered merge of current facts + recent signals on a subject.
 
         Builds one chronological view of what the substrate holds about a
         subject by merging two streams:
 
-          * **facts** — current rows (``superseded_by IS NULL AND
-            valid_until IS NULL``, migration 0032) whose ``subject``
+          * **facts** — current rows (the migration-0032 open pair plus the
+            P7 ``origin_class`` leg, ``live_gate_sql``) whose ``subject``
             substring-matches the argument; and
           * **signals** — recent signals whose title/summary FTS-matches
             the subject (the same Postgres ``to_tsvector`` backing
@@ -1886,160 +1948,234 @@ class PostgresQdrantSubstrateQueryPort:
         (per the get_timeline temporal-anchor rule) — an item with no
         usable timestamp can't be placed on a timeline.  The merged list
         is sorted newest-first and clamped to ``limit``.
+
+        V3/P3 — ``since``/``until`` (ISO-8601) bound the window on each
+        stream's ANCHOR, half-open ``[since, until)``, applied in SQL so the
+        per-stream cap cannot evict an in-window item with an out-of-window
+        one. Either bound may be given alone; a malformed value refuses
+        rather than widening to all-time.
+
+        V3/P6 — the body lives in ``substrate_frame_reads.get_timeline``
+        (the module-size extraction); this method is the Protocol surface.
         """
-        clamped_limit = max(1, min(int(limit), _MAX_ROW_LIMIT))
-        s = (subject or "").strip()
-        if not s:
-            return {
-                "subject": subject,
-                "items": [],
-                "refs": [],
-                "error": "subject must be non-empty",
-            }
+        return await _frames.get_timeline(
+            self._pool,
+            subject=subject,
+            limit=limit,
+            since=since,
+            until=until,
+            max_row_limit=_MAX_ROW_LIMIT,
+        )
 
-        async with self._pool.acquire() as conn:
-            fact_rows = await conn.fetch(
-                """
-                SELECT id, subject, predicate, value, confidence,
-                       valid_from, produced_at, created_at
-                FROM facts
-                WHERE subject ILIKE $1
-                  AND superseded_by IS NULL
-                  AND valid_until IS NULL
-                ORDER BY COALESCE(valid_from, produced_at, created_at) DESC
-                LIMIT $2
-                """,
-                f"%{s}%",
-                _TIMELINE_PER_STREAM_CAP,
-            )
-            signal_rows = await conn.fetch(
-                """
-                SELECT id, payload->>'title' AS title,
-                       payload->>'title_en' AS title_en,
-                       payload->>'category' AS category,
-                       canonical_url, fetched_at, created_at
-                FROM signals
-                WHERE to_tsvector('simple',
-                          coalesce(payload->>'title','') || ' ' ||
-                          coalesce(payload->>'summary',''))
-                      @@ plainto_tsquery('simple', $1)
-                ORDER BY COALESCE(fetched_at, created_at) DESC
-                LIMIT $2
-                """,
-                s,
-                _TIMELINE_PER_STREAM_CAP,
-            )
-            # Situation FRAMES on the subject (5b/5c — situations are the
-            # persistent-frame substitute for an events table; see DATA_MODEL).
-            # A frame is a span [valid_from, valid_until); it anchors on
-            # valid_from so the timeline shows when the situation began alongside
-            # the facts + signals. Closed (historical) frames are included — they
-            # ARE the "events come and go" history.
-            situation_rows = await conn.fetch(
-                """
-                SELECT id, name, status, intensity_score,
-                       valid_from, valid_until, produced_at, created_at
-                FROM situations
-                WHERE name ILIKE $1
-                  AND superseded_by IS NULL
-                ORDER BY COALESCE(valid_from, produced_at, created_at) DESC
-                LIMIT $2
-                """,
-                f"%{s}%",
-                _TIMELINE_PER_STREAM_CAP,
-            )
+    # ------------------------------------------------------------------
+    # query_events / inspect_event (V3/P6 — spec §6.1)
+    # ------------------------------------------------------------------
 
-        # Merge into one stream keyed on a single temporal anchor.  Skip
-        # any row whose anchor is NULL — it can't be placed in time.
-        merged: list[tuple[datetime, dict[str, Any]]] = []
-        refs: list[str] = []
-        for r in fact_rows:
-            anchor = r["valid_from"] or r["produced_at"] or r["created_at"]
-            if not isinstance(anchor, datetime):
+    async def query_events(
+        self,
+        *,
+        target_id: str | None = None,
+        geo: str | list[str] | None = None,
+        category: str | None = None,
+        lifecycle_state: str | None = None,
+        entity: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        as_of: str | None = None,
+        include_origin: list[str] | None = None,
+        situation_id: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """The filtered event list (the V3 ``events`` table, migration 0202).
+
+        ``target_id`` / ``category`` / ``lifecycle_state`` (one of the five-
+        state vocabulary — an unknown state refuses loud) / ``geo`` (ISO2
+        code or list, array-overlap) / ``entity`` (canonical-name substring
+        over ``event_entity_links``) / ``situation_id`` (the tracked-events
+        read — events a situation links to) are optional filters.
+
+        ``since``/``until`` (ISO-8601) bound the event's OCCURRENCE span by
+        overlap — an event that began before ``until`` and had not ended
+        before ``since`` is in the window; ``time_start``/``time_end`` NULLs
+        fall back to ``produced_at``. A malformed value refuses rather than
+        widening to all-time.
+
+        The default (no ``as_of``) read is the OPEN gate — the 0032 pair
+        plus the P7 ``origin_class`` leg — so a backfilled event can never
+        read as live. ``as_of`` swaps to the validity predicate and only
+        there does ``include_origin`` widen the class set (default
+        ``LIVE_CLASSES``; an unknown class refuses). ``unbounded_start``
+        counts returned rows with no recorded ``valid_from``.
+
+        The body lives in ``substrate_frame_reads.query_events``.
+        """
+        return await _frames.query_events(
+            self._pool,
+            target_id=target_id,
+            geo=geo,
+            category=category,
+            lifecycle_state=lifecycle_state,
+            entity=entity,
+            since=since,
+            until=until,
+            as_of=as_of,
+            include_origin=include_origin,
+            situation_id=situation_id,
+            limit=limit,
+            max_row_limit=_MAX_ROW_LIMIT,
+        )
+
+    async def inspect_event(
+        self,
+        *,
+        event_id: str,
+    ) -> dict[str, Any]:
+        """The one-event dossier (V3/P6 — spec §6.1).
+
+        Returns ``found=True`` plus the five sections: the ``event`` row
+        itself (full provenance + geo + lifecycle columns); ``signals`` —
+        its ranked evidence (``signal_event_links`` joined to signal titles,
+        relevance-ordered); ``actors`` — entities with roles
+        (``event_entity_links`` → ``entity_profiles``); ``edges`` — its
+        event edges in BOTH directions (superseded edges excluded);
+        ``situations`` — the frames tracking it (``situation_event_links``);
+        and ``lifecycle`` — the append-only ledger OLDEST→NEWEST (the
+        ``opened`` row first). ``refs`` unions every substrate id so the
+        consult loop can cite them.
+
+        A non-uuid ``event_id`` or a missing row returns ``found=False``
+        with a named error — never an empty-looking success.
+
+        The body lives in ``substrate_frame_reads.inspect_event``.
+        """
+        return await _frames.inspect_event(self._pool, event_id=event_id)
+
+    # ------------------------------------------------------------------
+    # The COLLECTION series reads (7g-2 §6)
+    #
+    # History, not now. These two are the only readers of `observations`,
+    # the bitemporal series store a COLLECTION loads once and nothing
+    # schedules. They are read-only, publish nothing, and read only
+    # holdings whose descriptor head is in state `loaded` — the operator's
+    # approval is the gate, and it is enforced in the leaf rather than
+    # trusted to a caller.
+    #
+    # The bodies live in ``_observations_read``.
+    # ------------------------------------------------------------------
+
+    async def series_history(
+        self,
+        *,
+        series_id: str,
+        subject: str,
+        since: Any = None,
+        until: Any = None,
+        as_of: Any = None,
+        collection_id: str | None = None,
+        limit: int = _observations.MAX_SERIES_ROWS,
+    ) -> dict[str, Any]:
+        """One curated HISTORICAL series for one subject, over a valid window.
+
+        ``since``/``until`` bound the VALID time — the period each number is
+        ABOUT — and are required: a series read is always over a bounded
+        window, never all-time, and a malformed bound refuses rather than
+        widening. ``as_of`` is the RECORD time: with it, each period comes
+        back as the latest revision the provider had published on or before
+        that instant (so an as-of replay cannot inherit a restatement that
+        had not happened yet); without it, the latest revision on record.
+
+        Every row carries its ``valid_from``/``valid_to``, its
+        ``record_time``, the value with its ``unit``, the ``source_url`` and
+        the ``sha256`` of the file the number was read out of, and a
+        ``ref`` (``observation:<uuid>``) the citation builder resolves.
+        """
+        return await _observations.read_series_history(
+            self._pool,
+            series_id=series_id,
+            subject=subject,
+            since=since,
+            until=until,
+            as_of=as_of,
+            collection_id=collection_id,
+            limit=limit,
+        )
+
+    async def series_compare(
+        self,
+        *,
+        series_id: str,
+        subjects: list[str] | None = None,
+        since: Any = None,
+        until: Any = None,
+        as_of: Any = None,
+        collection_id: str | None = None,
+        limit: int = _observations.MAX_SERIES_ROWS,
+    ) -> dict[str, Any]:
+        """The same series across several subjects over the same window.
+
+        Same bitemporal rule and same row shape as :meth:`series_history`, in
+        ONE statement rather than N calls. A subject the holding does not
+        carry contributes no rows and is named in ``subjects_with_no_rows`` —
+        never padded with a zero nobody published.
+        """
+        return await _observations.read_series_compare(
+            self._pool,
+            series_id=series_id,
+            subjects=subjects or [],
+            since=since,
+            until=until,
+            as_of=as_of,
+            collection_id=collection_id,
+            limit=limit,
+        )
+
+    async def classify_cited_refs(self, *, refs: list[str]) -> dict[str, Any]:
+        """``origin_class`` counts for a bounded list of CITED substrate ids.
+
+        7g-2's provenance census: consult cites bare substrate uuids, and
+        "how much of this answer rests on live reporting, how much on a
+        curated holding, how much on a web retrieval" is a question the ids
+        alone cannot answer. Two indexed lookups answer it from the rows'
+        OWN ``origin_class`` column — never from which tool returned them,
+        which is a guess dressed as provenance.
+
+        A ref in NEITHER table is counted as ``unresolved`` rather than
+        assigned a class: a citation we cannot resolve is a fact about the
+        answer, and silently bucketing it would overstate whichever class
+        absorbed it. Measured live 2026-09-25: 1.7 ms for 20 signal ids
+        (``signals_pkey``), 1.6 ms for 12 observation ids (the per-partition
+        primary keys).
+        """
+        wanted: list[UUID] = []
+        seen: set[str] = set()
+        for raw in refs or ():
+            text = str(raw).strip()
+            if not text or text in seen:
                 continue
-            fid = r["id"]
-            refs.append(str(fid))
-            merged.append((anchor, {
-                "kind": "fact",
-                "id": str(fid),
-                "at": anchor.isoformat(),
-                "subject": r["subject"],
-                "predicate": r["predicate"],
-                "value": r["value"],
-                "confidence": float(r["confidence"])
-                    if r["confidence"] is not None else None,
-            }))
-        for r in signal_rows:
-            anchor = r["fetched_at"] or r["created_at"]
-            if not isinstance(anchor, datetime):
+            seen.add(text)
+            try:
+                wanted.append(UUID(text))
+            except (AttributeError, TypeError, ValueError):
                 continue
-            sid = r["id"]
-            refs.append(str(sid))
-            merged.append((anchor, {
-                "kind": "signal",
-                "id": str(sid),
-                "at": anchor.isoformat(),
-                "title": r["title"],
-                # T-1b (M13): stored English title (translate route); absent else.
-                "title_en": r["title_en"],
-                "category": r["category"],
-                "source_url": r["canonical_url"],
-            }))
-        for r in situation_rows:
-            anchor = r["valid_from"] or r["produced_at"] or r["created_at"]
-            if not isinstance(anchor, datetime):
-                continue
-            uid = r["id"]
-            refs.append(str(uid))
-            until = r["valid_until"]
-            merged.append((anchor, {
-                "kind": "situation",
-                "id": str(uid),
-                "at": anchor.isoformat(),
-                "name": r["name"],
-                "status": r["status"],
-                "intensity_score": float(r["intensity_score"])
-                    if r["intensity_score"] is not None else None,
-                # The span end — None while the frame is still open/ongoing.
-                "until": until.isoformat() if isinstance(until, datetime) else None,
-            }))
-
-        merged.sort(key=lambda pair: pair[0], reverse=True)  # newest-first
-        # DQ-#70/F5 — per-kind floor: guarantee each kind up to
-        # ``_TIMELINE_PER_KIND_FLOOR`` of its NEWEST items (round-robin, so a
-        # tight budget is shared fairly), then fill the remaining slots by
-        # overall recency. Without this, a dense signal stream clamps the whole
-        # window to signals and the sparse facts/situations vanish.
-        by_kind: dict[str, list[tuple[datetime, dict[str, Any]]]] = {}
-        for pair in merged:
-            by_kind.setdefault(pair[1]["kind"], []).append(pair)
-        selected: list[tuple[datetime, dict[str, Any]]] = []
-        chosen: set[str] = set()
-        for rank in range(_TIMELINE_PER_KIND_FLOOR):
-            for rows in by_kind.values():
-                if rank < len(rows) and len(selected) < clamped_limit:
-                    pair = rows[rank]
-                    if pair[1]["id"] not in chosen:
-                        selected.append(pair)
-                        chosen.add(pair[1]["id"])
-        for pair in merged:  # fill the rest by overall recency
-            if len(selected) >= clamped_limit:
-                break
-            if pair[1]["id"] not in chosen:
-                selected.append(pair)
-                chosen.add(pair[1]["id"])
-        selected.sort(key=lambda pair: pair[0], reverse=True)
-        items = [item for _, item in selected]
-
+        by_class: dict[str, int] = {}
+        resolved = 0
+        if wanted:
+            async with self._pool.acquire() as conn:
+                for table in ("signals", "observations"):
+                    rows = await conn.fetch(
+                        f"SELECT origin_class, count(*) AS n FROM {table} "
+                        "WHERE id = ANY($1::uuid[]) GROUP BY origin_class",
+                        wanted,
+                    )
+                    for r in rows:
+                        klass = str(r["origin_class"] or "unknown")
+                        by_class[klass] = by_class.get(klass, 0) + int(r["n"])
+                        resolved += int(r["n"])
         return {
-            "subject": subject,
-            "items": items,
-            "refs": [item["id"] for item in items],
-            "counts": {
-                "facts": sum(1 for i in items if i["kind"] == "fact"),
-                "signals": sum(1 for i in items if i["kind"] == "signal"),
-                "situations": sum(1 for i in items if i["kind"] == "situation"),
-            },
+            "by_origin_class": by_class,
+            "resolved": resolved,
+            "unresolved": max(0, len(wanted) - resolved),
+            "asked": len(wanted),
         }
 
     # ------------------------------------------------------------------
@@ -2054,9 +2190,10 @@ class PostgresQdrantSubstrateQueryPort:
         """Side-by-side substrate rollup for two or more target ids.
 
         For each ``target_id`` the rollup counts the substrate's live
-        material: current facts (``superseded_by IS NULL AND valid_until
-        IS NULL``), open nexuses (``valid_until IS NULL AND superseded_by
-        IS NULL``), the hypothesis status mix, and a handful of recent
+        material: current facts (the 0032 open pair plus the P7
+        ``origin_class`` leg), open nexuses (``valid_until IS NULL AND
+        superseded_by IS NULL``), the hypothesis status mix, and a handful of
+        recent
         findings (``analyst_outputs`` rows of ``kind = 'finding'`` that
         have not been superseded).  This is the comparator the agentic
         assessors lean on when the loop hands it several target ids — a
@@ -2093,11 +2230,10 @@ class PostgresQdrantSubstrateQueryPort:
         async with self._pool.acquire() as conn:
             for tid in ids:
                 fact_count = await conn.fetchval(
-                    """
+                    f"""
                     SELECT count(*) FROM facts
                     WHERE target_id = $1
-                      AND superseded_by IS NULL
-                      AND valid_until IS NULL
+                      AND {_origin.live_gate_sql("")}
                     """,
                     tid,
                 )
@@ -2175,6 +2311,7 @@ class PostgresQdrantSubstrateQueryPort:
         polarity_product: int | None = None,
         limit: int = 30,
         families: list[str] | None = None,
+        as_of: str | None = None,
     ) -> dict[str, Any]:
         """Ranked signed PATHS from ``subject`` to ``obj`` over open edges.
 
@@ -2190,9 +2327,9 @@ class PostgresQdrantSubstrateQueryPort:
         The graph is CYCLIC, so each branch carries the path-so-far as a
         ``uuid[]`` of node ids; a candidate next hop already on the path is
         pruned (the VISITED-SET guard) so traversal terminates with no reliance
-        on ``max_hops``.  ``max_hops`` is clamped to :data:`_GRAPH_MAX_HOPS`;
-        the frontier and the returned set are clamped to
-        :data:`_GRAPH_MAX_PATHS`.
+        on ``max_hops``.  ``max_hops`` is clamped to the walk module's hop
+        ceiling; the frontier and the returned set are clamped to its row
+        cap (``substrate_graph_walks``).
 
         When ``polarity_product`` (∈ {-1, 0, 1}) is supplied, only paths whose
         net sign matches are returned.  The filter is applied IN SQL, before
@@ -2220,89 +2357,33 @@ class PostgresQdrantSubstrateQueryPort:
         An endpoint that resolves to no entity now returns a ``warnings`` entry
         instead of an empty ``paths`` list, because on an id-keyed walk the two
         are otherwise indistinguishable.
+
+        V3/P3 — ``as_of`` (ISO-8601, validity time) walks the graph AS IT
+        STOOD on date D: the canonical as-of predicate replaces the open-row
+        gate per hop, on BOTH the seed and the recursive arm (a path through
+        an edge closed since D is not a path that existed on D). The envelope
+        then carries ``unbounded_start`` over the walked edges.
         """
-        s = (subject or "").strip()
-        o = (obj or "").strip()
-        if not s or not o:
+        try:
+            as_of_dt = (
+                _temporal.parse_instant(as_of, name="as_of")
+                if as_of is not None else None
+            )
+        except _temporal.TemporalParameterError as exc:
             return {
-                "subject": subject,
-                "object": obj,
-                "paths": [],
-                "refs": [],
-                "error": "both subject and object must be non-empty",
+                "subject": subject, "object": obj,
+                "paths": [], "refs": [], "error": str(exc),
             }
-        hops = max(1, min(int(max_hops), _GRAPH_MAX_HOPS))
-        clamped_limit = max(1, min(int(limit), _GRAPH_MAX_PATHS))
-        pol_filter = (
-            int(polarity_product)
-            if polarity_product is not None and int(polarity_product) in (-1, 0, 1)
-            else None
+        return await _walks.query_paths(
+            self._pool,
+            subject=subject,
+            obj=obj,
+            max_hops=max_hops,
+            polarity_product=polarity_product,
+            limit=limit,
+            families=families,
+            as_of=as_of_dt,
         )
-        fams = _walk_families(families)
-
-        async with self._pool.acquire() as conn:
-            ends = await _resolve_walk_endpoints(conn, [s, o])
-            warnings = _endpoint_warnings({"subject": s, "object": o}, ends)
-            if warnings:
-                # FAIL LOUD. An unresolvable endpoint on an ID-keyed walk is
-                # indistinguishable from "not connected" unless it is SAID —
-                # this is the confidently-empty-answer class `graph_paths`
-                # already guards with GRAPH_MISS_WARNINGS.
-                return {
-                    "subject": subject, "object": obj, "max_hops": hops,
-                    "polarity_product_filter": pol_filter,
-                    "edge_families": fams,
-                    "paths": [], "refs": [], "warnings": warnings,
-                }
-            src_id, dst_id = ends[s.lower()], ends[o.lower()]
-
-            pol_clause = ""
-            params: list[Any] = [src_id, dst_id, hops, fams]
-            if pol_filter is not None:
-                params.append(pol_filter)
-                pol_clause = f"AND COALESCE(pol_product, 0) = ${len(params)}"
-            params.append(clamped_limit)
-            sql = _PATH_WALK_SQL.format(
-                pol_clause=pol_clause, limit_param=f"${len(params)}")
-            # The recursive frontier is bounded by the visited-set guard + the
-            # hop cap; the LIMIT caps the materialized terminal set (already
-            # polarity-filtered, so the cutoff cannot hide a matching path).
-            records = await conn.fetch(sql, *params)
-            names = await _hydrate_node_names(
-                conn, {n for r in records for n in (r["node_path"] or [])})
-
-        paths: list[dict[str, Any]] = []
-        refs: list[str] = []
-        for r in records:
-            net = int(r["pol_product"]) if r["pol_product"] is not None else 0
-            edge_ids = [str(e) for e in (r["edge_ids"] or [])]
-            for e in edge_ids:
-                if e not in refs:
-                    refs.append(e)
-            node_ids = list(r["node_path"] or [])
-            paths.append({
-                # `nodes` stays the DISPLAY-NAME list every consumer already
-                # reads; `node_ids` is the identity the walk actually used.
-                "nodes": [names.get(n, str(n)) for n in node_ids],
-                "node_ids": [str(n) for n in node_ids],
-                "edge_ids": edge_ids,
-                "polarities": [int(p) for p in (r["polarities"] or [])],
-                "polarity_product": net,
-                "min_confidence": float(r["min_conf"])
-                    if r["min_conf"] is not None else None,
-                "hops": int(r["hops"]),
-            })
-
-        return {
-            "subject": subject,
-            "object": obj,
-            "max_hops": hops,
-            "polarity_product_filter": pol_filter,
-            "edge_families": fams,
-            "paths": paths,
-            "refs": refs,
-            "warnings": [],
-        }
 
     # ------------------------------------------------------------------
     # find_proxy_chains (P5 / #99) — INDIRECT links A → … → B
@@ -2317,6 +2398,7 @@ class PostgresQdrantSubstrateQueryPort:
         polarity_product: int | None = None,
         limit: int = 30,
         families: list[str] | None = None,
+        as_of: str | None = None,
     ) -> dict[str, Any]:
         """Proxy / cut-out chains from ``subject`` to ``obj`` — INDIRECT only.
 
@@ -2328,93 +2410,30 @@ class PostgresQdrantSubstrateQueryPort:
         reads: how is A connected to B when they are not (only) directly
         connected.  Same cyclic-graph VISITED-SET guard, hop cap, and
         ``polarity_product`` filter as :meth:`query_paths`.
+
+        V3/P3 — ``as_of`` inherits :meth:`query_paths`'s per-hop temporal
+        gate exactly.
         """
-        # Reuse the bounded walk, then keep only the indirect chains.
-        base = await self.query_paths(
+        try:
+            as_of_dt = (
+                _temporal.parse_instant(as_of, name="as_of")
+                if as_of is not None else None
+            )
+        except _temporal.TemporalParameterError as exc:
+            return {
+                "subject": subject, "object": obj,
+                "chains": [], "refs": [], "error": str(exc),
+            }
+        return await _walks.find_proxy_chains(
+            self._pool,
             subject=subject,
             obj=obj,
             max_hops=max_hops,
             polarity_product=polarity_product,
-            limit=_GRAPH_MAX_PATHS,
+            limit=limit,
             families=families,
+            as_of=as_of_dt,
         )
-        if base.get("error"):
-            return {
-                "subject": subject,
-                "object": obj,
-                "chains": [],
-                "refs": [],
-                "error": base["error"],
-            }
-        if base.get("warnings"):
-            # Propagate the miss rather than reporting "no proxy chains".
-            return {
-                "subject": subject, "object": obj,
-                "max_hops": base["max_hops"],
-                "polarity_product_filter": base["polarity_product_filter"],
-                "edge_families": base["edge_families"],
-                "chains": [], "refs": [], "warnings": base["warnings"],
-            }
-        clamped_limit = max(1, min(int(limit), _GRAPH_MAX_PATHS))
-
-        # A single-edge path is "proxy" only if that edge reifies an
-        # intermediary cut-out; pull the intermediary for the 1-hop edges so
-        # we can keep the A→via→B reified proxies and drop bare A→B edges.
-        # The cut-out is an entity ID now, so it is NAMED by a join instead of
-        # returned as whatever string the producer happened to write.
-        single_edge_ids: list[str] = [
-            p["edge_ids"][0]
-            for p in base["paths"]
-            if p["hops"] == 1 and p["edge_ids"]
-        ]
-        intermediary_by_edge: dict[str, str | None] = {}
-        if single_edge_ids:
-            async with self._pool.acquire() as conn:
-                irows = await conn.fetch(
-                    """
-                    SELECT e.id, p.canonical_name AS intermediary
-                      FROM entity_edges e
-                      LEFT JOIN entity_profiles p ON p.id = e.intermediary_id
-                     WHERE e.id = ANY($1::uuid[])
-                    """,
-                    single_edge_ids,
-                )
-            intermediary_by_edge = {
-                str(r["id"]): r["intermediary"] for r in irows
-            }
-
-        chains: list[dict[str, Any]] = []
-        refs: list[str] = []
-        for p in base["paths"]:
-            if p["hops"] >= 2:
-                indirect = True
-                intermediary = None
-            else:
-                intermediary = intermediary_by_edge.get(p["edge_ids"][0]) \
-                    if p["edge_ids"] else None
-                indirect = bool(intermediary)
-            if not indirect:
-                continue
-            chain = dict(p)
-            if intermediary is not None:
-                chain["intermediary"] = intermediary
-            for e in p["edge_ids"]:
-                if e not in refs:
-                    refs.append(e)
-            chains.append(chain)
-            if len(chains) >= clamped_limit:
-                break
-
-        return {
-            "subject": subject,
-            "object": obj,
-            "max_hops": base["max_hops"],
-            "polarity_product_filter": base["polarity_product_filter"],
-            "edge_families": base["edge_families"],
-            "chains": chains,
-            "refs": refs,
-            "warnings": [],
-        }
 
     # ------------------------------------------------------------------
     # query_brokers (P5 / #99) — entities ON the paths between two camps
@@ -2428,6 +2447,7 @@ class PostgresQdrantSubstrateQueryPort:
         max_hops: int = 3,
         limit: int = 50,
         families: list[str] | None = None,
+        as_of: str | None = None,
     ) -> dict[str, Any]:
         """Entities that SIT ON paths between two entity sets (brokers).
 
@@ -2440,8 +2460,8 @@ class PostgresQdrantSubstrateQueryPort:
         Brokers are ranked by how many distinct A→B paths run through them
         (betweenness-flavored degree), then named.
 
-        Both camps are clamped to :data:`_BROKER_MAX_CAMP` members and the
-        result to :data:`_BROKER_MAX_RESULTS` brokers.
+        Both camps are clamped to the walk module's camp cap and the result
+        to its broker cap (``substrate_graph_walks``).
 
         W3-A — CUT OVER FROM ``nexuses``. The tally key is the entity ID, so
         two surfaces of one actor (an alias, or a name the GC has since merged)
@@ -2454,95 +2474,31 @@ class PostgresQdrantSubstrateQueryPort:
         A camp member that resolves to no entity is reported in ``warnings``
         and excluded, never silently dropped: a ranking over half a camp is a
         different answer from one over all of it.
+
+        V3/P3 — ``as_of`` (ISO-8601, validity time) applies the canonical
+        as-of predicate per hop on BOTH the seed and the recursive arm, so
+        the brokerage ranking is computed over the graph as it stood on
+        date D. The envelope then carries ``unbounded_start``.
         """
-        a_names = [str(x).strip() for x in (camp_a or []) if str(x).strip()]
-        b_names = [str(x).strip() for x in (camp_b or []) if str(x).strip()]
-        a_names = a_names[:_BROKER_MAX_CAMP]
-        b_names = b_names[:_BROKER_MAX_CAMP]
-        if not a_names or not b_names:
+        try:
+            as_of_dt = (
+                _temporal.parse_instant(as_of, name="as_of")
+                if as_of is not None else None
+            )
+        except _temporal.TemporalParameterError as exc:
             return {
-                "camp_a": camp_a,
-                "camp_b": camp_b,
-                "brokers": [],
-                "refs": [],
-                "error": "both camp_a and camp_b must be non-empty",
+                "camp_a": camp_a, "camp_b": camp_b,
+                "brokers": [], "refs": [], "error": str(exc),
             }
-        hops = max(1, min(int(max_hops), _GRAPH_MAX_HOPS))
-        clamped_limit = max(1, min(int(limit), _BROKER_MAX_RESULTS))
-        fams = _walk_families(families)
-
-        # Walk from every camp_a seed; keep terminal paths that land on a
-        # camp_b member. The interior nodes (everything between the first and
-        # last) are the brokers. VISITED-SET guard + hop cap as above.
-        async with self._pool.acquire() as conn:
-            resolved = await _resolve_walk_endpoints(conn, a_names + b_names)
-            a_ids = [resolved[n.lower()] for n in a_names
-                     if resolved.get(n.lower()) is not None]
-            b_ids = [resolved[n.lower()] for n in b_names
-                     if resolved.get(n.lower()) is not None]
-            # A camp member that resolves to nothing is NAMED, not dropped
-            # silently: a broker set computed over half a camp is a different
-            # answer from one computed over all of it, and the caller has to be
-            # able to tell those apart.
-            warnings = [
-                f"camp member {n!r} matches no entity, or matches several "
-                f"(ambiguous) — excluded from the walk"
-                for n in a_names + b_names if resolved.get(n.lower()) is None
-            ]
-            if not a_ids or not b_ids:
-                return {
-                    "camp_a": a_names, "camp_b": b_names, "max_hops": hops,
-                    "edge_families": fams, "brokers": [], "refs": [],
-                    "warnings": warnings or [
-                        "neither camp resolved to any entity"],
-                }
-            records = await conn.fetch(
-                _BROKER_WALK_SQL, a_ids, b_ids, hops, fams, _GRAPH_MAX_PATHS)
-            names = await _hydrate_node_names(
-                conn, {n for r in records for n in (r["node_path"] or [])})
-
-        # Tally interior nodes (exclude the camp endpoints themselves). The
-        # tally key is the entity ID now, so two surfaces of one actor can no
-        # longer be counted as two different brokers — which is exactly the
-        # error a brokerage ranking must not make.
-        broker_paths: dict[Any, int] = {}
-        broker_refs: dict[Any, set[str]] = {}
-        camp_set = set(a_ids) | set(b_ids)
-        for r in records:
-            node_path = list(r["node_path"] or [])
-            edge_ids = [str(e) for e in (r["edge_ids"] or [])]
-            for node in node_path[1:-1]:  # drop both camp endpoints
-                if node in camp_set:
-                    continue
-                broker_paths[node] = broker_paths.get(node, 0) + 1
-                broker_refs.setdefault(node, set()).update(edge_ids)
-
-        ranked = sorted(
-            broker_paths.items(), key=lambda kv: kv[1], reverse=True
-        )[:clamped_limit]
-        refs: list[str] = []
-        brokers: list[dict[str, Any]] = []
-        for node_id, count in ranked:
-            edge_ids = sorted(broker_refs.get(node_id, set()))
-            for e in edge_ids:
-                if e not in refs:
-                    refs.append(e)
-            brokers.append({
-                "entity": names.get(node_id, str(node_id)),
-                "entity_id": str(node_id),
-                "path_count": count,
-                "edge_ids": edge_ids,
-            })
-
-        return {
-            "camp_a": a_names,
-            "camp_b": b_names,
-            "max_hops": hops,
-            "edge_families": fams,
-            "brokers": brokers,
-            "refs": refs,
-            "warnings": warnings,
-        }
+        return await _walks.query_brokers(
+            self._pool,
+            camp_a=camp_a,
+            camp_b=camp_b,
+            max_hops=max_hops,
+            limit=limit,
+            families=families,
+            as_of=as_of_dt,
+        )
 
     # ==================================================================
     # JOURNAL SELF-INSTRUMENT readers (Journal Assessor Wave 1, plan §5).
@@ -2633,23 +2589,7 @@ class PostgresQdrantSubstrateQueryPort:
             )
             clauses.append(f"f.produced_at >= ${len(params)}")
         params.append(clamped_limit)
-        sql = (
-            "SELECT f.id, f.title, f.body, f.confidence, f.severity, "
-            "       f.target_id, f.analyst_id, f.produced_at, "
-            "       c.critic_score AS critic_score "
-            "FROM analyst_outputs f "
-            "LEFT JOIN LATERAL ( "
-            "  SELECT (cr.data->>'overall_score')::real AS critic_score "
-            "  FROM analyst_outputs cr "
-            "  WHERE cr.kind = 'critique' "
-            "    AND cr.data->>'analyzed_output_id' = f.id::text "
-            "    AND cr.data->>'overall_score' IS NOT NULL "
-            "  ORDER BY cr.produced_at DESC, cr.id DESC LIMIT 1 "
-            ") c ON TRUE "
-            f"WHERE {' AND '.join(clauses)} "
-            "ORDER BY f.produced_at DESC, f.id DESC "
-            f"LIMIT ${len(params)}"
-        )
+        sql = critic_folded_findings_sql(" AND ".join(clauses), len(params))
         async with self._pool.acquire() as conn:
             records = await conn.fetch(sql, *params)
         rows: list[dict[str, Any]] = []
@@ -3342,21 +3282,32 @@ class PostgresQdrantSubstrateQueryPort:
             {"source_id": r["source_id"], "name": r["name"], "state": r["state"]}
             for r in non_active_records
         ]
+        # KEY ORDER IS LOAD-BEARING (2026-09-25, the lens "three active feeds"
+        # fabrication). The GATHER preamble renders a non-signal tool result as
+        # ``json.dumps(result)[:600]`` (inline_target's ``tool_summaries``): with
+        # ``rows`` first, those 600 characters were two rows cut mid-JSON and the
+        # ``summary`` at the tail never reached the narrator — every lens then
+        # spoke the rows it saw as the fleet ("active_total = 3 … total_wired =
+        # 3"; the honesty phase stamped ``source_health_fabricated`` on each).
+        # The NARRATE loop's ``_bounded_tool_json`` (4,000 chars) sheds whole
+        # rows and keeps the other keys, so it was never the site. The
+        # denominator-honest aggregate goes FIRST so ANY prefix keeps it; the
+        # row list and the non-active roster are what a bound sheds.
         return {
-            "rows": rows,
-            "refs": [],
+            # H-1 denominator-honest aggregates (whole-fleet, not row-capped).
+            "summary": summary,
             "count": len(rows),
-            # Capped/active-only view (back-compat). Prefer `summary` for the truth.
-            "silent_count": silent_count,
-            "error_count": error_count,
-            "silent_threshold_hours": silent_hours,
             # Coverage honesty (W2-T6): how many ACTIVE heads the row scan
             # actually covered vs the fleet; rows are staleness-ordered so a
             # truncated scan only sheds the freshest feeds.
             "scanned": len(records),
             "truncated": len(records) < summary["active_total"],
-            # H-1 denominator-honest aggregates (whole-fleet, not row-capped).
-            "summary": summary,
+            # Capped/active-only view (back-compat). Prefer `summary` for the truth.
+            "silent_count": silent_count,
+            "error_count": error_count,
+            "silent_threshold_hours": silent_hours,
+            "refs": [],
+            "rows": rows,
             "non_active": non_active,
         }
 

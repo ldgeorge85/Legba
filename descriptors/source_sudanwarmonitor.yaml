@@ -1,0 +1,96 @@
+# sources_wave_2 — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# Sudan War Monitor — a collaborative of journalists and open-source
+# researchers tracking Sudan's war (Substack-hosted, sudanwarmonitor.com).
+# Closes the same audit-flagged gap as source_dabangasudan.yaml
+# (planning/COVERAGE_VS_SELECTION_AUDIT_2026-09-07.md item #5, Kalogi
+# strikes / South Kordofan): the audit's own remedy list names it directly
+# alongside Sudan Tribune, Radio Dabanga and OHCHR/UN News. Also stands in
+# for Sudan Tribune, which was researched and is NOT shippable — see below.
+# Verified live 2026-09-07: valid RSS 2.0, title "Sudan War Monitor", newest
+# item same-day, all 5 checked items dated 2026-09-03..06 (well inside 7d);
+# items include direct South Kordofan ground reporting (a WFP-convoy-attack
+# item, IDP counts from Kurmuk/Abbasiya localities) — the exact locality
+# class the audit found absent around Kalogi.
+#
+# SUDAN TRIBUNE (the outlet actually named in the brief) was researched and
+# is NOT shippable: sudantribune.com returned HTTP 403 to this fetcher on
+# EVERY path tried — bare https and www roots, /feed/, /feed, ?feed=rss2,
+# /category/sudan/feed/ — including the plain homepage, which is a
+# categorical site-level bot-block, not a feed-specific one. The
+# WordPress-standard guess (https://sudantribune.com/feed/) is the most
+# likely real route if the operator's production fetcher (different
+# UA/IP reputation) can reach it, but it is UNVERIFIED and not registered
+# here. Reported, not shipped; see the sources-wave-2 report.
+#
+# LANGUAGE NOTE: the feed interleaves English and Arabic posts (the checked
+# window's 5 most recent items were all Arabic-language ground dispatches);
+# scope.languages declares both so language_detect is not surprised by
+# either.
+#
+# source_class: analysis. This is an open-source-investigation/monitoring
+# collaborative (methodology-driven verification of a live conflict), the
+# same house bucket as source_isw.yaml / source_dfrlab.yaml, not a
+# traditional newsroom.
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after verifying the route
+# live on the instance.
+
+identity:
+  id: source.sudanwarmonitor.news
+  name: Sudan War Monitor
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: sources_wave_2
+  created: "2026-09-07T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [SD]
+  languages: [en, ar]
+  tags: [news, africa, sudan, analysis, sources_wave_2]
+  source_class: analysis
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "20 2-23/6 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://sudanwarmonitor.com/feed"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language —
+    # load-bearing here since the feed mixes en/ar.
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

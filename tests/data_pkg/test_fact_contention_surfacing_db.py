@@ -353,14 +353,32 @@ async def test_llm_verdict_cache_round_trip(pg_pool, clean, monkeypatch):
         assert cached["winner_value_key"] == "de-escalating"
         assert cached["model_id"] == "vllm-test"
 
-    # Second pass, unchanged evidence — MY verdict is served from cache: the
-    # subject's prompt count must not grow.
+    # Second pass, unchanged evidence — the model is not re-asked. Since the
+    # 2026-09-20 starvation fix there are TWO layers that guarantee that, and
+    # this test pins both.
+    #
+    # (a) Default: the pass fingerprints the group's raw rows and finds them
+    #     identical, so the group is skipped WHOLE — the tie-break is never
+    #     reached, which is a stronger guarantee than the cache and costs no
+    #     query at all.
     counts2 = await arb._run_arbiter(pg_pool, llm)
+    assert sum(_skey(subject) in p for p in llm.prompts) == 1, (
+        "an unchanged group must not re-call the LLM"
+    )
+    assert counts2["groups_unchanged"] >= 1
+
+    # (b) With the skip disabled (the operator escape hatch), the group IS
+    #     re-decided every pass — and then the verdict CACHE is what keeps the
+    #     model out of it. Without this half, turning the skip off would
+    #     silently uncover a regression in the cache.
+    monkeypatch.setenv("LEGBA_CONTENTION_REFRESH_HOURS", "0")
+    counts3 = await arb._run_arbiter(pg_pool, llm)
     assert sum(_skey(subject) in p for p in llm.prompts) == 1, (
         "cache HIT must not re-call the LLM for this group"
     )
-    assert counts2["llm_cache_hits"] >= 1
-    assert counts2["llm_tiebreaks"] >= 1
+    assert counts3["groups_unchanged"] == 0
+    assert counts3["llm_cache_hits"] >= 1
+    assert counts3["llm_tiebreaks"] >= 1
 
 
 @pytest.mark.integration

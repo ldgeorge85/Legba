@@ -73,7 +73,7 @@ method:
   # MEASURE stage (the paired faithfulness eval) is ~valset × (1 generate + 1
   # verify) LLM calls — capped by faithfulness_valset_max (12) below. 150k
   # leaves comfortable headroom for one weekly compile + measure.
-  budget_tokens_per_day: 150000
+  budget_tokens_per_day: 0
 
 cadence:
   # WEEKLY — Mon 04:00 UTC, OFFSET from calibration_tracking (03:00) and the

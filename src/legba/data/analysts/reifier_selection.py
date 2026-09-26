@@ -53,6 +53,22 @@ UNORDERED co-mention; both ``A→B`` and ``B→A`` can exist as distinct rows (t
 would mint two nexuses for one co-mention pair, so an open nexus in EITHER
 direction retires the candidate.
 
+ADDENDUM (2026-09-23) — the already-reified HALF of stage 2 moved into stage 1.
+Measured on the live pool (the 2026-09-23 12:45Z receipt): 1,330 of every 1,800
+examined rows were dead on arrival at stage 2 — a pending row whose
+keeper-resolved pair already carried an open nexus, discovered only AFTER
+paying for the keeper resolution on all 1,800. :data:`QUALIFICATION_SCAN_SQL`
+now carries the SAME bidirectional open-nexus test as a negated predicate
+(:data:`_ALREADY_REIFIED_GUARD_SQL`, over a SET-BASED keeper map —
+:func:`_guarded_pool_sql`), so the scan itself returns only
+rows that have NOT been reified — stage 1's head is now ``examine`` USEFUL
+candidates, not ``examine`` raw rows most of which stage 2 would have thrown
+away. Stage 2 still runs :func:`resolve_pair` per survivor (junk/self-loop
+detection, and the ``keeper_source``/``keeper_target`` the caller needs); the
+receipt's ``already_reified`` counter is now read from a companion count query
+(:data:`ALREADY_REIFIED_COUNT_SQL`) instead of a Python loop, because a row the
+SQL excludes is invisible to the query that excluded it.
+
 Nothing here writes. It reads, it resolves, it counts, and it hands the caller a
 window plus a :class:`SelectionCounters` receipt.
 """
@@ -64,7 +80,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Sequence
 
 from .._entity_canon import canonicalize_entity, is_junk_entity, same_referent
-from .._entity_resolve import resolve_keeper
+from .._entity_resolve import _CLASS_PRIORITY_SQL, resolve_keeper
 from .edge_qualification import (
     MIN_INDEPENDENT_SOURCES,
     RECOMMENDED_BAR,
@@ -86,45 +102,200 @@ MIN_EDGE_CONFIDENCE: float = 0.45
 PENDING_STATUS: str = "pending"
 
 #: How many rows to READ per row the caller wants to TYPE. Headroom for the
-#: candidates the Python stage drops (junk endpoints, self-loops, and pairs an
-#: open nexus already covers). 3× is measured-generous: on the live pool the
-#: keeper-aware guard retires well under a third of a pending window, because
-#: pending rows are by definition the ones that have NOT been reified.
+#: candidates stage 2 still drops (junk endpoints, self-loops) now that the
+#: already-reified guard runs INSIDE the SQL scan itself (2026-09-23 — see
+#: :data:`_ALREADY_REIFIED_GUARD_SQL`) rather than after the fact. Before that
+#: fix this multiplier ALSO had to cover the already-reified drop, and it did
+#: not: the 2026-09-23 12:45Z receipt measured 1,330 of 1,800 examined rows
+#: (74%) as already-reified, not "well under a third" as this comment used to
+#: claim.
 EXAMINE_MULTIPLIER: int = 3
 
 #: Absolute ceiling on the SQL stage regardless of ``limit × EXAMINE_MULTIPLIER``.
 #: Bounds one run's read + keeper-resolution work; the cap is the throughput
 #: dial, this is the blast radius.
 MAX_EXAMINE: int = 8000
+#: H9 (2026-09-23) — a candidate the typer REJECTED is stamped ``reviewed_at`` and
+#: waits this many days before the scan may hand it to the model again. Measured
+#: before this: of the scan's top 1,800 pending, 907 were not reified and 847 of
+#: those were older than 14 days — the same ~470 high-scoring rejects typed twice a
+#: day for up to the 30-day age-out, while fresh candidates never reached the head.
+#: A rejection is stochastic at temperature 1.0, so the row stays ``pending`` (the
+#: governance pass keeps owning ``status``); only the re-type spacing changes.
+REJECT_COOLDOWN_DAYS: int = 7
 
 
 # ---------------------------------------------------------------------------
 # Queries
 # ---------------------------------------------------------------------------
 
+#: H9's cooldown predicate, templated so :data:`QUALIFICATION_SCAN_SQL` and
+#: :data:`ALREADY_REIFIED_COUNT_SQL` render it identically and can never
+#: silently drift apart on which rows even ENTER the qualifying pool. The two
+#: queries number their bind parameters differently (the scan carries a row
+#: cap the count query has no use for), so the cooldown's own placeholder
+#: number is the one thing each caller supplies.
+def _status_filter(cooldown_param: str) -> str:
+    return (
+        "pe.status = $1 AND pe.confidence >= $2 "
+        "AND (pe.reviewed_at IS NULL OR pe.reviewed_at < now() - "
+        f"make_interval(days => {cooldown_param}))"
+    )
+
+
+#: ``resolve_keeper``'s active-row filter, restated for the SET-BASED keeper
+#: map below (same predicate ``_entity_resolve._EXACT_SQL`` carries).
+_ACTIVE_PROFILE_SQL = "COALESCE(ep.data->>'gc_status', '') NOT IN ('merged', 'junk')"
+
+
+#: The scored pool with BOTH endpoints keeper-resolved — SET-BASED, never a
+#: correlated probe per row. Measured on the live pool (2026-09-24 03:37Z, the
+#: review of this lane): a per-row correlated ``entity_profiles`` probe (an
+#: ``OR`` over an exact-name match and an alias-containment ``EXISTS``, which
+#: no index can serve) could not finish over the ~36,000-row qualifying pool
+#: inside a 180 s statement timeout — 36,000 × 2 × 148,000 profile rows. This
+#: shape finishes in ~8 s, of which ~6 s is the pre-existing pool scan itself:
+#:
+#: * ``keeper_aliases`` expands every active profile's ``merged_aliases`` ONCE
+#:   (~23,000 rows on the live substrate, one 80 ms scan);
+#: * ``pool`` is :func:`~.edge_qualification.scored_pool_sql` with the hard
+#:   independent-source floor pushed inside, so ``surfaces`` sees only rows the
+#:   caller could ever type;
+#: * ``surfaces`` is the DISTINCT set of endpoint surfaces in that pool
+#:   (~13,000 live);
+#: * ``keeper_map`` resolves each surface the way ``resolve_keeper``'s two
+#:   FASTEST probes do — exact canonical name (hash-joined against
+#:   ``lower(canonical_name)``) UNION exact alias containment (hash-joined
+#:   against ``keeper_aliases``) — with the SAME active-row filter and the SAME
+#:   class-priority tie-break (:data:`_CLASS_PRIORITY_SQL`, IMPORTED from
+#:   ``_entity_resolve`` rather than restated; this module already imports
+#:   :func:`resolve_keeper` from that sibling, so the layering direction is
+#:   established);
+#: * ``resolved`` is the pool with ``ks``/``kt`` — the keeper surface, or the
+#:   raw surface itself when no keeper matches (``resolve_keeper``'s own
+#:   degrade-not-break contract).
+#:
+#: Deliberately DOES NOT run the normalized/article-stripped fallback probe
+#: (``_ALIAS_SQL``) or the E1.1 override — duplicating ``resolve_keeper``'s
+#: full branching a second time in SQL would be the wrong trade for a
+#: pre-filter. The Python-side :func:`resolve_pair` (still run per survivor,
+#: for ``keeper_source``/``keeper_target``) stays the single source of truth
+#: for a candidate that actually reaches the typer; this map only needs to
+#: catch the common case cheaply, in the planner, before stage 2 pays for a
+#: full keeper resolution.
+#:
+#: ``status_filter`` is the H9-templated pool predicate; ``floor_param`` the
+#: bind placeholder carrying the independent-source floor (the two callers
+#: number their parameters differently).
+def _guarded_pool_sql(status_filter: str, floor_param: str) -> str:
+    prio = _CLASS_PRIORITY_SQL.replace("CASE entity_class", "CASE ep.entity_class", 1)
+    return f"""WITH keeper_aliases AS (
+    SELECT lower(btrim(al)) AS alias, ep.canonical_name, {prio} AS prio, ep.created_at
+      FROM entity_profiles ep
+      CROSS JOIN LATERAL jsonb_array_elements_text(
+          CASE WHEN jsonb_typeof(ep.data->'merged_aliases') = 'array'
+               THEN ep.data->'merged_aliases' ELSE '[]'::jsonb END) AS al
+     WHERE {_ACTIVE_PROFILE_SQL}
+), pool AS (
+    SELECT * FROM (
+{scored_pool_sql(status_filter=status_filter)}
+    ) p WHERE p.independent_sources >= {floor_param}
+), surfaces AS (
+    SELECT DISTINCT lower(btrim(source_entity)) AS s FROM pool
+    UNION
+    SELECT DISTINCT lower(btrim(target_entity)) FROM pool
+), keeper_map AS (
+    SELECT DISTINCT ON (m.s) m.s, lower(m.canonical_name) AS keeper
+      FROM (
+        SELECT s.s, ep.canonical_name, {prio} AS prio, ep.created_at
+          FROM surfaces s
+          JOIN entity_profiles ep ON lower(ep.canonical_name) = s.s
+         WHERE {_ACTIVE_PROFILE_SQL}
+        UNION ALL
+        SELECT s.s, ka.canonical_name, ka.prio, ka.created_at
+          FROM surfaces s
+          JOIN keeper_aliases ka ON ka.alias = s.s
+      ) m
+     ORDER BY m.s, m.prio, m.created_at ASC
+), resolved AS (
+    SELECT e.*, coalesce(ks.keeper, lower(btrim(e.source_entity))) AS ks,
+                coalesce(kt.keeper, lower(btrim(e.target_entity))) AS kt
+      FROM pool e
+      LEFT JOIN keeper_map ks ON ks.s = lower(btrim(e.source_entity))
+      LEFT JOIN keeper_map kt ON kt.s = lower(btrim(e.target_entity))
+)
+"""
+
+
+#: The already-reified test itself, as a boolean SQL expression over the
+#: ``resolved`` CTE's ``e.ks`` / ``e.kt`` (:func:`_guarded_pool_sql`) — the
+#: SAME bidirectional open-nexus question :data:`ALREADY_REIFIED_SQL` asks for
+#: an already-resolved pair, inlined so the planner answers it server-side
+#: (two ``idx_nexuses_triple_open`` probes per row) instead of round-tripping
+#: through Python once per examined row (the cost the 2026-09-23 12:45Z
+#: receipt measured: 1,330 of 1,800 examined rows paid for a keeper resolution
+#: whose only purpose was to find out they were dead). Referenced by BOTH
+#: :data:`QUALIFICATION_SCAN_SQL` (negated, to EXCLUDE) and
+#: :data:`ALREADY_REIFIED_COUNT_SQL` (bare, to COUNT), so the two can never
+#: disagree about what "already reified" means.
+_ALREADY_REIFIED_GUARD_SQL = (
+    "EXISTS (\n"
+    "    SELECT 1 FROM nexuses n\n"
+    "     WHERE n.valid_until IS NULL AND n.superseded_by IS NULL\n"
+    "       AND (\n"
+    "             (lower(n.subject) = e.ks AND lower(n.object) = e.kt)\n"
+    "          OR (lower(n.subject) = e.kt AND lower(n.object) = e.ks)\n"
+    "       )\n"
+    ")"
+)
+
 #: Stage 1a — SCORE the live queue. ``$1`` status, ``$2`` confidence floor,
-#: ``$3`` minimum independent sources, ``$4`` row cap.
+#: ``$3`` minimum independent sources, ``$4`` row cap, ``$5`` the reject cooldown in days
+#: (H9: a row stamped ``reviewed_at`` inside the cooldown is not offered again).
 #:
-#: Ordered by the QUALIFICATION SCORE, not by ``proposed_edges.confidence``.
-#: That column is accumulated co-mention weight: it cannot tell nine newsrooms
-#: independently reporting a relationship from one wire story syndicated to nine
-#: outlets, which for a graph whose whole claim is that edges are EARNED is the
-#: wrong quantity to sort on (``docs/TYPING_BAKEOFF_2026-08-03.md`` §2.1).
+#: Ordered by the SAME qualification score the bar is measured against, so the
+#: window is a prefix of the best-qualified pending rows — never the
+#: highest-confidence rows that happen to fail the bar. Two thresholds:
+#: ``pe.confidence >= $2`` cuts the raw queue on the extractor's own number;
+#: ``e.independent_sources >= $3`` is the HARD floor — anything below it can
+#: never clear the bar, so it never enters the window. On the live substrate
+#: the vast majority of the pending pool rests on a single independent source,
+#: so the floor takes the scan from ~176,000 rows to ~36,000 in one predicate.
 #:
-#: The independent-source floor is pushed into SQL because it is a HARD gate,
-#: not a ranking — and because it is what makes this query fast: 92.1% of the
-#: pending pool rests on a single independent source, so the floor takes the
-#: scan from ~176,000 rows to ~13,000 in one predicate.
+#: The already-reified guard (2026-09-23, :data:`_ALREADY_REIFIED_GUARD_SQL`,
+#: set-based since 2026-09-24 via :func:`_guarded_pool_sql`) is ALSO pushed
+#: into SQL, negated, so the LIMIT below applies to USEFUL candidates rather
+#: than to a raw window most of which stage 2 would throw away — see the module
+#: docstring's 2026-09-23 addendum.
 #:
 #: Deliberately narrow: ids and numbers only. The row payload (evidence text,
 #: lineage) is fetched for the WINNERS by :data:`CANDIDATE_FETCH_SQL`, so a
-#: 13,000-row scan never drags 13,000 evidence excerpts through the CTE chain.
+#: 36,000-row scan never drags 36,000 evidence excerpts through the CTE chain.
 QUALIFICATION_SCAN_SQL = (
-    scored_pool_sql(status_filter="pe.status = $1 AND pe.confidence >= $2")
-    + """
- WHERE e.independent_sources >= $3
+    _guarded_pool_sql(status_filter=_status_filter("$5"), floor_param="$3")
+    + f"""SELECT e.*
+  FROM resolved e
+ WHERE NOT ({_ALREADY_REIFIED_GUARD_SQL})  -- reifier_selection.py:already_reified
  ORDER BY qual_score DESC, e.produced_at DESC
  LIMIT $4
+"""
+)
+
+#: The companion to :data:`QUALIFICATION_SCAN_SQL` that makes the receipt's
+#: ``already_reified`` counter possible. A row the scan EXCLUDES is invisible
+#: to the scan itself, so the count can't come from ``len(scan)`` arithmetic —
+#: this asks the identical already-reified question, un-negated, over the SAME
+#: qualifying pool (status / confidence floor / H9 cooldown / independent-
+#: source floor — everything the scan filters on EXCEPT the guard and the row
+#: cap) and returns how many of it the guard would exclude. ``$1`` status,
+#: ``$2`` confidence floor, ``$3`` minimum independent sources, ``$4`` the H9
+#: reject cooldown in days. No row cap: a ``count(*)`` over the qualifying pool
+#: is one aggregate, not a materialized, LIMIT-bound window.
+ALREADY_REIFIED_COUNT_SQL = (
+    _guarded_pool_sql(status_filter=_status_filter("$4"), floor_param="$3")
+    + f"""SELECT count(*) AS n
+  FROM resolved e
+ WHERE ({_ALREADY_REIFIED_GUARD_SQL})
 """
 )
 
@@ -190,8 +361,10 @@ class SelectionCounters:
     says WHERE it collapsed.
     """
 
-    #: Rows the SCORING scan returned: pending, above the confidence floor, above
-    #: the hard independent-source floor, best-scoring first, bounded by
+    #: Rows the SCORING scan returned: pending, above the confidence floor,
+    #: above the hard independent-source floor, NOT already reified (2026-09-23
+    #: — the already-reified guard now runs INSIDE the scan, see
+    #: :data:`_ALREADY_REIFIED_GUARD_SQL`), best-scoring first, bounded by
     #: ``limit × EXAMINE_MULTIPLIER``.
     examined: int = 0
     #: Of those, how many cleared the qualification bar.
@@ -203,10 +376,20 @@ class SelectionCounters:
     #: costs nothing and is the difference between "we are behind" and "we are
     #: caught up".
     qualified: int = 0
+    #: V3/P5 — the DRAIN/STEADY distinction above, as a named flag rather than
+    #: an inference the reader has to make. ``True`` exactly when the scoring
+    #: scan returned its LIMIT's worth of rows (``examined == examine``) AND
+    #: every examined row cleared the bar — i.e. the qualifying supply provably
+    #: extends below the cut. ``False`` covers both "the pool ran out inside
+    #: the window" and the degenerate empty scan.
+    scan_limit_binding: bool = False
     #: Dropped before any keeper work: junk endpoint or a canon self-loop.
     skipped_endpoints: int = 0
-    #: Dropped by the merge-aware guard — an open nexus already covers the
-    #: KEEPER-RESOLVED pair in one direction or the other.
+    #: Excluded by the merge-aware guard — an open nexus already covers the
+    #: KEEPER-RESOLVED pair in one direction or the other. The guard itself now
+    #: runs INSIDE :data:`QUALIFICATION_SCAN_SQL` (2026-09-23), so these rows
+    #: never reach ``examined``; the count comes from the companion
+    #: :data:`ALREADY_REIFIED_COUNT_SQL` query, not a Python loop over survivors.
     already_reified: int = 0
     #: Dropped because the keeper rewrite collapsed both endpoints onto one
     #: entity (two surfaces of the same actor — never a relationship).
@@ -217,13 +400,36 @@ class SelectionCounters:
     #: Handed to the typer (``min(eligible, limit)``).
     selected: int = 0
 
-    def as_dict(self) -> dict[str, int]:
-        return {k: int(v) for k, v in asdict(self).items()}
+    def as_dict(self) -> dict[str, Any]:
+        # Preserve field types — scan_limit_binding is a bool and must
+        # serialize as jsonb `true`, not the integer 1 an int() map makes.
+        return dict(asdict(self))
 
 
 # ---------------------------------------------------------------------------
 # Resolution
 # ---------------------------------------------------------------------------
+
+
+#: H9 — the rejection write-back. ``status`` is untouched (the governance pass owns
+#: it); ``reviewed_at`` is the stamp :data:`QUALIFICATION_SCAN_SQL` reads against the
+#: cooldown. Only still-pending rows are stamped, so a row governance promoted or
+#: aged out between the scan and this write is left as governance left it.
+MARK_REJECTED_SQL = """
+UPDATE proposed_edges
+   SET reviewed_at = now()
+ WHERE id = ANY($1::uuid[])
+   AND status = 'pending'
+RETURNING id
+"""
+
+
+async def mark_rejected_candidates(conn: Any, ids: Sequence[Any]) -> int:
+    """Stamp ``reviewed_at`` on the candidates the typer rejected; returns how many rows took the stamp."""
+    if not ids:
+        return 0
+    rows = await conn.fetch(MARK_REJECTED_SQL, [str(i) for i in ids])
+    return len(rows)
 
 
 async def resolve_pair(
@@ -297,6 +503,7 @@ async def select_candidates(
     bar: float = RECOMMENDED_BAR,
     min_sources: int = MIN_INDEPENDENT_SOURCES,
     keeper_cache: dict[str, str] | None = None,
+    reject_cooldown_days: int = REJECT_COOLDOWN_DAYS,
 ) -> tuple[list[dict[str, Any]], SelectionCounters]:
     """The per-run candidate window: pending, QUALIFIED, merge-aware-deduped, capped.
 
@@ -330,13 +537,32 @@ async def select_candidates(
     scan = await conn.fetch(
         QUALIFICATION_SCAN_SQL,
         str(status), float(min_confidence), int(min_sources), int(examine),
+        int(reject_cooldown_days),
     )
     counters.examined = len(scan)
+
+    # 2026-09-23 — the already-reified guard now runs INSIDE the scan above
+    # (QUALIFICATION_SCAN_SQL's NOT EXISTS), so an excluded row never reaches
+    # `scan` and can't be counted by len()/loop arithmetic here. This companion
+    # query asks the SAME question, un-negated, over the same qualifying pool.
+    already_reified_n = await conn.fetchval(
+        ALREADY_REIFIED_COUNT_SQL,
+        str(status), float(min_confidence), int(min_sources),
+        int(reject_cooldown_days),
+    )
+    counters.already_reified = int(already_reified_n or 0)
 
     # The scan is already ordered best-first and already carries the hard source
     # floor, so the bar is a prefix cut — everything below it is below it.
     scored = [r for r in scan if float(r["qual_score"] or 0.0) >= float(bar)]
     counters.qualified = len(scored)
+    # V3/P5 — name the DRAIN state on the receipt. The LIMIT binds only when
+    # the scan actually RETURNED its limit's worth (examined == examine);
+    # qualified == examined alone is ambiguous when the pool ran out early.
+    counters.scan_limit_binding = (
+        counters.examined == examine
+        and counters.qualified == counters.examined
+    )
     if not scored:
         logger.info("reifier_selection.window %s", counters.as_dict())
         return [], counters
@@ -380,17 +606,13 @@ async def select_candidates(
             continue
         resolved.append((cand, pair))
 
-    covered = await already_reified(conn, [p for _, p in resolved])
-
-    # Guard the WHOLE examined set before capping, so the drop counters describe
-    # the same population ``examined`` does. The cap is applied last and only to
-    # the survivors — a receipt that stopped counting mid-window would hide
-    # exactly the collapse this module exists to make visible.
+    # The already-reified guard already ran (QUALIFICATION_SCAN_SQL, above) —
+    # every survivor here cleared it. Attach the keeper-resolved endpoints the
+    # write path needs and let the cap apply last, so ``eligible`` is the true
+    # depth of live work available (a receipt that stopped counting mid-window
+    # would hide exactly the collapse this module exists to make visible).
     out: list[dict[str, Any]] = []
     for cand, (k_source, k_target) in resolved:
-        if (k_source.lower(), k_target.lower()) in covered:
-            counters.already_reified += 1
-            continue
         cand["keeper_source"] = k_source
         cand["keeper_target"] = k_target
         out.append(cand)
@@ -410,6 +632,7 @@ __all__ = [
     "EXAMINE_MULTIPLIER",
     "MAX_EXAMINE",
     "QUALIFICATION_SCAN_SQL",
+    "ALREADY_REIFIED_COUNT_SQL",
     "CANDIDATE_FETCH_SQL",
     "ALREADY_REIFIED_SQL",
     "SelectionCounters",

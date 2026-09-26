@@ -37,6 +37,8 @@ import {
   type ConsultSessionSummary,
 } from '@/lib/api'
 import type { PanelProps } from '@/types'
+import { useConsultPanel } from '@/state/consultSession'
+import { questionWithPins } from '@/lib/consultContext'
 
 const POLL_INTERVAL_MS = 3000
 
@@ -54,6 +56,15 @@ function formatApiError(err: unknown): string {
 }
 
 export default function DeepConsultPanel({ registration }: PanelProps) {
+  // Deep Consult shares the ordinary Consult's panel id (the merged wrapper
+  // hands both tabs the same `registration`), so it shares its PIN SET — the
+  // auto-pinned scope and whatever the operator pinned by hand. Before this,
+  // `DeepConsult` sent `{question, …}` with no selection and no pins at all, so
+  // moving a question from Chat to Deep silently dropped the operator's whole
+  // context. `DeepConsultRequest` still declares no `pinned_context` field, so
+  // the pins ride the ONE channel that works against today's backend: the
+  // `[Pinned …]` prefix inside `question` (design §5.4).
+  const { pins } = useConsultPanel(registration.id)
   const [question, setQuestion] = useState('')
   const [scope, setScope] = useState('')
   const [emitFacts, setEmitFacts] = useState(true)
@@ -103,7 +114,7 @@ export default function DeepConsultPanel({ registration }: PanelProps) {
     stopPolling()
     try {
       const resp = await submitDeepConsult({
-        question: trimmed,
+        question: questionWithPins(trimmed, pins),
         scope_predicate: scope.trim() || null,
         emit_facts: emitFacts,
         emit_hypotheses: emitHypotheses,

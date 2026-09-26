@@ -144,6 +144,7 @@ scope:
   # channel set, so classed reporting (the conservative default) even though the
   # shipped EXAMPLE channels are official org channels.
   source_class: reporting
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 
@@ -261,6 +262,20 @@ config:
     raw: 12
   # Bare boolean (no factory wrapper — the unwrap path passes scalars
   # through untouched): media described, never downloaded, stays off.
+  # 2026-09-20 operator: two channels (tassagency_en, ansarollah) timed out on every poll at 15 s; the 30 s / 100-entry
+  # generic poll bound clamped the walk (90 clamps / 48 h). Timeouts and bounds raised to the runtime ceilings.
+  per_channel_timeout_seconds:
+    factory_kind: number
+    raw: 45
+  cycle_timeout_seconds:
+    factory_kind: number
+    raw: 360
+  poll_budget_seconds:
+    factory_kind: number
+    raw: 240
+  max_entries_per_poll:
+    factory_kind: number
+    raw: 1000
   include_media: false
   per_channel_message_limit:
     factory_kind: number

@@ -44,6 +44,7 @@ scope:
   languages: [en]
   tags: [crawl, markdown, structured, discovery]
   source_class: analysis
+  access_class: restricted          # Wave-E — never-bound generic adapter; no concrete source to review terms for — fail-closed until classified at activation
 
 acquisition: poll
 

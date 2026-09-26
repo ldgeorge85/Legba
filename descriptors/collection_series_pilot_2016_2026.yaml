@@ -1,0 +1,547 @@
+# Program 7g-3 — THE FIRST COLLECTION. Drafted 2026-09-24 by lane g0 against
+# planning/PROGRAM_7G_COLLECTIONS_DESIGN_2026-09-25.md §2 (the descriptor
+# family and manifest shape), §3 (the observations table these rows must fit)
+# and §7 (7g-3).
+#
+# A COLLECTION IS NOT A SOURCE. A source is a live feed: it is polled, it has
+# a cadence, its silence is a health signal, its arrival can wake a trigger. A
+# collection is a bounded, versioned, curated HOLDING of the past: loaded once
+# by the operator, never scheduled, and fenced by the `firewall:` block below
+# from every surface that reads "now". That is why this file is
+# `collection_`-prefixed and not `source_`: nothing in the source machinery
+# should ever pick it up.
+#
+# STATE: draft. Lifecycle is draft -> reviewed -> loaded -> superseded (§2).
+# NOTHING IS LOADED BY THIS FILE. The schema (`legba/collection/1.0.0`), the
+# `observations` table, `scripts/load_collection.py` and the registry route
+# are 7g-1's and do not exist yet; this manifest is drafted to the design
+# note's shape so 7g-1 implements a schema this file already satisfies. The
+# licence line is the OPERATOR's to approve (§7) — see `licence:` below.
+#
+# WHAT WAS ACTUALLY FETCHED. Every `coverage:` block in this file was measured
+# against the live providers on 2026-09-24 by
+# `scripts/verify_collection_manifest.py` — not estimated, not recalled. Where
+# a provider does not hold a subject-year, the block says so with a null and a
+# reason; it never says zero. Two real holes are recorded rather than filled:
+#   * World Bank external debt stocks (DT.DOD.DECT.CD) has NO value for US or
+#     IL in any year of the window — the Debtor Reporting System covers
+#     low- and middle-income borrowers only. Absence, not zero.
+#   * EIA crude oil imports/exports (INTL.57-3 / 57-4) were frozen by the
+#     provider in 2021 (`last_updated` 2021-07-09): the series stops at 2020
+#     for US/IL and at 2018 for IR/UA. Four/seven of the ten years are simply
+#     not published. Absence, not zero.
+#
+# THE EIA API KEY QUESTION IS ANSWERED: NO KEY IS NEEDED (see `provider_access`).
+
+identity:
+  id: collection.series_pilot_2016_2026
+  name: "Pilot series collection — World Bank + EIA, four desks, 2016-2025"
+  schema_uri: legba/collection/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L0              # raw provider observations; no analysis
+  state: draft
+  owner: p7g_lane_g0
+  created: "2026-09-24T00:00:00Z"
+
+# §2 — WHERE the holding comes from. `archive_only`: these providers are
+# archives in their own right (World Bank WDI, EIA International Energy Data);
+# no Legba source identity exists for either series API, so there is nothing
+# to stamp `backfill_native` against.
+origin_shape: archive_only
+
+# §3 — the class every loaded row carries in `observations.origin_class`.
+# One of the three HISTORY classes; never `live`, never `seed`.
+origin_class: archive
+
+# §2 — FAILS CLOSED: a manifest without a recorded class does not load.
+# Vocabulary is the access-class one already on sources
+# (legba.data.provenance.access.ACCESS_CLASSES).
+licence_class: public
+
+licence:
+  # The operator approves this block per collection (§7). Both providers are
+  # free, keyless and redistributable; neither carries a noncommercial bar.
+  providers:
+    world_bank:
+      holder: "The World Bank Group"
+      licence: "Creative Commons Attribution 4.0 International (CC BY 4.0)"
+      licence_url: "https://creativecommons.org/licenses/by/4.0/"
+      terms_url: "https://datacatalog.worldbank.org/public-licenses"
+      summary_terms_url: "https://data.worldbank.org/summary-terms-of-use"
+      text: >-
+        World Bank Open Data datasets classified as Public are licensed under
+        CC BY 4.0: free to copy, redistribute, adapt and use commercially,
+        with attribution to The World Bank as the source and a note of any
+        changes made.
+      attribution: "Source: World Bank, World Development Indicators (accessed 2026-09-24)."
+    eia:
+      holder: "U.S. Energy Information Administration"
+      licence: "U.S. Government work — public domain (17 U.S.C. §105)"
+      licence_url: "https://www.eia.gov/about/copyrights_reuse.php"
+      terms_url: "https://www.eia.gov/about/copyrights_reuse.php"
+      text: >-
+        "U.S. government publications are in the public domain and are not
+        subject to copyright protection. You may use and/or distribute any of
+        our data, files, databases, reports, graphs, charts, and other
+        information products that are on our website... if you use or
+        reproduce any of our information products, you should use an
+        acknowledgment, which includes the publication date."
+      attribution: "Source: U.S. Energy Information Administration (Sep 2026)."
+
+# §2 — declared, not assumed. The registry refuses a collection whose
+# `excluded_from` omits any of the eight surfaces the design note lists.
+firewall:
+  readers_opt_in:
+    - consult
+    - research
+    - claim_watch
+    - program6_baselines
+    - replay
+  excluded_from:
+    - cadence_analysts
+    - freshness
+    - source_health
+    - calibration
+    - salience
+    - alerts
+    - reactive_triggers
+    - surge_detection
+
+loader:
+  kind: series_api
+  priority: low
+  batch: 200
+  resume_key: "series_id:subject"
+  # NOTE FOR 7g-1: the two providers are fetched by two different SHAPES under
+  # this one kind — World Bank is a per-(subject, indicator) JSON call, EIA is
+  # ONE bulk JSONL file scanned once for every series and subject in the
+  # manifest. Each series carries its own `fetch.mode` so the loader can
+  # branch without guessing. If 7g-1 would rather split the kinds, the EIA
+  # half is a `series_bulk`; this file names the mode either way.
+  rate_limit_per_second:
+    world_bank: 4
+    eia: 1
+  # House rule (V3_IMPLEMENTATION_PLAN §0): every descriptor declares it.
+  # A collection makes no LLM call at all — it fetches numbers and writes
+  # rows. The zero is the literal truth here, not a cap.
+  budget_tokens_per_day: 0
+
+# The four pilot desks (§7). `subject_kind: country`; the SUBJECT written to
+# `observations.subject` is the ISO-3166-1 alpha-2 code, because that is what
+# the desks' `scope.geo` already carries. `iso3` is recorded only because the
+# EIA series ids are built from alpha-3.
+subject_kind: country
+subjects:
+  - desk: country_g20_us
+    subject: US
+    iso3: USA
+    name: "United States"
+  - desk: country_watch_il
+    subject: IL
+    iso3: ISR
+    name: "Israel"
+  - desk: country_watch_ir
+    subject: IR
+    iso3: IRN
+    name: "Iran, Islamic Rep."
+  - desk: country_watch_ua
+    subject: UA
+    iso3: UKR
+    name: "Ukraine"
+
+# THE VALID-TIME WINDOW of the whole holding — ten years. Every series below
+# narrows to this; none widens past it. (`valid_from`/`valid_to` on a row are
+# the period the number is ABOUT, not when it was fetched — §3.)
+window:
+  valid_from: "2016-01-01"
+  valid_to: "2025-12-31"
+
+provider_access:
+  world_bank:
+    requires_key: false
+    verified: "2026-09-24"
+    note: >-
+      api.worldbank.org/v2 is open, keyless and reachable from this host. One
+      GET per (subject, indicator) returns the whole decade
+      (`?date=2016:2025&per_page=100`).
+  eia:
+    requires_key: false
+    verified: "2026-09-24"
+    note: >-
+      THE KEY QUESTION, ANSWERED. The EIA **v2 REST API**
+      (api.eia.gov/v2/international/...) does require a free registered
+      `api_key` and returns 403 without one. The **bulk download route does
+      not**: `https://api.eia.gov/bulk/manifest.txt` (HTTP 200, 28 KB) and
+      `https://api.eia.gov/bulk/INTL.zip` (HTTP 200, 24.2 MB, redirecting to
+      `https://www.eia.gov/opendata/bulk/INTL.zip`) both serve keyless, and
+      INTL.zip contains the complete International Energy Data set —
+      105,055 JSONL series records, `accessLevel: public`, last updated
+      2026-09-21 — including every petroleum series this collection needs.
+      **No EIA API key is required for this collection and none was
+      registered.** If a later collection needs the v2 REST route (monthly
+      partial-year data lands there first), the open item at that point is:
+      "operator: a free EIA API key, stored in the vault as `eia.api_key`".
+    bulk_manifest_url: "https://api.eia.gov/bulk/manifest.txt"
+    dataset_last_updated: "2026-09-21T16:22:39-04:00"
+
+manifest:
+  series:
+
+    # ---------------------------------------------------------------------
+    # World Bank — World Development Indicators. Annual, keyless, CC BY 4.0.
+    # `record_time` for every WB row is the response envelope's `lastupdated`
+    # (2026-07-13 for the whole WDI release), NOT the fetch time: a 2016 GDP
+    # figure revised in the July 2026 release is a 2016 valid-time row with a
+    # 2026-07-13 record time (§3, bitemporal).
+    # ---------------------------------------------------------------------
+
+    - series_id: wb.gdp_growth_annual_pct
+      provider: world_bank
+      dataset: WDI
+      indicator: NY.GDP.MKTP.KD.ZG
+      indicator_name: "GDP growth (annual %)"
+      unit: pct_per_year
+      cadence: annual
+      subject_kind: country
+      subjects: [US, IL, IR, UA]
+      valid_from: "2016-01-01"
+      valid_to: "2025-12-31"
+      fetch:
+        mode: json_api
+        requires_key: false
+        record_time_source: "response envelope `lastupdated`"
+      source_url_template: "https://api.worldbank.org/v2/country/{subject}/indicator/NY.GDP.MKTP.KD.ZG?format=json&date=2016:2025&per_page=100"
+      coverage:
+        fetched_at: "2026-09-24"
+        provider_last_updated: "2026-07-13"
+        US: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+        IL: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+        IR: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+        UA: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+
+    - series_id: wb.cpi_inflation_annual_pct
+      provider: world_bank
+      dataset: WDI
+      indicator: FP.CPI.TOTL.ZG
+      indicator_name: "Inflation, consumer prices (annual %)"
+      unit: pct_per_year
+      cadence: annual
+      subject_kind: country
+      subjects: [US, IL, IR, UA]
+      valid_from: "2016-01-01"
+      valid_to: "2025-12-31"
+      fetch:
+        mode: json_api
+        requires_key: false
+        record_time_source: "response envelope `lastupdated`"
+      source_url_template: "https://api.worldbank.org/v2/country/{subject}/indicator/FP.CPI.TOTL.ZG?format=json&date=2016:2025&per_page=100"
+      coverage:
+        fetched_at: "2026-09-24"
+        provider_last_updated: "2026-07-13"
+        # US 2025 not yet published in the July 2026 WDI release.
+        US: {first_valid_year: 2016, last_valid_year: 2024, values: 9, nulls: 1}
+        IL: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+        IR: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+        UA: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+
+    - series_id: wb.military_expenditure_pct_gdp
+      provider: world_bank
+      dataset: WDI
+      indicator: MS.MIL.XPND.GD.ZS
+      indicator_name: "Military expenditure (% of GDP)"
+      unit: pct_of_gdp
+      cadence: annual
+      subject_kind: country
+      subjects: [US, IL, IR, UA]
+      valid_from: "2016-01-01"
+      valid_to: "2025-12-31"
+      fetch:
+        mode: json_api
+        requires_key: false
+        record_time_source: "response envelope `lastupdated`"
+      source_url_template: "https://api.worldbank.org/v2/country/{subject}/indicator/MS.MIL.XPND.GD.ZS?format=json&date=2016:2025&per_page=100"
+      coverage:
+        fetched_at: "2026-09-24"
+        provider_last_updated: "2026-07-13"
+        # Sourced from SIPRI; 2025 lands in the next release for all four.
+        US: {first_valid_year: 2016, last_valid_year: 2024, values: 9, nulls: 1}
+        IL: {first_valid_year: 2016, last_valid_year: 2024, values: 9, nulls: 1}
+        IR: {first_valid_year: 2016, last_valid_year: 2024, values: 9, nulls: 1}
+        UA: {first_valid_year: 2016, last_valid_year: 2024, values: 9, nulls: 1}
+
+    - series_id: wb.external_debt_stocks_usd
+      provider: world_bank
+      dataset: WDI
+      indicator: DT.DOD.DECT.CD
+      indicator_name: "External debt stocks, total (DOD, current US$)"
+      unit: current_usd
+      cadence: annual
+      subject_kind: country
+      subjects: [US, IL, IR, UA]
+      valid_from: "2016-01-01"
+      valid_to: "2025-12-31"
+      fetch:
+        mode: json_api
+        requires_key: false
+        record_time_source: "response envelope `lastupdated`"
+      source_url_template: "https://api.worldbank.org/v2/country/{subject}/indicator/DT.DOD.DECT.CD?format=json&date=2016:2025&per_page=100"
+      # THE BRIEF'S "where reported" CASE, and it is not the one expected.
+      # The Debtor Reporting System covers low- and middle-income BORROWERS:
+      # the US and Israel are not in it, so the provider holds NOTHING for
+      # them in any year — not a low number, no number. Iran and Ukraine are
+      # reported through 2024.
+      coverage:
+        fetched_at: "2026-09-24"
+        provider_last_updated: "2026-07-13"
+        US:
+          held: false
+          first_valid_year: null
+          last_valid_year: null
+          values: 0
+          nulls: 10
+          reason: "not a Debtor Reporting System borrower — the World Bank publishes no value for any year in the window"
+        IL:
+          held: false
+          first_valid_year: null
+          last_valid_year: null
+          values: 0
+          nulls: 10
+          reason: "not a Debtor Reporting System borrower — the World Bank publishes no value for any year in the window"
+        IR: {first_valid_year: 2016, last_valid_year: 2024, values: 9, nulls: 1}
+        UA: {first_valid_year: 2016, last_valid_year: 2024, values: 9, nulls: 1}
+
+    - series_id: wb.energy_use_per_capita_kgoe
+      provider: world_bank
+      dataset: WDI
+      indicator: EG.USE.PCAP.KG.OE
+      indicator_name: "Energy use (kg of oil equivalent per capita)"
+      unit: kg_oil_equivalent_per_capita
+      cadence: annual
+      subject_kind: country
+      subjects: [US, IL, IR, UA]
+      valid_from: "2016-01-01"
+      valid_to: "2025-12-31"
+      fetch:
+        mode: json_api
+        requires_key: false
+        record_time_source: "response envelope `lastupdated`"
+      source_url_template: "https://api.worldbank.org/v2/country/{subject}/indicator/EG.USE.PCAP.KG.OE?format=json&date=2016:2025&per_page=100"
+      # CHOSEN OVER EG.ELC.ACCS.ZS (access to electricity, % of population).
+      # Access is 99.9-100% for all four desks in every year of the window —
+      # complete, and carrying no information. Energy use per capita moves,
+      # and is the energy-consumption dimension these desks actually read.
+      coverage:
+        fetched_at: "2026-09-24"
+        provider_last_updated: "2026-07-13"
+        US: {first_valid_year: 2016, last_valid_year: 2024, values: 9, nulls: 1}
+        IL: {first_valid_year: 2016, last_valid_year: 2024, values: 9, nulls: 1}
+        IR: {first_valid_year: 2016, last_valid_year: 2023, values: 8, nulls: 2}
+        UA: {first_valid_year: 2016, last_valid_year: 2023, values: 8, nulls: 2}
+
+    - series_id: wb.fdi_net_inflows_pct_gdp
+      provider: world_bank
+      dataset: WDI
+      indicator: BX.KLT.DINV.WD.GD.ZS
+      indicator_name: "Foreign direct investment, net inflows (% of GDP)"
+      unit: pct_of_gdp
+      cadence: annual
+      subject_kind: country
+      subjects: [US, IL, IR, UA]
+      valid_from: "2016-01-01"
+      valid_to: "2025-12-31"
+      fetch:
+        mode: json_api
+        requires_key: false
+        record_time_source: "response envelope `lastupdated`"
+      source_url_template: "https://api.worldbank.org/v2/country/{subject}/indicator/BX.KLT.DINV.WD.GD.ZS?format=json&date=2016:2025&per_page=100"
+      coverage:
+        fetched_at: "2026-09-24"
+        provider_last_updated: "2026-07-13"
+        US: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+        IL: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+        IR: {first_valid_year: 2016, last_valid_year: 2024, values: 9, nulls: 1}
+        UA: {first_valid_year: 2016, last_valid_year: 2024, values: 9, nulls: 1}
+
+    # ---------------------------------------------------------------------
+    # EIA — International Energy Data (dataset INTL), annual, KEYLESS via the
+    # bulk route. Provider series id is `INTL.<activity>-<product>-<ISO3>-
+    # <unit>.<freq>`; one download of INTL.zip carries every series below for
+    # every subject, so the loader fetches the file ONCE and scans it, rather
+    # than making 20 calls. `record_time` is the per-series `last_updated`
+    # field inside the file — it differs per series and per subject, which is
+    # exactly the bitemporal case §3 is built for (57-3/57-4 were last
+    # revised in 2021 and have not moved since).
+    # ---------------------------------------------------------------------
+
+    - series_id: eia.crude_oil_production_tbpd
+      provider: eia
+      dataset: INTL
+      indicator: "INTL.57-1-{iso3}-TBPD.A"
+      indicator_name: "Crude oil including lease condensate production, annual"
+      unit: thousand_barrels_per_day
+      cadence: annual
+      subject_kind: country
+      subjects: [US, IL, IR, UA]
+      valid_from: "2016-01-01"
+      valid_to: "2025-12-31"
+      fetch:
+        mode: bulk_jsonl
+        requires_key: false
+        bulk_url: "https://api.eia.gov/bulk/INTL.zip"
+        bulk_member: INTL.txt
+        record_key: series_id
+        record_time_source: "record `last_updated`"
+      source_url_template: "https://api.eia.gov/bulk/INTL.zip#INTL.57-1-{iso3}-TBPD.A"
+      coverage:
+        fetched_at: "2026-09-24"
+        provider_last_updated: "2026-09-21T16:22:39-04:00"
+        US: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+        IL: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+        IR: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+        UA: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+
+    - series_id: eia.refinery_processing_gain_tbpd
+      provider: eia
+      dataset: INTL
+      indicator: "INTL.56-1-{iso3}-TBPD.A"
+      indicator_name: "Refinery processing gain, annual"
+      unit: thousand_barrels_per_day
+      cadence: annual
+      subject_kind: country
+      subjects: [US, IL, IR, UA]
+      valid_from: "2016-01-01"
+      valid_to: "2025-12-31"
+      fetch:
+        mode: bulk_jsonl
+        requires_key: false
+        bulk_url: "https://api.eia.gov/bulk/INTL.zip"
+        bulk_member: INTL.txt
+        record_key: series_id
+        record_time_source: "record `last_updated`"
+      source_url_template: "https://api.eia.gov/bulk/INTL.zip#INTL.56-1-{iso3}-TBPD.A"
+      # STANDS IN FOR REFINERY THROUGHPUT, AND SAYS SO. The INTL dataset holds
+      # no refinery throughput or distillation-capacity series covering all
+      # four subjects across the window (`Refined petroleum products
+      # production`, INTL.54-1, stops at 2014 for every one of them and is
+      # therefore NOT in this collection). Processing gain is the volume
+      # refineries add — the nearest keyless published proxy for how hard a
+      # country's refining sector is being run. A reader must not read it as
+      # throughput; 7g-2's rendering carries `indicator_name` verbatim.
+      coverage:
+        fetched_at: "2026-09-24"
+        provider_last_updated: "2026-03-27T00:33:58-04:00"
+        US: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+        IL: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+        IR: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+        UA: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+
+    - series_id: eia.refined_products_consumption_tbpd
+      provider: eia
+      dataset: INTL
+      indicator: "INTL.54-2-{iso3}-TBPD.A"
+      indicator_name: "Refined petroleum products consumption, annual"
+      unit: thousand_barrels_per_day
+      cadence: annual
+      subject_kind: country
+      subjects: [US, IL, IR, UA]
+      valid_from: "2016-01-01"
+      valid_to: "2025-12-31"
+      fetch:
+        mode: bulk_jsonl
+        requires_key: false
+        bulk_url: "https://api.eia.gov/bulk/INTL.zip"
+        bulk_member: INTL.txt
+        record_key: series_id
+        record_time_source: "record `last_updated`"
+      source_url_template: "https://api.eia.gov/bulk/INTL.zip#INTL.54-2-{iso3}-TBPD.A"
+      coverage:
+        fetched_at: "2026-09-24"
+        provider_last_updated: "2026-09-21T16:22:39-04:00"
+        US: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+        IL: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+        IR: {first_valid_year: 2016, last_valid_year: 2024, values: 9, nulls: 1}
+        UA: {first_valid_year: 2016, last_valid_year: 2024, values: 9, nulls: 1}
+
+    - series_id: eia.crude_oil_exports_tbpd
+      provider: eia
+      dataset: INTL
+      indicator: "INTL.57-4-{iso3}-TBPD.A"
+      indicator_name: "Crude oil including lease condensate exports, annual"
+      unit: thousand_barrels_per_day
+      cadence: annual
+      subject_kind: country
+      subjects: [US, IL, IR, UA]
+      valid_from: "2016-01-01"
+      valid_to: "2025-12-31"
+      fetch:
+        mode: bulk_jsonl
+        requires_key: false
+        bulk_url: "https://api.eia.gov/bulk/INTL.zip"
+        bulk_member: INTL.txt
+        record_key: series_id
+        record_time_source: "record `last_updated`"
+      source_url_template: "https://api.eia.gov/bulk/INTL.zip#INTL.57-4-{iso3}-TBPD.A"
+      # PROVIDER-FROZEN. Every subject's series carries
+      # `last_updated: 2021-07-09` and has not moved since: EIA stopped
+      # publishing international crude trade on this route. Half the window is
+      # simply not held. It stays in the collection because the years that ARE
+      # held (2016-2020 / 2016-2018) are exactly the pre-sanctions-snapback
+      # and pre-2022 baselines the desks reach for — but the era coverage map
+      # (§6) must render the missing tail as a `history_gap`, never as zero.
+      coverage:
+        fetched_at: "2026-09-24"
+        provider_last_updated: "2021-07-09T09:36:18-04:00"
+        provider_frozen: true
+        US: {first_valid_year: 2016, last_valid_year: 2020, values: 5, nulls: 5}
+        IL: {first_valid_year: 2016, last_valid_year: 2020, values: 5, nulls: 5}
+        IR: {first_valid_year: 2016, last_valid_year: 2018, values: 3, nulls: 7}
+        UA: {first_valid_year: 2016, last_valid_year: 2018, values: 3, nulls: 7}
+
+    - series_id: eia.crude_oil_imports_tbpd
+      provider: eia
+      dataset: INTL
+      indicator: "INTL.57-3-{iso3}-TBPD.A"
+      indicator_name: "Crude oil including lease condensate imports, annual"
+      unit: thousand_barrels_per_day
+      cadence: annual
+      subject_kind: country
+      subjects: [US, IL, IR, UA]
+      valid_from: "2016-01-01"
+      valid_to: "2025-12-31"
+      fetch:
+        mode: bulk_jsonl
+        requires_key: false
+        bulk_url: "https://api.eia.gov/bulk/INTL.zip"
+        bulk_member: INTL.txt
+        record_key: series_id
+        record_time_source: "record `last_updated`"
+      source_url_template: "https://api.eia.gov/bulk/INTL.zip#INTL.57-3-{iso3}-TBPD.A"
+      # Provider-frozen on the same 2021-07-09 revision as the exports series.
+      coverage:
+        fetched_at: "2026-09-24"
+        provider_last_updated: "2021-07-09T09:36:18-04:00"
+        provider_frozen: true
+        US: {first_valid_year: 2016, last_valid_year: 2020, values: 5, nulls: 5}
+        IL: {first_valid_year: 2016, last_valid_year: 2020, values: 5, nulls: 5}
+        IR: {first_valid_year: 2016, last_valid_year: 2018, values: 3, nulls: 7}
+        UA: {first_valid_year: 2016, last_valid_year: 2018, values: 3, nulls: 7}
+
+# Everything the operator must decide before this collection moves
+# draft -> reviewed. Empty of provider blockers on purpose: the EIA key
+# question was the expected blocker and it resolved to "no key needed".
+open_items:
+  - id: licence_line
+    owner: operator
+    text: >-
+      Approve the `licence:` block above (§7: the licence line is the
+      operator's). Both providers are free and keyless; World Bank is CC BY
+      4.0 and requires attribution on anything republished, EIA is U.S.
+      public domain and asks for an acknowledgment with a publication date.
+  - id: awaiting_7g1
+    owner: p7g_lane_1
+    text: >-
+      Nothing here loads until 7g-1 ships `legba/collection/1.0.0`, migration
+      0219 (`observations`), `scripts/load_collection.py` and the
+      `/descriptors/collection` registry route. This file is drafted to the
+      design note's shape so that schema has a real manifest to validate
+      against on day one.

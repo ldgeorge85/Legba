@@ -31,6 +31,7 @@ scope:
   languages: [en]
   tags: [news, world, indo_pacific, taiwan, rsshub_lane]
   source_class: reporting
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

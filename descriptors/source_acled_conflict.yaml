@@ -58,6 +58,7 @@ scope:
   languages: [en]
   tags: [conflict, political_violence, protest, events, structured, global]
   source_class: analysis           # S1-T8 — research/data project (coded conflict-event data)
+  access_class: licensed_noncommercial          # Wave-E — ACLED's standard terms: free for academic/nonprofit use, paid licence for commercial redistribution
 
 acquisition: poll
 

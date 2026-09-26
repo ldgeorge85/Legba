@@ -64,7 +64,7 @@ method:
       raw: llm.primary.openai_compat  # core plane — the chronicler VOICE
       expected_family: llm_provider
     max_tokens: 16384                 # a ~1,000-word entry + citations
-  budget_tokens_per_day: 1000000      # weekly deep agent — modest daily ceiling
+  budget_tokens_per_day: 0      # weekly deep agent — modest daily ceiling
   gather:
     max_rounds: 6                     # the in-actor GATHER ReAct cap (HARD ceiling)
   retry:

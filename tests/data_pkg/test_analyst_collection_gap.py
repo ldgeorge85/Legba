@@ -18,7 +18,11 @@ from legba.data.analysts.deterministic import (
     OUTPUT_KIND_BY_SUB_HANDLER,
     SUB_HANDLERS,
 )
+from legba.data.analysts.deterministic_handlers import (
+    _reference_gap_dispatch as rgd,
+)
 from legba.data.analysts.deterministic_handlers import collection_gap as cg
+from legba.data.analysts.deterministic_handlers import desk_reference as dr
 from legba.data.analysts.deterministic_handlers import scorecard_banding
 from legba.runtime.analyst_method import AnalystMethodResult
 
@@ -327,3 +331,153 @@ async def test_handle_empty_inputs_is_trace_only():
     result = await cg.handle([], {"analyst_id": "collection_gap"}, None)
     assert result.finding.data["gap_count"] == 0
     assert result.force_trace_only is True
+
+
+# ---------------------------------------------------------------------------
+# A-4 — the THIRD origin's SELECTION, before a row is ever shaped.
+#
+# The selection is where a "does not fit the design" answer would hide, so it
+# is tested apart from the row shape (test_collection_requirements.py) and
+# apart from the sweep (test_desk_reference.py): what clears the materiality
+# bar, what the caps trim, and what is dropped outright.
+# ---------------------------------------------------------------------------
+
+
+def _gap_candidate(**over) -> dict:
+    base = {
+        "reference_id": str(uuid4()),
+        "target_id": "country_g20_ml",
+        "unit": "economic_coercion",
+        "geo": ["ML"],
+        "ordinal": 1,
+        "headline": "New export controls announced",
+        "sentence": "Mali announced export controls.",
+        "entity_folds": ["china"],
+        "urls": ["https://example.invalid/1"],
+        "materiality": "high",
+        "n_slice_rows": 120,
+        "arms_failed": ["c1_url", "c2_entity", "c3_prose"],
+    }
+    base.update(over)
+    return base
+
+
+def test_the_materiality_bar_is_the_reference_writers_own_vocabulary():
+    """No threshold is invented here. The bar is
+    ``desk_reference.MATERIALITY_VOCABULARY`` MINUS its bottom rung — stated
+    as a derivation so the two cannot drift apart silently."""
+    assert set(dr.MATERIALITY_VOCABULARY) == {"high", "medium", "low"}
+    assert rgd.MATERIAL_CLASSES == set(dr.MATERIALITY_VOCABULARY) - {"low"}
+    assert rgd.is_material({"materiality": "high"})
+    assert rgd.is_material({"materiality": "medium"})
+    assert not rgd.is_material({"materiality": "low"})
+
+
+def test_an_unlabelled_item_clears_the_bar_at_the_parsers_own_default():
+    """An absent / unrecognised materiality reads as the parse-time default
+    (``medium``) and CLEARS — the same direction ``_clean_materiality`` already
+    resolves in, so the bar cannot tighten because a model omitted a field."""
+    assert dr._DEFAULT_MATERIALITY == "medium"
+    assert rgd.is_material({})
+    assert rgd.is_material({"materiality": ""})
+    assert rgd.is_material({"materiality": "CRITICAL"})
+    assert rgd.is_material({"materiality": "HIGH"})  # case-folded, not dropped
+
+
+def test_selection_drops_a_low_materiality_gap_and_keeps_the_order():
+    picked = rgd.select_candidates([
+        _gap_candidate(headline="a", entity_folds=["china"]),
+        _gap_candidate(headline="b", entity_folds=["russia"], materiality="low"),
+        _gap_candidate(headline="c", entity_folds=["india"], materiality="medium"),
+    ])
+    assert [c["headline"] for c in picked] == ["a", "c"]
+
+
+def test_selection_is_capped_per_desk_dimension_and_only_trims():
+    """Candidates arrive in the reference model's OWN salience order
+    (``ordinal``); the cap TRIMS the tail and never reorders — the
+    ``build_gap_requirement_rows`` contract, applied to this origin."""
+    picked = rgd.select_candidates([
+        _gap_candidate(ordinal=i, entity_folds=[f"fold{i}"])
+        for i in range(rgd.MAX_REQUIREMENTS_PER_DESK_DIMENSION + 4)
+    ])
+    assert len(picked) == rgd.MAX_REQUIREMENTS_PER_DESK_DIMENSION
+    assert [c["ordinal"] for c in picked] == list(
+        range(rgd.MAX_REQUIREMENTS_PER_DESK_DIMENSION)
+    )
+    # The per-pair cap is per (desk, unit): a second unit gets its own budget.
+    both = rgd.select_candidates(
+        [
+            _gap_candidate(ordinal=i, entity_folds=[f"fold{i}"])
+            for i in range(rgd.MAX_REQUIREMENTS_PER_DESK_DIMENSION + 2)
+        ]
+        + [
+            _gap_candidate(ordinal=i, unit="escalation", entity_folds=[f"fold{i}"])
+            for i in range(rgd.MAX_REQUIREMENTS_PER_DESK_DIMENSION + 2)
+        ]
+    )
+    assert len(both) == rgd.MAX_REQUIREMENTS_PER_DESK_DIMENSION * 2
+
+
+def test_selection_dedupes_a_repeated_fold_within_one_pair():
+    """Two items naming the same polity are ONE collection need and would
+    collide on natural_key anyway. Dropping it here keeps the receipt's count
+    honest instead of reporting a write the unique index refused."""
+    picked = rgd.select_candidates([
+        _gap_candidate(headline="first", entity_folds=["china", "india"]),
+        _gap_candidate(headline="second", entity_folds=["china"]),
+    ])
+    assert len(picked) == 1 and picked[0]["headline"] == "first"
+    # The KEY fold is the item's FIRST — the polity the item leads with, and a
+    # stable key half across days.
+    assert picked[0]["fold"] == "china"
+
+
+def test_selection_drops_a_candidate_that_could_not_be_provenanced():
+    """``evidence_id`` is ``uuid NOT NULL``: a requirement is never written
+    without a citable evidence row (the build_gap_requirement_rows rule)."""
+    assert rgd.select_candidates([_gap_candidate(reference_id="")]) == []
+    assert rgd.select_candidates([_gap_candidate(entity_folds=[])]) == []
+    assert rgd.select_candidates([_gap_candidate(unit="")]) == []
+    assert rgd.select_candidates([_gap_candidate(target_id="")]) == []
+    assert rgd.select_candidates(["not a mapping"]) == []
+
+
+def test_selection_has_a_whole_sweep_cap_beneath_the_per_pair_one():
+    picked = rgd.select_candidates([
+        _gap_candidate(target_id=f"country_g20_{i:02d}", entity_folds=[f"fold{i}"])
+        for i in range(rgd.MAX_DISPATCH_PER_RUN + 10)
+    ])
+    assert len(picked) == rgd.MAX_DISPATCH_PER_RUN
+
+
+def test_the_fold_is_the_key_and_the_canonical_name_is_the_prose():
+    """``item_names`` runs in LOCKSTEP with ``item_folds`` — index 0 of one is
+    the same entity as index 0 of the other — so the written sentence can say
+    "Lebanon" while every key stays built on the fold. A candidate carrying no
+    names falls back to the fold rather than rendering an empty subject."""
+    named = rgd.select_candidates([
+        _gap_candidate(entity_folds=["lebanon"], entity_names=["Lebanon"])
+    ])[0]
+    assert rgd.item_fold(named) == "lebanon"
+    assert rgd.entity_name(named) == "Lebanon"
+    assert "about Lebanon" in rgd.build_thesis(named)
+    # ...and the KEY is untouched by the prettier spelling.
+    assert named["natural_key"].endswith(":lebanon")
+    assert rgd.build_dispatch_entry(named)["source_id"].endswith("|lebanon")
+
+    unnamed = rgd.select_candidates([_gap_candidate(entity_folds=["lebanon"])])[0]
+    assert rgd.entity_name(unnamed) == "lebanon"
+    assert "about lebanon" in rgd.build_thesis(unnamed)
+
+
+def test_the_reference_gap_origin_is_the_third_one_and_names_its_writer():
+    """D-p: "collection gap" is already taken. The code must not conflate the
+    monthly starved-cell analyst with the daily world-side instrument — they
+    share a writer and a table, and nothing else."""
+    assert rgd.ORIGIN == "reference_gap" != cg.SUB_HANDLER_NAME
+    assert rgd.EVIDENCE_KIND == "unit_reference_label"
+    # ONE writer, not a fork: A-4 calls collection_gap's own function.
+    assert rgd.collection_gap.write_requirements is cg.write_requirements
+    assert cg._write_requirements is cg.write_requirements
+    assert cg._source_classes is cg.source_classes_for

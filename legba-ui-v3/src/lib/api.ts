@@ -83,7 +83,18 @@ export async function apiGet<T>(path: string): Promise<T> {
   }
 }
 
-export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+/**
+ * POST, returning the HTTP status alongside the parsed body.
+ *
+ * Added for the consult front door, which now answers 200 *or* 202 — 202
+ * meaning "the run outlived the request; it is still going". `apiPost` throws
+ * away the status, so a caller that has to tell those apart needs this.
+ * `apiPost` delegates here, so there is still exactly one fetch path.
+ */
+export async function apiPostWithStatus<T>(
+  path: string,
+  body: unknown,
+): Promise<{ status: number; body: T }> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
     headers: {
@@ -96,7 +107,12 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   if (!res.ok) {
     throw new ApiError(res.status, await readErrorBody(res))
   }
-  return res.json() as Promise<T>
+  return { status: res.status, body: (await res.json()) as T }
+}
+
+export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  const { body: parsed } = await apiPostWithStatus<T>(path, body)
+  return parsed
 }
 
 /** One composed export artifact off `POST /api/v1/v3/export` (A10). */
@@ -117,6 +133,20 @@ export async function exportCollection(body: {
   items: Array<{ kind: 'finding' | 'journal_entry'; id: string }>
   format: 'markdown' | 'json'
   title?: string | null
+  /**
+   * A10/7b-iii — the Desk Brief's situations/tracked-events section: a
+   * pre-composed markdown block carried through verbatim and printed AFTER
+   * every basket item (`export_api.ExportRequest.appendix`). Absent on an
+   * ordinary export.
+   *
+   * k5b — the OBJECT form carries that same markdown and ASKS the route to
+   * compose the desk's typed-absence section itself. The client can only ask:
+   * the absences are read server-side (`export_absences.py`) so the markdown
+   * and JSON formats of one export cannot disagree about what the desk is
+   * missing. `scope` is required whenever `absences` is true and names the
+   * desk — the route never infers one from the basket.
+   */
+  appendix?: string | { markdown?: string | null; absences: boolean; scope: string } | null
 }): Promise<ExportArtifact> {
   const res = await fetch(`${API_BASE}/v3/export`, {
     method: 'POST',
@@ -141,6 +171,21 @@ export async function exportCollection(body: {
     }
   }
   return { filename: match?.[1] ?? fallback, mime, content }
+}
+
+/** Trigger a browser download for a composed export artifact (Blob
+ *  object-URL + a throwaway anchor click) — the ONE download mechanism, used
+ *  by the Report Export panel and the Desk Brief action alike. */
+export function downloadExportArtifact(artifact: ExportArtifact): void {
+  const blob = new Blob([artifact.content], { type: artifact.mime })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = artifact.filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }
 
 export async function apiPut<T>(path: string, body: unknown): Promise<T> {
@@ -321,18 +366,23 @@ export async function triggerBackfill(
 
 // ---------------------------------------------------------------------------
 // Consult model picker (F1) — which registered LLM plane answers a consult /
-// deep_consult request. "opus" = the billed Anthropic Opus plane (the default,
-// preserving today's behavior); "core" = the free self-hosted core plane.
-// The registry maps this friendly value → a sanctioned component id server-side.
-// Mirrors `CONSULT_MODEL_ALLOWLIST` in `consult_api.py`.
+// deep_consult request. "opus" = the billed Anthropic Opus 5 plane (the
+// default, preserving today's behavior); "fable" = the billed Anthropic
+// Claude Fable 5.1 plane (selectable, never default); "core" = the free
+// self-hosted core plane. The registry maps this friendly value → a
+// sanctioned component id server-side. Mirrors `CONSULT_MODEL_ALLOWLIST` in
+// `consult_api.py`.
 // ---------------------------------------------------------------------------
 
-export type ConsultModel = 'opus' | 'core'
+export type ConsultModel = 'opus' | 'fable' | 'core'
+
+const CONSULT_MODEL_VALUES: readonly ConsultModel[] = ['opus', 'fable', 'core']
 
 /** Dropdown options — value + operator-facing label (order = display order). */
 export const CONSULT_MODEL_OPTIONS: { value: ConsultModel; label: string }[] = [
-  { value: 'opus', label: 'Opus (Anthropic · billed)' },
-  { value: 'core', label: 'Core (free)' },
+  { value: 'opus', label: 'Opus 5' },
+  { value: 'fable', label: 'Fable 5.1' },
+  { value: 'core', label: 'Core (self-hosted)' },
 ]
 
 const CONSULT_MODEL_STORAGE_KEY = 'legba_consult_model'
@@ -340,8 +390,9 @@ const CONSULT_MODEL_STORAGE_KEY = 'legba_consult_model'
 /** Last-chosen plane, persisted across panel opens; defaults to the Opus plane. */
 export function loadConsultModel(): ConsultModel {
   try {
-    return localStorage.getItem(CONSULT_MODEL_STORAGE_KEY) === 'core'
-      ? 'core'
+    const stored = localStorage.getItem(CONSULT_MODEL_STORAGE_KEY)
+    return (CONSULT_MODEL_VALUES as readonly string[]).includes(stored ?? '')
+      ? (stored as ConsultModel)
       : 'opus'
   } catch {
     return 'opus'
@@ -381,6 +432,22 @@ export interface DeepConsultStatus {
   detail?: string | null
 }
 
+/**
+ * One record pinned to a consult conversation. Mirrors
+ * `src/legba/data/registry/consult_api.py::PinnedRef` — `label` is accepted
+ * server-side as a synonym for `title` because that is the key the SPA's
+ * `Selection` rows carry. Caps live in `src/legba/data/pinned_context.py`:
+ * ≤20 entries, ≤512 title chars, ≤8000 text chars, ≤24000 chars total.
+ */
+export interface PinnedRef {
+  kind: string
+  id: string
+  title?: string | null
+  label?: string | null
+  /** The record body, when the caller already holds it. */
+  text?: string | null
+}
+
 export async function submitDeepConsult(body: {
   question: string
   scope_predicate?: string | null
@@ -388,6 +455,9 @@ export async function submitDeepConsult(body: {
   emit_hypotheses?: boolean
   // F1 model picker — the LLM plane the deep workflow runs on (default: opus).
   model?: ConsultModel
+  // Records pinned to the conversation. Same field, shape and caps the chat
+  // consult takes, so a Chat→Deep handoff carries the operator's context.
+  pinned_context?: PinnedRef[]
 }): Promise<DeepConsultSubmit> {
   return apiPost<DeepConsultSubmit>('/deep_consult', body)
 }
@@ -425,6 +495,15 @@ export interface ConsultTurnOut {
   cited_refs: unknown[]
   finding_id?: string | null
   created_at?: string | null
+  /**
+   * OPTIONAL, and absent today: `consult_sessions` does not record the run's
+   * request id, so a turn re-seeded from the server cannot be addressed back to
+   * its run. Declared here (rather than in a later scramble) because it is the
+   * ONE field that would let "Synthesize from evidence" survive a reload — the
+   * panel reads it through and simply omits the control while it is missing.
+   */
+  request_id?: string | null
+  synthesis_status?: 'complete' | 'partial' | 'none'
 }
 
 /** A session header + its ordered turns. */
@@ -457,6 +536,157 @@ export async function loadConsultSession(
   )
 }
 
+/**
+ * Live state of a detached consult run.
+ *
+ * `running` means keep waiting; `complete` carries the answer; `error` carries
+ * the reason AND the steps the run managed to gather, which is what the panel
+ * renders instead of going blank. The durable record is always the session's
+ * turns — this is the fast path for a client that lost its stream between the
+ * answer and the reconnect, and it 404s once the run ages out.
+ */
+export interface ConsultRunStatus {
+  request_id: string
+  session_id: string | null
+  status: 'running' | 'complete' | 'error'
+  elapsed_s: number
+  steps: Record<string, unknown>[]
+  response?: ConsultResponseBody | null
+  error_status?: number
+  error_detail?: unknown
+}
+
+/**
+ * Running LLM spend for one consult run, carried with its own ceilings.
+ *
+ * Totals and caps travel TOGETHER on purpose: a token count with no ceiling
+ * beside it is a number nobody can act on, and the 2026-09-16 incident — a
+ * ~$10 run that returned 487 characters — was invisible precisely because the
+ * panel showed neither. Rides the `llm_call` step frames while a run is live
+ * (running totals) and the response body once it settles (the final bill).
+ */
+export interface ConsultUsage {
+  calls: number
+  input_tokens: number
+  output_tokens: number
+  est_cost_usd: number
+  max_input_tokens: number
+  max_cost_usd: number
+}
+
+/** The consult answer body, shared by the POST response and the run status. */
+/** 7g-2 — see {@link ProvenanceCensus} in `state/consultSession`. */
+export interface ConsultProvenanceCensus {
+  version?: string
+  live?: number | null
+  web_retrieval?: number | null
+  history?: number | null
+  seed?: number | null
+  unclassified?: number | null
+  unresolved?: number | null
+  cited_total?: number | null
+  model_knowledge?: number | null
+  sentences_examined?: number | null
+  basis?: string | null
+}
+
+export interface ConsultResponseBody {
+  answer: string
+  finding_id?: string | null
+  derived_from?: string[]
+  tool_calls?: unknown[]
+  cited_refs?: unknown[]
+  receipt_hash?: string | null
+  uncertainty?: number | null
+  unanswered_aspects?: string[]
+  session_id?: string | null
+  model?: string | null
+  status?: 'complete' | 'accepted'
+  request_id?: string | null
+  /**
+   * Whether the FINAL SYNTHESIS ran to completion — orthogonal to `status`,
+   * which is about the request/run. `'partial'` means the synthesis was cut
+   * (deadline, ceiling) and what came back is the prefix it had written;
+   * `'none'` means it never produced text at all. Both are recoverable: the
+   * evidence is persisted, so the synthesis can be re-run over it alone.
+   */
+  synthesis_status?: 'complete' | 'partial' | 'none'
+  /** Whether the server still holds this run's evidence to re-synthesise from. */
+  resynthesizable?: boolean
+  usage?: ConsultUsage | null
+}
+
+/**
+ * `POST /consult/runs/{id}/synthesize` — the answer body plus how faithfully
+ * the transcript it synthesised from could be reconstructed.
+ *
+ * `replay_fidelity !== 'exact'` MUST be shown to the operator: a rebuilt
+ * transcript (tool calls re-executed, the model's own free text between rounds
+ * gone) is a different artifact from the run they paid for, and a recovery that
+ * silently passes itself off as a clean re-run is the kind of lie that makes a
+ * whole surface untrustworthy.
+ */
+export interface ConsultSynthesisBody extends ConsultResponseBody {
+  replay_fidelity?: 'exact' | 'rebuilt' | 'unavailable'
+  replay_note?: string | null
+  /** The turn this answer was written into, and the one whose evidence it read. */
+  turn_id?: string | null
+  parent_turn_id?: string | null
+}
+
+export async function getConsultRun(requestId: string): Promise<ConsultRunStatus> {
+  return apiGet<ConsultRunStatus>(
+    `/consult/runs/${encodeURIComponent(requestId)}`,
+  )
+}
+
+/** Acknowledgement of a stop request — 404 once the run is unknown/finished. */
+export interface ConsultStopResult {
+  request_id: string
+  status: string
+}
+
+/**
+ * Cancel a run's drilling. The evidence it has gathered is KEPT — stopping is
+ * "spend no more", not "throw it away", which is what makes
+ * {@link synthesizeConsultRun} the natural next call.
+ */
+export async function stopConsultRun(requestId: string): Promise<ConsultStopResult> {
+  return apiPost<ConsultStopResult>(
+    `/consult/runs/${encodeURIComponent(requestId)}/stop`,
+    {},
+  )
+}
+
+/**
+ * Re-run ONLY the final synthesis over a turn's persisted evidence — no new
+ * drilling, so it costs one call rather than another round of tools.
+ *
+ * Addressed by RUN where there is one, and by TURN where there is not. That
+ * second door is not a nicety: a turn persisted before the run id was recorded
+ * on the row has no run to name — which is every turn that existed when this
+ * was built, the ~$10 one included. The server resolves either, so the panel
+ * sends whichever it holds and the recovery reaches the turns that need it
+ * most. (The path segment must be *something*; the turn id is used there as a
+ * benign placeholder, since it can never match a stored run id.)
+ */
+export async function synthesizeConsultRun(
+  target: { requestId?: string | null; turnId?: string | null },
+  model?: ConsultModel,
+): Promise<ConsultSynthesisBody> {
+  const addressed = target.requestId || target.turnId
+  if (!addressed) {
+    throw new ApiError(400, 'this turn names neither a run nor a turn to synthesise from')
+  }
+  const body: Record<string, unknown> = {}
+  if (model) body.model = model
+  if (!target.requestId && target.turnId) body.turn_id = target.turnId
+  return apiPost<ConsultSynthesisBody>(
+    `/consult/runs/${encodeURIComponent(addressed)}/synthesize`,
+    body,
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Journal / Voices (JOURNAL_ASSESSOR_PLAN §9 / Wave 3; Voices panel step 1,
 // planning/VOICES_PANEL_SPEC.md §3) — the reflective voice's read surface. The
@@ -468,11 +698,16 @@ export async function loadConsultSession(
 
 /** A cited substrate UUID resolved to its kind + label (chip deep-link target).
  *  `kind='unknown'` when the id resolves in no substrate table (superseded /
- *  pruned ref) — the chip still renders; the citation is never hidden (§9). */
+ *  pruned ref) — the chip still renders; the citation is never hidden (§9).
+ *  `source_id` (T1.3) is set ONLY when `kind==='signal'` — the originating
+ *  `source.*` feed, so a raw-signal citation's chip can say WHICH feed it
+ *  came from instead of falling back to a bare "unknown" label. `undefined`/
+ *  `null` for every other kind, additive and back-compatible. */
 export interface JournalRef {
   id: string
   kind: string
   title?: string | null
+  source_id?: string | null
 }
 
 /** One cited claim — a span of the entry bound to its resolved refs (§3.6).
@@ -488,13 +723,18 @@ export interface JournalClaim {
 
 /** The `entry_kind` vocabulary the `kind` filter accepts (VOICES_PANEL_SPEC
  *  §3.1). `lens`/`lens_diff` are accepted by the API today (harmless — no such
- *  rows exist pre-LV-1) even though nothing in step 1 generates those chips. */
+ *  rows exist pre-LV-1) even though nothing in step 1 generates those chips.
+ *  `inquiry`/`crossroads` are the Program 5 stateful tier, accepted on the same
+ *  terms — a kind the API validates but the panel only ever chips when rows for
+ *  it actually exist. */
 export type JournalEntryKind =
   | 'entry'
   | 'consolidation'
   | 'chronicle'
   | 'lens'
   | 'lens_diff'
+  | 'inquiry'
+  | 'crossroads'
   | string
 
 /** One `journal_entries` row at `fields=full` weight (today's shape, plus
@@ -1314,6 +1554,13 @@ export interface DeskBaselineRow {
   spillover_current: number
   features: Record<string, unknown>
   computed_at: string | null
+  /** H12 — the instrument revision that computed this row. Null on a row
+   *  written before migration 0219; never back-labelled. */
+  method_version: string | null
+  /** K3 — the SCALE the counts above are read on: a count per 24h bucket and
+   *  its distance from the trailing mean in robust sigmas. A sigma-distance is
+   *  comparable ACROSS desks only within one scale era. */
+  scale_version: string | null
 }
 
 export interface DeskBaselineBoard {
@@ -1520,4 +1767,146 @@ export async function fetchReadRollup(
 ): Promise<ReadRollupResponse> {
   const qs = opts.days != null ? `?days=${encodeURIComponent(String(opts.days))}` : ''
   return apiGet<ReadRollupResponse>(`/read-events/rollup${qs}`)
+}
+
+// ---------------------------------------------------------------------------
+// Layer divergence (Program 6 L2, 7b-v) — the divergence map.
+// ---------------------------------------------------------------------------
+
+/** One UTC day of one layer, as the wire fold counted it. */
+export interface LayerDivergenceDay {
+  day: string
+  /** Rows the scan saw before the fold. */
+  raw: number
+  /** What entered the ratio — `raw` minus the wire copies folded away. */
+  kept: number
+  /** Copies folded away inside this (layer, day) bucket. */
+  folded: number
+}
+
+/** One layer's declaration for one desk, plus its day-ordered counts. */
+export interface LayerDivergenceLayer {
+  /** `present` | `absent` | `unmeasured` | `undeclared`. */
+  declared: string
+  /** The operator's own words. Required for `absent`; blank otherwise. */
+  reason: string
+  sources_mapped: number
+  /** Null on any layer that was never counted — an excluded layer has no
+   *  thin-day tally, because nobody read those days. */
+  thin_days: number | null
+  daily: LayerDivergenceDay[]
+}
+
+/** One day of one pair's series, verbatim from the receipt. */
+export interface LayerDivergenceSeriesPoint {
+  day: string
+  /** Folded count on layer A that day — the number the ratio used. */
+  a: number
+  b: number
+  log_ratio: number | null
+  /** True when NEITHER layer carried anything: not evidence about the country. */
+  blank: boolean
+  /** Null until the trailing baseline is usable. Never 0 as a stand-in. */
+  z: number | null
+  baseline: {
+    n: number
+    centre: number | null
+    mad: number | null
+    scale: number | null
+    scale_floored: boolean
+  } | null
+}
+
+/** One pair row, verbatim from the receipt. */
+export interface LayerDivergencePair {
+  pair_id: string
+  layer_a: string
+  layer_b: string
+  evaluable: boolean
+  /** Named, never summarised: `aperture_excluded` | `below_threshold` |
+   *  `baseline_thin` | `blank_day` | `no_z` | `sign_flipped` |
+   *  `window_too_short`, or `''` when the pair fired. */
+  no_fire_reason: string
+  /** Present only when `evaluable` is false — which side, and WHY. */
+  excluded_layers?: { layer: string; state: string; reason: string }[]
+  /** Present only when `evaluable` is true. */
+  series?: LayerDivergenceSeriesPoint[]
+}
+
+/** The newest divergence a desk actually fired. */
+export interface LayerDivergenceFired {
+  finding_id: string
+  produced_at: string | null
+  pair_id: string
+  /** `widening` | `narrowing` — the handler's own word. */
+  direction: string | null
+  severity: string | null
+  day: string | null
+  z: number | null
+  thin: boolean | null
+}
+
+export interface LayerDivergenceDesk {
+  target_id: string
+  country: string
+  map_version: string
+  sources_mapped: number
+  rows_scanned: number
+  rows_truncated: boolean
+  aperture: {
+    present?: string[]
+    absent?: { layer: string; reason: string }[]
+    unmeasured?: { layer: string; reason: string }[]
+    undeclared?: { layer: string; reason: string }[]
+  }
+  /** Layers the map carries sources for that the aperture calls `absent`. */
+  counts_suppressed_by_aperture: Record<string, number>
+  layers: Record<string, LayerDivergenceLayer>
+  pairs: LayerDivergencePair[]
+  fired: LayerDivergenceFired | null
+}
+
+export interface LayerDivergencePairDeclared {
+  pair_id: string
+  layer_a: string
+  layer_b: string
+  meaning: string
+}
+
+export interface LayerDivergenceResponse {
+  /** False when the read itself failed — NOT "the engine is quiet". */
+  measured: boolean
+  generated_at: string
+  reader_version: string
+  /** The server's own one-sentence account of what the unit measures. */
+  unit_sentence: string
+  /** The one day the run measured at. Null when no run has happened. */
+  as_of: string | null
+  receipt_run_id: string | null
+  run_started_at: string | null
+  method_version: string | null
+  payload_schema: string | null
+  /** SEAMS #60 — the un-audited-classification stamp. Always rendered. */
+  classification_audit: string | null
+  window_days: number | null
+  baseline_days: number | null
+  z_threshold: number | null
+  mad_floor: number | null
+  consecutive_days: number | null
+  thin_min_per_day: number | null
+  layer_vocab: string[]
+  pairs_declared: LayerDivergencePairDeclared[]
+  desks: LayerDivergenceDesk[]
+  desks_unresolved: Record<string, unknown>[]
+  warnings: string[]
+}
+
+export async function fetchLayerDivergence(
+  opts: { firedDays?: number } = {},
+): Promise<LayerDivergenceResponse> {
+  const qs =
+    opts.firedDays != null
+      ? `?fired_days=${encodeURIComponent(String(opts.firedDays))}`
+      : ''
+  return apiGet<LayerDivergenceResponse>(`/v3/layers/divergence${qs}`)
 }

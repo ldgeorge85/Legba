@@ -93,40 +93,86 @@ export const WORKSPACES: readonly WorkspaceDef[] = [
     label: 'Morning Read',
     question: 'What happened, what moved, what does it mean?',
     index: 1,
-    // Design §2.4 #1: a "what changed" band across the top, the feed as the
-    // left spine, the "what does it mean" reads tabbed on the right, the world
-    // map beneath them.
+    // WORKSTATION_V2_FLOW_DESIGN §8 — the landing redrawn around the SCOPE
+    // contract. The old grid opened on a dashboard (glance strip → Wall → feed);
+    // this one opens on the READ, with a rail that says which read and a
+    // conversation docked beside it:
     //
-    // The Wall REPLACES the old boot grid's standalone `system.wall_movers`
-    // tile: movers-since-last-visit is the Wall's own quadrant, and the boot
-    // grid mounted it a second time beside its own parent (design §1.2). The
-    // Wall carries it, the world-at-a-glance band grid, newest verified, and
-    // the health corner in one band.
+    //   NAVIGATOR │ REPORT (v4.morning_read) │ FINDINGS/ENTITIES │ CONSULT
+    //             ├──────────────────────────┴───────────────────┤
+    //             │ GRAPH · MAP · TIMELINE                        │
+    //
+    // Nothing is DELETED from the stance — the Wall and the glance strip are
+    // tabbed behind the read rather than stacked above it (design §8: "the Wall
+    // moves behind Alt+1's second tab so the first screenful is the read, not
+    // the dashboard"), so every pre-existing boot surface is still one click
+    // away and `system.wall_movers` stays de-seeded exactly as U-4 required.
+    //
+    // Consult is docked RIGHT and alone in its group. It must NOT be `within`
+    // another group — that is precisely how it vanished in `investigate`, where
+    // it is tabbed behind `system.entities` and so opens hidden.
     seed: [
-      { kind: 'v4.kpi' },
-      { kind: 'system.wall', position: { referencePanel: 'v4.kpi', direction: 'below' } },
-      { kind: 'system.findings', position: { referencePanel: 'system.wall', direction: 'below' } },
+      { kind: 'system.navigator' },
+      {
+        kind: 'v4.morning_read',
+        position: { referencePanel: 'system.navigator', direction: 'right' },
+      },
+      // The A/B pair (spec §5.2) stays seeded for the whole demotion program:
+      // flag off, the one-pager is one click away; flag on, it is the
+      // historical comparison the reader is graded against.
       {
         kind: 'v4.assessment',
-        position: { referencePanel: 'system.findings', direction: 'right' },
+        position: { referencePanel: 'v4.morning_read', direction: 'within' },
+      },
+      // The dashboard, behind the read.
+      {
+        kind: 'system.wall',
+        position: { referencePanel: 'v4.morning_read', direction: 'within' },
+      },
+      { kind: 'v4.kpi', position: { referencePanel: 'v4.morning_read', direction: 'within' } },
+      // The scoped record column: one feed grammar (findings + signals), the
+      // entity surface, the alerts queue and the detail rail as tabs.
+      {
+        kind: 'system.findings',
+        position: { referencePanel: 'v4.morning_read', direction: 'right' },
+      },
+      {
+        kind: 'system.entities',
+        position: { referencePanel: 'system.findings', direction: 'within' },
       },
       {
         kind: 'system.alerts_watches',
-        position: { referencePanel: 'v4.assessment', direction: 'within' },
+        position: { referencePanel: 'system.findings', direction: 'within' },
       },
       {
         kind: 'system.inspector',
-        position: { referencePanel: 'v4.assessment', direction: 'within' },
+        position: { referencePanel: 'system.findings', direction: 'within' },
       },
-      { kind: 'v4.map', position: { referencePanel: 'v4.assessment', direction: 'below' } },
+      // §5.1 — docked right, full height, OPEN. Its own group, deliberately.
+      {
+        kind: 'system.consult',
+        position: { referencePanel: 'system.findings', direction: 'right' },
+      },
+      // The bottom band: three views of one scope (§7).
+      {
+        kind: 'system.graph_walk',
+        position: { referencePanel: 'v4.morning_read', direction: 'below' },
+      },
+      { kind: 'v4.map', position: { referencePanel: 'system.graph_walk', direction: 'right' } },
+      {
+        kind: 'system.timeline',
+        position: { referencePanel: 'v4.map', direction: 'right' },
+      },
     ],
-    // The product one-pager is the default-active right tab (not the Inspector,
-    // which peeks on the first selection); the feed anchors the left.
-    active: ['v4.assessment', 'system.findings'],
+    // The read is the default-active centre tab; the feed anchors the record
+    // column. The Inspector still peeks on the first selection.
+    active: ['v4.morning_read', 'system.findings'],
     sizes: [
-      { kind: 'v4.kpi', height: 100 },
-      { kind: 'system.wall', height: 300 },
-      { kind: 'v4.assessment', widthFraction: 0.34 },
+      { kind: 'system.navigator', widthFraction: 0.15 },
+      { kind: 'v4.morning_read', widthFraction: 0.36 },
+      { kind: 'system.findings', widthFraction: 0.23 },
+      { kind: 'system.consult', widthFraction: 0.26 },
+      { kind: 'system.graph_walk', height: 300 },
     ],
   },
   {

@@ -104,6 +104,10 @@ method:
   # Inline, topic-scoped system prompt — the unit carries its bounded question
   # VERBATIM in the descriptor (no Python; no prompt_module set). Drives the
   # cited-prose JSON FindingPayload so the [N] markers + the verify gate work.
+  # F-3 — the same bounded question, quote-derived to one interrogative
+  # sentence, as an explicit field so the assembly's block header can render
+  # it without re-parsing this prose (DEMOTION_D1_SPEC §7 F-3, §1.2).
+  bounded_question: "What is this country's near-term internal political stability, viewed through a coup-vulnerability lens, and where is it going?"
   system_prompt: |
     WHO YOU ARE. You are the INTERNAL-STABILITY unit of an automated
     open-source intelligence platform. The platform reads the wire so a
@@ -222,7 +226,7 @@ method:
     Respond with STRICT JSON ONLY — no prose outside the JSON, no code fence —
     matching exactly this shape:
     {
-      "title": "<concise headline naming the country + the driving instability vector — see TITLE in the HOUSE READ CONTRACT below>",
+      "title": "<concise headline: the country + what this window actually shows about who holds the street and who holds the state — the concrete development in its own words, never a category label and never a bare risk level; where nothing moved, name what is HOLDING it — see TITLE in the HOUSE READ CONTRACT below>",
       "body": "<github-markdown, in exactly the shape the HOUSE READ CONTRACT below specifies, with every claim cited [N] and dated. Inside that shape, '## Why it matters' reads the coup-vulnerability base rate against any acute triggers, and '## Indicators' carries the concrete near-term signals that would confirm destabilization or stabilization>",
       "confidence": <float 0.0-1.0 — calibrated confidence in the verdict given the cited evidence>,
       "evidence": [<the signal indices / source references you cited, as strings>],
@@ -445,7 +449,7 @@ method:
   # Per-day token cap for this unit's fan-out — sized for the staggered
   # twice-daily cadence (kept well under the country_assessor cap because each
   # unit answers a single bounded question, not the full situational sweep).
-  budget_tokens_per_day: 30000000
+  budget_tokens_per_day: 0
   # On a projected per-day cap crossing, PAUSE this unit until the next UTC
   # bucket rather than demoting to a paid fallback (the primary is the
   # self-hosted core plane; there is no cheap fallback wired here).

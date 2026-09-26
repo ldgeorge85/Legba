@@ -1,0 +1,305 @@
+# R2 — THE REFERENCE UNIT (LEDGER_RESET_2026-09-16 §3, Program 2).
+#
+# THE SEAM THIS CLOSES. G1 shipped the correctness instrument whole — migration
+# 0196, the three-family protocol under ANNEX C v4, the calibration interlock —
+# and deliberately did NOT ship the thing it grades AGAINST (docs/SEAMS.md #55).
+# `unit_references` was populated by hand, once, for Israel. This analyst is
+# that seam closed: one independent reference per country per 14-day window,
+# built on the $0 core plane from the open web, span-anchored, date-gated, and
+# honest about where it is thin.
+#
+# WHY A REFERENCE MUST BE BUILT BLIND, and why that shapes this file. The whole
+# value of a correctness number is that the reference was built WITHOUT reading
+# our substrate. A reference derived from the reads it grades is a
+# self-consistency check wearing the wrong label — which is precisely the ~84%
+# of this fleet's LLM calls that Program 1 exists because of. So: no
+# `search_corpus`, no substrate slice, no registry read in this analyst's path.
+# `subscription.substrate.direct_queries` is true ONLY so the handler can read
+# its own ROSTER and CADENCE (which targets exist, when each was last built) —
+# it never reads a signal, a fact or a head, and the materialized input slice
+# the cadence actor hands every META analyst is IGNORED.
+#
+# WHAT R1 MEASURED, and why this is a HYBRID rather than a free lane.
+# The experiment ran the same model on the same instruction twice
+# (planning/PROGRAM2_2026-09-16/R1/COMPARISON.md). Run 1, no fences: 13
+# developments, 1 of 13 spans verified, 11 cited URLs never fetched (several
+# invented outright), 12 of 17 fetches burned on one host that 401'd every time.
+# Run 2, with three fences: 19 developments, 15 of 19 spans verified, 8 of 8
+# dimensions carrying two — verification PASS. And still a FAIL on substance:
+# 33% of a knowledgeable reader's major developments, plus one development that
+# was FALSE (a November-2024 appointment dated off a masthead) and one out of
+# window. For a reference the second failure is the disqualifying one: a thin
+# reference under-covers, but a reference carrying a false development marks
+# CORRECT live reads as contradicted.
+#
+# So the verdict was adopted as a design rather than as a veto:
+#
+#   * the core lane builds a span-anchored SKELETON under fences that are CODE
+#     (fetched-URL manifest, 2-failure domain blocklist, enforced NOTE turn,
+#     DATE GATE, Tier 1-2 discovery allowlist, span verification against the
+#     archived page). Every one of them runs AFTER the model commits, over text
+#     the model cannot reach. Nothing it asserts about a date, a URL or a tier
+#     is taken on its word;
+#   * every dimension left with fewer than two SURVIVING developments is
+#     written to `thin_dimensions` — the column the correctness grader ALREADY
+#     reads — so the free lane UNDER-CLAIMS rather than mis-grades;
+#   * the substance gap is closed, if and when the operator wants it closed, by
+#     an OPERATOR-TRIGGERED lane: scripts/reference_topup_packet.py writes the
+#     packet, scripts/load_unit_reference.py --merge-into takes the result back
+#     through the SAME fences. Nothing here schedules it, nothing here can start
+#     it, and no LLM call in this analyst's path ever leaves the core plane.
+#
+# THE STAGGER IS DERIVED, NOT SCHEDULED, and that is why the cadence below is
+# HOURLY for a FORTNIGHTLY product. R1 measured one reference at ~1-1.7M
+# core-plane prompt tokens and ~8 minutes of ai1. A 33-target roster on a 14-day
+# cadence is ~4-5 hours of owned hardware per cycle, affordable only if at most
+# one build runs at a time. So the tick fires often, the handler takes the
+# SINGLE most overdue target (max_targets_per_run: 1), and the roster staggers
+# itself: a new country joins by appearing in the roster, a skipped run costs a
+# country one tick rather than its slot, and there is no stagger table anywhere
+# to drift out of sync with the roster. Most ticks build nothing and cost one
+# SELECT.
+#
+# COST. The core plane, always and only. There is no paid route in this
+# analyst's path to gate, which is why — unlike the grader — it carries no
+# spend-ceiling env: the ceiling is the architecture. Tokens in, tokens out and
+# wall time are recorded on every reference's own ref_json header, so the cost
+# of a reference travels with the reference.
+#
+# WHY `deterministic` AND NOT AN LLM KIND — the standing auditor's own ruling,
+# and it binds here exactly as it binds on the grader: the ROSTER, the CADENCE,
+# the FENCES, the ARCHIVE, the THIN computation and the WRITE are code; the
+# model is a bounded instrument that finds pages and quotes them. A builder
+# whose acceptance rules a model could influence is not a builder.
+#
+# VERIFY-EXEMPT ON PURPOSE. reference_builder joins
+# STRUCTURAL_VERIFY_EXEMPT_ANALYSTS. Its receipt reports what the instrument did
+# and asserts nothing about the world a faithfulness judge could grade; and the
+# REFERENCE it writes is not a finding at all but an INPUT to a measurement.
+# Routing either through the pass that scores our prose against our own
+# citations is the exact circularity the reference exists to escape.
+#
+# NOTHING PAGES AND NOTHING GATES FROM THIS TRAIN. The receipt is a
+# counting-not-repairing gauge. It never alerts, never dispatches, and never
+# writes to any table but `unit_references`.
+#
+# State: DRAFT in-tree. FLAG LEGBA_REFERENCE_BUILDER_ENABLED defaults OFF; with
+# it off the handler searches nothing, fetches nothing, calls no model and
+# writes nothing at all.
+# DEPLOY ORDER (all operator steps, none of them this file's):
+#   1. migration 0196 already applied (unit_references — G1's, and this analyst
+#      is the only writer to it). NO new migration: the row shape G1 defined was
+#      the right one, and `thin_dimensions` / `span_verified_rate` are used for
+#      exactly what their comments say;
+#   2. REGISTRY IMAGE REBUILT — a NEW deterministic sub-handler is compiled into
+#      the image and the registry validates descriptors against it; then the
+#      runtime + worker recreate;
+#   3. this descriptor registered and transitioned draft -> active;
+#   4. LEGBA_REFERENCE_BUILDER_ENABLED=1, and only then. Force the first build
+#      by hand with scripts/reference_build_now.py --target <id> and READ IT
+#      before letting the cadence run: the first reference on a new roster is
+#      the one worth a human's eyes.
+
+identity:
+  id: reference_builder
+  name: Independent Country Reference Builder
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: r2_reference_unit
+
+subscription:
+  # No `targets` block => META analyst: ONE global tick per cadence. The handler
+  # reads its own roster and cadence via deps.pg_pool and IGNORES the
+  # materialized input slice — load-bearing, not incidental: a reference built
+  # from our own slice would not be independent of the reads it grades.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: reference_builder
+  # X-1 declared knobs (handler_options.HANDLER_OPTIONS['reference_builder']).
+  # Values below are the in-source defaults, stated explicitly so this file
+  # documents the shipped volume rather than implying it. NOTE WHAT IS NOT HERE:
+  # no fence is settable from a descriptor. The fetched-URL manifest, the date
+  # gate, the tier allowlist and the span check are not knobs and never will be
+  # — a descriptor PUT is an API call any holder of the registry token can
+  # make, and lowering the bar a reference must clear is not that kind of
+  # decision.
+  options:
+    # EMPTY means "the single most overdue target on the live roster". Naming
+    # targets here bypasses the cadence and builds exactly those, which is what
+    # scripts/reference_build_now.py --target does.
+    reference_targets: []
+    # The window a reference covers and the cadence at which it is rebuilt.
+    # EQUAL, deliberately: consecutive references then TILE the timeline, so
+    # every as-of stamp the grader asks about falls inside exactly one
+    # reference's window rather than in a gap or an overlap.
+    window_days: 14
+    cadence_days: 7
+    # THE STAGGER. See the banner. Raising this puts several ~8-minute builds
+    # on the box at once.
+    max_targets_per_run: 1
+    # R1's measured budget: 80 calls produced 19 developments across 8
+    # dimensions at 78.9% span verification in ~8 minutes of ai1.
+    tool_call_cap: 200        # 2026-09-20 operator: was 80 — yield
+    # The token lever. R1 measured 2.57M prompt against 73k completion over two
+    # runs — a tool loop over fetched pages is almost entirely prompt-side.
+    page_chars_to_model: 16000   # 2026-09-20 operator: was 7000
+    # The model must have NOTED this many developments before it may commit;
+    # below it the loop pushes back and names the thin dimensions.
+    min_developments: 5      # 2026-09-20 operator: was 20 — unreachable, only delayed the commit
+    # A dimension with fewer than this many SURVIVING verified developments is
+    # written to thin_dimensions. Two is the number G1's loader uses.
+    thin_below: 2
+    # How recently a dimension desk must have produced for its target to count
+    # as on the live roster. The roster is DERIVED from what the fleet actually
+    # reads rather than listed anywhere.
+    roster_window_days: 30
+    # THE TWO WALLS (D3/D4, ops 2026-09-17). The 00:43Z autonomous tick picked
+    # Argentina, ran 927.9 s for 4,510,885 prompt tokens over 67 tool calls and
+    # committed NOTHING — the web_access governor was already over its
+    # max_invocations_per_hour when the tick fired, so 63 of those calls came
+    # back "not admitted" and the loop had no exit toward a commit except the
+    # tool cap running out. 4.5 M tokens then exhausted budget_tokens_per_day
+    # below, whose pause_until_next_window strategy stamped a ONE-HOUR GLOBAL
+    # COOLDOWN on the actor; the 02:43 tick no-op'd on it and the liveness
+    # watchdog raised cadence_stall. Both numbers below are hard: at ~70% of
+    # either the loop stops offering tools and asks for the reference from the
+    # notes it has; past 100% of the wall clock it stops, committed or not, and
+    # the receipt reads `no_commit`.
+    #
+    # 420 s sits ABOVE the 294 s the one good live build needed (Ukraine) and
+    # BELOW both cooldown_seconds (3000) and the hourly tick period, so a build
+    # can never still hold the actor's turn when the next reminder fires.
+    build_max_seconds: 900   # 2026-09-20 operator: was 420
+    # 1.2 M is under a third of budget_tokens_per_day, so three builds fit a
+    # day's bucket with headroom and ONE build can never exhaust it.
+    build_max_tokens: 1200000
+    # THE RETRY FENCE (R2-FIX(2), ops 2026-09-17). The scheduler used to order
+    # the roster by each target's newest SUCCESSFUL reference, and a failed
+    # build writes no row — so a target that cannot be built stayed permanently
+    # the most overdue one. Argentina (3 of 16 pages usable to this lane) took
+    # two consecutive builds and would have taken every hourly tick after that,
+    # while 29 other due targets were never built at all.
+    #
+    # The order is now by last ATTEMPT, read off this lane's own receipts
+    # (data.attempts — no table, no migration), and a failure buys the target a
+    # rest so the hour goes to the next one. Backed-off targets stay in the
+    # receipt's due queue with reason `retry_backoff` and the instant they
+    # return; after three consecutive failures a target is flagged
+    # `unbuildable_by_lane` and is STILL retried at this cadence, for ever.
+    #
+    # NOTE THE PRECEDENCE: LEGBA_REFERENCE_RETRY_BACKOFF_HOURS WINS over this
+    # knob, the inverse of the two walls above. The walls are volumes sized once;
+    # this is the lever an operator reaches for while the lane is stuck on one
+    # country, at the moment a descriptor PUT + re-register + fresh actor record
+    # is exactly the ceremony they cannot afford.
+    retry_backoff_hours: 24
+  llm:
+    # THE CORE PLANE, and the opposite choice from desk_reference's — which
+    # binds a THIRD family precisely to avoid shared blind spots. Two reasons
+    # it is right here and wrong there:
+    #
+    #   1. THE REFERENCE MUST BE FREE. One reference is ~1-1.7M prompt tokens.
+    #      A 33-target fortnightly roster on a paid plane is the cost question
+    #      Program 2 exists to answer NO to; on ai1 it is ~4-5 hours and $0.
+    #   2. THE INDEPENDENCE PROPERTY IS NOT "a different family". It is "built
+    #      without reading our substrate", which this lane satisfies by
+    #      construction — its only inputs are the open web and its own roster.
+    #      A blind spot shared with the desks surfaces as a `silent` claim,
+    #      which the grader already publishes as COVERAGE rather than as
+    #      correctness. That is the honest treatment of it.
+    #
+    # REPOINTABLE BY PUT, and resolved through the shared
+    # _wire_deterministic_llm, so the Anthropic hard-refuse applies — which
+    # matters more here than anywhere: this is a SCHEDULED analyst making dozens
+    # of model rounds per build, and routing it onto the billed plane would be
+    # the most expensive misconfiguration available in the tree.
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+  # Per-day token cap (24h bucket). SIZED TO THE CADENCE, and that is the whole
+  # point of the number (ops 2026-09-17). The old 4,000,000 was sized for "a
+  # handful of builds" before the cadence was halved to 7 days, and it is what
+  # the 00:43Z run exhausted — after which the budget precheck stamped a
+  # ONE-HOUR GLOBAL COOLDOWN on the actor with no log line, the next tick
+  # no-op'd on it and the liveness watchdog reported a cadence stall.
+  #
+  # The arithmetic the lane actually runs on: a 32-target roster on a 7-day
+  # cadence needs ceil(32/7) = 5 builds a day, and build_max_tokens caps a build
+  # at 1.2M. 5 x 1.2M = 6M, which 4M cannot hold — the lane was STRUCTURALLY
+  # guaranteed to cool down roughly daily, whatever else was fixed. 8M carries
+  # it with a third to spare; on the $0 core plane the only real cost is ai1
+  # wall time (~5 x 5.5 min/day). tests/runtime/test_reference_builder_wiring.py
+  # asserts builds/day x build_max_tokens <= this number, so a cadence change or
+  # a roster that outgrows it is a red test rather than a cooldown in the logs.
+  budget_tokens_per_day: 0
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # HOURLY at :43 for a FORTNIGHTLY product — see the banner. Most ticks find
+  # nothing due and cost one SELECT over unit_references. The minute is chosen
+  # clear of the hourly standing auditor (:07), the grader (01:20) and
+  # desk_reference (04:22), so a build that runs for eight minutes never
+  # overlaps the start of another instrument's sweep.
+  fallback_schedule: "43 * * * *"
+  # 50 minutes — below the hourly interval so an organic tick is never
+  # swallowed by its own cooldown (the alert_trigger_scan 0.8x ratio).
+  cooldown_seconds: 3000
+
+# THE WEB PACK. The ONLY outward reach this analyst has, and the reason it can
+# be independent at all: web_search + web_fetch through the governed action-pack
+# door, which carries the SSRF guard, the pack's invocation governor and the
+# per-run cost ledger. Note what this grant does NOT include — no substrate
+# read, no corpus search, no registry call. With the pack ungranted or the
+# agency plane down the handler records `no_web` and builds NOTHING, which is a
+# refusal rather than a degradation: a reference built without the open web
+# would not be independent of the reads it grades.
+action_packs:
+  # THE BUILDER'S OWN HOURLY BUCKET, and the reason it needs one. The pack
+  # declares `governor.budget_account: web_access` with
+  # `max_invocations_per_hour: 120`, and Agency.run_pack_tool resolves the
+  # account as `res.governor.budget_account or call.budget_account` — so the
+  # PACK's account beats the per-analyst one the binding passes and every holder
+  # of the grant draws on ONE hourly bucket. Measured live: in one two-hour
+  # window `standing_auditor` alone spent 120 of 120. The 00:43Z builder tick
+  # then found the hour gone and 63 of its 67 tool calls came back "not admitted
+  # by the pack" — a whole build spent learning that.
+  #
+  # `governor_override` is the supported carve-out and it is TIGHTENING ONLY:
+  # agency.resolution._merge_governor takes the more restrictive of each numeric
+  # cap and lets `budget_account` follow the override, because "re-targeting the
+  # ledger account is not a loosening". So this buys a PRIVATE bucket and a cap
+  # still under the pack's own — it cannot be used to widen anything. Nothing
+  # here raises the shared 120: that would just hand the auditor a bigger hour.
+  #
+  # 100/hour = one whole build (tool_call_cap: 80 admitted calls) plus 25%
+  # headroom, against an hourly tick that builds at most one target. Refused,
+  # blocklisted and cached calls never reach the binding, so 80 is a real
+  # ceiling rather than an estimate.
+  - pack_id: web_access
+    governor_override:
+      budget_account: web_access_reference_builder
+      max_invocations_per_hour: 1000000   # 2026-09-20 operator: no cap — was 100/h
+
+# No output bindings. The tick's receipt finding is the run's own return value;
+# the REFERENCES are side-written to unit_references (migration 0196). No
+# outward fan-out from here — the grader picks them up on its own next sweep,
+# because its population is derived from that table rather than from a list.
+outputs: []

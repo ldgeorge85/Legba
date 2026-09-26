@@ -110,6 +110,24 @@ LIMIT $3
 
 _VERDICT_FETCH_CAP = 2000
 
+#: The width ledger read (migration 0190). Every column the ``external_grades``
+#: aggregation strata read off a row — kept explicit rather than ``SELECT *`` so
+#: a schema addition does not silently change what this route ships.
+_LEDGER_SQL = """
+SELECT claim_key, population, verdict, assembly_regime, claim_severity,
+       absence_shaped, decisive_source_tier, analyst_id, grader_family,
+       grader_pipeline_version, rater_role, retrieval_origin_mix,
+       search_provider, search_liveness, search_degraded, sample_fraction,
+       graded_at
+FROM external_grades
+WHERE graded_at > $1
+ORDER BY graded_at DESC
+LIMIT $2
+"""
+
+#: A window read is bounded like every other polled surface here.
+_LEDGER_FETCH_CAP = 20000
+
 #: The four verdicts the plane can write. Published so a panel never hardcodes
 #: them, and so a window with none of a given verdict still shows the key at 0.
 VERDICTS: tuple[str, ...] = (
@@ -177,6 +195,13 @@ class ExternalAuditOut(BaseModel):
     desks_audited: int = 0
     pipeline_versions: list[str] = Field(default_factory=list)
     contradictions: list[AuditContradiction] = Field(default_factory=list)
+    #: THE WIDTH LEDGER, when there is one. ``None`` off-width (flag off, or
+    #: before the first graded tick), so the flag-off payload is byte-identical
+    #: to the shipped one and no consumer has to special-case an empty block. It
+    #: carries the ``external_truth`` shape — one record per population, never
+    #: pooled — read straight off ``external_grades`` (migration 0190), which is
+    #: where the per-claim detail lives now that the critique is one row per read.
+    external_truth: Optional[dict[str, Any]] = None
 
 
 def _blank(window_days: int, generated_at: datetime) -> ExternalAuditOut:
@@ -266,8 +291,15 @@ def build_payload(
     window_days: int,
     generated_at: datetime,
     stale_after_hours: float = DEFAULT_STALE_AFTER_HOURS,
+    ledger_rows: list[dict[str, Any]] | None = None,
 ) -> ExternalAuditOut:
-    """Assemble the response. Pure — every DB read happens in the route."""
+    """Assemble the response. Pure — every DB read happens in the route.
+
+    ``ledger_rows`` is the width plane's ``external_grades`` window (the
+    per-claim detail that used to live in per-claim critiques). ``None`` or empty
+    ⇒ ``external_truth`` stays ``None`` and the payload is the shipped one
+    byte-for-byte, which is the flag-off guarantee reaching the wire.
+    """
     by_verdict = {v: 0 for v in VERDICTS}
     desks: set[str] = set()
     versions: set[str] = set()
@@ -317,7 +349,29 @@ def build_payload(
         desks_audited=len(desks),
         pipeline_versions=sorted(versions),
         contradictions=contradictions,
+        external_truth=_external_truth_block(ledger_rows, window_days=window_days),
     )
+
+
+def _external_truth_block(
+    ledger_rows: list[dict[str, Any]] | None, *, window_days: int
+) -> Optional[dict[str, Any]]:
+    """The ``external_truth`` aggregation, or ``None`` when there is no ledger.
+
+    Imported lazily and guarded: this module ships in the REGISTRY image, and
+    ``external_grades`` is a pure ``data.provenance`` leaf with no runtime
+    dependency, but a defensive import keeps the ops route answering even if the
+    aggregation module is ever unavailable — a polled panel must never 500.
+    """
+    if not ledger_rows:
+        return None
+    try:
+        from ..provenance import external_grades as eg
+
+        return eg.aggregate(eg.coerce_rows(ledger_rows), window_days=window_days)
+    except Exception as exc:  # noqa: BLE001 — a polled panel must not 500
+        logger.info("v3.system.external_audit.ledger_aggregate_failed err=%s", exc)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +396,7 @@ def build_external_audit_router(deps: RegistryAPIDeps) -> APIRouter:
     ) -> ExternalAuditOut:
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(days=days)
+        ledger_rows: list[dict[str, Any]] = []
         try:
             async with deps_.descriptor_registry.pg.acquire() as conn:
                 hb = await conn.fetchrow(
@@ -350,6 +405,20 @@ def build_external_audit_router(deps: RegistryAPIDeps) -> APIRouter:
                 rows = await conn.fetch(
                     _VERDICTS_SQL, _TITLE_PREFIX, cutoff, _VERDICT_FETCH_CAP
                 )
+                # THE WIDTH LEDGER. Read separately and defensively: the table
+                # is absent on a deployment that never applied migration 0190,
+                # and empty on one that has the flag off — both are the
+                # flag-off shape, and neither is an error. ``to_regclass`` gates
+                # the read so a missing table costs nothing and never logs a
+                # scary "relation does not exist".
+                has_table = await conn.fetchval(
+                    "SELECT to_regclass('public.external_grades')"
+                )
+                if has_table:
+                    ledger = await conn.fetch(
+                        _LEDGER_SQL, cutoff, _LEDGER_FETCH_CAP
+                    )
+                    ledger_rows = [dict(r) for r in ledger]
         except Exception as exc:  # noqa: BLE001 — a polled panel must not 500
             logger.info("v3.system.external_audit.unavailable err=%s", exc)
             return _blank(days, now)
@@ -358,6 +427,7 @@ def build_external_audit_router(deps: RegistryAPIDeps) -> APIRouter:
             [dict(r) for r in rows],
             window_days=days,
             generated_at=now,
+            ledger_rows=ledger_rows,
         )
 
     return router

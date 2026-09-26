@@ -35,6 +35,8 @@ const TargetMap = lazy(() => import('@/panels/target/Map'))
 const TargetGraph = lazy(() => import('@/panels/target/Graph'))
 const TargetTimeline = lazy(() => import('@/panels/target/Timeline'))
 const TargetClaims = lazy(() => import('@/panels/target/Claims'))
+// P-A — the desk brief as a page (the composed export, read rather than downloaded).
+const TargetDeskBriefPage = lazy(() => import('@/panels/target/DeskBriefPage'))
 
 const AnalystRuns = lazy(() => import('@/panels/analyst/Runs'))
 const AnalystOutputs = lazy(() => import('@/panels/analyst/Outputs'))
@@ -42,6 +44,8 @@ const AnalystCrossTarget = lazy(() => import('@/panels/analyst/CrossTarget'))
 const AnalystCritiques = lazy(() => import('@/panels/analyst/Critiques'))
 
 const SystemFindings = lazy(() => import('@/panels/system/Findings'))
+// The Navigator — the landing's product rail (WORKSTATION_V2_FLOW_DESIGN §4).
+const SystemNavigator = lazy(() => import('@/panels/system/Navigator'))
 const SystemBudget = lazy(() => import('@/panels/system/Budget'))
 const SystemOptimizer = lazy(() => import('@/panels/system/Optimizer'))
 const SystemDeadLetter = lazy(() => import('@/panels/system/DeadLetter'))
@@ -102,9 +106,16 @@ const SystemSourceHealth = lazy(() => import('@/panels/system/SourceHealth'))
 const SystemEvalBoards = lazy(() => import('@/panels/system/EvalBoards'))
 const SystemReadScoreboard = lazy(() => import('@/panels/system/ReadScoreboard'))
 
+// 7b-v — Program 6 L2's divergence map.
+const SystemLayerDivergence = lazy(() => import('@/panels/system/LayerDivergence'))
+
+// Wave P lane B — the cross-framing comparison, scoped to one CLAIM.
+const AnalysisCrossFraming = lazy(() => import('@/panels/analysis/CrossFraming'))
+
 // v4 visual workspace panels (selection-linked singletons).
 const V4Map = lazy(() => import('@/panels/v4/MapPanel'))
 const V4Assessment = lazy(() => import('@/panels/v4/AssessmentPanel'))
+const V4MorningRead = lazy(() => import('@/panels/v4/MorningReadPanel'))
 const V4Kpi = lazy(() => import('@/panels/v4/KpiPanel'))
 
 // U-3 merge — Provenance folds v4.why + system.lineage + v4.flow into one
@@ -156,6 +167,10 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     definition: def('target.claims', 'target_claims', 'target', 'target_id', 'Target Claims', true, ['personal', 'cis'], 'Quote'),
     Component: TargetClaims,
   },
+  'target.desk_brief_page': {
+    definition: def('target.desk_brief_page', 'target_desk_brief_page', 'target', 'target_id', 'Desk Brief', true, ['personal', 'cis'], 'Newspaper'),
+    Component: TargetDeskBriefPage,
+  },
 
   // --- Analyst panels (A1–A5) ---
   'analyst.runs': {
@@ -204,6 +219,13 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     definition: def('system.findings', 'system_findings', 'system', null, 'Live Feed', false, ['personal', 'cis'], 'Radio'),
     Component: SystemFindings,
   },
+  'system.navigator': {
+    // The front door. `system` (not `operator`) and BOTH modes deliberately:
+    // the landing seeds it, and a cis session that boots without its navigation
+    // rail lands on a report with no way to change which report.
+    definition: def('system.navigator', 'system_navigator', 'system', null, 'Navigator', false, ['personal', 'cis'], 'ListTree'),
+    Component: SystemNavigator,
+  },
   'system.budget': {
     definition: def('system.budget', 'system_budget', 'system', null, 'Budget Ledger', false, ['personal'], 'DollarSign'),
     Component: SystemBudget,
@@ -221,7 +243,10 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
   'system.consult': {
     // U-3 merge — Deep Consult is a depth toggle here (merged/Consult.tsx);
     // `system.deep_consult` retired into the alias table (→ tab "deep").
-    definition: def('system.consult', 'system_consult', 'system', null, 'Consult', false, ['personal'], 'MessageSquare'),
+    // Decision 3 — modes widened `['personal']` → `['personal','cis']`. Consult
+    // is the landing's docked-right centre; leaving it personal-only made the
+    // operator's main working surface invisible for half their sessions.
+    definition: def('system.consult', 'system_consult', 'system', null, 'Consult', false, ['personal', 'cis'], 'MessageSquare'),
     Component: SystemConsultMerged,
   },
   'system.settings': {
@@ -423,6 +448,25 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
     definition: def('system.eval_boards', 'system_eval_boards', 'system', null, 'Eval Boards', false, ['personal'], 'LayoutDashboard'),
     Component: SystemEvalBoards,
   },
+  // 7b-v — the DIVERGENCE MAP. Program 6 L2 writes no table: the series and the
+  // receipt ride the analyst payload, and a quiet run is suppressed to
+  // trace-only, so until this panel there was no way to see that the instrument
+  // was running at all. An ANALYSIS kind, not Engine Room: a layer-to-layer gap
+  // moving is a reading about the country, not about the plumbing.
+  'system.layer_divergence': {
+    definition: def('system.layer_divergence', 'system_layer_divergence', 'system', null, 'Layer Divergence', false, ['personal'], 'Layers'),
+    Component: SystemLayerDivergence,
+  },
+  // WAVE P LANE B — CROSS-FRAMING. One claim against the units that touch it,
+  // the layer-divergence receipt, and what no unit says. A DRILL surface, not a
+  // deck row: it is opened from the claim it is about (the Claims panel's
+  // action, a situation row, ⌘K) and has nothing to show without one, which is
+  // why it ships hidden — see HIDDEN_KINDS for the argument, and
+  // `registry.test.ts`'s size ratchet for why a 60th kind was taken at all.
+  'analysis.cross_framing': {
+    definition: def('analysis.cross_framing', 'analysis_cross_framing', 'system', null, 'Cross-framing', false, ['personal'], 'Columns3'),
+    Component: AnalysisCrossFraming,
+  },
   // THE READ SCOREBOARD (D2e) — the only panel on the deck that measures the
   // OPERATOR instead of the engine. Sits with the ops panels because it is
   // read on the same errand ("is this thing working?") and because the answer
@@ -440,6 +484,16 @@ export const PANEL_REGISTRY: Record<PanelKind, RegistryEntry> = {
   'v4.assessment': {
     definition: def('v4.assessment', 'v4_assessment', 'system', null, 'World Assessment', false, ['personal', 'cis'], 'ScrollText'),
     Component: V4Assessment,
+  },
+  // D-4 — the assembly reader. Registered beside `v4.assessment` rather than
+  // replacing it: while `LEGBA_COMPOSITION_ASSEMBLY` is off the rows carry no
+  // `data.data.assembly` and the legacy prose one-pager is still the right
+  // render of them (spec §5.2 — the old path stays runnable for the whole
+  // program). This surface renders a legacy run honestly as prose too, so the
+  // two overlap safely rather than fighting.
+  'v4.morning_read': {
+    definition: def('v4.morning_read', 'v4_morning_read', 'system', null, 'Morning Read', false, ['personal', 'cis'], 'Newspaper'),
+    Component: V4MorningRead,
   },
   // (v4.case Casework Board removed — S7-T2; shelved, no pin board reachable.)
   // Renamed "At a Glance" (U-3 §4) — "KPI Strip" named the widget, not what an
@@ -517,7 +571,23 @@ for (const k of PREVIEW_KINDS) {
 //                                   mounts the WALL and this tile stays
 //                                   reachable for anyone whose saved layout
 //                                   holds it.
+//   * analysis.cross_framing      — wave P lane B. The second non-retirement in
+//                                   this set, and for the same reason as
+//                                   `system.wall_movers`: it is not a surface
+//                                   waiting for a survivor, it is a DRILL. Its
+//                                   scope is a CLAIM — it is opened from the
+//                                   claim it is about (the Claims panel's
+//                                   action, a situation row, ⌘K), and a sidebar
+//                                   row would open it with no claim in hand and
+//                                   nothing to say. `system.optimizer.diff` is
+//                                   the exact precedent: registered, hidden,
+//                                   reached from its parent surface. Hiding it
+//                                   also means the 26-row sidebar budget is
+//                                   untouched by this lane — it takes the
+//                                   ratchet's third option ("hide") honestly
+//                                   rather than arguing for a 27th row.
 const HIDDEN_KINDS: ReadonlySet<PanelKind> = new Set<PanelKind>([
+  'analysis.cross_framing',
   'system.optimizer.diff',
   'source.subscription_builder',
   'source.subscription_policy',

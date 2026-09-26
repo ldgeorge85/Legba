@@ -3,6 +3,8 @@ import {
   BAND,
   KIND_COLOR,
   SEVERITY_COLOR,
+  eventPoints,
+  eventSpans,
   findingMarkColor,
   findingPoints,
   pointOpacity,
@@ -11,6 +13,7 @@ import {
   situationSpans,
   spanOpacity,
   timeDomain,
+  type TLEvent,
   type TLFinding,
   type TLSignal,
   type TLSituation,
@@ -73,6 +76,68 @@ describe('point derivation', () => {
     expect(pts).toHaveLength(2)
     expect(pts[0].band).toBe(BAND.situation)
     expect(pts[0].subtitle).toContain('active')
+  })
+})
+
+// V3/P6 — bounded occurrences: a closed event, an ongoing one (no
+// time_end), one with only produced_at, and one unplaceable.
+const ev: TLEvent[] = [
+  {
+    id: 'ev1', title: 'Strike', lifecycle_state: 'resolved', severity: 'high',
+    time_start: '2026-06-01T00:00:00Z', time_end: '2026-06-02T00:00:00Z',
+  },
+  {
+    id: 'ev2', title: 'Ongoing talks', lifecycle_state: 'active',
+    time_start: '2026-06-02T00:00:00Z', time_end: null,
+  },
+  {
+    id: 'ev3', title: 'Unstamped', lifecycle_state: 'emerging',
+    time_start: null, time_end: null, produced_at: '2026-06-03T00:00:00Z',
+  },
+  {
+    id: 'ev4', title: 'Nowhere', lifecycle_state: 'emerging',
+    time_start: null, time_end: null, produced_at: null,
+  },
+]
+const NOW_MS = new Date('2026-06-05T00:00:00Z').getTime()
+
+describe('eventPoints (V3/P6)', () => {
+  it('lands on band 4, anchors time_start with produced_at fallback, drops unplaceable', () => {
+    const pts = eventPoints(ev)
+    expect(pts).toHaveLength(3)
+    expect(pts[0].band).toBe(BAND.event)
+    expect(pts[0].ts).toBe(new Date('2026-06-01T00:00:00Z').getTime())
+    expect(pts[0].subtitle).toBe('resolved')
+    // ev3 anchors on produced_at (no occurrence stamps); ev4 is dropped.
+    expect(pts.find((p) => p.id === 'ev3')!.ts).toBe(
+      new Date('2026-06-03T00:00:00Z').getTime(),
+    )
+    expect(pts.find((p) => p.id === 'ev4')).toBeUndefined()
+  })
+})
+
+describe('eventSpans (V3/P6)', () => {
+  it('spans time_start → time_end with the lifecycle badge', () => {
+    const s = eventSpans(ev, NOW_MS).find((x) => x.id === 'ev1')!
+    expect(s.start).toBe(new Date('2026-06-01T00:00:00Z').getTime())
+    expect(s.end).toBe(new Date('2026-06-02T00:00:00Z').getTime())
+    expect(s.band).toBe(BAND.event)
+    expect(s.lifecycle).toBe('resolved')
+    expect(s.open).toBe(false)
+  })
+
+  it('a NULL time_end is OPEN — resolved to now for layout, never a close', () => {
+    const s = eventSpans(ev, NOW_MS).find((x) => x.id === 'ev2')!
+    expect(s.open).toBe(true)
+    expect(s.end).toBe(NOW_MS)
+  })
+
+  it('produced_at is the start fallback; a fully unstamped row is dropped', () => {
+    const spans = eventSpans(ev, NOW_MS)
+    const s3 = spans.find((x) => x.id === 'ev3')!
+    expect(s3.start).toBe(new Date('2026-06-03T00:00:00Z').getTime())
+    expect(s3.open).toBe(true)
+    expect(spans.find((x) => x.id === 'ev4')).toBeUndefined()
   })
 })
 

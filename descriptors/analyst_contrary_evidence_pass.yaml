@@ -1,0 +1,234 @@
+# Contrary-Evidence Pass (Program 7a) — the platform's only ACTIVE retrieval
+# against its own published claims.
+#
+# THE GAP. Four organs in this fleet already handle disagreement and not one of
+# them goes looking for it:
+#   * claim_contradiction (R2) compares claims that ALREADY CAME IN — P and ¬P
+#     inside one desk's verified set, over a closed, calibrated vocabulary;
+#   * fact_contention_arbiter compares VALUES ALREADY EXTRACTED for a
+#     subject/predicate;
+#   * competing_hypotheses (ACH) resolves a thesis against the evidence base we
+#     happen to hold;
+#   * standing_auditor searches the open web FOR THE CLAIM — its query is the
+#     claim's own, and NOT_FOUND is its honest common answer.
+# Nothing formulates the COUNTER-query. The operator's 2026-09-23 capture names
+# the model (IARPA REASON): "for material claims, actively retrieve the
+# strongest counter-evidence, not only supporting evidence. Emit contention
+# records, never verdicts." This analyst is that act.
+#
+# WHAT IT IS. A `deterministic`-kind META analyst (sub_handler=
+# contrary_evidence_pass) that runs ONCE daily and, on the $0 core plane:
+#   1. selects MATERIAL claims using the standing auditor's own bar — imported,
+#      not re-implemented: the same top layer (world_assessor,
+#      country_composition, escalation_composition, world_assessment), the same
+#      deterministic enumeration off the assembled record's spans and the
+#      Assessment channel's sentences, the same checkable/uncheckable
+#      pre-filter, the same severity-then-lead priority. One subtraction: a
+#      claim longer than R2's single-proposition ceiling is not selected,
+#      because a compound sentence has no single negation;
+#   2. formulates ONE COUNTER-QUERY per claim — deterministically by negating
+#      the claim's position in R2's polarity vocabulary where it applies (no
+#      model, replayable from the claim text alone a month later), otherwise via
+#      one bounded core-plane call whose prompt says three times that the reply
+#      is a SEARCH QUERY and never a verdict, and whose reply is re-validated in
+#      code against a PARAPHRASE GATE before any search is spent;
+#   3. runs it on the FREE RUNG through the web_access PACK TOOL;
+#   4. FETCHES the top hits through the auditor's own fences — robots consulted
+#      before the call, non-2xx refused, trafilatura extraction, a DISCOVERED
+#      publication date that is never invented — and hashes the text with the
+#      same function the research plane hashes a landed page with;
+#   5. writes ONE `claim_contentions` row (migration 0221) per claim carrying a
+#      STANCE derived in code: contradicts | qualifies | none_found |
+#      search_failed.
+#
+# WHY `deterministic` AND NOT `inline_target`. Same argument the standing
+# auditor makes, one step sharper: a pass whose SAMPLE is model-chosen can
+# quietly stop contending the uncomfortable desks. So the sample, the caps, the
+# stance vocabulary, the stance DERIVATION and the writes are all code, and the
+# model is a bounded instrument used at most once per claim, for a string that
+# gets typed into a search engine. Its output never reaches a stored row.
+#
+# NO VERDICT, AND THIS IS THE DESIGN. `stance` is a statement about the
+# RETRIEVAL ("a page this platform holds asserts the opposite"), never about the
+# claim. A verdict would make this a THIRD grader beside the faithfulness judge
+# and the external audit, and pooling three populations is how a number stops
+# meaning anything. There is deliberately no grader ref in this descriptor: the
+# organ the design refuses to have cannot be wired by a PUT.
+#
+# CROSS-FAMILY, BY CONSTRUCTION. The capture asks for the judge to be
+# cross-family from the producer, and it already is on this path without a
+# fence: the counter-query comes from the CORE plane (gpt-oss-120b, the writer's
+# own family — which is fine, because it writes a query and asserts nothing),
+# and the only thing ever GRADED here is the composition's tension line, graded
+# by the faithfulness judge (nemotron). Producer and judge are different
+# families for every sentence this pass causes to be written.
+#
+# NO CORPUS WRITES. The pages this pass fetches are selected ADVERSARIALLY —
+# that is the entire point — and landing that selection in `signals` would move
+# freshness, source health, salience and calibration for every desk that reads
+# them, silently and in one direction. Existing corpus rows are LINKED by
+# content hash where they already exist; nothing is created. The standing
+# auditor made the same call (decisive_url + decisive_span_sha256 on
+# external_grades, no signals) and this analyst follows it.
+#
+# WHAT REACHES A COMPOSITION, AND WHAT DOES NOT. The composition tension rule
+# admits stance='contradicts' AND derivation='polarity' AND a live expires_at,
+# and renders it as a hedged line citing a plain [counter:N] ordinal into a
+# "## Counter-evidence" foot — never a [[ref:N]], because the assembly mints
+# exactly one [[ref:N]] per carried block and that invariant is load-bearing.
+# The UNCALIBRATED negation fallback is served on GET /v3/contentions and on the
+# Inspector chip, where a human reads it with the counter-ref one click away,
+# and is withheld from compositions: a false `contradicts` rendered into a
+# composition manufactures a disagreement for the fleet to write up, which is
+# exactly what R2 shipped ZERO pairs rather than risk.
+#
+# THE HEARTBEAT. A run with no LLM, no search binding or no new reads still ends
+# analyst_traces.status='success' — the shape of the 08-12 judge outage that
+# stayed invisible for three days. So every run, including one that contended
+# nothing, upserts a row into the EXISTING alert_trigger_watermarks table
+# (migration 0091) as trigger_class='contrary_evidence',
+# watermark_key='_heartbeat', carrying claims selected, queries issued,
+# paraphrase refusals, searches, pages fetched, the stance mix and an explicit
+# degraded_reason. A second key, '_watermark', carries the produced_at high
+# water mark so a claim is contended once rather than daily. No new table.
+#
+# DEGRADE, DON'T DIE. A missing deps.pg_pool RAISES (a contrary pass that cannot
+# read the tower must not report a clean zero). No LLM => the pass still runs
+# and still contends every claim whose negation is deterministic, naming the gap
+# — a real, partial, honest run. No web binding => every claim comes back
+# search_failed with a reason, which is the ledger saying the plane is down
+# rather than the web being quiet.
+#
+# VOLUME + COST. claims_per_run (60) claims x (1 search + at most 2 fetches) =
+# <=180 egress calls per DAY, all on the free rung. The capture's own risk note
+# — "the contrary pass doubles search volume on the audit's claims" — is why
+# the cadence ships daily rather than at the auditor's hourly drain. The metered
+# rung is DECLARED and WIRED and OFF: `paid_rung: false` below, and while it is
+# false the handler additionally truncates the ladder to rung 0 in code, so a
+# PUT that appends a metered rung cannot spend anything on its own. With it on,
+# a metered query is still refused unless the web_access pack declares
+# `max_cost_usd_per_day`, and every escalation and refusal is counted on the
+# heartbeat.
+#
+# State: draft in-tree. Registration and the operator's activate flip are DEPLOY
+# steps; a NEW deterministic sub-handler needs a REGISTRY REBUILD + runtime
+# recreate to activate, and migration 0221 must be applied first (without it
+# every write fails, is counted, and the heartbeat says so). The `web_access`
+# action pack must already be registered with its web_search provider bound, or
+# the pass runs and reports an uncontended heartbeat — loudly, on purpose.
+
+identity:
+  id: contrary_evidence_pass
+  name: Contrary-Evidence Pass
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: p7a_checking_layer
+
+subscription:
+  # No `targets` block => META analyst: ONE global sweep per cadence tick. The
+  # handler reads the top-layer heads directly via deps.pg_pool and ignores the
+  # materialized input slice (the composition_lineage_sweep / standing_auditor
+  # precedent).
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: contrary_evidence_pass
+  # X-1 declared knobs (handler_options_programs.CONTRARY_EVIDENCE_OPTIONS).
+  # Every one bounds a COST or a record's SHELF LIFE, except `paid_rung`, which
+  # is the only knob here that can cause a charge. Values below are the
+  # in-source defaults, stated explicitly so the descriptor documents the
+  # shipped volume rather than implying it.
+  options:
+    claims_per_run: 60
+    max_refs_per_claim: 2
+    search_limit: 5
+    # Seven days. A desk read stays relevant about that long, and after it a
+    # contention is history rather than a live disagreement: the composition
+    # tension rule stops admitting it and the route marks it expired.
+    contention_ttl_hours: 168
+    read_fetch_cap: 200
+    # THE METERED RUNG — OFF, and fenced twice. See the header.
+    paid_rung: false
+    serp_provider_order:
+      - searxng
+  llm:
+    # THE $0 CORE PLANE, and nothing else. The deterministic deps-builder's
+    # shared _wire_deterministic_llm hard-refuses an Anthropic component for any
+    # deterministic sub-handler, so this ref cannot be repointed onto the billed
+    # plane by a descriptor PUT — consult / deep_consult remain the only
+    # sanctioned Anthropic users.
+    #
+    # THE WRITER'S OWN FAMILY IS THE RIGHT ANSWER HERE, which is unusual and
+    # worth stating. Everywhere else on this platform a model reading the
+    # platform's own output is fenced to a different family, because a family
+    # grading itself measures its shared blind spots and calls them agreement.
+    # This call GRADES NOTHING. It is handed a claim and returns a search query;
+    # it may not assert a fact, its reply is re-validated in code against a
+    # paraphrase gate, and the only thing that survives it is a string typed
+    # into a search engine. There is nothing here for a family to be biased
+    # about, and paying a second family to write a query would be spending on a
+    # fence that guards nothing.
+    temperature: 1.0
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # Output cap. The vLLM handler drops max_tokens from the wire by default (a
+    # self-hosted server serves its own budget), so this is the hosted-endpoint
+    # safety net rather than the live control; the handler's own
+    # COUNTER_MAX_TOKENS is what actually bounds the reply.
+    max_tokens: 300
+  # Per-day CORE-plane token cap. Zero is the standing house rule: the core
+  # plane is $0 and is never budgeted by token count.
+  budget_tokens_per_day: 0
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # DAILY at 05:37 UTC. Not the auditor's hourly drain, deliberately: the
+  # capture's own risk note is that this pass DOUBLES search volume on the
+  # audit's claims, and an hourly cadence would do that against a measurement
+  # nobody has taken yet. Daily is the conservative start and the cadence is a
+  # descriptor field, so widening it is a PUT once the volume is measured.
+  #
+  # :37 is its own minute — clear of the :00 composition block, the :07 external
+  # audit and the :20/:30 deterministic maintenance analysts, so it never
+  # co-fires with the plane it reads from.
+  fallback_schedule: "37 5 * * *"
+  # 20 hours — below the 24h interval, so an organic daily tick is never
+  # swallowed by its own cooldown (the alert_trigger_scan 0.8x ratio).
+  cooldown_seconds: 72000
+
+# THE AGENCY GRANT. `web_access` is the ONLY way this analyst reaches outside
+# the substrate: there is no ad-hoc HTTP anywhere in its path and no httpx
+# import in any of its modules. Granting the pack does NOT activate search — the
+# three-way gate still applies, the web_search ToolSpec still needs its provider
+# stack_ref bound, the web_fetch egress still passes the SSRF guard, and robots
+# is consulted before every page fetch. Every one of those gaps fails LOUDLY and
+# lands in a row's `reason` column and the heartbeat's degraded_reason rather
+# than as a silent empty result.
+action_packs:
+  - pack_id: web_access
+
+# No output bindings: the run summary is TRACE_ONLY (audited in analyst_traces +
+# mirrored into the heartbeat row); the REAL product is the claim_contentions
+# rows the handler side-writes. No outward fan-out and no alert from here — a
+# retrieval is not a page-worthy event, and the surfaces that read these records
+# (the composition tension rule, GET /v3/contentions, the Inspector chip) are
+# pull, not push.
+outputs: []

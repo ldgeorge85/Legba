@@ -806,7 +806,9 @@ async def test_fallback_query_drops_only_the_supersession_predicate():
     assert "f.superseded_by IS NULL" not in query
     # Everything else is the basis admissibility, verbatim.
     assert "DISTINCT ON (f.analyst_id, f.target_id)" in query
-    assert "JOIN LATERAL" in query
+    # H17 — the verify leg is the set-based fold CTE, INNER-joined (the gate).
+    assert "JOIN v ON v.fid = f.id::text" in query
+    assert "LATERAL" not in query
     assert "LEAST(f.confidence, v.faithfulness_score)" in query
     assert params[1] == 336
 
@@ -877,7 +879,7 @@ async def test_read_slice_flag_on_runs_the_fallback_gather(monkeypatch):
     class _SplitConn(_CapturingConn):
         async def fetch(self, query: str, *params: Any) -> list[dict[str, Any]]:
             self.calls.append((query, params))
-            if "LEFT JOIN LATERAL" in query:            # the periphery gather
+            if "LEFT JOIN v ON v.fid = f.id::text" in query:  # periphery gather
                 return [
                     _row(
                         analyst_id="military_posture",
@@ -886,7 +888,10 @@ async def test_read_slice_flag_on_runs_the_fallback_gather(monkeypatch):
                         faithfulness_score=0.40,
                     )
                 ]
-            if "f.superseded_by IS NULL" not in query and "JOIN LATERAL" in query:
+            if (
+                "f.superseded_by IS NULL" not in query
+                and "JOIN v ON v.fid = f.id::text" in query
+            ):
                 return [                                # the FALLBACK gather
                     _row(
                         analyst_id="military_posture",
@@ -905,7 +910,8 @@ async def test_read_slice_flag_on_runs_the_fallback_gather(monkeypatch):
     )
     queries = [q for q, _ in conn.calls]
     assert any(
-        "JOIN LATERAL" in q and "f.superseded_by IS NULL" not in q for q in queries
+        "JOIN v ON v.fid = f.id::text" in q and "f.superseded_by IS NULL" not in q
+        for q in queries
     ), "the newest-passing fallback gather must have run"
     promoted = [r for r in rows if r.get(cw.FLOOR_FALLBACK_KEY)]
     assert len(promoted) == 1
@@ -930,14 +936,14 @@ async def test_read_slice_flag_off_never_runs_the_fallback_gather(monkeypatch):
     )
     # The predicate this asserts on is the HEAD-FOLD gather's — the query whose
     # job is "one newest non-superseded head per (unit, desk)". FRAME-2's WINDOW
-    # LEDGER also joins the verify lateral and DELIBERATELY carries no
+    # LEDGER also joins the verify fold and DELIBERATELY carries no
     # supersession predicate (supersession is a freshness relation, and the
     # fortnight's record is almost entirely superseded rows), so it is excluded
-    # by its own severity CASE rather than by a blanket "any lateral" sweep.
+    # by its own severity CASE rather than by a blanket "any fold" sweep.
     folding_queries = [
         q
         for q, _ in conn.calls
-        if "JOIN LATERAL" in q
+        if "JOIN v ON v.fid = f.id::text" in q
         and "FROM situations" not in q
         and "CASE f.severity" not in q
     ]

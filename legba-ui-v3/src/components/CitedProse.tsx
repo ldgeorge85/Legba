@@ -43,8 +43,16 @@ import {
 import {
   CLAIM_VERDICT_ABSENCE_EXPLAIN,
   claimVerdictForMarker,
+  markerOrdinal,
   type ClaimVerdict,
 } from '@/lib/claimVerdicts'
+import ClaimTag from '@/components/ClaimTag'
+import type { ContentionRow } from '@/lib/contentionsModel'
+import {
+  claimFoldChips,
+  type CitationCorroboration,
+  type ClaimFoldChip,
+} from '@/lib/claimFold'
 import { stripMarkdown, unwrapEnvelope } from '@/lib/proseText'
 
 export interface CitedProseProps {
@@ -63,6 +71,31 @@ export interface CitedProseProps {
    * honest `claim-level verdict not recorded` line, never a fabricated one.
    */
   verification?: Record<string, unknown> | null
+  /**
+   * 7b-i — render the CITED SOURCE and the fold reasons beside each claim
+   * (masthead · date, then a `single-source` / `wire-folded` / `unsupported` /
+   * `insufficient evidence` chip per reason the record states). OFF by default:
+   * the scan surfaces (Live Feed, Journal, the Morning Read columns) keep the
+   * bare ordinal, and the Inspector's read card — the surface a reader opens to
+   * CHECK a claim — turns it on. A citation stating none of those keys renders
+   * exactly as it does with the flag off.
+   */
+  claimTags?: boolean
+  /**
+   * The rendered record's per-ordinal corroboration blocks
+   * (`lib/claimFold.corroborationByOrdinal`), which carry the wire-fold COUNT
+   * the citation itself records only as a boolean. Absent → the chips fall
+   * back to the citation's own stamps.
+   */
+  corroboration?: Map<number, CitationCorroboration> | null
+  /**
+   * 7a — the contrary-evidence records for this read, keyed by the ordinal
+   * they were written against (`contentionsModel.contentionsByOrdinal`).
+   * `null` means NOT READ YET and an empty map means read-and-nothing-
+   * contended; neither chips anything, and the distinction is the caller's to
+   * keep.
+   */
+  contentions?: Map<number, ContentionRow> | null
   variant?: 'block' | 'inline'
   /**
    * What a chip click does. Defaults to scrolling to the citation's evidence
@@ -193,6 +226,38 @@ function CitationCard({ c, verdict }: { c: Citation; verdict: ClaimVerdict }) {
           {c.source}
         </span>
       )}
+      {/* 7g-2 — a cited HISTORICAL OBSERVATION resolves IN the card: the row
+          is carried on the citation, so the reader sees the number, its unit
+          and — always — the period it is about, without a drill that has
+          nowhere to go. The stale-tense marker is the backend's own string,
+          printed verbatim; absent fields print nothing rather than a guess. */}
+      {c.observation && (
+        <span className="mt-1 block text-[10px] leading-snug text-ink-2" data-testid="citation-observation">
+          {c.observation.value && (
+            <span className="font-mono text-ink-1">
+              {c.observation.value}
+              {c.observation.unit ? ` ${c.observation.unit}` : ''}
+            </span>
+          )}
+          {c.observation.staleTense && (
+            <span className="ml-1 text-accent-warning" data-testid="citation-stale-tense">
+              {c.observation.staleTense}
+            </span>
+          )}
+          {c.observation.provider && (
+            <span className="mt-0.5 block text-ink-3">
+              {c.observation.provider}
+              {c.observation.seriesId ? ` · ${c.observation.seriesId}` : ''}
+              {c.observation.subject ? ` · ${c.observation.subject}` : ''}
+            </span>
+          )}
+          {c.observation.sha256 && (
+            <span className="mt-0.5 block truncate font-mono text-ink-3" title={c.observation.sha256}>
+              file sha256:{c.observation.sha256}
+            </span>
+          )}
+        </span>
+      )}
       {c.evidenceText ? (
         <span className="mt-1.5 block max-h-24 overflow-hidden text-[11px] italic leading-snug text-ink-2">
           “{c.evidenceText.length > 240 ? `${c.evidenceText.slice(0, 240)}…` : c.evidenceText}”
@@ -224,10 +289,15 @@ function CitationCard({ c, verdict }: { c: Citation; verdict: ClaimVerdict }) {
 function CitationChip({
   c,
   verdict,
+  foldChips,
   onClick,
 }: {
   c: Citation
   verdict: ClaimVerdict
+  /** 7b-i — the fold reasons to render beside this claim, or null when the
+   *  surface did not ask for claim tags. `[]` is meaningful and different: the
+   *  surface asked, and the record states no fold reason. */
+  foldChips: ClaimFoldChip[] | null
   onClick: () => void
 }) {
   return (
@@ -259,6 +329,10 @@ function CitationChip({
       >
         {citationLabel(c.marker)}
       </button>
+      {/* 7b-i — the cited source and the fold reasons, beside the claim rather
+          than a hover away. Outside the button so the ordinal drill-down is
+          untouched: the tag is read, never clicked. */}
+      {foldChips && <ClaimTag citation={c} chips={foldChips} />}
       <CitationCard c={c} verdict={verdict} />
     </span>
   )
@@ -289,6 +363,7 @@ function linkChildren(
   byMarker: Map<string, Citation>,
   onCite: (c: Citation) => void,
   verdictFor: (marker: string) => ClaimVerdict,
+  foldFor: (c: Citation, verdict: ClaimVerdict) => ClaimFoldChip[] | null,
 ): ReactNode {
   return Children.map(children, (child, i) => {
     if (typeof child === 'string') {
@@ -296,11 +371,13 @@ function linkChildren(
       if (tokens.length === 1 && tokens[0].kind === 'text') return child
       return tokens.map((tok, j) => {
         if (tok.kind === 'marker') {
+          const verdict = verdictFor(tok.citation.marker)
           return (
             <CitationChip
               key={`c-${i}-${j}`}
               c={tok.citation}
-              verdict={verdictFor(tok.citation.marker)}
+              verdict={verdict}
+              foldChips={foldFor(tok.citation, verdict)}
               onClick={() => onCite(tok.citation)}
             />
           )
@@ -316,7 +393,10 @@ function linkChildren(
       if (props && props.children != null) {
         return {
           ...child,
-          props: { ...props, children: linkChildren(props.children, byMarker, onCite, verdictFor) },
+          props: {
+            ...props,
+            children: linkChildren(props.children, byMarker, onCite, verdictFor, foldFor),
+          },
         }
       }
     }
@@ -330,12 +410,13 @@ function citedComponents(
   byMarker: Map<string, Citation>,
   onCite: (c: Citation) => void,
   verdictFor: (marker: string) => ClaimVerdict,
+  foldFor: (c: Citation, verdict: ClaimVerdict) => ClaimFoldChip[] | null,
 ): Components {
   const base = MD_COMPONENTS
   const wrap = (key: keyof Components) => {
     const Original = base[key] as ((p: { children?: ReactNode }) => ReactNode) | undefined
     return (props: { children?: ReactNode }) => {
-      const linked = linkChildren(props.children, byMarker, onCite, verdictFor)
+      const linked = linkChildren(props.children, byMarker, onCite, verdictFor, foldFor)
       return Original ? Original({ ...props, children: linked }) : <>{linked}</>
     }
   }
@@ -356,6 +437,9 @@ export default function CitedProse({
   text,
   citations,
   verification = null,
+  claimTags = false,
+  corroboration = null,
+  contentions = null,
   variant = 'block',
   onCiteClick,
   className,
@@ -378,6 +462,27 @@ export default function CitedProse({
       return v
     }
   }, [verification])
+
+  // 7b-i — the fold reasons for one claim, or `null` when this surface renders
+  // bare ordinals. Memoised per citation marker like the verdicts above, so a
+  // re-render never re-derives a chip list per chip.
+  const foldFor = useMemo<(c: Citation, verdict: ClaimVerdict) => ClaimFoldChip[] | null>(() => {
+    if (!claimTags) return () => null
+    const cache = new Map<string, ClaimFoldChip[]>()
+    return (c: Citation, verdict: ClaimVerdict): ClaimFoldChip[] => {
+      let chips = cache.get(c.marker)
+      if (!chips) {
+        const ordinal = markerOrdinal(c.marker)
+        chips = claimFoldChips(c, {
+          verdict,
+          corroboration: (ordinal !== null && corroboration?.get(ordinal)) || null,
+          contention: (ordinal !== null && contentions?.get(ordinal)) || null,
+        })
+        cache.set(c.marker, chips)
+      }
+      return chips
+    }
+  }, [claimTags, corroboration, contentions])
 
   if (variant === 'inline') {
     // A clamped scan line: strip markdown to a flat flow (no headings/blocks) and
@@ -410,7 +515,7 @@ export default function CitedProse({
     )
   }
 
-  const components = citedComponents(byMarker, onCite, verdictFor)
+  const components = citedComponents(byMarker, onCite, verdictFor, foldFor)
   return (
     // `report-prose` gives the reading columns a 45–75ch measure + 16px/1.7
     // off-white type scale (S7-T6); the caller's className still layers on top.

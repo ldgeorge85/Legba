@@ -6,7 +6,8 @@
   "description": "Legba descriptor-driven Dockview workstation (L-204). Replaces legba-ui (27-panel legacy set) with a fresh panel set per legba_ui_panels_v2.md, consuming L-192 UIPanelRegistry.",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "dev:mobile": "vite --config vite.config.mobile.ts",
+    "build": "tsc -b && vite build && vite build --config vite.config.mobile.ts",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
     "lint:tokens": "node tools/lint-tokens.mjs",
@@ -28,6 +29,7 @@
     "dockview": "^8.2.0",
     "dockview-react": "^8.2.0",
     "elkjs": "^0.11.1",
+    "html-to-image": "^1.11.13",
     "js-yaml": "^4.1.0",
     "leaflet": "^1.9.4",
     "lucide-react": "^0.468.0",

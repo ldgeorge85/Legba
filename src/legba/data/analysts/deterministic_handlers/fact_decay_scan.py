@@ -72,8 +72,15 @@ from ...facts.decay import (
     load_decay_config,
 )
 from ...provenance.models import FindingPayload
+from ...provenance.origin import origin_class_clause
 
 logger = logging.getLogger(__name__)
+
+#: P7/7g-1 — the origin-class leg on the open-fact scan and its sidecar
+#: prune (SEAMS #57 sweep). The decay sidecar mirrors the LIVE open set: a
+#: loaded historical figure has no last-sighting to age against, and a
+#: readout for one would be a staleness reading on a finished number.
+_LIVE_FACTS = origin_class_clause("f")
 
 SUB_HANDLER_NAME = "fact_decay_scan"
 
@@ -88,7 +95,7 @@ DEFAULT_TOP_CANDIDATES = 10
 #: subselect resolves each backing signal id against the signals pkey (the
 #: whole open set derives in <1s live). Excludes rows the legacy expire pass
 #: has marked ``data.expired`` (they are past valid_until anyway).
-_OPEN_FACTS_SQL = """
+_OPEN_FACTS_SQL = f"""
     SELECT f.id, f.subject, f.predicate, f.value, f.confidence,
            f.source_type, f.created_at,
            (SELECT max(COALESCE(s.fetched_at, s.created_at))
@@ -96,6 +103,7 @@ _OPEN_FACTS_SQL = """
              WHERE s.id = ANY(f.derived_from)) AS last_signal_at
       FROM facts f
      WHERE f.superseded_by IS NULL
+       AND {_LIVE_FACTS}
        AND (f.valid_until IS NULL OR f.valid_until > now())
        AND COALESCE(f.data->>'expired', 'false') != 'true'
      ORDER BY f.created_at
@@ -125,12 +133,13 @@ _UPSERT_SQL = """
 
 #: Prune readouts whose fact closed (superseded/expired) or vanished since the
 #: last scan — the sidecar mirrors the OPEN set only.
-_PRUNE_SQL = """
+_PRUNE_SQL = f"""
     DELETE FROM fact_decay_states d
      WHERE NOT EXISTS (
              SELECT 1 FROM facts f
               WHERE f.id = d.fact_id
                 AND f.superseded_by IS NULL
+                AND {_LIVE_FACTS}
                 AND (f.valid_until IS NULL OR f.valid_until > now())
            )
 """

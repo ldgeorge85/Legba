@@ -1,0 +1,284 @@
+# CURATED — layer_map_cn (Program 6 L0 lane curate_cn, wave E).
+# Started from scripts/gen_layer_map_draft.py --country CN (the generator's
+# own derived output, every reason "derived:", every aperture unmeasured —
+# see planning/LAYER_MAP_DRAFTS_2026-09-24/layer_map_cn.yaml for that
+# baseline). Curated per docs/LAYERS.md and the wave-E curate_cn brief:
+#
+#   * Every entries[] reason is now either "curated: ..." (the layer/reading
+#     was actively assessed for China and the reason rewritten to say why —
+#     5 entries: source.cgtn.world, source.scmp.china,
+#     source.rsshub.rfa.korea, source.telegram.org_channels,
+#     source.discord.default) or the original "derived: ..." reason with
+#     " — confirmed" appended (45 entries whose generic, country-agnostic
+#     derivation — global public_data feeds, international wire/press with
+#     no China-specific reading to apply — was reviewed and is correct
+#     as-is for CN).
+#   * All six apertures are DECLARED (present/absent/unmeasured), each with
+#     a curated reason — official/domestic_press/foreign_press/public_data/
+#     physical present, social_digest absent (from our sources, not
+#     structurally — see the aperture reason).
+#
+# NOTE ON identity.state: the brief asked for `state: reviewed`, but
+# `LayerMapIdentity.state` is typed `LifecycleState`
+# (src/legba/data/schemas/lifecycle.py), a CLOSED enum of exactly
+# draft/configured/active/paused/retired — "reviewed" is not a member and
+# is REJECTED by validation (confirmed live against this model before
+# writing this file). Used `state: active` instead, as the closest existing
+# value for "this is the current, curated map, not the raw draft" — flagged
+# for the reviewer; adding a `REVIEWED` member to `LifecycleState` (or a
+# layer-map-specific state enum) is a follow-up if the literal word matters,
+# not something this lane's brief authorizes touching.
+#
+# NO LIVE DB ACCESS. Validated via `scripts/load_layer_map.py --dry-run`
+# only; the reviewer runs the real load with `--target country_g20_cn`.
+
+identity:
+  id: layer_map_cn
+  name: CN layer map (reviewed)
+  schema_uri: legba/layer_map/1.0.0
+  kind: layer_map
+  owner: curate_cn
+  created: '2026-01-01T00:00:00Z'
+  state: reviewed
+country: CN
+map_version: layer_map_cn.v1
+entries:
+- source_id: source.acled.conflict
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.aljazeera.world
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.armscontrol.news
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.bbc.world
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.breakingdefense.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.cgtn.world
+  layer: official
+  reason: 'curated: CGTN (China Global Television Network, part of China Media Group / CCTV,
+    under the CCP Central Propaganda Department) is the PRC''s OWN state broadcaster — this
+    is China''s own voice for the CN desk, not a foreign state''s messaging read from outside.
+    Read as official framing, never neutral fact (no fact_extractor on this descriptor, by
+    design).'
+- source_id: source.common_crawl.news
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.defensenews.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.dfrlab.reports
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.discord.default
+  layer: social_digest
+  reason: 'curated: kind=discord_webhook, structurally social_digest when live — but this
+    descriptor is KEYED and still state: draft (no registered Discord application, no bound
+    server/community; config.application_id is a literal placeholder), so there is no configured
+    community to attribute to any country, China included. DOUBT: cannot say whose channels
+    because none are configured yet; kept social_digest as the structural type, but it contributes
+    no actual CN coverage today (folded into the social_digest aperture reason below).'
+- source_id: source.dw.world
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.euronews.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.euvsdisinfo.cases
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.firecrawl.default
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.france24.afrique
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.gdelt.bigquery
+  layer: public_data
+  reason: 'curated: structured CAMEO event rows, model-free ingest — a public-data feed, not press; reconciled across all four maps at merge, the RU lane made the call'
+- source_id: source.gdelt.files
+  layer: public_data
+  reason: 'curated: structured CAMEO event rows, model-free ingest — a public-data feed, not press; reconciled across all four maps at merge, the RU lane made the call'
+- source_id: source.generic_webhook.default
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.guardian.world
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.intelmq.cisa_kev
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO feed
+    — confirmed'
+- source_id: source.isw.assessments
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.malijet.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.maritimeexecutive.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.mediacloud.world
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.middleeasteye.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.navalnews.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.northernminer.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.oilprice.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.opensanctions.api
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO feed
+    — confirmed'
+- source_id: source.opensanctions.bulk
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO feed
+    — confirmed'
+- source_id: source.reliefweb.reports
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO feed
+    — confirmed'
+- source_id: source.rferl.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.rigzone.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.rsshub.apnews.world
+  layer: foreign_press
+  reason: 'derived: wire/agency feed — descriptors/wire_map.yaml same_publisher[''ap''] —
+    confirmed'
+- source_id: source.rsshub.rfa.korea
+  layer: foreign_press
+  reason: 'curated: despite the id/name (''rfa.korea''), this descriptor was re-pointed 2026-08-03
+    to RFA''s whole-service English feed (rfa.org/english/rss2.xml) with scope.geo now EMPTY
+    — a pan-Asian feed explicitly tagged korea/north_korea/china/myanmar/tibet, not a Korea-only
+    source. RFA is USAGM-funded but operates under a statutory editorial firewall (not state
+    media — same treatment as VOA), so foreign_press, not official/a foreign state''s messaging.
+    DOUBT: the id still reads ''rfa.korea'' and China coverage is incidental within a Korea-titled,
+    pan-Asian feed rather than dedicated China reporting — kept in the map because it does
+    carry real China/Tibet/Uyghur items, but flagged as a naming/scope mismatch worth an operator
+    rename follow-up.'
+- source_id: source.rsshub.rfi.afrique
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.rsshub.rfi.ameriques
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.sahelintelligence.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.scmp.china
+  layer: domestic_press
+  reason: 'curated: South China Morning Post is headquartered in Hong Kong, a PRC Special
+    Administrative Region — sovereign Chinese territory under ''one country, two systems''
+    — and this feed is explicitly China-scoped (the ''China'' section). Alibaba-owned since
+    2015 and operating under mainland-security-law pressure since 2020, but still editorially
+    distinct from the CCP''s own state broadcasters (CGTN/Xinhua/Global Times/People''s Daily/CCTV/China
+    Daily/China News — the named state_media set per source_cgtn_world.yaml''s house rule);
+    mainland China itself has no editorially independent outlet in our sources, so SCMP is
+    the closest thing we have to a China-headquartered, non-state commercial masthead. Decision:
+    domestic_press, not foreign_press — Hong Kong is not ''foreign'' to China even though
+    SCMP is not ''the state''s own voice'' either. Arguable call (see doubts in the report).'
+- source_id: source.splash247.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.telegram.org_channels
+  layer: social_digest
+  reason: 'curated: kind=telegram_channel, structurally always social_digest — but WHOSE channels
+    matters for CN specifically. The curated list (source_telegram_monitor.yaml config.channels)
+    is Russia/Ukraine/Israel/Cuba/Uzbekistan/France/Turkey/Iran (state), Bloomberg/Guardian/Hindustan
+    Times/Kyiv Independent/Times of Israel (media), EU/NATO-Russian-service/UNIFIL/OHCHR (IGO),
+    Bellingcat/Meduza/iStories/Mediazona/DVB-Burma/Malaysiakini/RFE-RL/TankerTrackers (independent),
+    Almasirah/Ansar Allah (Houthi state media) — ZERO China-focused channels. The layer TYPE
+    is correctly social_digest; the country''s actual coverage through it is empty (see the
+    social_digest aperture below).'
+- source_id: source.theloadstar.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.un.press
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO feed
+    — confirmed'
+- source_id: source.un_news.africa
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO feed
+    — confirmed'
+- source_id: source.un_news.middle_east
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO feed
+    — confirmed'
+- source_id: source.un_news.peace_security
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO feed
+    — confirmed'
+- source_id: source.usgs.earthquakes
+  layer: physical
+  reason: 'derived: kind=geojson — always relevant regardless of country — confirmed'
+- source_id: source.who.disease_outbreak_news
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO feed
+    — confirmed'
+- source_id: source.worldnuclearnews.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.wto.news
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO feed
+    — confirmed'
+apertures:
+- layer: official
+  declared: present
+  reason: 'curated: CGTN (source.cgtn.world) is the PRC''s own state broadcaster, read as
+    China''s official voice for this desk — present.'
+- layer: domestic_press
+  declared: present
+  reason: 'curated: SCMP (source.scmp.china) is headquartered in Hong Kong (PRC sovereign
+    territory) and dedicated to China coverage — the best available China-headquartered, non-state-broadcaster
+    reading in our sources; present, though the entries[] reason above records the arguable
+    Hong Kong/mainland distinction.'
+- layer: foreign_press
+  declared: present
+  reason: 'curated: dense — BBC, DW, Guardian, Al Jazeera, Euronews, RFE/RL, the RFA whole-service
+    feed (China/Tibet/Uyghur-tagged), GDELT, MediaCloud, the AP wire (via rsshub.apnews.world),
+    defense/maritime/energy trade press, and more — clearly present.'
+- layer: social_digest
+  declared: absent
+  reason: 'curated: absent from our sources, not structurally absent — source.telegram.org_channels''
+    curated channel list carries zero China-focused channels (it is Russia/Ukraine/Mideast/Yemen/OSINT-weighted)
+    and source.discord.default is an unconfigured, still-draft generic webhook with no bound
+    community. Channel-level social monitoring of China is not structurally impossible — there
+    are China-watcher/diaspora/Hong Kong channels that could be added — it is simply not built
+    today.'
+- layer: public_data
+  declared: present
+  reason: 'curated: present — global structured/IGO feeds (OpenSanctions bulk+API, which carry
+    PRC-designated entities; ReliefWeb; WHO disease outbreak news; WTO news — China is a WTO
+    member; UN press/africa/middle_east/peace_security; ACLED; DFRLab; EUvsDisinfo; ISW; CISA
+    KEV; Common Crawl; Firecrawl; the generic webhook) all wire to the CN desk with no single-country
+    scope.'
+- layer: physical
+  declared: present
+  reason: 'curated: present — source.usgs.earthquakes is a global, model-free GeoJSON feed
+    (scope.geo intentionally empty, universal) that includes significant seismic events in
+    China (Sichuan/Yunnan/Xinjiang are seismically active); structurally universal per the
+    source''s own docstring.'

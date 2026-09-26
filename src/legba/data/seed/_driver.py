@@ -372,6 +372,9 @@ async def run_seed_source(
                     derived_from=[],
                     source_type=source.source_type,
                     seed_batch_id=batch_id,
+                    # V3/P7 — every row the seed path writes is the 'seed'
+                    # origin class, whatever the batch's source_type label.
+                    origin_class="seed",
                 )
                 if dlq is not None or out is None:
                     result.counts["skipped"] += 1

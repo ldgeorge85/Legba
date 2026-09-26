@@ -59,11 +59,16 @@ logger = logging.getLogger(__name__)
 LOOP_JUDGE_AVAILABILITY = "judge_availability"
 LOOP_DESCRIPTOR_PROMPT_DRIFT = "descriptor_prompt_drift"
 LOOP_DESCRIPTOR_STATE_DRIFT = "descriptor_state_drift"
+# P4b — the graph-projection parity/freshness loop lives in the sibling leaf
+# ``production_gauge_projection``; the class id is mirrored into the tuple
+# below (imported, never re-spelled).
+from .production_gauge_projection import LOOP_GRAPH_PROJECTION
 
 INTEGRITY_LOOP_CLASSES: tuple[str, ...] = (
     LOOP_JUDGE_AVAILABILITY,
     LOOP_DESCRIPTOR_PROMPT_DRIFT,
     LOOP_DESCRIPTOR_STATE_DRIFT,
+    LOOP_GRAPH_PROJECTION,
 )
 
 # Quiet-by-design reasons these loops add to the S-1 vocabulary.
@@ -668,6 +673,12 @@ async def read_integrity_loops(
     loops = await read_judge_loops(conn, now=now, cfg=cfg)
     loops.extend(await read_descriptor_drift_loops(conn, now=now, cfg=cfg))
     loops.extend(await read_descriptor_state_loops(conn, now=now, cfg=cfg))
+    # The P4b projection loop — call-time import for the same reason this
+    # module is call-time-imported: it imports the gauge vocabulary from
+    # production_gauge, which imports this module's callers.
+    from .production_gauge_projection import read_projection_loops
+
+    loops.extend(await read_projection_loops(conn, now=now, cfg=cfg))
     return loops
 
 

@@ -1,0 +1,141 @@
+# crossroads — the one FIXED-MANDATE descriptor on the `inquiry` kind
+# (Program 5 lane 3; planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §5, §7 lane 3).
+#
+# WHAT IT IS. Every other producer on this platform is bounded by construction — a
+# desk reads one target, a unit one dimension, a composition one country, a lens
+# one declared prior. The crossroads reads what they produced TOGETHER and writes
+# the four things none of them is positioned to say: cross-unit PATTERNS, desk
+# DRIFTS, unreconciled CONTRADICTIONS, and SILENCES. It never asserts a new fact
+# (the tower is the fact floor, as for every journal-family voice) and it never
+# adjudicates a contradiction it found — naming the unreconciled disagreement IS
+# the work.
+#
+# THE NUMBERS ARE NOT THE MODEL'S. `method.options.pre_pass_module` names the
+# deterministic pre-pass — legba.data.analysts.crossroads_detectors:pre_pass_block
+# — which computes all four detectors in CODE over the governed read tools' rows
+# and hands the run a CROSSROADS BLOCK whose rows carry [N] ordinals. This is the
+# 7e SPREAD-BLOCK contract (src/legba/data/analysts/spread_block.py) one layer up:
+# a model asked to eyeball "which desks are converging" from prose will keep
+# finding convergence, so the arithmetic is computed before the model sees it and
+# the mandate requires every such claim to name the block's own ordinal. The block
+# degrades to an explicit line and NEVER raises; it distinguishes "the detectors
+# ran and nothing fired" from "the detectors did not run", which are different
+# answers and are never collapsed (the B-8 lesson).
+#
+# THE BRIEF IS FIXED AND LIVES IN CODE. Every other inquiry carries a PUT-able
+# `method.options.brief`; this one does not. Its mandate is the persona module
+# (legba.prompts.crossroads) so the descriptor CONTENT HASH is the mandate version
+# — the same DL-2 discipline the lens priors carry. Re-authoring the mandate is a
+# descriptor PUT with a visible hash change, not a silent DB edit.
+#
+# GRANTS (design §2): journal_read + substrate_read + inquiry_state. Wider than a
+# lens (which is journal_read only) because the crossroads must reach the roster
+# and the targets to name a silence honestly; still NO web pack, by construction.
+# NO journal_propose: the contradiction rows name the propose_correction dispatch
+# shape but this descriptor cannot perform it — the pre-pass says so in the row,
+# and the ledger question lands with `dispatched_to` unset until that grant is a
+# separate, visible decision.
+#
+# CADENCE: daily 12:00 UTC — AFTER the six lean lenses finish their 09:00–11:30
+# band, because a crossroads that runs before the lenses would report every
+# country as lens-silent.
+#
+# identity.state: draft — the orchestrator promotes. Registration and promotion
+# are not an agent's act.
+#
+# INTEGRATION NOTE (lane p5_kind owns these, not this lane): the `inquiry` analyst
+# kind must be registered in src/legba/data/analysts/__init__.py (the in-code
+# extension-kind registration every non-enum kind needs for model_validate), and
+# ANALYST_KIND_OPTIONS must carry an `inquiry` entry declaring `pre_pass_module`
+# alongside `brief` — without the catalog key, AnalystDescriptor refuses any
+# method.options block as structurally inert (X-1/QW1-B).
+
+identity:
+  id: crossroads
+  name: "Crossroads — the cross-desk inquiry"
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: inquiry                      # the Program 5 kind module (lane p5_kind)
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Journal
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: program5_inquiry
+
+subscription:
+  # No `targets` block → META analyst: ONE global run per cadence tick. The
+  # crossroads is about the whole roster's shape, so a per-target fan-out would
+  # be the wrong unit of work by construction.
+  other_analysts: []
+  substrate:
+    direct_queries: false            # reads via the granted packs; the pre-pass's
+                                     # two leaf reads are named in its module
+                                     # docstring (no pack tool covers either)
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: llm_planner
+  # COLON form ('module:ATTR') — a dotted path silently falls back to the kind
+  # default and loses the entire mandate.
+  prompt_module: "legba.prompts.crossroads:CROSSROADS_SYSTEM"
+  options:
+    # THE SEAM. The kind resolves this module:ATTR pair and awaits
+    # `pre_pass_block(options, deps) -> str | None`, prepending the returned
+    # block to the user prompt. Same COLON form and same reason as prompt_module.
+    pre_pass_module: "legba.data.analysts.crossroads_detectors:pre_pass_block"
+  llm:
+    # Model-card sampling (gpt-oss ships generation_config temperature=1.0; the
+    # vLLM client always sends temperature, so the card default can never apply
+    # on its own). Fleet-wide per the 2026-07-24 sampling audit + A/B.
+    temperature: 1.0
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat  # core plane — the GATHER investigation
+      expected_family: llm_provider
+    verify:
+      # The journal-family V1 gate: cited FACT claims graded post-persist by the
+      # faithfulness pass (perspective exempt, entry never mutated). $0 core
+      # plane. A crossroads claim that names no block ordinal and no substrate
+      # ref is exactly what this pass is here to catch.
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    narrate:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat  # core plane — the crossroads VOICE
+      expected_family: llm_provider
+    # NO max_tokens: the core plane never caps model output (2026-09-17 house
+    # rule). The Opus flip, if the operator ever wants one, is a descriptor PUT
+    # with visible cost — never a default.
+  budget_tokens_per_day: 0            # the $0 core plane carries no per-day cap
+  gather:
+    max_rounds: 6                     # the in-actor GATHER ReAct cap (HARD ceiling)
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  fallback_schedule: "0 12 * * *"     # daily — 12:00 UTC, after the lens band
+  cooldown_seconds: 79200             # 22h — below the 24h interval (below-interval guard)
+
+grounding:
+  enabled: false                      # OFF by default (§4.3) — the crossroads
+                                      # reads tower conclusions that were already
+                                      # grounding-corrected upstream
+
+# Grant invariant (§2 of the design): the tower-top read surface (journal_read),
+# the roster + target reads a silence claim needs (substrate_read), and the
+# inquiry's own continuity ledger (inquiry_state, lane p5_state). NO web_access,
+# NO research pack, NO journal_propose, NO publish sink.
+action_packs:
+  - pack_id: journal_read
+  - pack_id: substrate_read
+  - pack_id: inquiry_state
+  - pack_id: journal_propose   # the dispatch: a question or a contention goes out as a proposal through the journal gate (never a spend)
+
+outputs: []                           # JournalPayload → journal_entries
+                                      # (entry_kind='crossroads'); no sinks

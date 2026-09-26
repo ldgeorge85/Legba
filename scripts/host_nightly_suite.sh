@@ -157,6 +157,8 @@ KNOWN_FAILURES=(
   'tests/runtime/test_critic_descriptor_e2e\.py::test_critic_missing_rubric_rejection'
   'tests/runtime/test_webhook_alert_e2e\.py::test_webhook_4xx_no_retry_no_dlq'
   'tests/runtime/test_webhook_alert_e2e\.py::test_webhook_5xx_retries_then_dlqs'
+  # (2026-09-09: the a2a-mount entry joined 09-01 retired — the nightly's stale-entry report matched nothing on
+  # 09-09, i.e. the probe xfails normally in the rig again; per this list's rule.)
 )
 
 # ---------------------------------------------------------------------------

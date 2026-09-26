@@ -11,6 +11,7 @@ from uuid import UUID
 
 import asyncpg
 
+from ..data.provenance.kinds import is_deterministic_rollup
 from ..data.schemas.analyst import AnalystDescriptor
 
 if TYPE_CHECKING:  # pragma: no cover - typing-only; avoids dapr_actors import cycle
@@ -420,10 +421,36 @@ async def verify_inline_target_finding(
     # second-order claim over first-order findings, and its confidence must not
     # exceed the ceiling of the rows it rests on. A cycle with nothing to say
     # emits no citations key and no-ops here, same as an honest-empty compose.
+    # D-5 (DEMOTION_D1_SPEC §4.1) — THE DETERMINISTIC ROLLUP IS NOT GRADED.
+    # A ``region_rollup.v1`` row contains no sentence written for it: every
+    # quoted span is its member country assembly's own block object, carried
+    # forward unchanged, still pointing at the desk head that wrote it. There is
+    # no prose to be unfaithful with, so a faithfulness verdict over it would be
+    # a number about nothing — and running the judge would be live spend for it.
+    # NO-OP, loudly documented, rather than a fabricated pass.
+    #
+    # This keys on the ROW, not on the environment. A rollup stays a rollup
+    # after the flag flips back, and a legacy generative region read written
+    # yesterday is still graded exactly as it was — flag-off behaviour is
+    # byte-identical because no flag is read here. It also means the descriptor
+    # keeps its ``method.llm.verify`` key (the whole verify-dispatch
+    # discriminator, and this train's only rollback lever), so the generative
+    # path remains restorable by one env var with no descriptor edit at all.
+    #
+    # The rollup is NOT unverified: it declares its arithmetic in
+    # ``data['structural_claims']`` and the C2b structural profile re-derives
+    # every number from the constituent set the row itself recorded — see
+    # ``kinds.structural_claims_verify_opt_in`` and the dispatch below this one.
+    if is_deterministic_rollup(data):
+        return None
     is_composition = kind in (
         "meta_findings_synthesizer", "cross_analyst_correlator", "situation_tracker",
     )
-    is_journal = kind == "journal_assessor"
+    # Program 5: the `inquiry` kind writes the SAME JournalPayload through the
+    # same off-chain path, so its cited FACT claims are reshaped by the same
+    # helper and judged on the same V1 profile. A second arm here would be a
+    # copy of build_journal_verify_inputs's contract that drifts.
+    is_journal = kind in ("journal_assessor", "inquiry")
     if kind == "inline_target":
         pass
     elif is_composition:
@@ -552,6 +579,16 @@ async def verify_inline_target_finding(
             # counted soft verify failures. ``None`` for every non-composition
             # kind → the fold is inert.
             eval_block=data.get("eval") if isinstance(data, Mapping) else None,
+            # D-3: the typed ``assembly.v1`` document, when the producer emitted
+            # one. This seam — and NOT ``dapr_actors`` — is where the block is
+            # read, deliberately: ``dapr_actors.py`` is at 4110/4110 with no
+            # headroom and no seam, so the assembly arms had to reach verify
+            # through a caller that already reads ``data``. ``None`` for every
+            # unit finding; a LEGACY-regime composition passes the block through
+            # and the arms decline it on the regime (§5.2 stamps the label on
+            # every composition row, flag on or off). Either way the four arms
+            # are a no-op and the pass is byte-identical.
+            assembly=data.get("assembly") if isinstance(data, Mapping) else None,
             # J2: the sampling gate (None ⇒ ungated — every pre-J2 caller and
             # replay harness is byte-identical).
             judge_sampling=judge_sampling,

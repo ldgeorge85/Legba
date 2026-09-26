@@ -67,6 +67,11 @@ MAPPING = [
     ("source.telegram.api_id",          "TELEGRAM_API_ID"),
     ("source.telegram.api_hash",        "TELEGRAM_API_HASH"),
     ("source.telegram.session",         "TELEGRAM_SESSION_B64"),
+    # R-C — the PAID search rung (descriptors/stack_component_search_brave.yaml
+    # ships draft and points config.api_key here). Absent = the component
+    # refuses every query with SearchProviderUnresolved ("NO query was issued")
+    # and its healthcheck is UNHEALTHY — never a silent empty result set.
+    ("search.brave.api_key",            "LEGBA_BRAVE_SEARCH_API_KEY"),
 ]
 
 BASE = os.environ.get(

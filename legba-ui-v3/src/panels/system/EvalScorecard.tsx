@@ -12,6 +12,19 @@
  * Worst-scoring analysts surface first (they need attention). Selecting an
  * analyst expands its critic-score trend chart + per-axis rubric bars.
  *
+ * The panel stacks six sections, each over its own route key and never pooled
+ * with another: the honest skill scoreboard (exogenous Brier + acute BSS), the
+ * band-calibration harness (`EvalBandCalibration` — ordinal persistence, never
+ * a Brier score), the operator gold-set correctness axis, standing external
+ * truth, the banded per-desk country scorecard with its per-band drill, and the
+ * per-analyst critic rollup.
+ *
+ * "download CSV" (7b-iii) on the banded per-country section serialises the
+ * bands the page is showing — one row per (desk, dimension), insufficient
+ * dimensions included — straight from the `CountryScorecard[]` in hand
+ * (`@/lib/bandCsv`). No second fetch and no new route, so the file cannot
+ * disagree with the section it came from.
+ *
  * NOTE: the cross-analyst `/v3/eval/scorecard` rollup endpoint is not yet wired
  * in the registry API (404 today). Until it lands, this singleton shows an
  * empty state pointing operators at the per-analyst Critiques panel (A5,
@@ -30,28 +43,32 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { Download } from 'lucide-react'
 import { PanelChrome } from '@/components/PanelChrome'
 import { InfoTip } from '@/components/InfoTip'
 import { apiGet, ApiError } from '@/lib/api'
+import { BAND_CSV_MIME, buildBandCsv } from '@/lib/bandCsv'
+import { downloadText } from '@/lib/reportDownload'
 import {
-  bandCalibrationEmpty,
-  bandRateLabel,
   bandTone,
   buildScorecards,
   calibrationBanner,
   correctnessLabel,
   critScoreTrend,
   evalBadge,
+  externalTruthLabel,
+  fmtRate,
   insufficientLabel,
+  orderedStrata,
   isInsufficient,
-  orderedBandHorizons,
+  orderedDimensions,
   relTime,
   scoreBand,
   type AcuteTag,
   type BandTone,
   type CalibrationScoreboard,
   type CountryScorecard,
-  type DimensionBand,
+  type ExternalTruthPopulation,
   type ScorecardRow,
   type ScoreBand,
   type UnitCorrectnessBoard,
@@ -62,6 +79,10 @@ import { ProvenanceStateBadge } from '@/components/ProvenanceBadge'
 import { resolveNumberProvenance } from '@/lib/provenance'
 import { humanizeId } from '@/lib/deskNames'
 import { FAITHFULNESS_EXPLAIN } from '@/lib/verdictModel'
+import { EvalBandCalibration } from './EvalBandCalibration'
+import { EvalGraderRoster } from './EvalGraderRoster'
+import type { GraderRoster } from '@/lib/graderRosterModel'
+import { ScaleStamp } from '@/components/ScaleStamp'
 
 /** U-5 — reused wherever this panel shows a raw "faithfulness N | correctness
  *  N (n=k)" / "unmeasured" badge, so the honest-absence idiom (never a
@@ -96,31 +117,6 @@ const TONE_PILL: Record<BandTone, string> = {
   high: 'bg-rose-900 text-rose-200',
   critical: 'bg-red-900 text-red-200',
   insufficient: 'bg-slate-800 text-slate-400',
-}
-
-// The bounded unit dimensions (analyst_ids) a scorecard cards, in display order.
-// There are now SIX; any further extras still render after these (orderedDimensions).
-const DIMENSION_ORDER = [
-  'leadership_transition',
-  'energy_security',
-  'escalation',
-  'narrative_coordination',
-  'internal_stability',
-  'military_posture',
-] as const
-
-/** Order a scorecard's dimensions: the 4 known units first, then any extras. */
-function orderedDimensions(
-  dims: Record<string, DimensionBand>,
-): Array<[string, DimensionBand]> {
-  const known = DIMENSION_ORDER.filter((u) => u in dims).map(
-    (u) => [u, dims[u]] as [string, DimensionBand],
-  )
-  const extras = Object.keys(dims)
-    .filter((u) => !(DIMENSION_ORDER as readonly string[]).includes(u))
-    .sort()
-    .map((u) => [u, dims[u]] as [string, DimensionBand])
-  return [...known, ...extras]
 }
 
 // Target ids arrive as `country_<tier>_<iso2>` (e.g. country_g20_tr); a
@@ -206,6 +202,23 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
     refetchInterval: 60_000,
   })
 
+  // c1 — the machine grader's ROSTER (correctness + coverage per desk over a
+  // trailing 7-night window). Its own endpoint, never pooled with the operator
+  // gold-set axis above: a 404 while unwired reads as "no grader rows yet",
+  // never an error, and never a roster of zeros.
+  const { data: graderRoster } = useQuery<GraderRoster | null>({
+    queryKey: ['eval-grader-roster'],
+    queryFn: async () => {
+      try {
+        return await apiGet<GraderRoster>('/v3/eval/grader_roster?nights=7')
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return null
+        throw e
+      }
+    },
+    refetchInterval: 60_000,
+  })
+
   // The banded per-country scorecard (P4-T3/T5). Its own registry route — a 404
   // while unwired reads as "no scorecard computed yet", never an error. Empty
   // list is a first-class honest state (no country carded yet).
@@ -222,6 +235,10 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
     refetchInterval: 60_000,
   })
 
+  // W-6 rides the SAME route as the operator axis — one read, two
+  // judge-independent axes, still never pooled: they are separate blocks on the
+  // response and separate sections on the page.
+  const truth = correctness?.external_truth ?? null
   const cards = useMemo(() => buildScorecards(data ?? []), [data])
   const banner = useMemo(() => calibrationBanner(cal), [cal])
   // P4-5 — live|fallback|absent on the calibration NUMBERS. A number reads
@@ -245,6 +262,15 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
       ),
     [scorecards],
   )
+
+  /** 7b-iii — the banded section as CSV, built from the rows already on this
+   *  page (`@/lib/bandCsv`): no second read, so the file and the section can
+   *  never disagree. Every dimension travels, insufficient ones included. */
+  function downloadBandCsv() {
+    if (countryCards.length === 0) return
+    const csv = buildBandCsv(countryCards)
+    downloadText(csv.filename, BAND_CSV_MIME, csv.content)
+  }
 
   return (
     <PanelChrome
@@ -315,80 +341,22 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
           hard band-ladder transitions at fixed 14d/28d horizons, graded
           held/reverted/worsened against LATER scorecard rows only. HONESTLY
           NOT a Brier score (bands are ordinal risk categories, not
-          probabilities) — the route's own honesty_note states this, and this
-          panel never relabels a rate as a skill/probability number. An
-          honest awaiting state renders until the tracker has graded at least
-          one claim. */}
-      <div
-        className="bg-surface-100 border border-slate-800 rounded p-2 mb-2 space-y-1.5 text-xs"
-        data-testid="eval-band-calibration"
-      >
-        <div className="flex items-baseline gap-2 flex-wrap">
-          <span className="text-slate-500 text-[10px] uppercase tracking-wide">
-            band calibration
-          </span>
-          <span
-            className="text-slate-600 text-[10px]"
-            title="Ordinal band-persistence stability — NOT a probability or Brier score."
-          >
-            persistence / reversal rate (not a Brier score)
-          </span>
-        </div>
-        {bandCalibrationEmpty(cal?.band_calibration) ? (
-          <div className="text-slate-500 text-[10px] py-1" data-testid="band-calibration-empty">
-            no band transitions graded yet
-          </div>
-        ) : (
-          <>
-            <div className="text-slate-600 text-[10px]">
-              {cal!.band_calibration!.claims_total} claim
-              {cal!.band_calibration!.claims_total === 1 ? '' : 's'} logged
-              {cal!.band_calibration!.produced_at &&
-                ` · ${relTime(cal!.band_calibration!.produced_at)}`}
-            </div>
-            {orderedBandHorizons(cal!.band_calibration!.horizons).map(([label, h]) => (
-              <div
-                key={label}
-                className="flex items-baseline gap-2 flex-wrap"
-                data-testid={`band-calibration-horizon-${label}`}
-              >
-                <span className="w-10 shrink-0 text-slate-400 font-mono">{label}</span>
-                <span className="text-slate-300">
-                  persistence{' '}
-                  <span
-                    className="font-mono text-slate-200"
-                    data-testid={`band-calibration-persistence-${label}`}
-                  >
-                    {bandRateLabel(h.persistence_rate)}
-                  </span>
-                </span>
-                <span className="text-slate-300">
-                  reversal{' '}
-                  <span
-                    className="font-mono text-slate-200"
-                    data-testid={`band-calibration-reversal-${label}`}
-                  >
-                    {bandRateLabel(h.reversal_rate)}
-                  </span>
-                </span>
-                <span
-                  className="text-slate-600 text-[10px]"
-                  title={
-                    `confirmed=${h.confirmed} reverted=${h.reverted} (n_scored=${h.scored}) · ` +
-                    `excluded: insufficient=${h.excluded_insufficient} unresolvable=${h.excluded_unresolvable}`
-                  }
-                >
-                  n={h.scored}
-                </span>
-              </div>
-            ))}
-            <div className="text-slate-600 text-[10px] italic" data-testid="band-calibration-honesty-note">
-              {cal!.band_calibration!.honesty_note ??
-                'Ordinal band-persistence stability — not a Brier score.'}
-            </div>
-          </>
-        )}
-      </div>
+          probabilities). The whole section, its two honest absences and its
+          per-horizon / per-direction / per-dimension tables live in
+          `EvalBandCalibration` — see that module's banner for the four rules
+          that make it honest rather than flattering. */}
+      <EvalBandCalibration section={cal?.band_calibration} />
+
+      {/* c1 — the machine GRADER's roster: correctness AND coverage for every
+          graded desk, thinnest coverage first. Placed directly above the
+          operator gold-set axis because the two share a word and nothing else:
+          this one is graded against an independent reference built without
+          seeing the platform, that one is a human's read of whether a finding
+          was right. They are never pooled, and two adjacent sections is how
+          the page says so. The whole section — its two labelled roster figures,
+          its unmeasured-is-not-zero rule and its table — lives in
+          `EvalGraderRoster`; see that module's banner for the four rules. */}
+      <EvalGraderRoster roster={graderRoster} />
 
       {/* M-1 — the OPERATOR gold-set correctness axis, the platform's only
           JUDGE-INDEPENDENT quality signal. Deliberately its own block, beside
@@ -480,14 +448,164 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
         )}
       </div>
 
+      {/* W-6 — STANDING EXTERNAL TRUTH. The fourth stacked section, immediately
+          after the operator axis and for the same reason it sits there: this is
+          the only other JUDGE-INDEPENDENT number the platform has, and it is
+          graded against the WORLD rather than against a human's read of one
+          finding. Three rules are structural here and none of them is a
+          preference:
+
+          - The headline is a PAIR (F-12). The record is the DESKS' sentences,
+            quoted verbatim under the assembly; the voice is the Assessment's own.
+            They are rendered side by side and never summed.
+          - `instrument_limited` renders as a SENTENCE, not a number with a flag.
+            A week whose two grader families disagreed below 0.75 raw overlap does
+            not get to publish a rate at all — that is R3's stop rule, made
+            continuous.
+          - `decided_rate` is always beside the accuracy, because NOT_FOUND is a
+            statement about the SEARCH and a dashboard showing only the first
+            number will be read as if it were the second. */}
+      <div
+        className="bg-surface-100 border border-slate-800 rounded p-2 mb-2 space-y-1.5 text-xs"
+        data-testid="eval-external-truth"
+      >
+        <div className="flex items-baseline gap-2 flex-wrap">
+          <span className="text-slate-500 text-[10px] uppercase tracking-wide">
+            standing external truth
+          </span>
+          <InfoTip
+            text={
+              truth?.honesty_note ??
+              'Standing external truth grades the read\'s claims against sources outside this pipeline. It is never pooled with faithfulness, calibration or the operator gold set.'
+            }
+            className="text-slate-600 text-[10px]"
+            testId="external-truth-explain"
+          >
+            graded against the world (web-grounded, never pooled)
+          </InfoTip>
+        </div>
+        {!truth?.available ? (
+          <div
+            className="text-slate-500 text-[10px] py-1"
+            data-testid="external-truth-empty"
+          >
+            no claims graded against the world yet — the standing auditor's ledger
+            is empty for this window
+          </div>
+        ) : (
+          <>
+            {/* The PAIR. Two numbers, never one — the note says why. */}
+            <div
+              className="text-slate-300 font-mono"
+              data-testid="external-truth-headline"
+            >
+              record {fmtRate(truth.headline?.record?.accuracy)} (n=
+              {truth.headline?.record?.n_decided ?? 0}) · voice{' '}
+              {fmtRate(truth.headline?.voice?.accuracy)} (n=
+              {truth.headline?.voice?.n_decided ?? 0})
+            </div>
+            <div
+              className="text-slate-600 text-[10px]"
+              data-testid="external-truth-headline-note"
+            >
+              {truth.headline?.note}
+            </div>
+            {truth.populations.map((pop: ExternalTruthPopulation) => (
+              <div
+                key={pop.population}
+                className="space-y-1"
+                data-testid={`external-truth-${pop.population}`}
+              >
+                <div
+                  className={
+                    pop.instrument?.instrument_limited
+                      ? 'text-amber-300 italic'
+                      : pop.sufficient
+                        ? 'text-slate-200'
+                        : 'text-slate-400 italic'
+                  }
+                  data-testid={`external-truth-label-${pop.population}`}
+                >
+                  {externalTruthLabel(pop)}
+                </div>
+                <div className="text-slate-600 text-[10px] flex gap-3 flex-wrap">
+                  <span data-testid={`external-truth-instrument-${pop.population}`}>
+                    grader overlap {fmtRate(pop.instrument?.overlap_raw)} (n=
+                    {pop.instrument?.overlap_n ?? 0}
+                    {pop.instrument?.band ? `, ${pop.instrument.band}` : ''})
+                  </span>
+                  <span>
+                    excluded: {pop.n_uncheckable} uncheckable · {pop.n_unchecked}{' '}
+                    unchecked · {pop.not_found} not-found
+                  </span>
+                  {typeof pop.search?.degraded_share === 'number' && (
+                    <span
+                      title="A week when the search plane lost engines is not a week the world got quieter."
+                    >
+                      search degraded {fmtRate(pop.search.degraded_share)}
+                    </span>
+                  )}
+                </div>
+                {orderedStrata(pop).map(([axis, cells]) => (
+                  <div
+                    key={axis}
+                    className="flex items-baseline gap-2 flex-wrap text-[10px]"
+                    data-testid={`external-truth-stratum-${pop.population}-${axis}`}
+                  >
+                    <span className="w-28 shrink-0 text-slate-500">{axis}</span>
+                    {cells.length === 0 ? (
+                      <span className="text-slate-600 italic">no rows yet</span>
+                    ) : (
+                      cells.map(([value, cell]) => (
+                        <span key={value} className="text-slate-400">
+                          {value}{' '}
+                          <span className="font-mono text-slate-300">
+                            {fmtRate(cell.accuracy)}
+                          </span>
+                          <span className="text-slate-600"> (n={cell.n_decided})</span>
+                        </span>
+                      ))
+                    )}
+                  </div>
+                ))}
+              </div>
+            ))}
+            <div
+              className="text-slate-600 text-[10px] italic"
+              data-testid="external-truth-honesty-note"
+            >
+              {truth.honesty_note}
+            </div>
+          </>
+        )}
+      </div>
+
       {/* Banded per-country scorecard (P4-T3/T5). One honest card per active G20
           country: a band per dimension, click a band → its verified sub-claims
           (basis findings, each a P1 evidence + signed-lineage drill), a per-dim
           faithfulness+correctness badge, and an explicit not-enough-verified
           state for an insufficient-evidence band — never a fabricated band. */}
       <div className="mb-2 space-y-2" data-testid="scorecard-country-list">
-        <div className="text-slate-500 text-[10px] uppercase tracking-wide">
-          banded verdicts (per country)
+        <div className="flex items-baseline gap-2">
+          <span className="text-slate-500 text-[10px] uppercase tracking-wide">
+            banded verdicts (per country)
+          </span>
+          <button
+            type="button"
+            onClick={downloadBandCsv}
+            disabled={countryCards.length === 0}
+            className="ml-auto flex items-center gap-1 rounded border border-slate-700 bg-surface-200 px-2 py-0.5 text-[10px] text-slate-300 hover:bg-surface-300 disabled:opacity-40"
+            title={
+              countryCards.length === 0
+                ? 'No scorecard computed yet — there is nothing to export'
+                : 'Download these bands as CSV — one row per (desk, dimension), ' +
+                  'built from the rows on this page'
+            }
+            data-testid="scorecard-csv"
+          >
+            <Download className="h-3 w-3" aria-hidden />
+            download CSV
+          </button>
         </div>
         {countryCards.length === 0 && (
           <div
@@ -531,6 +649,20 @@ export default function EvalScorecardPanel({ registration }: PanelProps) {
                 <span className="text-slate-600 text-[10px] shrink-0">
                   {bandedN}/{dims.length} banded
                 </span>
+                {/* H12/K3 — the instrument stamps this card's bands were
+                    computed under. The scorecard's bands are a LADDER, not a
+                    measure, so the card carries a method revision and no scale
+                    of its own: the chip's method-only state is the honest
+                    render, and a pre-H12 card reads "unstamped". The
+                    generated-at beside it is this card's as-of. */}
+                <ScaleStamp
+                  stamp={{
+                    scale: null,
+                    method: sc.method_version ?? null,
+                    state: sc.method_version ? 'method-only' : 'unstamped',
+                  }}
+                  testId={`scorecard-scale-stamp-${sc.target_id}`}
+                />
                 {sc.generated_at && (
                   <span className="text-slate-600 text-[10px] shrink-0 ml-auto">
                     {relTime(sc.generated_at)}

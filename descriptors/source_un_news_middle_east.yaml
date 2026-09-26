@@ -1,0 +1,74 @@
+# sources_wave_2 — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# UN News — Middle East topic feed (news.un.org). One of the three UN News
+# topic feeds named in the sources-wave-2 brief alongside Africa and Peace &
+# Security. Verified live 2026-09-07: valid RSS 2.0, title "UN News - Global
+# perspective Human stories", newest item same-day (West Bank displacement
+# report, Lebanon-Israel tension, a Security Council LIVE item on Syria's
+# chemical weapons — all 2026-09-03/04), well inside 7d.
+#
+# source_class: official. Credibility host un.org (seeded 0.88/gov,
+# state_affiliation True — matches source_un_press.yaml's existing seed).
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after verifying the route
+# live on the instance.
+
+identity:
+  id: source.un_news.middle_east
+  name: UN News — Middle East
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: sources_wave_2
+  created: "2026-09-07T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [gov, diplomacy, humanitarian, middle_east, sources_wave_2]
+  source_class: official
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "10 1-23/6 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://news.un.org/feed/subscribe/en/news/region/middle-east/feed/rss.xml"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming the
+    # route yields full article text (mirrors the RSSHub-lane conservative default).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

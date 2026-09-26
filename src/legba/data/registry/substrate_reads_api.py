@@ -46,9 +46,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from ..archive import sha256_from_object_ref
+from ..findings_projection import project_citations
+from ..provenance import access as _access
 from ..provenance.kinds import structural_badge
 from ..provenance.verify import structural_verify_gate_enabled
 from .api import RegistryAPIDeps, require_bearer
+from .substrate_reads_folds import (
+    CRITIC_SCORE_CTE as _CRITIC_SCORE_CTE,
+    FACET_SCAN_CAP as _FACET_SCAN_CAP,
+    FAITHFULNESS_VERIFICATION_CTE as _FAITHFULNESS_VERIFICATION_CTE,
+    STRUCTURAL_BADGE_CTE as _STRUCTURAL_BADGE_CTE,
+    STRUCTURAL_VERIFICATION_CTE as _STRUCTURAL_VERIFICATION_CTE,
+)
+from .unit_correctness_api import build_unit_correctness_router
 
 # E-1 — the system-wide verification floor (the 0.50 decision), MIRRORED from
 # ``analysts.deterministic_handlers.scorecard_banding.FAITH_FLOOR``. A local
@@ -66,6 +76,7 @@ _FAITH_FLOOR = 0.50
 
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 500
+
 
 # Substrate enum values shared by `analyst_outputs.severity` and the
 # `situations` lifecycle taxonomy. We surface these as `Literal[...]`
@@ -314,8 +325,116 @@ class ContentionRow(BaseModel):
     values: list[ContentionValueRow] = Field(default_factory=list)
 
 
+class FindingSummaryRow(BaseModel):
+    """One `analyst_outputs` (`kind='finding'`) row at `fields=summary` weight.
+
+    A DISTINCT model from `FindingRow` (mirrors `journal_api.py`'s
+    `JournalEntrySummaryOut` — nullable fields are never bolted onto the full
+    model), so the response schema stays honest about what a summary row
+    actually carries. FLAT field names (`assembly_tier` rather than a
+    `data: {"data": {"assembly": {"tier": ...}}}` reconstruction) — the same
+    convention `journal_api.py`'s `verify_score` flattening already uses — so a
+    client reads `row.assembly_tier` instead of re-running the full payload's
+    defensive nested-object parser against a partially-populated shape.
+
+    The nine base columns are `id, analyst_id, target_id, kind, title,
+    created_at, produced_at, severity, confidence` (build report's field list).
+    The six data leaves are the ones `MorningRead.tsx`'s `RunHistory` and the
+    mobile navigator (`mobileModel.toReportRow` / `ReportsList`) actually read
+    off `assembly` / `verification` / `drops` — see the build report for the
+    exact call sites and the fields real list rendering ALSO reaches for
+    (`assembly.blocks[].target_name`/`.spans` for the lead thread and
+    `assembly.blocks.length` for the block count) that this projection
+    deliberately excludes because they are full block content, not leaves.
+    """
+
+    id: str
+    analyst_id: str | None
+    target_id: str | None
+    kind: str
+    title: str
+    created_at: datetime
+    produced_at: datetime
+    severity: str | None
+    confidence: float
+    # `data.data.assembly.tier` / `.regime` / `.lead.kind` (assembly.v1, D-4).
+    # `None` for a legacy/pre-assembly row or one with no `assembly` key at
+    # all — never fabricated.
+    assembly_tier: str | None = None
+    assembly_regime: str | None = None
+    assembly_lead_kind: str | None = None
+    # `data.data.assembly.drops.counts` — the ledger sub-object alone (NOT the
+    # sibling `drops.trimmed`/`drops.below_floor`/`drops.no_head` ITEM LISTS,
+    # which are exactly the per-block detail this weight exists to shed).
+    drops_counts: dict[str, Any] | None = None
+    # The row's surfaced `verification` block's two published leaves — the
+    # SAME object-level fallback `_hydrate_finding` uses (a faithfulness
+    # critique's block if one exists, else a structural critique's), read at
+    # the SQL level rather than the whole block (`claim_verdicts` /
+    # `unsupported_spans` / `branch_scores` are most of that object's weight).
+    verification_faithfulness_score: float | None = None
+    verification_score_state: str | None = None
+
+
+class FindingsSummaryPage(BaseModel):
+    data: list[FindingSummaryRow]
+    next_cursor: str | None
+
+
 class FindingsPage(BaseModel):
     data: list[FindingRow]
+    next_cursor: str | None
+
+
+class CitationJudgmentEntry(BaseModel):
+    """One citation reduced to the judgment weight's key set (7b-v).
+
+    Mirrors ``findings_projection.JUDGMENT_FIELDS`` field-for-field — never
+    the full stored citation (``evidence_text``, ``title``, ``tier``,
+    ``derived_from``, ``effective_confidence``, the bare ``ref_id``/
+    ``signal_id``, …). Same shape whatever KIND of citation it is (a signal,
+    a composition sub-claim, a desk grounding block) — a reader never has to
+    sniff which.
+    """
+    ordinal: int | None = None
+    source: str | None = None
+    source_id: str | None = None
+    produced_at: str | None = None
+    single_source: bool = False
+    wire_folded: bool = False
+    marker_class: str | None = None
+
+
+class FindingJudgmentRow(BaseModel):
+    """One `analyst_outputs` (`kind='finding'`) row at `fields=judgment`
+    weight (7b-v) — the Morning Read's CHECKED band population
+    (`GET /findings?fields=judgment`).
+
+    Carries the verify verdict WHOLE (`verification`, including its own
+    `unsupported_spans` — the thing the band exists to show, and exactly what
+    `fields=summary` drops) plus enough about each citation to render
+    "cited [N]" and say who is behind it. Deliberately NEVER carries `data`
+    (the assembly's quoted blocks are most of a row's weight), `derived_from`,
+    or `body` — the three leaves that make the default weight ~5.5 MB for a
+    200-row page.
+    """
+    id: str
+    kind: str
+    title: str
+    analyst_id: str | None
+    analyst_version: str | None
+    target_id: str | None
+    target_version: str | None
+    produced_at: datetime
+    severity: str | None
+    confidence: float
+    schema_uri: str
+    verification: dict[str, Any] | None = None
+    citations: list[CitationJudgmentEntry] = Field(default_factory=list)
+
+
+class FindingsJudgmentPage(BaseModel):
+    data: list[FindingJudgmentRow]
     next_cursor: str | None
 
 
@@ -397,7 +516,12 @@ def _hydrate_finding(row: Any) -> FindingRow:
         sv_score = float(sv_score_raw) if sv_score_raw is not None else None
         if sv_score is not None:
             effective_confidence = min(effective_confidence, sv_score)
-    verify_exempt = structural_badge(row["analyst_id"], structural_verified)
+    # D-5: the row is passed so a DETERMINISTIC ROLLUP gets its own badge pair
+    # rather than rendering as an ordinary unverified LLM read. Rollup rows
+    # carry no faithfulness block by design and DO carry a structural verdict.
+    verify_exempt = structural_badge(
+        row["analyst_id"], structural_verified, row.get("data")
+    )
     # E-1 — the explicit below-floor mark: a verdict ONLY for a GRADED finding
     # (critic_score present); an ungraded row stays None (never fabricated).
     below_floor = (
@@ -429,6 +553,152 @@ def _hydrate_finding(row: Any) -> FindingRow:
         verify_exempt=verify_exempt,
         below_floor=below_floor,
     )
+
+
+def _hydrate_finding_summary(row: Any) -> FindingSummaryRow:
+    """Map a `fields=summary` SQL row (leaf scalars already extracted by the
+    query — see the route's `if fields == "summary"` branch) to
+    `FindingSummaryRow`.
+
+    The `coalesce(c.verification, s.structural_verification)` in the SQL is
+    OBJECT-level, matching `_hydrate_finding`'s own Python fallback
+    (`if verification is None: verification = structural_verification`) —
+    not a per-key coalesce. A per-key coalesce would misread a faithfulness
+    block whose `faithfulness_score` is legitimately `null` (Q-1's
+    `unassessable` score_state) as "no faithfulness block, fall through to
+    structural"; the object-level form never reaches for the wrong source.
+    """
+    drops_counts = _load_jsonb_opt(row.get("drops_counts"))
+    ffs_raw = row.get("verification_faithfulness_score")
+    return FindingSummaryRow(
+        id=str(row["id"]),
+        analyst_id=row["analyst_id"],
+        target_id=row["target_id"],
+        kind=row["kind"],
+        title=row["title"],
+        created_at=row["created_at"],
+        produced_at=row["produced_at"],
+        severity=row["severity"],
+        confidence=float(row["confidence"]),
+        assembly_tier=row.get("assembly_tier"),
+        assembly_regime=row.get("assembly_regime"),
+        assembly_lead_kind=row.get("assembly_lead_kind"),
+        drops_counts=drops_counts,
+        verification_faithfulness_score=(
+            float(ffs_raw) if ffs_raw is not None else None
+        ),
+        verification_score_state=row.get("verification_score_state"),
+    )
+
+
+def _hydrate_finding_judgment(row: Any) -> FindingJudgmentRow:
+    """Map a `fields=judgment` SQL row (§ the route's `if fields ==
+    "judgment"` branch) to `FindingJudgmentRow`.
+
+    `verification` is the SAME object-level `coalesce(faithfulness,
+    structural)` fallback `_hydrate_finding`/`_hydrate_finding_summary` use,
+    carried WHOLE this time (not flattened to two leaves). `citations_raw` is
+    the SQL's own nested-then-flat resolve of a finding's citation array
+    (`data.data.citations` else `data.citations` — mirrors `export_api
+    ._citation_list`'s fallback order); `findings_projection.
+    project_citations` reduces it to the judgment key set here, so this
+    route never sends the finding's full `data` blob to answer this weight.
+    """
+    return FindingJudgmentRow(
+        id=str(row["id"]),
+        kind=row["kind"],
+        title=row["title"],
+        analyst_id=row["analyst_id"],
+        analyst_version=row["analyst_version"],
+        target_id=row["target_id"],
+        target_version=row["target_version"],
+        produced_at=row["produced_at"],
+        severity=row["severity"],
+        confidence=float(row["confidence"]),
+        schema_uri=row["schema_uri"],
+        verification=_load_jsonb_opt(row.get("verification")),
+        citations=[
+            CitationJudgmentEntry(**entry)
+            for entry in project_citations(row.get("citations_raw"))
+        ],
+    )
+
+
+async def fetch_situations_page(
+    pg: Any,
+    *,
+    state: SituationState | None = None,
+    target_id: str | None = None,
+    since: datetime | None = None,
+    as_of: datetime | None = None,
+    limit: int = DEFAULT_LIMIT,
+    cursor: str | None = None,
+) -> SituationsPage:
+    """One situations page — the query the ``/api/v1/situations`` route and
+    the V3/P3 ``/api/v1/v3/situations`` alias BOTH run (the v3 surface needed
+    the same list so the temporal acceptance proof can curl the v3 prefix;
+    extracting the query keeps the two routes on one WHERE clause forever).
+
+    ``as_of`` (V3/P3) is the canonical validity-time read: the frames that
+    held on date D, including ones closed since —
+    ``COALESCE(valid_from, -infinity) <= D AND (valid_until IS NULL OR
+    valid_until > D)`` — never ANDed with an open-row gate. A malformed
+    ``as_of`` never reaches here; FastAPI 422s it at the boundary.
+    """
+    limit = _validate_limit(limit)
+
+    where: list[str] = []
+    args: list[Any] = []
+
+    if as_of is not None:
+        args.append(as_of)
+        d = len(args)
+        where.append(
+            f"COALESCE(valid_from, '-infinity'::timestamptz) <= ${d} "
+            f"AND (valid_until IS NULL OR valid_until > ${d})"
+        )
+    if state is not None:
+        args.append(state)
+        where.append(f"status = ${len(args)}")
+    if target_id is not None:
+        args.append(target_id)
+        where.append(f"target_id = ${len(args)}")
+    if since is not None:
+        args.append(since)
+        where.append(f"produced_at >= ${len(args)}")
+    if cursor is not None:
+        cur_at, cur_id = _decode_cursor(cursor)
+        args.append(cur_at)
+        args.append(cur_id)
+        where.append(
+            f"(produced_at, id) < (${len(args) - 1}, ${len(args)})"
+        )
+
+    args.append(limit + 1)
+    where_clause = (
+        f"WHERE {' AND '.join(where)}" if where else ""
+    )
+    sql = f"""
+        SELECT id, data, name, status, category, last_event_at,
+               event_count, intensity_score,
+               target_id, target_version, analyst_id, analyst_version,
+               produced_at, derived_from, schema_uri, run_id,
+               created_at, updated_at
+          FROM situations
+         {where_clause}
+         ORDER BY produced_at DESC, id DESC
+         LIMIT ${len(args)}
+    """
+
+    async with pg.acquire() as conn:
+        rows = await conn.fetch(sql, *args)
+
+    out = [_hydrate_situation(r) for r in rows[:limit]]
+    next_cursor: str | None = None
+    if len(rows) > limit and out:
+        last = out[-1]
+        next_cursor = _encode_cursor(last.produced_at, last.id)
+    return SituationsPage(data=out, next_cursor=next_cursor)
 
 
 def _hydrate_situation(row: Any) -> SituationRow:
@@ -576,9 +846,17 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
     """
     router = APIRouter(tags=["substrate-reads"])
 
+    # ---------------- units/{target_id}/correctness (G2) ----------------
+    #
+    # The per-unit correctness NUMBER, from a sibling module so this file stays
+    # under the module-size gate's 1,500-line entry threshold. Mounted HERE
+    # rather than in `server.py` so the route inherits this router's prefix and
+    # `require_bearer` posture without a second wiring site to keep in step.
+    router.include_router(build_unit_correctness_router(deps))
+
     # ---------------- findings ----------------
 
-    @router.get("/findings", response_model=FindingsPage)
+    @router.get("/findings", response_model=None)
     async def list_findings(
         since: datetime | None = Query(default=None),
         target_id: str | None = Query(default=None),
@@ -589,10 +867,38 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         verified: bool | None = Query(default=None),
         judge_status: JudgeStatus | None = Query(default=None),
         q: str | None = Query(default=None),
+        # Wave-E — opt-in access-class filter (SEAMS #59). CSV of
+        # data/provenance/access.py's ACCESS_CLASSES; a finding matches when
+        # ANY signal in its `derived_from` carries one of the given classes
+        # (single-hop, mirroring access_ceiling_sql's own scope note — a
+        # finding several tiers removed from raw signals may derive_from
+        # only other analyst_outputs and so match nothing). Unset (the
+        # default) is BYTE-IDENTICAL to today's behaviour — no clause added.
+        access_class_in: str | None = Query(default=None),
         limit: int = Query(default=DEFAULT_LIMIT),
         cursor: str | None = Query(default=None),
+        # P-mobile — the list-view weight (build report
+        # "findings fields=summary"). Omitted (the default) is BYTE-IDENTICAL to
+        # the route's pre-existing behavior — same SQL, same hydration, same
+        # `FindingsPage` shape — so every existing caller (MorningRead, the
+        # workstation Feed, the mobile navigator's current full-row fetch) is
+        # unaffected. `fields=summary` opts into `FindingsSummaryPage`: the nine
+        # scalar columns every list row needs (§ below) plus the handful of
+        # `assembly`/`verification`/`drops` leaves MorningRead's history rail and
+        # the mobile navigator actually read — never the full `body`, the
+        # per-block `assembly.blocks` (quoted prose + spans + signals), or the
+        # verify pass's `claim_verdicts`/`unsupported_spans` detail, which are
+        # what make a day of reads hundreds of KB. A `Literal` type (rather than
+        # `journal_api.py`'s hand-rolled `_validate_fields`, which 400s) is used
+        # deliberately here so an unknown value 422s — this route's own spec.
+        # 7b-v — `fields=judgment`: the Morning Read CHECKED band's weight.
+        # The verify verdict WHOLE (`verification`, `unsupported_spans`
+        # included — exactly what `fields=summary` drops) plus a `citations`
+        # list reduced to `findings_projection.JUDGMENT_FIELDS` — never the
+        # finding's full `data`, `derived_from`, or `body`.
+        fields: Literal["summary", "judgment"] | None = Query(default=None),
         principal: str = Depends(require_bearer),
-    ) -> FindingsPage:
+    ) -> FindingsPage | FindingsSummaryPage | FindingsJudgmentPage:
         limit = _validate_limit(limit)
 
         # Findings are aliased ``f`` because S3 LEFT JOINs each finding to its
@@ -638,6 +944,14 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         # computed over the FILTERED population (the client-side sieve this
         # replaces filtered pages it had already fetched, so at any real
         # corpus size the facet lied about the filtered population).
+        #
+        # H17 — these two are the ONLY predicates that read the critique folds,
+        # so they are collected separately: everything in ``where`` filters the
+        # bounded page CTE, and these filter AFTER the join. That split is what
+        # lets the page LIMIT live inside the CTE (so the fold reads at most
+        # ``limit + 1`` ids) whenever the facet is not in play — which is every
+        # call that does not ask for it.
+        fold_where: list[str] = []
         surfaced_verification = "coalesce(c.verification, s.structural_verification)"
         if verified is not None:
             # ``verified=true`` means what the feed's isVerified() means: the
@@ -648,17 +962,14 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
             # NULL-safe — a missing block/key is never 'number' (and always
             # DISTINCT FROM it), so no fabricated verdict either way.
             op = "=" if verified else "IS DISTINCT FROM"
-            where.append(
+            fold_where.append(
                 f"jsonb_typeof({surfaced_verification} -> 'faithfulness_score') "
                 f"{op} 'number'"
             )
-        if judge_status is not None:
-            # Exact text match on the block's ``judge_status``, mirroring the
-            # client verdict model: a legacy block without the key matches NO
-            # value (never coalesced to 'deterministic' here — that fold is
-            # the production gauge's health heuristic, not a filter truth).
-            args.append(judge_status)
-            where.append(f"{surfaced_verification} ->> 'judge_status' = ${len(args)}")
+        # Bound AFTER the page-CTE predicates so that ``where``'s parameters stay
+        # $1..$where_argc contiguous (the scan-floor probe below re-runs exactly
+        # those, and a bind list has to match).
+        pending_judge_status = judge_status
         # P1-T1 reachability — keyword reach. Full-text match over the
         # concatenated title+body. `to_tsvector(...) @@ plainto_tsquery(...)` is
         # correct without a dedicated index (seq scan, scoped by the other
@@ -669,6 +980,19 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
                 "to_tsvector('simple', coalesce(f.title, '') || ' ' || "
                 f"coalesce(f.body, '')) @@ plainto_tsquery('simple', ${len(args)})"
             )
+        # Wave-E — SEAMS #59, opt-in only (see the param docstring above).
+        if access_class_in is not None:
+            classes = [c.strip() for c in access_class_in.split(",") if c.strip()]
+            try:
+                signal_clause = _access.access_class_clause("acs", classes)
+            except _access.AccessClassError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+                ) from exc
+            where.append(
+                "EXISTS (SELECT 1 FROM public.signals acs "
+                f"WHERE acs.id = ANY(f.derived_from) AND {signal_clause})"
+            )
         if cursor is not None:
             cur_at, cur_id = _decode_cursor(cursor)
             args.append(cur_at)
@@ -677,7 +1001,170 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
                 f"(f.produced_at, f.id) < (${len(args) - 1}, ${len(args)})"
             )
 
+        where_argc = len(args)
+        if pending_judge_status is not None:
+            # Exact text match on the block's ``judge_status``, mirroring the
+            # client verdict model: a legacy block without the key matches NO
+            # value (never coalesced to 'deterministic' here — that fold is
+            # the production gauge's health heuristic, not a filter truth).
+            args.append(pending_judge_status)
+            fold_where.append(
+                f"{surfaced_verification} ->> 'judge_status' = ${len(args)}"
+            )
+
         args.append(limit + 1)
+        # Where the page LIMIT lands (H17). With no verification facet the page
+        # is decided BEFORE the fold, so the LIMIT bounds the CTE and the fold
+        # reads at most `limit + 1` ids — the cheapest possible read.
+        #
+        # With the facet on it cannot: the facet reads the fold, so the page can
+        # only be cut after the join. The CTE is then bounded by
+        # `_FACET_SCAN_CAP` instead, because the alternative measured badly —
+        # an unbounded page CTE over the whole findings table folds ~41k
+        # critiques through a 125 MB external merge (4.8 s live, 2026-09-24),
+        # against 186 ms at the cap and 905 ms for the lateral this replaces.
+        # The cap does NOT drop rows: `_facet_scan_floor_cursor` below turns a
+        # capped scan into a `next_cursor`, so the client walks the rest of the
+        # population a scan at a time instead of being told the feed ended.
+        _page_limit = f"LIMIT ${len(args)}"
+        page_limit = f"LIMIT {_FACET_SCAN_CAP}" if fold_where else _page_limit
+        after_fold = (
+            (("WHERE " + " AND ".join(fold_where) + "\n                 ")
+             if fold_where else "")
+            + "ORDER BY f.produced_at DESC, f.id DESC"
+            + (f"\n                 {_page_limit}" if fold_where else "")
+        )
+
+        async def _facet_next_cursor(conn: Any, rows: list[Any]) -> str | None:
+            """The cursor a SHORT facet page still owes the client.
+
+            A page that filled tells us nothing was missed — the ordinary
+            `len(rows) > limit` rule answers. A short one is ambiguous: either
+            the population really ended, or the scan cap cut it. Asking for the
+            cap-th row of the SAME ordered scan settles it, and that row is
+            exactly where the next scan must resume.
+            """
+            if not fold_where or len(rows) > limit:
+                return None
+            floor = await conn.fetchrow(
+                "SELECT f.produced_at, f.id FROM analyst_outputs f "
+                f"WHERE {' AND '.join(where)} "
+                "ORDER BY f.produced_at DESC, f.id DESC "
+                f"OFFSET {_FACET_SCAN_CAP - 1} LIMIT 1",
+                *args[:where_argc],
+            )
+            if floor is None:
+                return None
+            return _encode_cursor(floor["produced_at"], floor["id"])
+
+        if fields == "summary":
+            # §"fields=summary" — the SAME two laterals (a finding's LATEST
+            # faithfulness critique, else its latest structural critique), but
+            # the SELECT list pulls only the leaf scalars the list surfaces
+            # render: no `f.body`, no full `f.data` (the assembly's quoted
+            # blocks/spans/signals live under there), no `c.critic_score` (the
+            # summary spec's `confidence` is the row's own stored column, not
+            # the critic-folded `effective_confidence`), and no whole
+            # `verification` blob (`claim_verdicts`/`unsupported_spans`/
+            # `branch_scores` are the bulk of that object and no summary
+            # consumer reads them). `coalesce(c.verification, s.
+            # structural_verification)` mirrors `_hydrate_finding`'s own
+            # Python-level fallback (object-level, not per-key — see
+            # `_hydrate_finding_summary`'s docstring) so a row with a
+            # faithfulness block whose `faithfulness_score` is legitimately
+            # `null` (the Q-1 `unassessable` state) is never misread as
+            # falling through to the structural score.
+            sql = f"""
+                WITH f AS MATERIALIZED (
+                    SELECT f.id, f.kind, f.title, f.confidence, f.severity,
+                           f.target_id, f.analyst_id, f.produced_at,
+                           f.created_at, f.data
+                      FROM analyst_outputs f
+                     WHERE {' AND '.join(where)}
+                     ORDER BY f.produced_at DESC, f.id DESC
+                     {page_limit}
+                ), {_FAITHFULNESS_VERIFICATION_CTE},
+                   {_STRUCTURAL_VERIFICATION_CTE}
+                SELECT f.id, f.kind, f.title, f.confidence, f.severity,
+                       f.target_id, f.analyst_id, f.produced_at, f.created_at,
+                       f.data->'data'->'assembly'->>'tier' AS assembly_tier,
+                       f.data->'data'->'assembly'->>'regime' AS assembly_regime,
+                       f.data->'data'->'assembly'->'lead'->>'kind'
+                           AS assembly_lead_kind,
+                       f.data->'data'->'assembly'->'drops'->'counts'
+                           AS drops_counts,
+                       (coalesce(c.verification, s.structural_verification)
+                           ->> 'faithfulness_score')::real
+                           AS verification_faithfulness_score,
+                       (coalesce(c.verification, s.structural_verification)
+                           ->> 'score_state') AS verification_score_state
+                  FROM f
+                  LEFT JOIN c ON c.fid = f.id::text
+                  LEFT JOIN s ON s.fid = f.id::text
+                 {after_fold}
+            """
+            async with deps.descriptor_registry.pg.acquire() as conn:
+                summary_rows = await conn.fetch(sql, *args)
+                summary_next_cursor = await _facet_next_cursor(conn, summary_rows)
+            out_summary = [_hydrate_finding_summary(r) for r in summary_rows[:limit]]
+            if len(summary_rows) > limit and out_summary:
+                last_summary = out_summary[-1]
+                summary_next_cursor = _encode_cursor(
+                    last_summary.produced_at, last_summary.id,
+                )
+            return FindingsSummaryPage(data=out_summary, next_cursor=summary_next_cursor)
+
+        if fields == "judgment":
+            # 7b-v — the CHECKED band's weight. The SAME two laterals as
+            # `fields=summary` (a finding's latest faithfulness critique, else
+            # its latest structural critique), but this time `verification` is
+            # surfaced WHOLE — the band's whole job is to read
+            # `unsupported_spans` off it, which `fields=summary` deliberately
+            # drops. `citations_raw` resolves the SAME nested-then-flat
+            # citations shape `export_api._citation_list` documents
+            # (`data->'data'->'citations'` else `data->'citations'`) but pulls
+            # ONLY that array — never the finding's full `data` (the assembly's
+            # quoted blocks, which is most of a row's weight and no consumer
+            # of this weight reads).
+            sql = f"""
+                WITH f AS MATERIALIZED (
+                    SELECT f.id, f.kind, f.title, f.analyst_id,
+                           f.analyst_version, f.target_id, f.target_version,
+                           f.produced_at, f.severity, f.confidence,
+                           f.schema_uri, f.data
+                      FROM analyst_outputs f
+                     WHERE {' AND '.join(where)}
+                     ORDER BY f.produced_at DESC, f.id DESC
+                     {page_limit}
+                ), {_FAITHFULNESS_VERIFICATION_CTE},
+                   {_STRUCTURAL_VERIFICATION_CTE}
+                SELECT f.id, f.kind, f.title, f.analyst_id, f.analyst_version,
+                       f.target_id, f.target_version, f.produced_at,
+                       f.severity, f.confidence, f.schema_uri,
+                       coalesce(c.verification, s.structural_verification)
+                           AS verification,
+                       coalesce(f.data->'data'->'citations', f.data->'citations')
+                           AS citations_raw
+                  FROM f
+                  LEFT JOIN c ON c.fid = f.id::text
+                  LEFT JOIN s ON s.fid = f.id::text
+                 {after_fold}
+            """
+            async with deps.descriptor_registry.pg.acquire() as conn:
+                judgment_rows = await conn.fetch(sql, *args)
+                judgment_next_cursor = await _facet_next_cursor(conn, judgment_rows)
+            out_judgment = [
+                _hydrate_finding_judgment(r) for r in judgment_rows[:limit]
+            ]
+            if len(judgment_rows) > limit and out_judgment:
+                last_judgment = out_judgment[-1]
+                judgment_next_cursor = _encode_cursor(
+                    last_judgment.produced_at, last_judgment.id,
+                )
+            return FindingsJudgmentPage(
+                data=out_judgment, next_cursor=judgment_next_cursor,
+            )
+
         # The lateral picks the LATEST faithfulness-verify critique per finding
         # and surfaces BOTH the gate input (overall_score) AND the P0-T3
         # faithfulness-verify detail block (cr.data->'data'->'verification' —
@@ -704,6 +1191,16 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         # flag is on — see _hydrate_finding). Pinned by title so it can never
         # shadow the faithfulness demotion.
         sql = f"""
+            WITH f AS MATERIALIZED (
+                SELECT f.id, f.kind, f.title, f.body, f.confidence, f.severity,
+                       f.data, f.target_id, f.target_version, f.analyst_id,
+                       f.analyst_version, f.produced_at, f.derived_from,
+                       f.schema_uri, f.run_id, f.created_at
+                  FROM analyst_outputs f
+                 WHERE {' AND '.join(where)}
+                 ORDER BY f.produced_at DESC, f.id DESC
+                 {page_limit}
+            ), {_CRITIC_SCORE_CTE}, {_STRUCTURAL_BADGE_CTE}
             SELECT f.id, f.kind, f.title, f.body, f.confidence, f.severity,
                    f.data, f.target_id, f.target_version, f.analyst_id,
                    f.analyst_version, f.produced_at, f.derived_from,
@@ -713,40 +1210,17 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
                    s.structural_verified AS structural_verified,
                    s.structural_score AS structural_score,
                    s.structural_verification AS structural_verification
-              FROM analyst_outputs f
-              LEFT JOIN LATERAL (
-                  SELECT (cr.data->>'overall_score')::real AS critic_score,
-                         (cr.data->'data'->'verification') AS verification
-                    FROM analyst_outputs cr
-                   WHERE cr.kind = 'critique'
-                     AND cr.data->>'analyzed_output_id' = f.id::text
-                     AND cr.data->>'overall_score' IS NOT NULL
-                     AND cr.title LIKE 'Faithfulness verify%'
-                   ORDER BY cr.produced_at DESC, cr.id DESC
-                   LIMIT 1
-              ) c ON TRUE
-              LEFT JOIN LATERAL (
-                  SELECT (sr.data->'data'->'verification'->>'structural_verified')
-                             AS structural_verified,
-                         (sr.data->>'overall_score')::real AS structural_score,
-                         (sr.data->'data'->'verification') AS structural_verification
-                    FROM analyst_outputs sr
-                   WHERE sr.kind = 'critique'
-                     AND sr.data->>'analyzed_output_id' = f.id::text
-                     AND sr.title LIKE 'Structural verify%'
-                   ORDER BY sr.produced_at DESC, sr.id DESC
-                   LIMIT 1
-              ) s ON TRUE
-             WHERE {' AND '.join(where)}
-             ORDER BY f.produced_at DESC, f.id DESC
-             LIMIT ${len(args)}
+              FROM f
+              LEFT JOIN c ON c.fid = f.id::text
+              LEFT JOIN s ON s.fid = f.id::text
+             {after_fold}
         """
 
         async with deps.descriptor_registry.pg.acquire() as conn:
             rows = await conn.fetch(sql, *args)
+            next_cursor = await _facet_next_cursor(conn, rows)
 
         out = [_hydrate_finding(r) for r in rows[:limit]]
-        next_cursor: str | None = None
         if len(rows) > limit and out:
             last = out[-1]
             next_cursor = _encode_cursor(last.produced_at, last.id)
@@ -759,57 +1233,19 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         state: SituationState | None = Query(default=None),
         target_id: str | None = Query(default=None),
         since: datetime | None = Query(default=None),
+        # V3/P3 — the canonical as-of read on the frame's validity span:
+        # the frames that held on date D, including ones closed since. A
+        # malformed value 422s at the FastAPI boundary, never defaults.
+        as_of: datetime | None = Query(default=None),
         limit: int = Query(default=DEFAULT_LIMIT),
         cursor: str | None = Query(default=None),
         principal: str = Depends(require_bearer),
     ) -> SituationsPage:
-        limit = _validate_limit(limit)
-
-        where: list[str] = []
-        args: list[Any] = []
-
-        if state is not None:
-            args.append(state)
-            where.append(f"status = ${len(args)}")
-        if target_id is not None:
-            args.append(target_id)
-            where.append(f"target_id = ${len(args)}")
-        if since is not None:
-            args.append(since)
-            where.append(f"produced_at >= ${len(args)}")
-        if cursor is not None:
-            cur_at, cur_id = _decode_cursor(cursor)
-            args.append(cur_at)
-            args.append(cur_id)
-            where.append(
-                f"(produced_at, id) < (${len(args) - 1}, ${len(args)})"
-            )
-
-        args.append(limit + 1)
-        where_clause = (
-            f"WHERE {' AND '.join(where)}" if where else ""
+        return await fetch_situations_page(
+            deps.descriptor_registry.pg,
+            state=state, target_id=target_id, since=since, as_of=as_of,
+            limit=limit, cursor=cursor,
         )
-        sql = f"""
-            SELECT id, data, name, status, category, last_event_at,
-                   event_count, intensity_score,
-                   target_id, target_version, analyst_id, analyst_version,
-                   produced_at, derived_from, schema_uri, run_id,
-                   created_at, updated_at
-              FROM situations
-             {where_clause}
-             ORDER BY produced_at DESC, id DESC
-             LIMIT ${len(args)}
-        """
-
-        async with deps.descriptor_registry.pg.acquire() as conn:
-            rows = await conn.fetch(sql, *args)
-
-        out = [_hydrate_situation(r) for r in rows[:limit]]
-        next_cursor: str | None = None
-        if len(rows) > limit and out:
-            last = out[-1]
-            next_cursor = _encode_cursor(last.produced_at, last.id)
-        return SituationsPage(data=out, next_cursor=next_cursor)
 
     # ---------------- signals ----------------
 
@@ -819,6 +1255,12 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
         since: datetime | None = Query(default=None),
         source_id: str | None = Query(default=None),
         language: str | None = Query(default=None),
+        # Wave-E — opt-in access-class filter (SEAMS #59). CSV of
+        # data/provenance/access.py's ACCESS_CLASSES, matched against the
+        # row's own `access_class` column (stamped at ingest, migration
+        # 0216). Unset (the default) is BYTE-IDENTICAL to today's behaviour
+        # — no clause is added and every existing caller is unaffected.
+        access_class_in: str | None = Query(default=None),
         limit: int = Query(default=DEFAULT_LIMIT),
         cursor: str | None = Query(default=None),
         principal: str = Depends(require_bearer),
@@ -864,6 +1306,14 @@ def build_substrate_reads_router(deps: RegistryAPIDeps) -> APIRouter:
             if language is not None:
                 args.append(language)
                 where.append(f"language = ${len(args)}")
+            if access_class_in is not None:
+                classes = [c.strip() for c in access_class_in.split(",") if c.strip()]
+                try:
+                    where.append(_access.access_class_clause("", classes))
+                except _access.AccessClassError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+                    ) from exc
             if cursor is not None:
                 cur_at, cur_id = _decode_cursor(cursor)
                 args.append(cur_at)

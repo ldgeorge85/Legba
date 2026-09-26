@@ -19,6 +19,7 @@ import { ShieldAlert, FileText } from 'lucide-react'
 import CitedProse from '@/components/CitedProse'
 import { RecordLink } from '@/components/inspector/RecordLink'
 import { UnitEvalBadge } from '@/components/inspector/UnitEvalBadge'
+import { UnitCorrectnessBadge } from '@/components/inspector/UnitCorrectnessBadge'
 import { VerdictBadge } from '@/components/VerdictBadge'
 import {
   citationAnchorId,
@@ -27,6 +28,8 @@ import {
   isGroundingCitation,
   type Citation,
 } from '@/lib/citationsModel'
+import type { CitationCorroboration } from '@/lib/claimFold'
+import type { ContentionRow } from '@/lib/contentionsModel'
 import {
   STRUCTURAL_EXEMPT_NOTE,
   buildVerdict,
@@ -45,6 +48,25 @@ export interface CitedAssessmentProps {
   /** The finding's analyst id — keys the per-unit eval badge (P2-T6). A
    *  non-bounded-unit id simply renders no badge. */
   analystId?: string | null
+  /** The finding's target id. With `analystId` it keys the per-unit
+   *  CORRECTNESS number (G2) — the pair IS the measurement's key, so a
+   *  target-less read (the world spine) correctly renders no correctness
+   *  badge rather than borrowing some country's number. */
+  targetId?: string | null
+  /**
+   * 7b-i — the rendered record's per-ordinal corroboration blocks
+   * (`claimFold.corroborationByOrdinal(body)`), which carry the wire-fold
+   * COUNT the citation itself stamps only as a boolean. Absent on a read with
+   * no assembly payload (a country composition), and the chips then fall back
+   * to the citation's own stamps.
+   */
+  corroboration?: Map<number, CitationCorroboration> | null
+  /**
+   * 7a — the contrary-evidence records for this read, by the ordinal they were
+   * written against. `null` (not read yet, or a surface that does not fetch
+   * them) chips nothing, exactly as before this existed.
+   */
+  contentions?: Map<number, ContentionRow> | null
 }
 
 /**
@@ -58,6 +80,9 @@ export default function CitedAssessment({
   verification = null,
   confidence = null,
   analystId = null,
+  targetId = null,
+  corroboration = null,
+  contentions = null,
 }: CitedAssessmentProps) {
   const cited = citations.length > 0
   const verdict = buildVerdict({
@@ -89,6 +114,10 @@ export default function CitedAssessment({
         )}
         <VerdictBadge verdict={verdict} showLegend />
         <UnitEvalBadge analystId={analystId} />
+        {/* G2 — correctness against an independent reference, a DIFFERENT
+            measurement from the faithfulness verdict beside it and never
+            pooled with it. */}
+        <UnitCorrectnessBadge analystId={analystId} targetId={targetId} />
       </div>
 
       {/* P0-4 — one-line subtext for a verify-EXEMPT structural read, so the
@@ -108,7 +137,19 @@ export default function CitedAssessment({
           The verify block rides along (P1-8) so each chip's hover card carries
           its per-claim judge verdict — or the honest not-recorded line. */}
       <div className="text-body text-ink-1">
-        <CitedProse text={text} citations={citations} verification={verification} />
+        {/* 7b-i — `claimTags` is ON here and nowhere else by default: this is
+            the surface a reader opens to CHECK a claim, so the cited source
+            (masthead · date) and the record's fold reasons ride beside the
+            sentence instead of a hover away. A read with no fold keys renders
+            exactly as it did before. */}
+        <CitedProse
+          text={text}
+          citations={citations}
+          verification={verification}
+          claimTags
+          corroboration={corroboration}
+          contentions={contentions}
+        />
       </div>
 
       {/* Evidence panel — one row per citation, an anchor a chip scrolls to. */}

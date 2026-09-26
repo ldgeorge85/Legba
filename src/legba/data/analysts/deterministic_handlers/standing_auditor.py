@@ -100,6 +100,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 from uuid import UUID, uuid4
@@ -109,23 +110,41 @@ from ...provenance.kinds import OutputKind
 from ...provenance.models import AlertPayload, CritiquePayload, FindingPayload
 from ....runtime.analyst_method import AnalystMethodResult
 from ._external_audit_sampling import (
+    ALERT_TRIGGER_CLASS,
     CHECKED_VERDICTS,
+    CRITIQUE_TITLE_PREFIX,
+    EXTERNAL_AUDIT_DATA_KEY,
+    EXTERNAL_AUDIT_PIPELINE_VERSION,
+    EXTERNAL_AUDIT_PIPELINE_VERSION_WIDTH,
+    EXTERNAL_AUDIT_PIPELINE_VERSION_WIDTH_HEADS,
+    HEARTBEAT_KEY,
+    SUB_HANDLER_NAME,
     VERDICT_CONTRADICTED,
     VERDICT_NOT_FOUND,
     VERDICT_SUPPORTED,
     VERDICT_UNCHECKED,
+    WIDTH_FLAG_ENV,
     CheckableClaim,
     ClaimVerdict,
     SampledHead,
     head_from_row,
     parse_claims_reply,
     parse_verdict_reply,
+    pipeline_version,
     rotate_desks,
+    width_enabled,
 )
+from ._external_audit_width_writes import analyst_ctx as _analyst_ctx
 
 logger = logging.getLogger(__name__)
 
-SUB_HANDLER_NAME = "standing_auditor"
+# THE VOCABULARY IS IMPORTED, NOT DEFINED, and re-exported below. It moved to
+# ``_external_audit_sampling`` when this module reached 1,492 lines against the
+# size gate's 1,500-line entry threshold — the house answer to a file at its
+# ceiling is a seam, never a raised ceiling. Every historical spelling
+# (``standing_auditor.CRITIQUE_TITLE_PREFIX``, ``.EXTERNAL_AUDIT_DATA_KEY``,
+# ``.ALERT_TRIGGER_CLASS``, ``.HEARTBEAT_KEY``, ``.SUB_HANDLER_NAME``) resolves
+# unchanged for every caller and every test.
 
 #: ``deps.extras`` key for the SELF-HOSTED core-plane handler the builder wires
 #: via the shared ``_wire_deterministic_llm`` (Anthropic hard-refused there).
@@ -136,27 +155,6 @@ LLM_DEPS_EXTRA_KEY = "standing_auditor_llm"
 #: this handler runs traverses resolve ∩ allow ∩ applicability, the governor and
 #: the invocation ledger.
 WEB_BINDING_DEPS_EXTRA_KEY = "standing_auditor_web_binding"
-
-#: This plane's OWN population-split key. Deliberately NOT
-#: ``JUDGE_PIPELINE_VERSION``: external-audit verdicts and faithfulness verdicts
-#: are different evidence about different questions, and a mean across the two
-#: would describe a population that never existed. Bump this — never that — when
-#: the prompts, the verdict vocabulary or the validation below change.
-EXTERNAL_AUDIT_PIPELINE_VERSION = "2026-08-29/1"
-
-#: The critique's ``data`` sub-key + the marker every consumer reads.
-EXTERNAL_AUDIT_DATA_KEY = "external_audit"
-
-#: Title prefix for every critique this plane writes. MUST NOT collide with
-#: ``'Faithfulness verify%'`` — that LIKE pin is what keeps the verify surface
-#: from ever reading one of these rows as a faithfulness verdict.
-CRITIQUE_TITLE_PREFIX = "External audit"
-
-#: The ``alert_trigger_watermarks`` (mig 0091) partition this plane owns, and
-#: the ``trigger_class`` its alert rows carry.
-ALERT_TRIGGER_CLASS = "external_audit"
-#: The single heartbeat row's key inside that partition.
-HEARTBEAT_KEY = "_heartbeat"
 
 # --- caps (all overridable via descriptor method.options; see handler_options) ---
 DEFAULT_WINDOW_HOURS = 48
@@ -178,7 +176,24 @@ SEARCH_TIMEOUT_SECONDS = 45.0
 #: ``finding_supersession._COMPOSITION_ANALYST_IDS`` minus the meta-report
 #: producers: these three are the reads that assert things about the WORLD.
 WORLD_ANALYST_ID = "world_assessor"
-DESK_ANALYST_IDS: tuple[str, ...] = ("country_composition", "region_composition")
+#: D-6 (2026-09-04) adds the ASSESSMENT CHANNEL, and it belongs here on this
+#: list's own stated criterion — "the reads that ASSERT things about the world".
+#: After the demotion the compositions carry their desks' words under ordinals;
+#: the Assessment is the one composition-tier surface still making claims of its
+#: own, so an external auditor blind to it would be auditing quotation.
+#:
+#: IT CONTRIBUTES NOTHING UNTIL IT IS ACTIVATED. The descriptor ships
+#: ``state: draft`` — no actor, no rows — so this list's audited population is
+#: byte-for-byte unchanged today. The population MOVES on the day the channel
+#: goes active, and that is the day ``EXTERNAL_AUDIT_PIPELINE_VERSION`` has to
+#: record a new producer entering (this instrument keeps its own stamp family and
+#: must never pool with the judge's). Bumping it here instead would pool an empty
+#: period with a live one — the 08-12 shape, in the other instrument.
+DESK_ANALYST_IDS: tuple[str, ...] = (
+    "country_composition",
+    "region_composition",
+    "world_assessment",
+)
 
 #: Receipt caps, mirroring composition_lineage_sweep's count+sample contract.
 _VERDICT_SAMPLE_CAP = 25
@@ -309,9 +324,28 @@ WHERE ao.kind = 'finding'
   AND ao.target_id IS NOT NULL
   AND ao.superseded_by IS NULL
   AND ao.produced_at > NOW() - make_interval(hours => $2)
+  AND (ao.data -> 'data' -> 'assembly' ->> 'regime') IS DISTINCT FROM 'rollup'
 ORDER BY ao.target_id, ao.produced_at DESC, ao.id DESC
 LIMIT $3
 """
+# D-5 (DEMOTION_D1_SPEC §4.3 item 8) — DO NOT AUDIT A DETERMINISTIC ROLLUP.
+#
+# The spec asked for ``region_composition`` to be removed from
+# :data:`DESK_ANALYST_IDS` outright. The predicate above does the same job
+# strictly better, and the difference is not cosmetic:
+#
+#   * it stops the spend at exactly the moment the rows become deterministic
+#     (this audit is an LLM claim-extraction plus a web search per claim, and
+#     over a rollup it would be extracting claims from an arithmetic statement
+#     — a real cost for a guaranteed nothing);
+#   * it KEEPS auditing generative region reads while the flag is off, so this
+#     train changes no behaviour it has not been switched into;
+#   * it needs no second flag and no id list to keep in sync — the ROW says
+#     what it is, which is the same discriminator every other D-5 guard uses.
+#
+# ``IS DISTINCT FROM`` rather than ``<>`` because the JSONB path is NULL on
+# every pre-D-2 row, and ``NULL <> 'rollup'`` is NULL, not TRUE — which would
+# silently empty this gather for the entire historical corpus.
 
 #: Bounded desk fan-in. The rotation only ever takes ``max_desks`` of these; the
 #: cap exists so a fleet growth spurt cannot turn the pre-sort into a big read.
@@ -433,6 +467,13 @@ async def _judge_claim(
     # grader rather than assume there was only ever one.
     usage = getattr(response, "usage", None)
     verdict.judge_model = (getattr(usage, "model", "") or "").strip()
+    if not verdict.judge_model:
+        # A provider that does not echo the model left this EMPTY, which is
+        # how the width path spent 2.7 days writing "model unrecorded" over a
+        # dead route. The configured handler always knows what it called.
+        from ._external_audit_grader import configured_model_id
+
+        verdict.judge_model = configured_model_id(llm)
     return verdict
 
 
@@ -464,18 +505,6 @@ async def _extract_claims(
 # ---------------------------------------------------------------------------
 # Writes — critique per verdict, alert per contradicted high-severity claim
 # ---------------------------------------------------------------------------
-
-
-def _analyst_ctx(
-    *, analyst_id: str, analyst_version: str | None, run_id: UUID,
-    target_id: str | None,
-) -> AnalystContext:
-    return AnalystContext(
-        analyst_id=analyst_id,
-        analyst_version=analyst_version or "0" * 16,
-        run_id=run_id,
-        target_id=target_id,
-    )
 
 
 def build_audit_critique_payload(verdict: ClaimVerdict) -> CritiquePayload:
@@ -550,7 +579,7 @@ def build_audit_critique_payload(verdict: ClaimVerdict) -> CritiquePayload:
         data={
             EXTERNAL_AUDIT_DATA_KEY: {
                 "external_audit": True,
-                "pipeline_version": EXTERNAL_AUDIT_PIPELINE_VERSION,
+                "pipeline_version": pipeline_version(),
                 "sub_handler": SUB_HANDLER_NAME,
                 **verdict.as_dict(),
             }
@@ -706,7 +735,7 @@ def build_heartbeat_state(
     """
     return {
         "sub_handler": SUB_HANDLER_NAME,
-        "pipeline_version": EXTERNAL_AUDIT_PIPELINE_VERSION,
+        "pipeline_version": pipeline_version(),
         "ran_at": ran_at.isoformat(),
         "heads_sampled": list(heads_sampled),
         "claims_extracted": claims_extracted,
@@ -797,7 +826,7 @@ def _build_receipt(
     body = [
         f"Standing external audit — {headline}.",
         f"  window_hours={window_hours} "
-        f"pipeline={EXTERNAL_AUDIT_PIPELINE_VERSION}",
+        f"pipeline={pipeline_version()}",
         f"  heads: {', '.join(state.get('heads_sampled') or []) or '(none)'}",
         f"  extracted={state.get('claims_extracted')} checked={checked} "
         f"verdicts={mix}",
@@ -825,6 +854,181 @@ def _build_receipt(
             "window_hours": window_hours,
             EXTERNAL_AUDIT_DATA_KEY: dict(state),
             "verdicts": [v.as_dict() for v in verdicts[:_VERDICT_SAMPLE_CAP]],
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# The width leg
+# ---------------------------------------------------------------------------
+
+
+async def _handle_width(
+    options: Mapping[str, Any],
+    deps: Any,
+    pool: Any,
+    *,
+    binding: Any,
+    analyst_id: str,
+    analyst_version: str | None,
+    run_id: UUID,
+    now: datetime,
+) -> AnalystMethodResult:
+    """One hourly WIDTH tick — the drain, the writes, and the same heartbeat.
+
+    The heartbeat keeps EVERY key the shipped sweep wrote and adds width's own
+    block beside them. That is deliberate: the ops route, the liveness family and
+    the operator's eye all read the shipped keys, and an instrument that renames
+    its own liveness fields the day it grows is an instrument nobody can watch
+    through the change.
+    """
+    from ._external_audit_grader import (
+        AUDIT_RATER_DEPS_EXTRA_KEY,
+        GRADER_DEPS_EXTRA_KEY,
+    )
+    from ._external_audit_width import (
+        resolve_window_config,
+        run_width_tick,
+        width_heartbeat_block,
+    )
+    from ._external_audit_width_writes import write_width_rows
+
+    extras = dict(getattr(deps, "extras", None) or {})
+    grader = extras.get(GRADER_DEPS_EXTRA_KEY)
+    audit_rater = extras.get(AUDIT_RATER_DEPS_EXTRA_KEY)
+
+    # THE STAMP IS RESOLVED HERE, BEFORE THE TICK, from the same two window
+    # knobs the tick will grade under (2026-09-07). An instrument stamp names
+    # the measurement taken, and with ``window_basis`` / ``window_grace_hours``
+    # settable from ``.env`` or a descriptor the measurement is no longer
+    # fixed by the code alone — see
+    # ``_external_audit_sampling.EXTERNAL_AUDIT_PIPELINE_VERSION_WIDTH``.
+    window = resolve_window_config(options)
+    stamp = pipeline_version(
+        window_basis=window.basis, grace_before_hours=window.grace_hours,
+    )
+
+    result = await run_width_tick(
+        pool=pool,
+        options=options,
+        binding=binding,
+        grader=grader,
+        audit_rater=audit_rater,
+        grader_family=str(extras.get(f"{GRADER_DEPS_EXTRA_KEY}_family") or ""),
+        grader_component_id=str(extras.get(f"{GRADER_DEPS_EXTRA_KEY}_ref") or ""),
+        rater_family=str(extras.get(f"{AUDIT_RATER_DEPS_EXTRA_KEY}_family") or ""),
+        rater_component_id=str(
+            extras.get(f"{AUDIT_RATER_DEPS_EXTRA_KEY}_ref") or ""
+        ),
+        trigger_class=ALERT_TRIGGER_CLASS,
+        pipeline_version=stamp,
+        now=now,
+    )
+    if audit_rater is None:
+        result.degraded.append(
+            "no fourth-family audit rater wired — the instrument's own overlap "
+            "reports UNMEASURED this tick (not agreement)"
+        )
+
+    async with pool.acquire() as conn:
+        critiques, alerts, failures = await write_width_rows(
+            conn, result, analyst_id=analyst_id,
+            analyst_version=analyst_version, run_id=run_id,
+        )
+        result.critiques = critiques
+        result.alerts = alerts
+        result.write_failures = failures + result.ledger_skipped
+        heads = sorted({g.claim.desk_key for g in result.graded})
+        state = build_heartbeat_state(
+            ran_at=now,
+            heads_sampled=heads,
+            claims_extracted=int(result.prefilter.get("claims") or 0),
+            claims_checked=result.claims_checked,
+            verdict_mix=result.verdict_mix,
+            critiques=critiques,
+            alerts=alerts,
+            write_failures=result.write_failures,
+            degraded_reason="; ".join(result.degraded),
+        )
+        state.update(width_heartbeat_block(result))
+        heartbeat_ok = await _write_heartbeat(conn, state, alerts=alerts)
+
+    if result.degraded:
+        logger.warning(
+            "standing_auditor.width_degraded reasons=%r drained=%s checked=%d",
+            result.degraded, result.plan.get("selected"), result.claims_checked,
+        )
+    else:
+        logger.info(
+            "standing_auditor.width_ran drained=%s checked=%d ledger=%d "
+            "write_failed=%d requeued=%d critiques=%d alerts=%d pending=%s "
+            "sample_fraction=%s",
+            result.plan.get("selected"), result.claims_checked,
+            result.ledger_written, result.write_failed, result.requeued,
+            critiques, alerts,
+            result.plan.get("pending_after"),
+            result.plan.get("sample_fraction"),
+        )
+    return AnalystMethodResult(
+        finding=_build_width_receipt(state=state, result=result),
+        usage={"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0},
+    )
+
+
+def _build_width_receipt(*, state: Mapping[str, Any], result: Any) -> FindingPayload:
+    """The TRACE_ONLY receipt for a width tick — counts, and a capped sample."""
+    checked = int(state.get("claims_checked") or 0)
+    degraded = str(state.get("degraded_reason") or "")
+    fraction = state.get("sample_fraction", 1.0)
+    headline = (
+        f"graded {checked} claim(s) from {state.get('reads_enumerated')} read(s)"
+        if checked else (degraded or "graded nothing this tick")
+    )
+    body = [
+        f"Standing external audit (WIDTH) — {headline}.",
+        f"  pipeline={getattr(result, 'pipeline_version', '') or pipeline_version()}"
+        f" rubric={state.get('rubric_version')}",
+        f"  queue: drained={state.get('claims_drained')} "
+        f"pending={state.get('queue_pending')} refill={state.get('refill')}",
+        f"  verdicts={state.get('verdicts')} tier_unknown="
+        f"{state.get('tier_unknown')}",
+        f"  prefilter={state.get('prefilter')}",
+        f"  searches={state.get('searches')} "
+        f"reformulations={state.get('reformulations')} "
+        f"paid={state.get('paid_escalations') or 0}"
+        + (
+            f"(+{state.get('paid_escalations_refused')} refused)"
+            if state.get("paid_escalations_refused") else ""
+        )
+        + f" double_graded={state.get('double_graded')}",
+        f"  ledger: written={state.get('ledger_written')} "
+        f"skipped={state.get('ledger_skipped')} "
+        f"write_failed={state.get('write_failed')} "
+        f"requeued={state.get('requeued')} "
+        f"dead_lettered={state.get('write_dead_lettered')} "
+        f"critiques={state.get('critiques_written')} "
+        f"alerts={state.get('alerts_written')}",
+        f"  sample_fraction={fraction} reason={state.get('sample_reason')} "
+        f"day_complete={state.get('day_complete')}",
+    ]
+    if degraded:
+        body.append(f"  DEGRADED: {degraded}")
+    for grade in result.graded[:_VERDICT_SAMPLE_CAP]:
+        body.append(
+            f"  - [{grade.verdict}] {grade.claim.desk_key}: "
+            f"{grade.claim.claim_text[:160]}"
+        )
+    return FindingPayload(
+        title=f"Standing external audit (width) — {headline}"[:2048],
+        body="\n".join(body)[:65536],
+        confidence=1.0,
+        evidence=[],
+        tags=["deterministic", SUB_HANDLER_NAME, "external_audit",
+              "external_audit_width", "severity:low"],
+        data={
+            "sub_handler": SUB_HANDLER_NAME,
+            "meta": True,
+            EXTERNAL_AUDIT_DATA_KEY: dict(state),
         },
     )
 
@@ -875,6 +1079,24 @@ async def handle(
         run_id = uuid4()
 
     now = datetime.now(timezone.utc)
+
+    # ---- THE WIDTH BRANCH ------------------------------------------------
+    # `assembly.regime` is what actually decides a read's claim source, and it
+    # is decided PER ROW inside `claims_from_read` — a legacy-regime row keeps
+    # today's extraction leg and an assembled one uses its own spans. This flag
+    # decides something coarser: whether the auditor runs the 6-claim daily
+    # sweep it shipped with, or the hourly drain over every claim in every
+    # assembled read. Off is the default and off is byte-identical.
+    if width_enabled():
+        return await _handle_width(
+            options, deps, pool,
+            binding=binding,
+            analyst_id=analyst_id,
+            analyst_version=analyst_version,
+            run_id=run_id,
+            now=now,
+        )
+
     degraded: list[str] = []
     if llm is None:
         degraded.append(
@@ -980,12 +1202,17 @@ __all__ = [
     "CRITIQUE_TITLE_PREFIX",
     "EXTERNAL_AUDIT_DATA_KEY",
     "EXTERNAL_AUDIT_PIPELINE_VERSION",
+    "EXTERNAL_AUDIT_PIPELINE_VERSION_WIDTH",
+    "EXTERNAL_AUDIT_PIPELINE_VERSION_WIDTH_HEADS",
     "HEARTBEAT_KEY",
     "LLM_DEPS_EXTRA_KEY",
     "SUB_HANDLER_NAME",
     "WEB_BINDING_DEPS_EXTRA_KEY",
+    "WIDTH_FLAG_ENV",
     "build_audit_alert_payload",
     "build_audit_critique_payload",
     "build_heartbeat_state",
     "handle",
+    "pipeline_version",
+    "width_enabled",
 ]

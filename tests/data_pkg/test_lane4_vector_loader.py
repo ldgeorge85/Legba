@@ -9,6 +9,14 @@ cases: a fixture doc loads; a re-run is a no-op; search returns the expected
 chunk; force = delete-and-reload. Plus: unknown-corpus refusal, missing
 text_ref skip, dry-run writes nothing, collection ensure, provenance/license
 inheritance, and multi-chunk chunk_part identity.
+
+Also covers the ``exemplar`` corpus (EXEMPLAR_SHELF_DRAFT_2026-07-31.md §4
+step 4): a ready shelf id is accepted, an alias of a merged pattern resolves
+and inherits the SURVIVOR's doctrine_source/research_ref, a retired id is
+refused with the shelf's reversal note, a held (not-yet-ready) id is refused,
+and a missing exemplar_id is refused — none of these touch the real curated
+``seeds/exemplar_shelf.yaml`` (gitignored); a small in-memory shelf built via
+``parse_shelf`` stands in.
 """
 
 from __future__ import annotations
@@ -22,7 +30,8 @@ import pytest
 
 from legba.data.config import QdrantConfig
 from legba.data.qdrant import QdrantStore
-from legba.data.rag.lane4_loader import load_vector_batch
+from legba.data.rag.lane4_loader import CORPUS_COLLECTIONS, load_vector_batch
+from legba.data.seed.exemplar_shelf import DEFAULT_YAML, ExemplarShelf, parse_shelf
 from legba.data.seed.manual_schema import (
     BatchManifest,
     BatchMode,
@@ -436,10 +445,220 @@ async def test_ensure_corpus_collections_idempotent() -> None:
     assert await store.ensure_world_context_collection() is True
     assert await store.ensure_world_context_collection() is False
     assert await store.ensure_tradecraft_collection() is True
-    assert set(fake.collections) == {"world_context", "tradecraft"}
+    assert await store.ensure_exemplar_collection() is True
+    assert await store.ensure_exemplar_collection() is False
+    assert set(fake.collections) == {"world_context", "tradecraft", "exemplar"}
 
 
 def test_qdrant_config_has_corpus_collection_names() -> None:
     cfg = QdrantConfig()
     assert cfg.world_context_collection == "world_context"
     assert cfg.tradecraft_collection == "tradecraft"
+    assert cfg.exemplar_collection == "exemplar"
+
+
+def test_corpus_collections_registers_exemplar() -> None:
+    assert CORPUS_COLLECTIONS["exemplar"] == (
+        "ensure_exemplar_collection",
+        "exemplar_collection",
+    )
+    assert set(CORPUS_COLLECTIONS) == {"world_context", "tradecraft", "exemplar"}
+
+
+# ---------------------------------------------------------------------------
+# The `exemplar` corpus — shelf-backed id validation (§4 step 4)
+# ---------------------------------------------------------------------------
+
+
+def _test_shelf() -> ExemplarShelf:
+    """A small in-memory shelf: one ready pattern, one merged-alias pattern,
+    one held pattern, one retired pattern — enough to exercise every branch
+    of :func:`~legba.data.rag.lane4_loader.check_exemplar_id`."""
+    raw: dict[str, Any] = {
+        "version": 1,
+        "patterns": [
+            {
+                "id": "port_capacity_crisis",
+                "slot": "15",
+                "title": "Port Capacity Crisis",
+                "doctrine_source": "Port/congestion economics; war-risk premium response",
+                "research_ref": "planning/exemplars_research/t2_maritime_economic.md",
+                "status": "ready",
+            },
+            {
+                "id": "prewar_mobilization_warning",
+                "slot": "3",
+                "title": "Prewar Mobilization Warning",
+                "doctrine_source": "Grabo I&W tradition",
+                "research_ref": "planning/exemplars_research/t1_military_coercive.md",
+                "status": "ready",
+                "aliases": ["exercise_as_cover"],
+                "merged_from": [
+                    {
+                        "id": "exercise_as_cover",
+                        "variant": "exercise_as_cover",
+                        "merge_reason": "T1's own question — folded as a modifier",
+                    }
+                ],
+                "variants": [{"id": "exercise_as_cover", "framing": "snap-exercise cover"}],
+            },
+            {
+                "id": "export_control_minerals_cascade",
+                "slot": "12",
+                "title": "Export-Control Minerals Cascade",
+                "doctrine_source": "Export-control / critical-minerals coercion literature",
+                "research_ref": "planning/exemplars_research/t2_maritime_economic.md",
+                "status": "hold",
+                "authoring_gate": "no clean stalled-negative found",
+            },
+        ],
+        "retired": [
+            {
+                "id": "hybrid_composite",
+                "slot": "22",
+                "title": "Hybrid Composite",
+                "disposition": "killed",
+                "reason": "no clean discriminator against ordinary escalation",
+                "reversal": "Operator override: re-admit with a CONTESTED flag "
+                "if current relevance is reweighted.",
+            }
+        ],
+    }
+    return parse_shelf(raw)
+
+
+def _exemplar_doc(doc_id: str, text: str, exemplar_id: str | None, **kw: Any) -> dict[str, Any]:
+    data = dict(kw.pop("data", {}))
+    if exemplar_id is not None:
+        data["exemplar_id"] = exemplar_id
+    return {"corpus": "exemplar", "doc_id": doc_id, "chunk_seq": 0, "text": text, "data": data, **kw}
+
+
+async def test_exemplar_ready_id_accepted() -> None:
+    store, fake = _store()
+    emb = _FakeEmbedder()
+    batch = _batch([_exemplar_doc("bts-2026", "port congestion baseline text", "port_capacity_crisis")])
+    res = await load_vector_batch(
+        batch=batch, batch_dir=".", store=store, embedder=emb,
+        ledger=_InMemoryLedger(), shelf=_test_shelf(),
+    )
+    assert not res.errors
+    assert res.counts["chunks"] == 1
+    _, payload = next(iter(fake.collections["exemplar"].values()))
+    assert payload["exemplar_id"] == "port_capacity_crisis"
+    assert payload["doctrine_source"] == "Port/congestion economics; war-risk premium response"
+    assert payload["research_ref"] == "planning/exemplars_research/t2_maritime_economic.md"
+    assert payload["source_class"] == "template"
+
+
+async def test_exemplar_alias_id_accepted_inherits_survivor_metadata() -> None:
+    store, fake = _store()
+    emb = _FakeEmbedder()
+    batch = _batch([_exemplar_doc("marad-2026", "snap exercise cover text", "exercise_as_cover")])
+    res = await load_vector_batch(
+        batch=batch, batch_dir=".", store=store, embedder=emb,
+        ledger=_InMemoryLedger(), shelf=_test_shelf(),
+    )
+    assert not res.errors
+    _, payload = next(iter(fake.collections["exemplar"].values()))
+    # The RAW alias is kept as exemplar_id (not normalized to the survivor's
+    # id) — but doctrine_source/research_ref are the SURVIVOR's, per the
+    # shelf's resolve() semantics.
+    assert payload["exemplar_id"] == "exercise_as_cover"
+    assert payload["doctrine_source"] == "Grabo I&W tradition"
+    assert payload["research_ref"] == "planning/exemplars_research/t1_military_coercive.md"
+    assert payload["source_class"] == "template"
+
+
+async def test_exemplar_retired_id_refused_with_reversal_note() -> None:
+    store, fake = _store()
+    emb = _FakeEmbedder()
+    batch = _batch([_exemplar_doc("bad-1", "hybrid composite text", "hybrid_composite")])
+    res = await load_vector_batch(
+        batch=batch, batch_dir=".", store=store, embedder=emb,
+        ledger=_InMemoryLedger(), shelf=_test_shelf(),
+    )
+    assert res.counts["skipped_docs"] == 1
+    assert res.counts["chunks"] == 0
+    assert res.errors
+    assert "retired" in res.errors[0]
+    assert "Operator override: re-admit" in res.errors[0]
+    assert "exemplar" not in fake.collections or not fake.collections["exemplar"]
+
+
+async def test_exemplar_held_id_refused() -> None:
+    store, fake = _store()
+    emb = _FakeEmbedder()
+    batch = _batch(
+        [_exemplar_doc("bad-2", "minerals cascade text", "export_control_minerals_cascade")]
+    )
+    res = await load_vector_batch(
+        batch=batch, batch_dir=".", store=store, embedder=emb,
+        ledger=_InMemoryLedger(), shelf=_test_shelf(),
+    )
+    assert res.counts["skipped_docs"] == 1
+    assert res.errors
+    assert "hold" in res.errors[0]
+    assert "no clean stalled-negative found" in res.errors[0]
+
+
+async def test_exemplar_missing_id_refused() -> None:
+    store, fake = _store()
+    emb = _FakeEmbedder()
+    batch = _batch([_exemplar_doc("bad-3", "no id given", None)])
+    res = await load_vector_batch(
+        batch=batch, batch_dir=".", store=store, embedder=emb,
+        ledger=_InMemoryLedger(), shelf=_test_shelf(),
+    )
+    assert res.counts["skipped_docs"] == 1
+    assert res.errors
+    assert "missing exemplar_id" in res.errors[0]
+
+
+async def test_exemplar_unknown_id_refused() -> None:
+    store, fake = _store()
+    emb = _FakeEmbedder()
+    batch = _batch([_exemplar_doc("bad-4", "nonsense id", "not_a_real_pattern")])
+    res = await load_vector_batch(
+        batch=batch, batch_dir=".", store=store, embedder=emb,
+        ledger=_InMemoryLedger(), shelf=_test_shelf(),
+    )
+    assert res.counts["skipped_docs"] == 1
+    assert "not on the shelf" in res.errors[0]
+
+
+async def test_exemplar_empty_shelf_refuses_everything() -> None:
+    """The house seed rule: a missing curated ``seeds/exemplar_shelf.yaml``
+    degrades to an EMPTY :class:`ExemplarShelf` (``load_shelf`` on an absent
+    file — see ``legba.data.seed.exemplar_shelf``), never invents a pattern.
+    Feeding the loader that empty shelf directly proves every exemplar_id is
+    then refused, never silently accepted, regardless of which id is asked
+    for."""
+    store, fake = _store()
+    emb = _FakeEmbedder()
+    batch = _batch([_exemplar_doc("x", "text", "port_capacity_crisis")])
+    res = await load_vector_batch(
+        batch=batch, batch_dir=".", store=store, embedder=emb,
+        ledger=_InMemoryLedger(), shelf=ExemplarShelf(),
+    )
+    assert res.counts["skipped_docs"] == 1
+    assert "not on the shelf" in res.errors[0]
+
+
+@pytest.mark.skipif(
+    not DEFAULT_YAML.exists(),
+    reason="curated seeds/exemplar_shelf.yaml absent (gitignored — the "
+    "test_seed_sipri precedent: skip rather than assert on curated data)",
+)
+async def test_exemplar_lazy_loads_default_shelf_when_not_injected() -> None:
+    """``shelf=None`` (the CLI's non-test path) lazily loads the real curated
+    shelf — proven here against whatever is actually on disk, so this only
+    runs when the curated file happens to be present locally."""
+    store, fake = _store()
+    emb = _FakeEmbedder()
+    batch = _batch([_exemplar_doc("x", "text", "port_capacity_crisis")])
+    res = await load_vector_batch(
+        batch=batch, batch_dir=".", store=store, embedder=emb, ledger=_InMemoryLedger(),
+    )
+    assert not res.errors
+    assert res.counts["chunks"] == 1

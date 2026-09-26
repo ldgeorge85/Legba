@@ -39,9 +39,16 @@ from typing import Any, Iterable, Mapping, Protocol, runtime_checkable
 from ...runtime.analyst_method import AnalystMethodResult, LLMHandlerLike
 from ..provenance.kinds import TRACE_ONLY as _TRACE_ONLY
 from ..provenance.models import FindingPayload
+from ..provenance.origin import origin_class_clause
 from ._tradecraft import with_preamble
 
 logger = logging.getLogger(__name__)
+
+#: P7/7g-1 — the origin-class leg on the salience batch (SEAMS #57 sweep;
+#: `salience` is one of the eight surfaces a collection is fenced from). A
+#: loaded historical document has no salience in the present, and scoring one
+#: would put imported history into every ranked window downstream.
+_LIVE_SIGNALS = origin_class_clause("s")
 
 # --- analyst-kind contract (discover_analyst_kinds reads these) --------------
 KIND_NAME: str = "signal_salience"
@@ -180,6 +187,184 @@ def max_salience(saliences: Iterable[Mapping[str, Any] | None]) -> dict | None:
     if best is None or best_mag < 0.0:
         return None
     return dict(best)
+
+
+# ---------------------------------------------------------------------------
+# THE SALIENCE REPAIR — `cited_mass.v1`  (D-1 §1.5.2)
+# ---------------------------------------------------------------------------
+#
+# `max_salience` above is a MAX-POOL, and at the composition tier the pool has
+# eaten the signal. Max over ~120 slice signals gives a desk head; max over ~8
+# desk heads gives a country; max over ~6 countries gives the world. Measured
+# 2026-09-03: region-tier magnitude mean 0.924 with **sd 0.024**, 313 of 315
+# rows inside [0.90, 0.95]; the world burial guard `_build_salience_check` sits
+# at 58 pass / 0 fail with a maximum observed gap of 0.050 against a 0.300
+# threshold — a guard that is mathematically unable to fire.
+#
+# THE REPAIR: score the signals a desk ACTUALLY CITED, not the slice it was
+# shown. A desk head carries `data.data.citations[]` with a `signal_id` per
+# cited wire item — typically 5-25 of the 120 it saw. Joining those ids to
+# `signals.salience->>'magnitude'` gives a per-head CONSEQUENCE PROFILE instead
+# of a per-COUNTRY wire-loudness reading.
+#
+# The measurement that settles the grain question (262 country desk heads, 12h):
+#
+#   key                                    mean    sd
+#   today's slice max-pool at this tier     0.924   0.024   dead
+#   cited_max                               0.421   0.322   discriminating
+#   cited_mass                              0.24    0.50    discriminating
+#   slice-grain mass (over derived_from)    3.20    4.40    but IDENTICAL across
+#                                                           all 8 desks of one
+#                                                           target (Iran:
+#                                                           16.1-17.8)
+#
+# That last row is why the key must be CITED-grain: computed over the pack every
+# desk was handed, all eight Iran desks score the same, because the number is
+# measuring how loud Iran's wire was rather than what any desk found in it.
+# Computed over citations they spread from 0.00 to 3.85.
+#
+# BLAST RADIUS, BOUNDED ON PURPOSE. `max_salience` is NOT deleted and
+# `magnitude` keeps its current value and meaning, so `salience_sort_key`,
+# `_build_salience_check`, `judge_input_checks.fold_salience_lead` and every
+# unit-tier consumer stay byte-identical. Only the composition ORDERING and the
+# earned-lead test read the new fields.
+
+#: The "this is background" floor `cited_mass` measures excess above. 0.50 sits
+#: at the median of the live signal-magnitude distribution (mode 0.10-0.30, long
+#: tail to 1.00; 23,530 of 23,970 signals scored in 7d = 98.2%).
+MASS_FLOOR: float = 0.50
+
+#: The bar `n_above` counts. A signal at or over this is one a reader would
+#: expect to see named.
+ABOVE_BAR: float = 0.70
+
+#: The repaired key's version, stamped on every emitted block so a reader can
+#: tell which arithmetic produced the number it is sorting on.
+CITED_SALIENCE_VERSION: str = "cited_mass.v1"
+
+
+def salience_over_ids(
+    signal_ids: Iterable[Any],
+    magnitudes: Mapping[str, float],
+    *,
+    source: str = "cited_signals",
+) -> dict[str, Any]:
+    """`cited_mass.v1` over an explicit DISTINCT signal-id set.
+
+    The shared arithmetic behind both grains. ``source`` names WHICH grain
+    produced the id set — ``cited_signals`` when the head cited the wire items
+    itself, ``pooled_child_signals`` when the ids were pooled from the head's
+    children (a composition candidate, whose own citations point at findings and
+    carry no ``signal_id``). Naming it on the row is the difference between a
+    reader knowing what the number measures and guessing.
+    """
+    seen: set[str] = set()
+    mags: list[float] = []
+    for sid in signal_ids or ():
+        if not sid:
+            continue
+        key = str(sid)
+        if key in seen:
+            continue
+        seen.add(key)
+        m = magnitudes.get(key)
+        if m is None:
+            continue
+        try:
+            mags.append(float(m))
+        except (TypeError, ValueError):
+            continue
+    return {
+        "cited_max": round(max(mags), 4) if mags else 0.0,
+        "cited_mass": round(sum(max(0.0, m - MASS_FLOOR) for m in mags), 4),
+        "n_above": sum(1 for m in mags if m >= ABOVE_BAR),
+        "n_cited_scored": len(mags),
+        "n_cited": len(seen),
+        "source": source,
+        "version": CITED_SALIENCE_VERSION,
+    }
+
+
+def cited_salience(
+    citations: Iterable[Mapping[str, Any] | None],
+    magnitudes: Mapping[str, float],
+) -> dict[str, Any]:
+    """`cited_mass.v1` over ONE head's own citations.
+
+    ``citations`` is the head's ``data.data.citations[]``; ``magnitudes`` maps
+    ``signal_id -> salience.magnitude`` for the ids that are scored (98.2% of
+    live signals are). An id with no entry contributes NOTHING — an unscored
+    signal is unmeasured, and counting it as zero would read as "the desk cited
+    something inconsequential", which is a different and false claim.
+
+    Why MASS and not MEAN: a desk that cites one world-moving item and four
+    routine ones should outrank a desk that cites five routine ones, and a mean
+    punishes exactly that shape. Mass is the excess consequence above
+    :data:`MASS_FLOOR`, summed. Distinct signal ids only — a head that cites the
+    same wire item under two markers cited one thing.
+    """
+    return salience_over_ids(
+        (
+            c.get("signal_id")
+            for c in (citations or ())
+            if isinstance(c, Mapping)
+        ),
+        magnitudes,
+    )
+
+
+def pool_salience(
+    children: Iterable[Mapping[str, Any] | None],
+    *,
+    distinct_signal_mags: Mapping[str, float] | None = None,
+) -> dict[str, Any] | None:
+    """The composition-tier pool: `max_salience` widened with the repaired key.
+
+    ``magnitude`` is byte-identical to what :func:`max_salience` returns today —
+    that is the compat contract D-1 §1.5.2 fixes, and it is why every existing
+    consumer is untouched. The four new keys ride ALONGSIDE it.
+
+    ``cited_mass`` is summed over DISTINCT signal ids across the children, not
+    over the children's own sums, so two desks resting on one shared wire item
+    do not double-count it. Pass ``distinct_signal_mags`` (the union map the
+    caller already built to compute each child's own key) to get the deduped
+    number; without it the pool degrades to the max of the children's masses,
+    which is the honest floor rather than an inflated sum.
+    """
+    children = list(children or ())
+    base = max_salience(children)
+    if base is None:
+        return None
+    kids = [c for c in children if isinstance(c, Mapping)]
+
+    def _num(key: str) -> list[float]:
+        out = []
+        for c in kids:
+            v = c.get(key)
+            try:
+                out.append(float(v))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    maxes = _num("cited_max")
+    masses = _num("cited_mass")
+    if distinct_signal_mags is not None:
+        mass = round(
+            sum(max(0.0, m - MASS_FLOOR) for m in distinct_signal_mags.values()), 4
+        )
+        n_above = sum(1 for m in distinct_signal_mags.values() if m >= ABOVE_BAR)
+    else:
+        mass = round(max(masses), 4) if masses else 0.0
+        n_above = max((int(c.get("n_above") or 0) for c in kids), default=0)
+    base.update({
+        "cited_max": round(max(maxes), 4) if maxes else 0.0,
+        "cited_mass": mass,
+        "n_above": n_above,
+        "source": "cited_signals",
+        "version": CITED_SALIENCE_VERSION,
+    })
+    return base
 
 
 def _signal_row_title(row: Mapping[str, Any]) -> str | None:
@@ -431,7 +616,7 @@ def _parse_salience_batch(
     return out
 
 
-_SELECT_BATCH_SQL = """
+_SELECT_BATCH_SQL = f"""
     SELECT s.id, s.payload,
            d.body::jsonb->'scope'->>'source_class' AS source_class,
            d.body::jsonb->'config'->'classes' AS channel_classes
@@ -439,6 +624,7 @@ _SELECT_BATCH_SQL = """
       LEFT JOIN source_descriptors d
         ON d.is_head = TRUE AND d.descriptor_id = s.source_id
      WHERE s.salience IS NULL
+       AND {_LIVE_SIGNALS}
        AND s.modality = 'text'
        AND s.fetched_at > now() - make_interval(hours => $1)
      ORDER BY s.fetched_at DESC
@@ -752,6 +938,9 @@ __all__ = [
     "EVENT_CLASSES", "ACTOR_RANKS", "AUTHORITY_BY_SOURCE_CLASS", "AUTHORITY_RANK",
     "SignalRow", "SalienceVerdict", "SignalSalienceDeps",
     "salience_sort_key", "magnitude_of", "max_salience",
+    # D-2 — the repaired CITED-grain key (`cited_mass.v1`, D-1 §1.5.2).
+    "MASS_FLOOR", "ABOVE_BAR", "CITED_SALIENCE_VERSION",
+    "cited_salience", "pool_salience",
     "build_signal_finding_salience",
     "score_signals", "select_salience_candidates",
     "run_method",

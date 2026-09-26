@@ -49,7 +49,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Mapping, Protocol, runtime_checkable
 
-from ...data import correctness_axis
+from ...data import correctness_axis, critic_fold
 
 logger = logging.getLogger(__name__)
 
@@ -889,37 +889,47 @@ async def _resolve_verify_component_id(analyzed_analyst_id: str) -> str | None:
 
 # Parent arm: the analyzed unit's freshest active findings + their LATEST folded
 # ``Faithfulness verify%`` critique score — the EXACT scorecard_banding _GATHER
-# LATERAL pattern, minus the target filter (all targets). f.body + f.data feed
+# pattern, minus the target filter (all targets). f.body + f.data feed
 # the candidate-arm regeneration; f.derived_from gives the signal lineage roots.
-_PARENT_FAITHFULNESS_SQL = """
+#
+# H17 — SET-BASED: the valset page is taken FIRST (at most $2 rows), then ONE
+# ``DISTINCT ON`` pass fetches the latest faithfulness critique for those ids
+# through the expression index. The former correlated lateral left the planner
+# free to serve its ``ORDER BY … LIMIT 1`` from ``(kind, produced_at DESC)``
+# instead, which walks every critique row for a parent that has none.
+#
+# ``judge_status`` is the regime the LIVE verify pass scored this parent row
+# under: 'llm' (judge ran) vs 'deterministic' (floor / judge errored). Lets the
+# pair exclude a floor-scored parent from a judge-scored candidate
+# (mixed-regime → spurious delta). NULL on legacy rows written before the
+# verification block carried judge_status.
+_PARENT_VERIFY_FOLD = critic_fold.latest_critique_cte(
+    "v",
+    "(cr.data->>'overall_score')::real AS faithfulness_score,\n"
+    "               cr.data->'data'->'verification'->>'judge_status'"
+    " AS judge_status",
+    "SELECT id::text FROM f",
+)
+
+_PARENT_FAITHFULNESS_SQL = f"""
+    WITH f AS MATERIALIZED (
+        SELECT f.id, f.body, f.data, f.derived_from, f.produced_at
+          FROM analyst_outputs f
+         WHERE f.kind = 'finding'
+           AND f.analyst_id = $1
+           AND f.superseded_by IS NULL
+         ORDER BY f.produced_at DESC, f.id DESC
+         LIMIT $2
+    ), {_PARENT_VERIFY_FOLD}
     SELECT f.id::text        AS finding_id,
            f.body            AS body,
            f.data            AS data,
            f.derived_from    AS derived_from,
            v.faithfulness_score AS faithfulness_score,
            v.judge_status    AS judge_status
-      FROM analyst_outputs f
-      LEFT JOIN LATERAL (
-          SELECT (cr.data->>'overall_score')::real AS faithfulness_score,
-                 -- The regime the LIVE verify pass scored this parent row under:
-                 -- 'llm' (judge ran) vs 'deterministic' (floor / judge errored).
-                 -- Lets the pair exclude a floor-scored parent from a judge-scored
-                 -- candidate (mixed-regime → spurious delta). NULL on legacy rows
-                 -- written before the verification block carried judge_status.
-                 cr.data->'data'->'verification'->>'judge_status' AS judge_status
-            FROM analyst_outputs cr
-           WHERE cr.kind = 'critique'
-             AND cr.data->>'analyzed_output_id' = f.id::text
-             AND cr.data->>'overall_score' IS NOT NULL
-             AND cr.title LIKE 'Faithfulness verify%'
-           ORDER BY cr.produced_at DESC, cr.id DESC
-           LIMIT 1
-      ) v ON TRUE
-     WHERE f.kind = 'finding'
-       AND f.analyst_id = $1
-       AND f.superseded_by IS NULL
+      FROM f
+      LEFT JOIN v ON v.fid = f.id::text
      ORDER BY f.produced_at DESC, f.id DESC
-     LIMIT $2
 """
 
 # SECONDARY axis — the deterministic source-overlap gold table. Kept for the

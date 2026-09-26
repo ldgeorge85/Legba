@@ -1,0 +1,86 @@
+# sources_wave_2 — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# UN News — Africa topic feed (news.un.org). Closes the audit-flagged gap
+# (planning/COVERAGE_VS_SELECTION_AUDIT_2026-09-07.md item #4/#5): the UN
+# Fact-Finding Mission's Sudan report and the Kalogi strikes were carried by
+# no subscribed outlet's Africa desk — OHCHR and UN News were both
+# unsubscribed. UN News syndicates OHCHR statements and Secretariat
+# human-rights reporting as regular news items (e.g. "West Bank: UN rights
+# report warns of forcible displacement", "Outside forces fuel Sudan war, new
+# report finds" — both live on this exact feed 2026-09-02/03). Verified live
+# 2026-09-07: valid RSS 2.0, title "UN News - Global perspective Human
+# stories", newest item same-day, oldest of 5 checked items 2026-09-01 (well
+# inside 7d).
+#
+# NOTE — OHCHR's own site (ohchr.org) was researched and REJECTED: its only
+# discoverable feed (https://www.ohchr.org/en/rss.xml) serves static taxonomy
+# "Topics" pages (items dated back to 2021, one stray 2026-08-05 entry), not
+# press releases — it fails the 7-day-recency bar and no OHCHR press-release
+# RSS or RSSHub route could be found. This UN News feed is the practical
+# substitute: it carries OHCHR/HRC-sourced material as regular wire items.
+#
+# source_class: official. Credibility host un.org (seeded 0.88/gov,
+# state_affiliation True — matches source_un_press.yaml's existing seed).
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after verifying the route
+# live on the instance.
+
+identity:
+  id: source.un_news.africa
+  name: UN News — Africa
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: sources_wave_2
+  created: "2026-09-07T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [gov, diplomacy, humanitarian, africa, sources_wave_2]
+  source_class: official
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "05 1-23/6 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://news.un.org/feed/subscribe/en/news/region/africa/feed/rss.xml"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming the
+    # route yields full article text (mirrors the RSSHub-lane conservative default).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open

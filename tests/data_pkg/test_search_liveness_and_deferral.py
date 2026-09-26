@@ -242,17 +242,36 @@ def test_the_runtime_actually_binds_search_into_the_web_access_tool_context():
     rebuilds the web_access ToolContext without the search fields would silently
     re-inert the whole discovery leg with every unit test still green, so assert
     the binding site directly.
+
+    #85 WIDENED THIS. The original version named ``dapr_host`` and only
+    ``dapr_host`` — and that is how the auditor's dead search leg shipped: a
+    SECOND binding site (``external_audit_binding``, for the deterministic
+    ``standing_auditor``) bound ``search`` by COPYING the bring-up ToolContext,
+    which never carried one. This test was green throughout. So the guard is now
+    on the shared RESOLVER, which is the thing a new binding site has to reach
+    for; the behavioural coverage lives in
+    ``tests/runtime/test_external_audit_binding.py``.
     """
     from pathlib import Path
 
     import legba.runtime.dapr_host as dapr_host
+    import legba.runtime.external_audit_binding as external_audit_binding
 
     text = Path(dapr_host.__file__).with_suffix(".py").read_text()
     assert "_search_handler_factory" in text
-    assert "build_search_handler_from_stack_component" in text
+    assert "search_handler_factory" in text
     # The web_access ToolContext carries both the handler and its route.
     assert "search=_search_handler" in text
     assert "search_route=_search_route" in text
+
+    # The auditor's binding site resolves too — it must never go back to
+    # copying a provider off a context that has none.
+    audit_text = Path(
+        external_audit_binding.__file__
+    ).with_suffix(".py").read_text()
+    assert "resolve_pack_search_binding" in audit_text
+    assert "search=search_handler" in audit_text
+    assert "search_route=search_route" in audit_text
 
 
 def test_a_meta_analyst_self_allows_its_web_pack():

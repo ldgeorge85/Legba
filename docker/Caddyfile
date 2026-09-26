@@ -93,6 +93,36 @@
 		file_server
 	}
 
+	# Bare `/m` (no trailing slash) would miss the `/m/*` matcher below and
+	# fall through to the workstation. An exact-path handle redirects it, so a
+	# typed or texted `…/m` still lands on the phone surface.
+	handle /m {
+		redir * /m/ 308
+	}
+
+	# Mobile surface (`/m/`) — the phone-first, report-centric page. A SECOND
+	# SPA from the SAME `legba_ui_dist` volume: `legba-ui-build` emits it to
+	# `dist/m/`, and the volume is copied whole, so `/srv/legba-ui/m` appears
+	# with no change to the build job.
+	#
+	# Its own `try_files` fallback is `/m/index.html`, NOT the workstation's
+	# `/index.html` — a deep link like `/m/?report=<id>` must boot the mobile
+	# bundle, and falling through to the workstation would silently serve the
+	# Dockview app to a phone.
+	#
+	# Same perimeter as everything else: `basic_auth_perimeter` first, so the
+	# mobile bundle is no more publicly downloadable than the workstation's,
+	# and the SPA's API calls flow through the `/api/*` handle above (which
+	# swaps the browser's cached Basic for the registry Bearer). The mobile
+	# entry adds NO new auth path — it reads the same `localStorage.legba_token`
+	# and rides the same two-layer gate.
+	handle /m/* {
+		import basic_auth_perimeter
+		root * /srv/legba-ui
+		try_files {path} /m/index.html
+		file_server
+	}
+
 	handle {
 		import basic_auth_perimeter
 		root * /srv/legba-ui

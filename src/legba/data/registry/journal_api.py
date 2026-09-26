@@ -30,8 +30,11 @@ that deep-links to the cited record. A bare UUID alone can't tell the chip what
 KIND of record it points at (situation vs finding vs nexus vs fact …) and there
 is no resolve-by-uuid endpoint, so this route resolves every cited ref to its
 ``(kind, title)`` server-side — a single union-by-id probe across the substrate
-tables (UUIDs are globally unique, so each id resolves in at most one table). The
-UI then calls ``selectRow(kind, id, label)`` directly without a second round-trip
+tables (UUIDs are globally unique, so each id resolves in at most one table). A
+``kind='signal'`` ref also carries ``source_id`` (T1.3 — the originating
+``source.*`` feed), so a raw-signal citation labels as
+"signal · <source> · <title>" rather than a title-less generic chip. The UI
+then calls ``selectRow(kind, id, label)`` directly without a second round-trip
 or a try-each-kind fallback.
 
 VERIFY SCORE (§3.4). Journal rows are verified the same way an ``inline_target``
@@ -87,13 +90,19 @@ MAX_LIMIT = 200
 # returning zero rows. `lens`/`lens_diff` are accepted now (harmless — no such
 # rows exist yet, §3.1) even though the `lens` secondary filter (§3.2) waits for
 # LV-1's `journal_entries.data` column.
-_VALID_KINDS = frozenset({"entry", "consolidation", "chronicle", "lens", "lens_diff"})
+_VALID_KINDS = frozenset({
+    "entry", "consolidation", "chronicle", "lens", "lens_diff",
+    # Program 5 — the stateful tier written by the `inquiry` KIND.
+    "inquiry", "crossroads",
+})
 
 # Default stream selection when `kind` is omitted: every append tier —
 # diary entries, chronicle, and the lens faculties + their diff (LV-2 tail,
 # 2026-07-23; the panel's filter rail narrows client-side). Consolidation
 # stays slot-only, never a stream row.
-_DEFAULT_STREAM_KINDS = ("entry", "chronicle", "lens", "lens_diff")
+_DEFAULT_STREAM_KINDS = (
+    "entry", "chronicle", "lens", "lens_diff", "inquiry", "crossroads",
+)
 
 _VALID_FIELDS = frozenset({"summary", "full"})
 
@@ -159,30 +168,40 @@ def _validate_fields(fields: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Ref resolution — bare UUID → (kind, title).
+# Ref resolution — bare UUID → (kind, title[, source_id]).
 #
 # Each entry in this table is one substrate table carrying universal-provenance
-# columns, with the SQL expressions that yield the row's kind label and a human
-# title. Mirrors lineage_api._SUBSTRATE_TABLES but is local + read-only here so
-# the journal route stays self-contained (and so a journal-side change never
-# perturbs the lineage walk's catalog). `nexuses` is ADDED here (it is NOT in
-# the lineage catalog) because a journal claim legitimately cites a signed nexus
-# (§9), and `journal_entries` itself is deliberately ABSENT — a chip never
-# resolves to another journal row (§3.5).
+# columns, with the SQL expressions that yield the row's kind label, a human
+# title, and (signals only) the originating source id. Mirrors
+# lineage_api._SUBSTRATE_TABLES but is local + read-only here so the journal
+# route stays self-contained (and so a journal-side change never perturbs the
+# lineage walk's catalog). `nexuses` is ADDED here (it is NOT in the lineage
+# catalog) because a journal claim legitimately cites a signed nexus (§9), and
+# `journal_entries` itself is deliberately ABSENT — a chip never resolves to
+# another journal row (§3.5).
+#
+# T1.3 (planning/JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09.md §6) — a
+# raw-signal ref (a journal claim citing `source.gdelt.files` et al directly,
+# with no analyst in between) rendered as the bare word "unknown" in the
+# reader because the chip label had no way to say WHICH feed a signal came
+# from. `source_id` closes that gap: additive on `ResolvedRef` (every other
+# kind leaves it `None`), so the reader can label a signal ref
+# `signal · <short source> · <title>` instead of a title-less generic chip.
 # ---------------------------------------------------------------------------
 
 
-_REF_TABLES: tuple[tuple[str, str, str], ...] = (
-    # (table, kind_expr, title_expr)
-    ("analyst_outputs", "kind", "title"),
-    ("situations", "'situation'", "name"),
-    ("facts", "'fact'", "subject || ' ' || predicate || ' ' || value"),
-    ("nexuses", "'nexus'", "label"),
-    ("hypotheses", "'hypothesis'", "LEFT(thesis, 240)"),
+_REF_TABLES: tuple[tuple[str, str, str, str], ...] = (
+    # (table, kind_expr, title_expr, source_expr)
+    ("analyst_outputs", "kind", "title", "NULL::text"),
+    ("situations", "'situation'", "name", "NULL::text"),
+    ("facts", "'fact'", "subject || ' ' || predicate || ' ' || value", "NULL::text"),
+    ("nexuses", "'nexus'", "label", "NULL::text"),
+    ("hypotheses", "'hypothesis'", "LEFT(thesis, 240)", "NULL::text"),
     (
         "signals",
         "'signal'",
         "payload->>'title'",
+        "source_id",
     ),
 )
 
@@ -195,11 +214,17 @@ class ResolvedRef(BaseModel):
     superseded / pruned / cross-environment ref): the chip still renders (the
     citation is never hidden) and the click coerces to a walkable Inspector path
     rather than dead-ending.
+
+    ``source_id`` (T1.3) is the originating ``source.*`` id — set only when
+    ``kind == "signal"``, ``None`` for every other kind (including
+    ``"unknown"``) and for a pre-T1.3 caller that never reads the field
+    (additive, backward-compatible).
     """
 
     id: str
     kind: str
     title: str | None = None
+    source_id: str | None = None
 
 
 async def _resolve_refs(conn: Any, ids: list[str]) -> dict[str, ResolvedRef]:
@@ -229,12 +254,12 @@ async def _resolve_refs(conn: Any, ids: list[str]) -> dict[str, ResolvedRef]:
         uniq.append(s)
 
     remaining = set(uniq)
-    for table, kind_expr, title_expr in _REF_TABLES:
+    for table, kind_expr, title_expr, source_expr in _REF_TABLES:
         if not remaining:
             break
         sql = (
-            f"SELECT id, ({kind_expr}) AS rk, ({title_expr}) AS rt "
-            f"FROM {table} WHERE id = ANY($1::uuid[])"
+            f"SELECT id, ({kind_expr}) AS rk, ({title_expr}) AS rt, "
+            f"({source_expr}) AS rs FROM {table} WHERE id = ANY($1::uuid[])"
         )
         try:
             rows = await conn.fetch(sql, list(remaining))
@@ -243,10 +268,12 @@ async def _resolve_refs(conn: Any, ids: list[str]) -> dict[str, ResolvedRef]:
         for row in rows:
             rid = str(row["id"])
             title = row["rt"]
+            source = row["rs"]
             out[rid] = ResolvedRef(
                 id=rid,
                 kind=str(row["rk"]),
                 title=str(title) if title is not None else None,
+                source_id=str(source) if source is not None else None,
             )
             remaining.discard(rid)
 

@@ -76,6 +76,7 @@ from typing import Any, Mapping, Optional
 from uuid import UUID
 
 from legba.data._entity_canon import identity_fold
+from ... import critic_fold
 from ...provenance.kinds import STRUCTURAL_VERIFY_EXEMPT_ANALYSTS
 from ...provenance.models import _SEVERITY_RANK, severity_from_tags
 
@@ -236,32 +237,31 @@ _WATCHES_SQL = """
 # The verified bar (P1-3 verified_finding), widened by the structural-exempt
 # branch (see module docstring). LEFT lateral — the structural branch needs
 # rows with no critique.
-_VERIFIED_WINDOW_SQL = """
+# H17 — SET-BASED: the window bounds the outer CTE, then ONE `DISTINCT ON` pass
+# over the critiques naming those ids. LEFT (not INNER) still, because the
+# structural branch needs rows with no critique.
+_VERIFIED_WINDOW_SQL = f"""
+    WITH f AS MATERIALIZED (
+        SELECT f.id, f.analyst_id, f.target_id, f.title, f.confidence,
+               f.severity, f.data -> 'tags' AS tags, f.produced_at
+          FROM analyst_outputs f
+         WHERE f.kind = 'finding'
+           AND f.superseded_by IS NULL
+           AND f.produced_at > now() - make_interval(hours => $1)
+    ), {critic_fold.faithfulness_score_cte()}
     SELECT f.id::text            AS finding_id,
            f.analyst_id          AS analyst_id,
            f.target_id           AS target_id,
            f.title               AS title,
            f.confidence          AS confidence,
            f.severity            AS severity,
-           f.data -> 'tags'      AS tags,
+           f.tags                AS tags,
            f.produced_at         AS produced_at,
            v.faithfulness_score  AS faithfulness_score,
            (f.analyst_id = ANY($2::text[])) AS structural_exempt
-      FROM analyst_outputs f
-      LEFT JOIN LATERAL (
-          SELECT (cr.data->>'overall_score')::real AS faithfulness_score
-            FROM analyst_outputs cr
-           WHERE cr.kind = 'critique'
-             AND cr.data->>'analyzed_output_id' = f.id::text
-             AND cr.data->>'overall_score' IS NOT NULL
-             AND cr.title LIKE 'Faithfulness verify%'
-           ORDER BY cr.produced_at DESC, cr.id DESC
-           LIMIT 1
-      ) v ON TRUE
-     WHERE f.kind = 'finding'
-       AND f.superseded_by IS NULL
-       AND f.produced_at > now() - make_interval(hours => $1)
-       AND (
+      FROM f
+      LEFT JOIN v ON v.fid = f.id::text
+     WHERE (
              (v.faithfulness_score IS NOT NULL
               AND LEAST(f.confidence, v.faithfulness_score) >= $3)
              OR f.analyst_id = ANY($2::text[])

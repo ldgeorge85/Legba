@@ -46,6 +46,15 @@ from pydantic import BaseModel, Field
 
 from ..situations.trajectory import read_trajectory
 from .api import RegistryAPIDeps, require_bearer
+# V3/P3 — the /api/v1/v3/situations LIST route the temporal acceptance proof
+# curls. The query itself lives in substrate_reads_api (the same slim
+# package): one helper, one WHERE clause, so the v1 and v3 surfaces can
+# never drift apart.
+from .substrate_reads_api import (
+    SituationState,
+    SituationsPage,
+    fetch_situations_page,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +154,29 @@ def build_situation_trajectory_router(deps: RegistryAPIDeps) -> APIRouter:
             # The newest row IS the state. Nothing is derived across rows.
             state=(events[0]["state_to"] if events else None),
             events=[_row(e) for e in events],
+        )
+
+    @router.get("/situations", response_model=SituationsPage)
+    async def list_situations_v3(
+        state: SituationState | None = Query(default=None),
+        target_id: str | None = Query(default=None),
+        since: datetime | None = Query(default=None),
+        # V3/P3 — the canonical as-of read: the frames that held on date D,
+        # including ones closed since. A malformed value 422s at the
+        # boundary, never defaults to now().
+        as_of: datetime | None = Query(default=None),
+        limit: int = Query(default=50),
+        cursor: str | None = Query(default=None),
+        _principal: str = Depends(require_bearer),
+        deps_: RegistryAPIDeps = Depends(_get_deps),
+    ) -> SituationsPage:
+        """The v3 situations list — the same page ``/api/v1/situations``
+        serves, reachable under the v3 prefix so the temporal acceptance
+        proof is a curl on this surface."""
+        return await fetch_situations_page(
+            deps_.descriptor_registry.pg,
+            state=state, target_id=target_id, since=since, as_of=as_of,
+            limit=limit, cursor=cursor,
         )
 
     return router

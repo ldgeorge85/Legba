@@ -1110,3 +1110,188 @@ async def test_full_arc_lens_clean_source_health_passes():
     result = await run_method([{"title": "seed"}], _lens_options(binding), deps)
     assert result.finding.entry_kind == "lens"
     assert "source_health_fabricated" not in result.finding.honesty_flags
+
+
+# ---------------------------------------------------------------------------
+# B1 (T1.2, JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09 §3 P4 / §6) — the
+# instrument-as-report honesty flag reaches a WRITTEN entry's honesty_flags,
+# the same way forced honesty flags (forecast_unproven/apparatus_lead) do.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_full_arc_flags_instrument_as_report_when_uncited_marker():
+    ref = uuid4()
+    binding = _FakeBinding(outputs={
+        "get_calibration": {
+            "available": True, "forecast_unproven": True, "calibration_thin": True,
+        },
+    })
+    scripted = [
+        '{"done": true}',                                        # GATHER round 1
+        f"Field notes: coercive pattern [[ref:{ref}]].",          # field-notes seam
+        "# A quiet pattern\n\nLegal-security reports trace a pattern of "
+        f"coercive police-civilian encounters [[ref:{ref}]].",     # narrate entry
+    ]
+    deps = InlineTargetDeps(
+        llm=_ScriptedLLM(scripted), system_prompt="PERSONA", max_rounds=1,
+        agency_binding=binding,
+    )
+    # The ONLY ref this fact span cites is a GDELT event-coded row (100%
+    # instrument share) and the entry never marks the sentence [[instrument]].
+    row = {
+        "id": str(ref), "source_id": "source.gdelt.files",
+        "title": "POLICE <-> GOVERNMENT: assault",
+    }
+    result = await run_method([row], _options(binding), deps)
+    payload = result.finding
+    assert "instrument_as_report" in payload.honesty_flags
+    # flag-never-strip: the citation and the prose both survive intact.
+    assert ref in payload.cited_substrate_refs
+    assert any("coercive police-civilian" in c.text_span for c in payload.claims)
+
+
+@pytest.mark.asyncio
+async def test_full_arc_no_instrument_flag_when_marker_present():
+    ref = uuid4()
+    binding = _FakeBinding(outputs={
+        "get_calibration": {
+            "available": True, "forecast_unproven": True, "calibration_thin": True,
+        },
+    })
+    scripted = [
+        '{"done": true}',
+        f"Field notes: coercive pattern [[ref:{ref}]].",
+        "# A quiet pattern\n\n[[instrument]] Legal-security reports trace a "
+        f"pattern of coercive police-civilian encounters [[ref:{ref}]].",
+    ]
+    deps = InlineTargetDeps(
+        llm=_ScriptedLLM(scripted), system_prompt="PERSONA", max_rounds=1,
+        agency_binding=binding,
+    )
+    row = {
+        "id": str(ref), "source_id": "source.gdelt.files",
+        "title": "POLICE <-> GOVERNMENT: assault",
+    }
+    result = await run_method([row], _options(binding), deps)
+    assert "instrument_as_report" not in result.finding.honesty_flags
+
+
+# ---------------------------------------------------------------------------
+# B2 (T1.4, JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09 §3 P6 / §6) — the
+# routine-as-signal honesty flag reaches a WRITTEN entry's honesty_flags.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_full_arc_flags_routine_as_signal_on_change_connective():
+    ref = uuid4()
+    binding = _FakeBinding(outputs={
+        "get_calibration": {
+            "available": True, "forecast_unproven": True, "calibration_thin": True,
+        },
+    })
+    scripted = [
+        '{"done": true}',
+        f"Field notes: heat advisory [[ref:{ref}]].",
+        "# A quiet week\n\nExtreme heat compounds the region's water stress "
+        f"this week [[ref:{ref}]].",
+    ]
+    deps = InlineTargetDeps(
+        llm=_ScriptedLLM(scripted), system_prompt="PERSONA", max_rounds=1,
+        agency_binding=binding,
+    )
+    row = {
+        "id": str(ref), "source_id": "source.nws.active_alerts",
+        "title": "Excessive Heat Warning",
+    }
+    result = await run_method([row], _options(binding), deps)
+    payload = result.finding
+    assert "routine_as_signal" in payload.honesty_flags
+    # flag-never-strip: the citation and the prose both survive intact.
+    assert ref in payload.cited_substrate_refs
+
+
+@pytest.mark.asyncio
+async def test_full_arc_no_routine_flag_without_change_connective():
+    ref = uuid4()
+    binding = _FakeBinding(outputs={
+        "get_calibration": {
+            "available": True, "forecast_unproven": True, "calibration_thin": True,
+        },
+    })
+    scripted = [
+        '{"done": true}',
+        f"Field notes: heat advisory [[ref:{ref}]].",
+        "# A quiet week\n\nThe weather service issued a heat advisory for "
+        f"the coming days [[ref:{ref}]].",
+    ]
+    deps = InlineTargetDeps(
+        llm=_ScriptedLLM(scripted), system_prompt="PERSONA", max_rounds=1,
+        agency_binding=binding,
+    )
+    row = {
+        "id": str(ref), "source_id": "source.nws.active_alerts",
+        "title": "Excessive Heat Warning",
+    }
+    result = await run_method([row], _options(binding), deps)
+    assert "routine_as_signal" not in result.finding.honesty_flags
+
+
+# ---------------------------------------------------------------------------
+# B5 (JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09 §6, the T1.3 reader lane's
+# live finding) — a hand-copied ref typo is repaired + flagged on a WRITTEN
+# entry, the ref-pair recorded in the entry's data column.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_full_arc_repairs_one_digit_ref_typo_and_flags_it():
+    good = uuid4()
+    last = str(good)[-1]
+    typo = str(good)[:-1] + ("0" if last != "0" else "1")
+    binding = _FakeBinding(outputs={
+        "get_calibration": {
+            "available": True, "forecast_unproven": True, "calibration_thin": True,
+        },
+    })
+    scripted = [
+        '{"done": true}',
+        f"Field notes: coercive pattern [[ref:{typo}]].",
+        "# A quiet pattern\n\nLegal-security reports trace a pattern of "
+        f"coercive police-civilian encounters [[ref:{typo}]].",
+    ]
+    deps = InlineTargetDeps(
+        llm=_ScriptedLLM(scripted), system_prompt="PERSONA", max_rounds=1,
+        agency_binding=binding,
+    )
+    row = {"id": str(good), "source_id": "source.reuters.rss", "title": "x"}
+    result = await run_method([row], _options(binding), deps)
+    payload = result.finding
+    assert "ref_repaired" in payload.honesty_flags
+    # flag-never-strip: the citation survives, repaired to the real id.
+    assert good in payload.cited_substrate_refs
+    assert payload.data.get("ref_repairs") == [{"from": typo, "to": str(good)}]
+
+
+@pytest.mark.asyncio
+async def test_full_arc_no_ref_repair_flag_when_ref_already_matches():
+    ref = uuid4()
+    binding = _FakeBinding(outputs={
+        "get_calibration": {
+            "available": True, "forecast_unproven": True, "calibration_thin": True,
+        },
+    })
+    scripted = [
+        '{"done": true}',
+        f"Field notes: pattern [[ref:{ref}]].",
+        f"# A quiet pattern\n\nA pattern of encounters [[ref:{ref}]].",
+    ]
+    deps = InlineTargetDeps(
+        llm=_ScriptedLLM(scripted), system_prompt="PERSONA", max_rounds=1,
+        agency_binding=binding,
+    )
+    row = {"id": str(ref), "source_id": "source.reuters.rss", "title": "x"}
+    result = await run_method([row], _options(binding), deps)
+    assert "ref_repaired" not in result.finding.honesty_flags
+    assert "ref_repairs" not in result.finding.data

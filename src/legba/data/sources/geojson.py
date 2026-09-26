@@ -39,6 +39,16 @@ Failure semantics (L-102 §7), mirroring the RSS handler:
     ``degraded``.
   * 4xx (other than 304) → no retry, yield nothing; health is ``unhealthy``.
   * HTTP 304 → empty iterator, health ``healthy`` (not modified).
+  * HTTP 200 whose every feature is BYTE-IDENTICAL to its last-seen content
+    (2026-09-07 fix — see ``_GEOJSON_FEATURE_CURSOR_KEY``) → empty iterator,
+    health ``healthy``, ``detail.newest_entry_ts`` still stamped from the
+    document's own update markers. Nothing is yielded, so the source
+    actor's poll-outcome row settles to ``outcome='empty'`` (not a
+    reserve_unchanged-flavoured ``'success'``) — the liveness watchdog's
+    honest-quiet cadence exemption requires exactly that.
+  * After ``_MAX_CONSECUTIVE_EMPTY`` straight empty polls (304s and/or
+    all-unchanged 200s) → one forced unconditional refetch with the
+    per-feature cursor cleared, logged, then normal operation resumes.
 
 This module never imports from ``legba.data.runtime`` — it depends only on the
 structural-typing surface in ``_contract.py`` plus ``httpx`` (a hard dep).
@@ -50,7 +60,7 @@ import asyncio
 import hashlib
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator, ClassVar
 
 import httpx
@@ -79,6 +89,70 @@ _GEOJSON_CURSOR_KEY = "geojson_cursor"
 _GEOJSON_HEALTH_KEY = "geojson_health"
 _DEFAULT_RETRIES_FOR_TRANSIENT = 1
 _TRANSIENT_STATUS = {502, 503, 504}
+
+# ---------------------------------------------------------------------------
+# 2026-09-07 fix (nasa.eonet_events landed zero for 2 days while every poll
+# recorded `outcome=success`) — see the module docstring's "Failure
+# semantics" for the full mechanism. Two additions, both mirroring the
+# equivalent RSS-handler machinery (`legba.data.sources.rss`) so the two
+# conditional-GET-shaped handlers stay in step:
+# ---------------------------------------------------------------------------
+
+#: Per-FEATURE change cursor (id -> a signature of its last-seen content),
+#: separate from the HTTP ETag/Last-Modified cursor above. A GeoJSON document
+#: fetch is a full re-GET of the CURRENT state, not an incremental log (there
+#: is no per-request "since" support in the RFC) — so on every 200 the
+#: handler re-parses features it has already seen. Upstream feeds with no
+#: ETag/Last-Modified at all (confirmed live for NASA EONET: `curl -I` on
+#: 2026-09-07 shows neither header — `Cache-Control: no-cache, private`) get
+#: ZERO benefit from the HTTP cursor above; every poll is an unconditional
+#: 200 fetch of the same handful of still-open events. Re-yielding an
+#: UNCHANGED feature every poll relies entirely on the downstream S-4
+#: intra-source content-hash collapse (`source_actor.write_canonical_signal`)
+#: to avoid a duplicate row — which it does correctly — but S-4 marks that
+#: collapse `outcome='success'` (`reserve_unchanged` > 0), a classification
+#: chosen so a healthy hazard feed re-serving active events doesn't trip the
+#: OLDER empty-streak stall check. It has a side effect: the liveness
+#: watchdog's per-source CADENCE check (`_source_stall_is_honest_quiet`)
+#: exempts a stale source ONLY when its latest poll outcome is exactly
+#: `'empty'` — a `'success'` (even a zero-write, reserve_unchanged-only one)
+#: never qualifies, so a source stuck re-serving the same unchanged features
+#: pages `source_stall` the moment its `last_signal` staleness crosses the
+#: cadence threshold, with no honest-quiet exemption possible. Tracking
+#: "have I already yielded THIS exact feature content" here, and skipping
+#: the yield when unchanged, means an all-unchanged poll now correctly
+#: settles to `outcome='empty'` (nothing was even offered to S-4) — letting
+#: the existing honest-quiet discriminator (which this fix also feeds via
+#: `newest_entry_ts`, below) do its job.
+_GEOJSON_FEATURE_CURSOR_KEY = "geojson_feature_cursor"
+
+#: Feature-property keys probed (in order) for a per-feature "this changed"
+#: marker. EONET's `date` is the concrete motivating case (bumped on every
+#: material update to an open event — new IRWIN detection, updated
+#: perimeter/magnitude); the rest are common conventions across other GIS
+#: feeds. Falls back to a whole-feature content hash when none is present
+#: (`_feature_signature`), so a feed with no freshness marker at all still
+#: gets correct (if coarser) unchanged-detection.
+_UPDATE_MARKER_KEYS: tuple[str, ...] = (
+    "date", "updated", "updated_at", "modified", "last_update", "pubDate",
+)
+
+#: A feed-provided marker further in the future than this skew is junk (the
+#: RSS handler's B0-11 year-typo class) and must not poison the
+#: newest-observed-entry evidence below.
+_NEWEST_ENTRY_MAX_FUTURE_SKEW = timedelta(hours=26)
+
+#: Stale-cursor safety valve (mirrors the RSS handler's
+#: `_MAX_CONSECUTIVE_304` stale-edge guard, generalised to cover BOTH cursor
+#: layers above). After this many CONSECUTIVE polls that yielded zero
+#: signals (a 304, or a 200 whose every feature matched its stored
+#: per-feature signature), the next poll drops the conditional-GET headers
+#: AND clears the per-feature cursor for one unconditional re-baseline, so a
+#: pinned ETag/Last-Modified *or* a stuck per-feature comparator can never
+#: mute a feed forever. Conditional-GET / the per-feature skip are otherwise
+#: kept (load-bearing — they're what makes `outcome='empty'` observable at
+#: all); the forced refetch is the rare exception.
+_MAX_CONSECUTIVE_EMPTY = 12
 
 #: RFC 7946 top-level GeoJSON object types.
 _GEOJSON_GEOMETRY_TYPES: frozenset[str] = frozenset({
@@ -208,10 +282,27 @@ class GeoJSONSourceHandler:
         downstream dedupe absorb re-pulls of an unchanged document.
 
         State:
-          ``ctx.state_store[_GEOJSON_CURSOR_KEY] = {"etag", "last_modified"}``
+          ``ctx.state_store[_GEOJSON_CURSOR_KEY] =
+            {"etag", "last_modified", "consecutive_empty"}``
+          ``ctx.state_store[_GEOJSON_FEATURE_CURSOR_KEY] =
+            {"features": {external_id: signature}}``
         """
         cursor = await self._load_cursor(ctx)
-        headers = self._build_conditional_headers(cursor)
+        consecutive_empty = _coerce_int(cursor.get("consecutive_empty"))
+        # Stale-cursor safety valve (see _MAX_CONSECUTIVE_EMPTY docstring):
+        # after N straight empty polls, force ONE unconditional refetch and
+        # ignore the per-feature cursor for this pull only.
+        force_unconditional = consecutive_empty >= _MAX_CONSECUTIVE_EMPTY
+        if force_unconditional:
+            headers: dict[str, str] = {}
+            ctx.logger.info(
+                "geojson.cursor.force_refetch url=%s consecutive_empty=%d "
+                "(stale-cursor safety valve — dropping conditional headers "
+                "and the per-feature comparator baseline for one pull)",
+                self._config.url, consecutive_empty,
+            )
+        else:
+            headers = self._build_conditional_headers(cursor)
 
         response = await self._fetch_with_retry(headers=headers, ctx=ctx)
         if response is None:
@@ -219,11 +310,30 @@ class GeoJSONSourceHandler:
             return
 
         if response.status_code == 304:
+            next_empty = 0 if force_unconditional else consecutive_empty + 1
+            await ctx.state_store.set(
+                _GEOJSON_CURSOR_KEY,
+                {
+                    "etag": str(cursor.get("etag") or ""),
+                    "last_modified": str(cursor.get("last_modified") or ""),
+                    "consecutive_empty": next_empty,
+                },
+            )
+            # A 304 means the document is unchanged, so the previous poll's
+            # newest-entry observation still holds — carry it forward (same
+            # contract as the RSS handler) so an honest-quiet 304 streak
+            # stays classifiable instead of degrading to "no evidence".
+            previous = await ctx.state_store.get(_GEOJSON_HEALTH_KEY) or {}
+            prev_newest = (previous.get("detail") or {}).get("newest_entry_ts")
             await self._record_health(
                 ctx,
                 state="healthy",
                 last_success_at=datetime.now(tz=timezone.utc),
-                detail={"status": 304, "note": "not modified"},
+                detail={
+                    "status": 304,
+                    "note": "not modified",
+                    "newest_entry_ts": prev_newest,
+                },
             )
             return
 
@@ -246,8 +356,37 @@ class GeoJSONSourceHandler:
             )
             return
 
+        # B0-12-style evidence (mirrors the RSS handler): the newest update
+        # marker OBSERVED across every parsed feature, BEFORE the
+        # per-feature unchanged filter below. This is what lets the liveness
+        # watchdog's honest-quiet discriminator tell "the feed genuinely has
+        # nothing newer than what we hold" apart from "the feed has newer
+        # content and something is silently eating it" — the exact
+        # distinction geojson sources had NO evidence for before this fix
+        # (`newest_entry_ts` was always NULL).
+        newest_entry_ts = _newest_entry_ts(features)
+
+        prior_feature_cursor: dict[str, str] = (
+            {} if force_unconditional else await self._load_feature_cursor(ctx)
+        )
+        new_feature_cursor: dict[str, str] = {}
+
         emitted = 0
         for feature in features:
+            if not isinstance(feature, dict):
+                continue
+            properties = feature.get("properties")
+            if not isinstance(properties, dict):
+                properties = {}
+            external_id = self._feature_external_id(feature, properties)
+            signature = _feature_signature(feature, properties)
+            new_feature_cursor[external_id] = signature
+            if prior_feature_cursor.get(external_id) == signature:
+                # Byte-identical to what we already yielded last poll — the
+                # per-feature equivalent of a 304. Skip without yielding so
+                # S-4 intra-source dedupe never sees it and this poll can
+                # settle to 'empty' rather than a masking 'success'.
+                continue
             if emitted >= self._config.max_features:
                 ctx.logger.warning(
                     "geojson.pull.max_features url=%s cap=%d — truncating",
@@ -260,9 +399,21 @@ class GeoJSONSourceHandler:
             emitted += 1
             yield signal
 
+        # The per-feature cursor SELF-PRUNES: only ids seen in THIS poll's
+        # document are retained, so a closed/retired event that drops out of
+        # the upstream window (e.g. EONET's rolling `days=N`) doesn't linger
+        # in state forever.
+        await ctx.state_store.set(
+            _GEOJSON_FEATURE_CURSOR_KEY, {"features": new_feature_cursor},
+        )
+
+        next_empty = (
+            0 if (emitted > 0 or force_unconditional) else consecutive_empty + 1
+        )
         new_cursor = {
             "etag": response.headers.get("etag", "") or "",
             "last_modified": response.headers.get("last-modified", "") or "",
+            "consecutive_empty": next_empty,
         }
         await ctx.state_store.set(_GEOJSON_CURSOR_KEY, new_cursor)
         await self._record_health(
@@ -272,7 +423,13 @@ class GeoJSONSourceHandler:
             detail={
                 "status": response.status_code,
                 "features_yielded": emitted,
+                "features_seen": len(features),
                 "etag": new_cursor["etag"],
+                "newest_entry_ts": (
+                    newest_entry_ts.isoformat()
+                    if newest_entry_ts is not None
+                    else None
+                ),
             },
         )
 
@@ -365,13 +522,32 @@ class GeoJSONSourceHandler:
         merged.setdefault("User-Agent", self._config.user_agent)
         return merged
 
-    async def _load_cursor(self, ctx: SourceContext) -> dict[str, str]:
+    async def _load_cursor(self, ctx: SourceContext) -> dict[str, Any]:
         raw = await ctx.state_store.get(_GEOJSON_CURSOR_KEY)
         if not isinstance(raw, dict):
             return {}
         return {
             "etag": str(raw.get("etag") or ""),
             "last_modified": str(raw.get("last_modified") or ""),
+            "consecutive_empty": _coerce_int(raw.get("consecutive_empty")),
+        }
+
+    async def _load_feature_cursor(self, ctx: SourceContext) -> dict[str, str]:
+        """The per-feature signature cursor from the last poll (2026-09-07 fix).
+
+        Defensive: tolerates a missing / malformed record (→ ``{}``, meaning
+        every feature this poll is treated as never-before-seen — the safe
+        default, since it can only ever cause a redundant yield that
+        downstream S-4/ingest dedupe collapses, never a dropped one).
+        """
+        raw = await ctx.state_store.get(_GEOJSON_FEATURE_CURSOR_KEY)
+        if not isinstance(raw, dict):
+            return {}
+        features = raw.get("features")
+        if not isinstance(features, dict):
+            return {}
+        return {
+            str(k): str(v) for k, v in features.items() if isinstance(v, str)
         }
 
     @staticmethod
@@ -669,6 +845,98 @@ def _extract_prose(properties: dict[str, Any]) -> str:
             if stripped:
                 parts.append(stripped)
     return "\n\n".join(parts)
+
+
+def _feature_signature(feature: dict[str, Any], properties: dict[str, Any]) -> str:
+    """A short, stable "has this feature changed since last poll" signature.
+
+    Prefers an explicit update-marker property (:data:`_UPDATE_MARKER_KEYS` —
+    EONET's `date` is the concrete case) so a feature reads as CHANGED the
+    moment its marker advances, without hashing the (possibly large) full
+    geometry every poll. Falls back to a content hash of the feature
+    (geometry + properties) when no marker property is present, so a feed
+    with no freshness marker at all still gets correct — just coarser,
+    whole-feature-granularity — unchanged detection. Equality (not ordering)
+    is the comparison this drives: any change in the marker/hash, including a
+    correction that moves it "backwards", counts as a real update worth
+    re-evaluating; that also sidesteps needing robust cross-format date
+    parsing just to detect "did anything change".
+    """
+    marker = _first_str(properties, _UPDATE_MARKER_KEYS)
+    if marker:
+        return f"marker:{marker}"
+    digest = hashlib.sha256(
+        json.dumps(
+            {"geometry": feature.get("geometry"), "properties": properties},
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return f"hash:{digest}"
+
+
+def _parse_marker_datetime(value: str) -> datetime | None:
+    """Parse an ISO-8601-ish update-marker value; ``None`` on anything else.
+
+    GeoJSON feeds are not consistent about offset notation — normalise a
+    trailing ``Z`` (not accepted by ``datetime.fromisoformat`` on some
+    supported Python versions) and treat a naive result as UTC.
+    """
+    if not value:
+        return None
+    text = value.strip()
+    if text.endswith("Z") or text.endswith("z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _newest_entry_ts(features: list[dict[str, Any]]) -> datetime | None:
+    """The newest update-marker timestamp OBSERVED across ALL parsed
+    features this poll (2026-09-07 fix, mirrors the RSS handler's B0-12
+    evidence) — computed over every feature regardless of the per-feature
+    unchanged filter or the ``max_features`` cap, because the whole point is
+    to have evidence survive even when everything downstream is filtered or
+    truncated. Future-skewed junk markers are excluded so one bad date can't
+    poison the observation. ``None`` when no feature carries a parseable,
+    sanely-dated marker (e.g. USGS, whose properties carry no such key at
+    all) — the watchdog's pre-existing no-evidence behavior.
+    """
+    newest: datetime | None = None
+    skew_ceiling = datetime.now(tz=timezone.utc) + _NEWEST_ENTRY_MAX_FUTURE_SKEW
+    for feature in features:
+        if not isinstance(feature, dict):
+            continue
+        properties = feature.get("properties")
+        if not isinstance(properties, dict):
+            continue
+        marker = _first_str(properties, _UPDATE_MARKER_KEYS)
+        if not marker:
+            continue
+        parsed = _parse_marker_datetime(marker)
+        if parsed is None or parsed > skew_ceiling:
+            continue
+        if newest is None or parsed > newest:
+            newest = parsed
+    return newest
+
+
+def _coerce_int(val: Any) -> int:
+    """Coerce a (possibly stringified / absent) counter to a non-negative int.
+
+    State-store backends may round-trip the consecutive-empty counter
+    through JSON; tolerate ints, numeric strings, and missing/garbage values
+    (-> 0). Mirrors the RSS handler's identical helper.
+    """
+    try:
+        n = int(val)
+    except (TypeError, ValueError):
+        return 0
+    return n if n > 0 else 0
 
 
 def _country_from_geometry(geometry: Any) -> str | None:

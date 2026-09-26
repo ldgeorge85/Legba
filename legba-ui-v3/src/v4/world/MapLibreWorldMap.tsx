@@ -37,6 +37,8 @@ import { useMapResize } from '@/lib/useMapResize'
 import { resolveBasemapStyle, WORLD_GEOJSON_PATH } from '@/lib/basemap'
 import { COUNTRY_BY_ISO2, resolveCountry } from '@/lib/countryGeo'
 import { useSelection, selectRow } from '@/state/selection'
+import { useScope } from '@/state/scope'
+import { iso2FromTargetId } from '@/lib/deskNames'
 import { densityPoints, coMentionArcs } from '@/lib/mapLayers'
 import {
   circleRing,
@@ -45,12 +47,12 @@ import {
   WATCH_RADIUS_OPTIONS,
   type WatchLocation,
 } from '@/lib/watchLocations'
-import { useWorldSignals, useWorldFindings, useWorldSituations } from './mapData'
+import { useWorldSignals, useWorldFindings, useWorldSituations, useWorldEvents } from './mapData'
 import { useWorldState } from './worldState'
 import { useCountryVerdicts, CONFIDENCE_FILL, CHOROPLETH_LEGEND } from './countryVerdicts'
 import { useConvergenceMarkers } from './convergenceData'
 import { useWatchState } from './watchState'
-import { SEVERITY_COLOR, SITUATION_COLOR, type Severity, type WorldFinding } from './types'
+import { SEVERITY_COLOR, SITUATION_COLOR, eventLifecycleColor, type Severity, type WorldFinding } from './types'
 
 const SEVERITY_RANK: Record<Severity, number> = { critical: 4, high: 3, medium: 2, low: 1, info: 0 }
 const LAND_UNASSESSED = 'rgba(0,0,0,0)' // choropleth fallback — let basemap land show
@@ -67,6 +69,7 @@ const SRC_COUNTRIES = 'legba-countries'
 const SRC_SIGNALS = 'legba-signals'
 const SRC_FINDINGS = 'legba-findings'
 const SRC_SITUATIONS = 'legba-situations'
+const SRC_EVENTS = 'legba-events'
 const SRC_CONVERGENCE = 'legba-convergence'
 const SRC_WATCH = 'legba-watch'
 const SRC_WATCH_RING = 'legba-watch-ring'
@@ -78,6 +81,7 @@ const L_WATCH_HALO = 'legba-watch-halo'
 const L_SIGNALS = 'legba-signal-clusters'
 const L_FINDINGS = 'legba-finding-circles'
 const L_SITUATIONS = 'legba-situation-circles'
+const L_EVENTS = 'legba-event-rings'
 const L_CONVERGENCE_GLOW = 'legba-convergence-glow'
 const L_CONVERGENCE = 'legba-convergence-ring'
 const L_WATCH = 'legba-watch-points'
@@ -117,6 +121,7 @@ export default function MapLibreWorldMap() {
   const { signals } = useWorldSignals()
   const { findings } = useWorldFindings()
   const { situations } = useWorldSituations()
+  const { events } = useWorldEvents()
   const { verdicts } = useCountryVerdicts()
   const { markers: convergence } = useConvergenceMarkers()
 
@@ -129,6 +134,13 @@ export default function MapLibreWorldMap() {
   const openDrawer = useWorldState((s) => s.openDrawer)
   const readScope = useWorldState((s) => s.readScope)
   const select = useSelection((s) => s.select)
+  // THE CAMERA FOLLOWS THE SELECTION (design §3.1). Before this the map imported
+  // only `s.select` — it WROTE the shared selection and never read it, so v2's
+  // "the map flies to the selected entity" had no implementation anywhere in the
+  // tree. `useScope` supplies the desk set the camera falls back to when the
+  // focus is a record the map does not itself carry.
+  const selection = useSelection((s) => s.selection)
+  const wallScope = useScope((s) => s.scope)
 
   // Watch-locations (P4-3 feature 5).
   const watches = useWatchState((s) => s.watches)
@@ -194,6 +206,19 @@ export default function MapLibreWorldMap() {
       ),
     [situations, windowStartMs, windowEndMs, filters.country],
   )
+  // V3/P6 — bounded occurrences (geo_lat/geo_lon only — an un-geocoded event
+  // never reaches this list, per mapData's no-centroid-fallback rule).
+  const winEvents = useMemo(
+    () =>
+      events.filter(
+        (e) =>
+          e.ts >= windowStartMs &&
+          e.ts <= windowEndMs &&
+          SEVERITY_RANK[e.severity] >= minRank &&
+          (filters.country == null || e.countries.includes(filters.country)),
+      ),
+    [events, windowStartMs, windowEndMs, minRank, filters.country],
+  )
 
   // Per-country windowed activity — drives the choropleth "top movers" hover.
   const findingsByCountry = useMemo(() => {
@@ -234,12 +259,14 @@ export default function MapLibreWorldMap() {
     }
     for (const f of findings) for (const c of f.countries) countries.add(c)
     for (const s of situations) for (const c of s.countries) countries.add(c)
+    for (const e of events) for (const c of e.countries) countries.add(c)
     setFilterOptions({ sources: [...sources].sort(), countries: [...countries].sort() })
-  }, [signals, findings, situations, windowStartMs, windowEndMs, minRank, setFilterOptions])
+  }, [signals, findings, situations, events, windowStartMs, windowEndMs, minRank, setFilterOptions])
 
   useEffect(() => setCount('signals', winSignals.length), [winSignals.length, setCount])
   useEffect(() => setCount('findings', winFindings.length), [winFindings.length, setCount])
   useEffect(() => setCount('situations', winSituations.length), [winSituations.length, setCount])
+  useEffect(() => setCount('events', winEvents.length), [winEvents.length, setCount])
 
   // Aggregate signals to per-coordinate clusters (same keying as Leaflet), plus
   // a `near` flag for the watch-proximity halo.
@@ -305,6 +332,23 @@ export default function MapLibreWorldMap() {
       })),
     }),
     [winSituations],
+  )
+
+  const eventFC = useMemo<FC>(
+    () => ({
+      type: 'FeatureCollection',
+      features: winEvents.map((e) => ({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [e.lon, e.lat] },
+        properties: {
+          id: e.id,
+          title: e.title,
+          lifecycle: e.lifecycle,
+          color: eventLifecycleColor(e.lifecycle),
+        },
+      })),
+    }),
+    [winEvents],
   )
 
   const convergenceFC = useMemo<FC>(
@@ -419,6 +463,7 @@ export default function MapLibreWorldMap() {
         map.addSource(SRC_SIGNALS, { type: 'geojson', data: empty })
         map.addSource(SRC_FINDINGS, { type: 'geojson', data: empty })
         map.addSource(SRC_SITUATIONS, { type: 'geojson', data: empty })
+        map.addSource(SRC_EVENTS, { type: 'geojson', data: empty })
         map.addSource(SRC_CONVERGENCE, { type: 'geojson', data: empty })
         map.addSource(SRC_WATCH, { type: 'geojson', data: empty })
         map.addSource(SRC_WATCH_RING, {
@@ -520,6 +565,22 @@ export default function MapLibreWorldMap() {
             'circle-stroke-color': '#0a0c10',
           },
         })
+        // V3/P6 — events: a hollow ring colored by the lifecycle-state badge
+        // (distinct from the solid signal/finding/situation circles — an
+        // occurrence is a marker of what happened, not a standing frame).
+        map.addLayer({
+          id: L_EVENTS,
+          type: 'circle',
+          source: SRC_EVENTS,
+          paint: {
+            'circle-radius': 8,
+            'circle-color': ['get', 'color'],
+            'circle-opacity': 0.15,
+            'circle-stroke-width': 2.5,
+            'circle-stroke-color': ['get', 'color'],
+            'circle-stroke-opacity': 0.95,
+          },
+        })
         // Geo-convergence markers (feature 4) — a bright hollow ring + glow.
         map.addLayer({
           id: L_CONVERGENCE_GLOW,
@@ -578,6 +639,14 @@ export default function MapLibreWorldMap() {
           openDrawer({ title: String(p.title ?? 'situation'), signals: [], findings: [] })
           select({ kind: 'situation', id: String(p.id), label: String(p.title ?? '') })
         })
+        // V3/P6 — event ring click → drawer + selection (kind 'event').
+        map.on('click', L_EVENTS, (e) => {
+          if (placingRef.current) return
+          const p = e.features?.[0]?.properties
+          if (!p) return
+          openDrawer({ title: String(p.title ?? 'event'), signals: [], findings: [] })
+          select({ kind: 'event', id: String(p.id), label: String(p.title ?? '') })
+        })
         // Convergence marker click → open the alert in the Inspector.
         map.on('click', L_CONVERGENCE, (e) => {
           if (placingRef.current) return
@@ -597,7 +666,7 @@ export default function MapLibreWorldMap() {
           selectRow('target', cv.targetId, countryLabel(iso2), { origin: 'world-map-choropleth' })
         })
 
-        for (const id of [L_FINDINGS, L_SITUATIONS, L_SIGNALS, L_CONVERGENCE, L_WATCH, L_CHORO_FILL]) {
+        for (const id of [L_FINDINGS, L_SITUATIONS, L_EVENTS, L_SIGNALS, L_CONVERGENCE, L_WATCH, L_CHORO_FILL]) {
           map.on('mouseenter', id, () => (map.getCanvas().style.cursor = 'pointer'))
           map.on('mouseleave', id, () => {
             map.getCanvas().style.cursor = ''
@@ -672,9 +741,54 @@ export default function MapLibreWorldMap() {
   useEffect(() => setData(SRC_SIGNALS, signalFC), [signalFC, styleReady])
   useEffect(() => setData(SRC_FINDINGS, findingFC), [findingFC, styleReady])
   useEffect(() => setData(SRC_SITUATIONS, situationFC), [situationFC, styleReady])
+  useEffect(() => setData(SRC_EVENTS, eventFC), [eventFC, styleReady])
   useEffect(() => setData(SRC_CONVERGENCE, convergenceFC), [convergenceFC, styleReady])
   useEffect(() => setData(SRC_WATCH, watchFC), [watchFC, styleReady])
   useEffect(() => setData(SRC_WATCH_RING, watchRingFC), [watchRingFC, styleReady])
+
+  /**
+   * Fly to whatever is selected.
+   *
+   * Resolution order, cheapest first: a record the map already holds (signal /
+   * finding / situation, which carry their own lat/lon), then a desk — via the
+   * verdict roster's `target_id → ISO2` mapping and `countryGeo`'s coarse
+   * centroid — then the scope's single desk. Nothing resolvable ⇒ the camera
+   * does not move, which is the honest outcome: a map that jumps to (0,0)
+   * because it could not place a record is worse than one that stays put.
+   */
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !loadedRef.current || !selection) return
+    let dest: [number, number] | null = null
+    if (selection.kind === 'signal' || selection.kind === 'finding' || selection.kind === 'situation') {
+      const hit =
+        winSignals.find((x) => x.id === selection.id) ??
+        winFindings.find((x) => x.id === selection.id) ??
+        winSituations.find((x) => x.id === selection.id)
+      if (hit && hit.lat != null && hit.lon != null) dest = [hit.lon, hit.lat]
+    }
+    if (!dest) {
+      const targetId =
+        selection.kind === 'target'
+          ? selection.id
+          : (wallScope?.members.targetIds.length === 1
+              ? wallScope.members.targetIds[0]
+              : null)
+      if (targetId) {
+        const v = [...verdicts.values()].find((x) => x.targetId === targetId)
+        const iso2 = v?.iso2 ?? iso2FromTargetId(targetId)
+        const fix = iso2 ? COUNTRY_BY_ISO2[iso2] : undefined
+        if (fix) dest = [fix.lon, fix.lat]
+      }
+    }
+    if (!dest) return
+    try {
+      map.flyTo({ center: dest, zoom: Math.max(map.getZoom(), 3.5), duration: 700 })
+    } catch {
+      // A camera move is a convenience; a renderer that refuses one must never
+      // take the panel down with it.
+    }
+  }, [selection, wallScope, winSignals, winFindings, winSituations, verdicts, styleReady])
 
   // Choropleth colour.
   useEffect(() => {
@@ -700,13 +814,14 @@ export default function MapLibreWorldMap() {
     vis(L_WATCH_HALO, layers.signals && showWatch && watches.length > 0)
     vis(L_FINDINGS, layers.findings)
     vis(L_SITUATIONS, layers.situations)
+    vis(L_EVENTS, layers.events)
     vis(L_CONVERGENCE, showConvergence)
     vis(L_CONVERGENCE_GLOW, showConvergence)
     vis(L_WATCH, showWatch)
     vis(L_WATCH_RING, showWatch)
   }, [
     choropleth, density, layers.signals, layers.findings, layers.situations,
-    showConvergence, showWatch, watches.length, styleReady,
+    layers.events, showConvergence, showWatch, watches.length, styleReady,
   ])
 
   // --- deck.gl overlay (lazy) ------------------------------------------------

@@ -66,9 +66,9 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     max_tokens: 1024           # a small JSON list of competing theses per topic
-    temperature: 0.2
+    temperature: 1.0
     max_topics: 12             # hard per-run cap on focal topics (budget bound)
-  budget_tokens_per_day: 1000000
+  budget_tokens_per_day: 0
   retry:
     budget:
       strategy: pause_until_next_window

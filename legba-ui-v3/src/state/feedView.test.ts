@@ -41,21 +41,21 @@ describe('feed view store', () => {
     expect(chipValue(useFeedView.getState().filter.chips, 'severity')).toBe('')
   })
 
-  it('seedDeskFilter writes an ORDINARY target chip the operator can clear', () => {
-    useFeedView.getState().seedDeskFilter('country_g20_br')
+  // `seedDeskFilter` is GONE (WORKSTATION_V2_FLOW_DESIGN §3). A desk no longer
+  // reaches into the feed's own posture store to smuggle itself in as a filter;
+  // it sets SCOPE (`state/scope.ts`), which the feed merges into its server
+  // params and renders as a removable pinned chip. What this store still owes
+  // is the property the seeded chip was invented to give: a target set here by
+  // hand is an ORDINARY chip the operator can clear.
+  it('a hand-set target is an ORDINARY chip the operator can clear', () => {
+    useFeedView.getState().setFacet('target', 'country_g20_br')
     expect(useFeedView.getState().query).toBe('target:country_g20_br')
-    // Nothing marks it as "seeded" — clearing it works exactly like any chip.
     useFeedView.getState().setFacet('target', '')
     expect(useFeedView.getState().filter.chips).toEqual([])
   })
 
-  it('seedDeskFilter ignores a blank target rather than writing an empty chip', () => {
-    useFeedView.getState().seedDeskFilter('   ')
-    expect(useFeedView.getState().filter.chips).toEqual([])
-  })
-
-  it('a manual facet set after a seed WINS (the seed is not sticky)', () => {
-    useFeedView.getState().seedDeskFilter('country_g20_br')
+  it('a later facet set replaces the earlier one', () => {
+    useFeedView.getState().setFacet('target', 'country_g20_br')
     useFeedView.getState().setFacet('target', 'country_watch_ir')
     expect(chipValue(useFeedView.getState().filter.chips, 'target')).toBe('country_watch_ir')
   })

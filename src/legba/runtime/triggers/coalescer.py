@@ -31,8 +31,9 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
+from ...data.provenance.origin import LIVE_CLASSES
 from .dispatch import AnalystTriggerRunner, TriggerFire, TriggerRunResult
 from .policy import (
     TriggerAccumulator,
@@ -44,6 +45,22 @@ from .policy import (
 from .state import TriggerStateStore
 
 logger = logging.getLogger(__name__)
+
+
+def is_live_origin(row: Mapping[str, Any]) -> bool:
+    """Is this signal row part of the LIVE present?
+
+    P7/7g-1 (SEAMS #57 sweep). ``origin_class`` is the closed vocabulary from
+    :mod:`legba.data.provenance.origin`; a row that carries none is treated as
+    live, because every writer that predates the column wrote the present and
+    the column's own default is ``'live'``. An UNKNOWN class is NOT live —
+    fail-closed, so a vocabulary that grows cannot silently widen the trigger
+    plane's ingress.
+    """
+    raw = row.get("origin_class")
+    if raw is None:
+        return True
+    return str(raw) in LIVE_CLASSES
 
 
 def _utcnow() -> datetime:
@@ -141,6 +158,21 @@ class Coalescer:
         survives reads it back).
         """
         now = now or _utcnow()
+        if not is_live_origin(signal_row):
+            # P7/7g-1 — THE ROW-LEVEL FIREWALL (SEAMS #57 sweep;
+            # `reactive_triggers` in the collection firewall's excluded_from).
+            # Everything else in this class is about WHEN a pair has seen
+            # enough to be worth waking; this is about WHETHER the row is part
+            # of the present at all. A ten-year holding delivered here would
+            # trip every accumulation gate in the fleet at once — the single
+            # largest wake event in the platform's life, caused by an operator
+            # loading history. The row is dropped before it is counted, so it
+            # cannot reach the accumulator either; the caller acks as usual.
+            logger.debug(
+                "trigger.dirty.non_live_origin analyst=%s target=%s class=%s",
+                analyst_id, target_id, signal_row.get("origin_class"),
+            )
+            return None
         policy = self._policy_for(analyst_id, target_id)
         canon = canonical_id_of(signal_row)
         sev = severity_of(signal_row)

@@ -45,7 +45,7 @@ mapping:
 
 method:
   kind: dspy_compile
-  budget_tokens_per_day: 2000000
+  budget_tokens_per_day: 0
 
 cadence:
   # ── P0-T6 SEQUENCED FREEZE (SUBTRACT) ──────────────────────────

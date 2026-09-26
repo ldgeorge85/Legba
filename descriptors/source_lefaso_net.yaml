@@ -1,0 +1,123 @@
+# Sahel coverage pass — Burkina Faso desk (country_watch_bf) — 2026-09-07.
+# Ships DRAFT.
+#
+# See source_aib_burkina.yaml's header for the full WHY-THIS-BATCH-EXISTS note.
+# This descriptor is LeFaso.net's — the batch's HIGH-VOLUME independent
+# domestic lane for Burkina Faso (the ActuNiger-equivalent slot).
+#
+# LeFaso.net — Ouagadougou-based independent online daily, one of the two or
+# three most-read Burkina Faso news sites; SPIP CMS (like abamako.com), so it
+# exposes a native RSS "backend" feed through SPIP's own `page=backend`
+# convention (the same mechanism, different CMS, as ActuNiger's Joomla
+# `component/joomrss`).
+#
+# SECTION FEED TRIED AND REJECTED — recorded so it is not re-probed. SPIP
+# exposes per-rubrique feeds via `&id_rubrique=N`; LeFaso's own nav gives
+# rubrique 2 = "Politique" (`https://lefaso.net/spip.php?page=backend&id_rubrique=2`).
+# Verified 2026-09-07: HTTP 200, well-formed, but only 10 items and the
+# NEWEST dated 2026-08-28 — 9 days stale at fetch time, i.e. it fails this
+# batch's own 7-day freshness bar. The Politique rubrique publishes in bursts
+# (the same "faits-divers"/"economie" pattern ActuNiger's header documents for
+# its own unshipped sections), so this descriptor ships the WHOLE-SITE backend
+# feed instead — lower signal density per item, far higher freshness and
+# volume, and every item observed is still Burkina-domestic (see the geo note).
+#
+# VERIFIED LIVE 2026-09-07 by direct fetch + feedparser: whole-site
+# `https://lefaso.net/spip.php?page=backend` -> HTTP 200,
+# `text/xml; charset=utf-8`, feedparser bozo=False, 64 items, newest item
+# 2026-09-06T23:52:00Z (same-day at fetch time), all 64 within the 7-day
+# window — by far the highest-volume BF-domestic candidate probed in this
+# batch (AIB: 20/7d; Studio Yafa: 10/7d). The mix is genuine general-interest
+# news (health campaigns, security-forces items, local government, an
+# AES-bloc political item) plus classifieds/obituaries/lottery results — noise
+# for the desk, but all still Burkina-local, not a geo hazard (see below).
+# Keyless, `robots.txt` explicitly permissive (see LICENCE note).
+#
+# NOT A DUPLICATE: no head row in source_descriptors points at lefaso.net.
+#
+# geo: [BF] — publisher origin (data/sources/baseline.py C2), promoted into
+# the indexed `geo` column ONLY as a post-enrichment fallback when nothing in
+# the body geocoded. Unlike source_amap_mali.yaml's AMAP feed, no item in the
+# sampled 64 was international/non-African wire copy — LeFaso.net is a
+# Burkina-domestic outlet end to end (even its classifieds and lottery results
+# are Burkina-local), so the fallback is honest here, the same call
+# source_actuniger_politique.yaml makes for its single-country feed.
+#
+# source_class: reporting — a privately-owned commercial news site, not a
+# state organ. Same treatment as source_actuniger_politique.yaml (ActuNiger):
+# an established, widely-cited domestic outlet, operating under the same kind
+# of military-government constraint on press freedom (Burkina Faso has
+# suspended foreign broadcasters — see source_france24_afrique.yaml's caveat —
+# a real constraint that a domestic outlet like LeFaso.net still operates
+# under and that the credibility host score should price in honestly at
+# registration time).
+#
+# LICENCE/ROBOTS POSTURE: `robots.txt` present and explicit —
+# `User-agents: * / Allow: /` (a nonstandard `User-agents` directive, but the
+# intent is unambiguous: everything allowed). No machine-readable licence
+# declaration found on-site. `scope.license_class` left UNSET (honest
+# absence, the LIC-2 default), which lands ingested signals at teaser depth
+# until an operator reviews it.
+#
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after the route is
+# re-verified live on the instance.
+
+identity:
+  id: source.lefaso.news
+  name: LeFaso.net — Burkina Faso
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: source_batch_2026_09
+  created: "2026-09-07T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [BF]
+  languages: [fr]
+  tags: [news, world, africa, sahel, burkina_faso, francophone, source_batch_2026_09]
+  source_class: reporting
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  # Hourly, staggered minute offset. High-volume feed (64 items/7d observed);
+  # the handler's conditional GET keeps an unchanged poll near-free.
+  schedule:
+    factory_kind: cron
+    raw: "17 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 60
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://lefaso.net/spip.php?page=backend"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

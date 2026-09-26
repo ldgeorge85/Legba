@@ -235,7 +235,7 @@ def test_country_assessor_has_no_descriptor_prompt_to_stamp() -> None:
     reader does not "fix" the omission by adding a prompt block to a retired
     descriptor that reads its prompt from code."""
     desc = _descriptor("country_assessor")
-    assert desc["identity"]["state"] == "draft"
+    assert desc["identity"]["state"] == "retired"
     assert "system_prompt" not in desc["method"]
     assert desc["method"]["prompt_module"]
 

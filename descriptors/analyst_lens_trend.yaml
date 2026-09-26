@@ -65,7 +65,7 @@ method:
       raw: llm.primary.openai_compat  # core plane — the lens VOICE
       expected_family: llm_provider
     max_tokens: 12288                 # a lens read is narrower than a full weekly record
-  budget_tokens_per_day: 600000       # weekly agent — lighter than the chronicle's 1M
+  budget_tokens_per_day: 0       # weekly agent — lighter than the chronicle's 1M
   gather:
     max_rounds: 6                     # the in-actor GATHER ReAct cap (HARD ceiling)
   retry:

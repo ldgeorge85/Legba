@@ -21,6 +21,11 @@ Two layers, per the house v3-route pattern:
     the honest empty state (fresh cursor -> all-empty valid envelope), honest
     truncation, cursor validation, and the trajectory shape.
 
+7b-iv adds the DUE band (``forecasts_due``, the ``forecasts_due`` leaf): its
+mirrored marks are drift-guarded against ``forecast_acute``, its reducer is
+pure, and the integration case proves the cursor-INDEPENDENCE that makes it an
+obligation read rather than a diff.
+
 Auth: tests run in dev-mode (``LEGBA_DEV_MODE=1`` from tests/conftest.py, no
 ``LEGBA_REGISTRY_API_TOKEN``), so ``require_bearer`` returns ``"anonymous"``
 and unauthenticated requests pass — the same bearer path as the rest of the
@@ -30,6 +35,10 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
+import subprocess
+import sys
+import textwrap
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4
@@ -40,6 +49,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from nacl.signing import SigningKey
 
+import legba.data.registry.forecasts_due as forecasts_due
 import legba.data.registry.since_api as since_api
 from legba.data.config import NatsConfig, PostgresConfig
 from legba.data.nats import NatsStore
@@ -50,6 +60,13 @@ from legba.data.registry.credentials import CredentialVault, MASTER_KEY_ENV
 from legba.data.registry.descriptor import DescriptorRegistry
 from legba.data.registry.dlq import DescriptorDeadLetter
 from legba.data.registry.signing import SigningIdentity
+from legba.data.registry.forecasts_due import (
+    MARK_AWAITING,
+    MARK_EXPIRED,
+    MARK_IN_GRACE,
+    due_forecasts,
+    forecast_mark,
+)
 from legba.data.registry.since_api import (
     build_since_router,
     classify_band_transition,
@@ -100,10 +117,12 @@ def test_since_routes_registered() -> None:
     assert not (paths & v3_paths)
 
 
-def test_since_registry_slim_no_runtime_imports() -> None:
-    """The module stays registry-slim: no runtime / deterministic-handler
-    imports (the v3_api slim-image rule) — mirrors + drift guards instead."""
-    src = since_api.__file__
+@pytest.mark.parametrize("module", [since_api, forecasts_due])
+def test_since_registry_slim_no_runtime_imports(module) -> None:
+    """The route AND its DUE-band leaf stay registry-slim: no runtime /
+    deterministic-handler imports (the v3_api slim-image rule) — mirrors +
+    drift guards instead."""
+    src = module.__file__
     with open(src, "r", encoding="utf-8") as fh:
         text = fh.read()
     import_lines = "\n".join(
@@ -114,7 +133,54 @@ def test_since_registry_slim_no_runtime_imports() -> None:
     assert "deterministic" not in import_lines
     assert "alert_trigger_scan" not in import_lines
     assert "situation_clustering" not in import_lines
+    assert "forecast_acute" not in import_lines
     assert "legba.runtime" not in import_lines and "..runtime" not in import_lines
+
+
+def test_since_imports_without_the_runtime_stack() -> None:
+    """The ROUTE IMPORT GUARD (the ``test_belief_api_imports`` mechanism).
+
+    The text check above reads this module's own import lines; it cannot see a
+    TRANSITIVE reach, and a deferred import moves WHEN the graph is walked,
+    never how far. So: a subprocess with the heavy third-party modules poisoned
+    to ``None``, importing the route and its new leaf, asserting nothing under
+    ``legba.data.analysts`` / ``legba.runtime`` was pulled in. The deployed
+    ``GET /units/{id}/correctness`` 500'd in exactly this way once.
+    """
+    probe = textwrap.dedent(
+        """
+        import sys
+        for blocked in ("feedparser", "telethon", "warcio", "aiobotocore",
+                        "pycountry", "networkx", "qdrant_client"):
+            sys.modules[blocked] = None
+
+        import legba.data.registry.since_api as api
+        import legba.data.registry.forecasts_due as leaf
+
+        leaked = sorted(
+            m for m in sys.modules
+            if m.startswith("legba.data.analysts")
+               or m.startswith("legba.runtime")
+        )
+        assert not leaked, "analyst/runtime package reachable: %r" % leaked
+        assert api.build_since_router is not None
+        assert leaf.UNRESOLVED_EXPIRED == "unresolved:expired"
+        print("OK")
+        """
+    )
+    src_root = str(pathlib.Path(since_api.__file__).resolve().parents[4])
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True, text=True, timeout=120,
+        # Keep the parent's PYTHONPATH tail: in the test container the deps
+        # live outside src/, reachable ONLY through it (2026-09-22 fix).
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(
+            pp for pp in (src_root, os.environ.get("PYTHONPATH", "")) if pp)},
+    )
+    assert result.returncode == 0, (
+        f"slim import failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+    assert "OK" in result.stdout
 
 
 def test_drift_guard_band_constants() -> None:
@@ -164,6 +230,94 @@ def test_drift_guard_situation_decay() -> None:
     assert situation_decay_status(None, now) == (
         situation_clustering._situation_status(None, now)
     )
+
+
+def test_drift_guard_forecast_marks() -> None:
+    """7b-iv — the DUE band mirrors three constants out of ``forecast_acute``
+    (which the registry image may not import). Each must stay equal to its
+    producer, or the band silently stops recognising an expired row."""
+    from legba.data.analysts.deterministic_handlers import forecast_acute
+
+    assert forecasts_due.UNRESOLVED_EXPIRED == forecast_acute.UNRESOLVED_EXPIRED
+    assert forecasts_due.VOID_PREFIX == forecast_acute.VOID_PREFIX
+    assert (
+        forecasts_due.RESOLUTION_GRACE_DAYS
+        == forecast_acute.RESOLUTION_GRACE_DAYS
+    )
+    # The SQL's void exclusion is built from the mirrored prefix, so the two
+    # cannot drift apart inside this module either.
+    assert f"NOT LIKE '{forecast_acute.VOID_PREFIX}%'" in (
+        forecasts_due.DUE_FORECASTS_SQL
+    )
+
+
+def test_forecast_mark_separates_the_three_honest_states() -> None:
+    """A closed window is not automatically late, and the resolver's own mark
+    outranks the arithmetic when it carries one."""
+    now = datetime.now(timezone.utc)
+
+    # Window closed an hour ago: inside the 1d grace — nothing is overdue yet.
+    assert forecast_mark(now - timedelta(hours=1), None, now=now) == MARK_IN_GRACE
+    # Past grace with no mark: the resolver has not run since.
+    assert forecast_mark(now - timedelta(days=3), None, now=now) == MARK_AWAITING
+    # The resolver ran and could not grade it — expired regardless of age,
+    # including inside the grace window (a late re-mint scenario).
+    for age in (timedelta(hours=1), timedelta(days=9)):
+        assert forecast_mark(
+            now - age, forecasts_due.UNRESOLVED_EXPIRED, now=now,
+        ) == MARK_EXPIRED
+
+
+def _due_row(
+    *,
+    region: str,
+    window_end: datetime,
+    resolved_by: str | None = None,
+    resolution_test: str = "class=hazard_severe; window=7d weekly",
+) -> dict[str, Any]:
+    """One ``acute_forecasts`` row as ``DUE_FORECASTS_SQL`` returns it."""
+    return {
+        "id": str(uuid4()),
+        "region": region,
+        "event_class": "hazard_severe",
+        "window_start": window_end - timedelta(days=7),
+        "window_end": window_end,
+        "p": 0.31,
+        "p_base": 0.22,
+        "method": "recent_rate_poisson",
+        "method_version": "forecast_acute/2026-09.1",
+        "resolution_test": resolution_test,
+        "resolved_by": resolved_by,
+        "issued_at": window_end - timedelta(days=7),
+        "total": 3,
+    }
+
+
+def test_due_forecasts_reducer() -> None:
+    """The projection: overdue measured from ``window_end``, the frozen test
+    carried verbatim (``retro: `` prefix INCLUDED), SQL order preserved."""
+    now = datetime.now(timezone.utc)
+    rows = [
+        _due_row(region="country_g20_br", window_end=now - timedelta(days=9),
+                 resolved_by=forecasts_due.UNRESOLVED_EXPIRED,
+                 resolution_test="retro: class=hazard_severe; window=7d weekly"),
+        _due_row(region="country_g20_us", window_end=now - timedelta(days=3)),
+        _due_row(region="country_g20_in", window_end=now - timedelta(hours=2)),
+    ]
+    out = due_forecasts(rows, now=now)
+
+    assert [f.region for f in out] == [
+        "country_g20_br", "country_g20_us", "country_g20_in",
+    ], "the SQL's longest-overdue-first order must survive the projection"
+    assert [f.mark for f in out] == [MARK_EXPIRED, MARK_AWAITING, MARK_IN_GRACE]
+    assert out[0].days_overdue == pytest.approx(9.0, abs=0.01)
+    assert out[2].days_overdue == pytest.approx(2 / 24, abs=0.01)
+    # The retro stamp is a different claim from a mint-time one — never trimmed.
+    assert out[0].resolution_test.startswith("retro: ")
+    assert out[1].resolution_test == "class=hazard_severe; window=7d weekly"
+    # Never negative, even with a window that closed this microsecond.
+    edge = due_forecasts([_due_row(region="r", window_end=now)], now=now)
+    assert edge[0].days_overdue == 0.0
 
 
 def _card_row(
@@ -567,6 +721,36 @@ async def _insert_alert(
     return row_id
 
 
+async def _insert_forecast(
+    pg_store: PostgresStore,
+    *,
+    region: str,
+    window_end: datetime,
+    resolved_outcome: int | None = None,
+    resolved_by: str | None = None,
+    resolution_test: str = "class=hazard_severe; window=7d weekly; grace=1d",
+) -> UUID:
+    """One pre-registered acute forecast (migrations 0047 + 0211 + 0212)."""
+    row_id = uuid4()
+    async with pg_store.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO acute_forecasts (
+                id, region, event_class, window_start, window_end,
+                p, p_base, method, method_version, issued_at,
+                resolved_outcome, resolved_by, resolution_test
+            ) VALUES (
+                $1, $2, 'hazard_severe', $3, $4,
+                0.31, 0.22, 'recent_rate_poisson', 'forecast_acute/2026-09.1',
+                $3, $5, $6, $7
+            )
+            """,
+            row_id, region, window_end - timedelta(days=7), window_end,
+            resolved_outcome, resolved_by, resolution_test,
+        )
+    return row_id
+
+
 def _iso(dt: datetime) -> str:
     return dt.isoformat()
 
@@ -617,6 +801,15 @@ async def test_since_empty_state(client: AsyncClient):
                     "situations", "alerts"):
         assert body[section] == {"items": [], "total": 0, "truncated": False}
         assert body["counts"][section] == 0
+    # ``forecasts_due`` is CURSOR-INDEPENDENT by design (7b-iv): a fresh cursor
+    # says nothing about it, and in a full-suite session other tests may have
+    # left due forecasts behind. The empty-state contract for it is the SHAPE —
+    # the same envelope, its count agreeing with its items — never "empty".
+    due = body["forecasts_due"]
+    assert set(due) == {"items", "total", "truncated"}
+    assert isinstance(due["items"], list) and isinstance(due["total"], int)
+    assert due["truncated"] is False and due["total"] == len(due["items"])
+    assert body["counts"]["forecasts_due"] == due["total"]
     server_now = datetime.fromisoformat(body["server_now"])
     assert server_now >= cursor - timedelta(seconds=1)
     assert datetime.fromisoformat(body["cursor"]) == cursor
@@ -971,6 +1164,7 @@ async def test_since_alerts_channel_filter(since_app, client: AsyncClient):
     # The other sections are NOT scoped by an alerts-channel filter.
     assert set(body["counts"]) == {
         "new_findings", "superseded", "band_changes", "situations", "alerts",
+        "forecasts_due",
     }
 
     # Well-formed but unknown channel: valid all-empty section, never a 404.
@@ -1027,6 +1221,92 @@ async def test_since_truncation_is_honest(
 # ---------------------------------------------------------------------------
 # /eval/band_trajectory
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# /since — forecasts_due (the Morning Read's DUE band, 7b-iv)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_since_forecasts_due(since_app, client: AsyncClient):
+    """Closed-window unresolved calls surface with their frozen test; voided,
+    resolved and still-open calls do NOT; and the section ignores the cursor.
+    """
+    _, _, pg = since_app
+    now = datetime.now(timezone.utc)
+    tag = uuid4().hex[:8]
+
+    expired = await _insert_forecast(
+        pg, region=f"country_due_a_{tag}", window_end=now - timedelta(days=9),
+        resolved_by="unresolved:expired",
+        resolution_test="retro: class=hazard_severe; window=7d weekly; grace=1d",
+    )
+    awaiting = await _insert_forecast(
+        pg, region=f"country_due_b_{tag}", window_end=now - timedelta(days=3),
+    )
+    in_grace = await _insert_forecast(
+        pg, region=f"country_due_c_{tag}", window_end=now - timedelta(hours=2),
+    )
+    # Excluded: withdrawn from grading by design (H13's permanent-19 misread).
+    voided = await _insert_forecast(
+        pg, region=f"country_due_d_{tag}", window_end=now - timedelta(days=4),
+        resolved_by="voided:pre_clamp",
+    )
+    # Excluded: actually graded.
+    graded = await _insert_forecast(
+        pg, region=f"country_due_e_{tag}", window_end=now - timedelta(days=4),
+        resolved_outcome=1, resolved_by="forecast_acute_exogenous",
+    )
+    # Excluded: the window has not closed, so nothing is owed yet.
+    still_open = await _insert_forecast(
+        pg, region=f"country_due_f_{tag}", window_end=now + timedelta(days=2),
+    )
+
+    # A FRESH cursor (nothing changed since this instant) — every diff section
+    # is empty and the obligation section is not. That is the contract.
+    r = await client.get("/api/v1/v3/since", params={"cursor": _iso(now)})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["new_findings"]["total"] == 0
+
+    section = body["forecasts_due"]
+    ids = _section_ids(section)
+    # The pivot test DB is SHARED across sessions and never dropped between
+    # runs (2026-09-25 01:30Z: nineteen owed rows from earlier runs sat beside
+    # these three and the strict equality failed). The contract is about THIS
+    # test's rows — their order among themselves and their exclusions — so
+    # the assertion is scoped to the ids this test minted.
+    mine = {str(expired), str(awaiting), str(in_grace)}
+    assert [i for i in ids if i in mine] == [str(expired), str(awaiting), str(in_grace)], (
+        "longest-overdue first, and only the three that are genuinely owed"
+    )
+    for excluded in (voided, graded, still_open):
+        assert str(excluded) not in ids, "an excluded call surfaced as owed"
+    # Population counts include other runs' owed rows on the shared pivot DB
+    # (22 here on 2026-09-25); this test's three are a lower bound.
+    assert section["total"] >= 3
+    assert section["truncated"] is False
+    assert body["counts"]["forecasts_due"] == section["total"]
+
+    by_id = {item["id"]: item for item in section["items"]}
+    assert by_id[str(expired)]["mark"] == "expired"
+    assert by_id[str(awaiting)]["mark"] == "awaiting"
+    assert by_id[str(in_grace)]["mark"] == "in_grace"
+    # The frozen test rides the row, verbatim, retro prefix and all.
+    assert by_id[str(expired)]["resolution_test"].startswith("retro: ")
+    assert "hazard_severe" in by_id[str(awaiting)]["resolution_test"]
+    assert by_id[str(awaiting)]["days_overdue"] == pytest.approx(3.0, abs=0.05)
+    assert by_id[str(awaiting)]["method_version"] == "forecast_acute/2026-09.1"
+
+    # Cursor-INDEPENDENT: a far-back cursor returns the same obligation set.
+    r2 = await client.get(
+        "/api/v1/v3/since",
+        params={"cursor": _iso(now - timedelta(days=30))},
+    )
+    assert r2.status_code == 200, r2.text
+    assert _section_ids(r2.json()["forecasts_due"]) == ids
 
 
 @pytest.mark.integration

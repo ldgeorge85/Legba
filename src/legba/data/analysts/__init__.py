@@ -98,6 +98,10 @@ _KIND_MODULE_NAMES: tuple[str, ...] = (
     # The 11th OutputKind's producer — Legba's first-person reflective voice
     # (plan §4.8 leg 1). OUTPUT_KIND = OutputKind.JOURNAL, off-chain.
     "journal_assessor",
+    # Program 5 — the STATEFUL journal voice: a standing investigation with a
+    # descriptor-borne brief and a ledger carried across cycles.
+    # OUTPUT_KIND = OutputKind.JOURNAL, off-chain, entry_kind='inquiry'.
+    "inquiry",
     # E4 — the entity de-fragmentation analyst (global META, LLM-adjudicated
     # merges). OUTPUT_KIND = TRACE_ONLY; real product = entity_profiles merges.
     "entity_researcher",
@@ -122,6 +126,12 @@ _KIND_MODULE_NAMES: tuple[str, ...] = (
 from ..schemas.analyst import register_analyst_kind as _register_analyst_kind
 
 _register_analyst_kind("journal_assessor")
+# Program 5 `inquiry` is likewise an EXTENSION kind (not in the closed
+# AnalystKind enum). Registry-side it needs the matching `vocabulary_entries`
+# row before an inquiry descriptor can be REGISTERED — the registry REPLACES its
+# extension set from that table on every refresh, so in-code registration alone
+# would not survive there (the situation_tracker/migration-0184 precedent).
+_register_analyst_kind("inquiry")
 # E4 entity_researcher is likewise an EXTENSION kind (not in the closed
 # AnalystKind enum) — register its identity.kind so model_validate accepts it.
 _register_analyst_kind("entity_researcher")

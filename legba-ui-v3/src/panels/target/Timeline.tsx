@@ -35,8 +35,11 @@ import type { PanelProps } from '@/types'
 import { selectRow } from '@/state/selection'
 import {
   BAND_LABELS,
+  EVENT_LIFECYCLE_COLOR,
   KIND_COLOR,
   SEVERITY_COLOR,
+  eventPoints,
+  eventSpans,
   findingMarkColor,
   findingPoints,
   pointOpacity,
@@ -45,6 +48,7 @@ import {
   situationSpans,
   spanOpacity,
   timeDomain,
+  type TLEvent,
   type TLFinding,
   type TLSignal,
   type TLSituation,
@@ -57,10 +61,12 @@ interface Page<T> {
   next_cursor: string | null
 }
 
-function openLineage(kind: TimelineKind, id: string, title: string) {
+function openLineage(kind: TimelineKind, id: string, title: string, ts?: number) {
   // Redesign Move 2: unified selection store → opens the Inspector + brushes
   // every room (was a legacy window event firing into the void).
-  selectRow(kind, id, title, { origin: 'timeline' })
+  // `ts` (WORKSTATION_V2_FLOW_DESIGN §3 enabler 1) carries the record's own
+  // instant so any OTHER timeline can center on it without a fetch.
+  selectRow(kind, id, title, { origin: 'timeline', preview: { ts } })
 }
 
 function fmtTimeAxis(ms: number): string {
@@ -128,34 +134,63 @@ export default function TargetTimelinePanel({ registration, scope }: PanelProps)
     refetchInterval: 60_000,
   })
 
+  // V3/P6 — bounded occurrences on their own band (spans time_start→time_end,
+  // lifecycle state as the badge). 404 = the route predates this deployment —
+  // degrade to no event band exactly like the situations band.
+  const eventsQ = useQuery<Page<TLEvent>>({
+    enabled: !!target_id,
+    queryKey: ['target-timeline-events', target_id],
+    queryFn: async () => {
+      try {
+        return await apiGet<Page<TLEvent>>(
+          `/v3/events?target_id=${encodeURIComponent(target_id)}&limit=100`,
+        )
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return { data: [], next_cursor: null }
+        throw e
+      }
+    },
+    refetchInterval: 60_000,
+  })
+
   const nowMs = Date.now() // recency-fade reference for the dot bands
   const sigPts = useMemo(() => signalPoints(signalsQ.data?.data ?? []), [signalsQ.data])
   const findPts = useMemo(() => findingPoints(findingsQ.data?.data ?? []), [findingsQ.data])
   const sitPts = useMemo(() => situationPoints(situationsQ.data?.data ?? []), [situationsQ.data])
   const spans = useMemo(() => situationSpans(situationsQ.data?.data ?? []), [situationsQ.data])
-
-  const xDomain = useMemo(
-    () => timeDomain([...sigPts, ...findPts, ...sitPts], spans),
-    [sigPts, findPts, sitPts, spans],
+  const evPts = useMemo(() => eventPoints(eventsQ.data?.data ?? []), [eventsQ.data])
+  const evSpans = useMemo(
+    () => eventSpans(eventsQ.data?.data ?? [], nowMs),
+    [eventsQ.data, nowMs],
   )
 
-  const totalPoints = sigPts.length + findPts.length + sitPts.length
-  const loading = signalsQ.isLoading || findingsQ.isLoading || situationsQ.isLoading
+  const xDomain = useMemo(
+    () => timeDomain(
+      [...sigPts, ...findPts, ...sitPts, ...evPts],
+      [...spans, ...evSpans],
+    ),
+    [sigPts, findPts, sitPts, evPts, spans, evSpans],
+  )
+
+  const totalPoints = sigPts.length + findPts.length + sitPts.length + evPts.length
+  const loading =
+    signalsQ.isLoading || findingsQ.isLoading || situationsQ.isLoading || eventsQ.isLoading
 
   return (
     <PanelChrome
       registration={registration}
-      subtitle={`${sigPts.length} signals · ${findPts.length} findings · ${sitPts.length} situations · target ${target_id}`}
+      subtitle={`${sigPts.length} signals · ${findPts.length} findings · ${sitPts.length} situations · ${evPts.length} events · target ${target_id}`}
       onRefresh={() => {
         signalsQ.refetch()
         findingsQ.refetch()
         situationsQ.refetch()
+        eventsQ.refetch()
       }}
     >
       <div className="flex-1 flex flex-col min-h-[280px]">
         {totalPoints === 0 ? (
           <div className="text-slate-500 text-sm py-4 text-center" data-testid="target-timeline-empty">
-            {loading ? 'loading timeline…' : 'no signals, findings, or situations for this target yet'}
+            {loading ? 'loading timeline…' : 'no signals, findings, situations, or events for this target yet'}
           </div>
         ) : (
           <div className="flex-1 min-h-[260px]" data-testid="target-timeline-chart">
@@ -174,8 +209,8 @@ export default function TargetTimelinePanel({ registration, scope }: PanelProps)
                 <YAxis
                   type="number"
                   dataKey="band"
-                  domain={[0.5, 3.5]}
-                  ticks={[1, 2, 3]}
+                  domain={[0.5, 4.5]}
+                  ticks={[1, 2, 3, 4]}
                   tickFormatter={(v: number) => BAND_LABELS[v] ?? ''}
                   stroke="#94a3b8"
                   fontSize={10}
@@ -203,13 +238,35 @@ export default function TargetTimelinePanel({ registration, scope }: PanelProps)
                   )
                 })}
 
+                {/* V3/P6 — event occurrence spans on the event band (4):
+                    time_start → time_end, colored by the lifecycle-state
+                    badge. An open event (no time_end) resolves to now with a
+                    dashed stroke — the ongoing bar, never a fabricated end. */}
+                {evSpans.map((e) => {
+                  const c = EVENT_LIFECYCLE_COLOR[e.lifecycle] ?? KIND_COLOR.event
+                  return (
+                    <ReferenceArea
+                      key={`evspan-${e.id}`}
+                      x1={e.start}
+                      x2={e.end}
+                      y1={3.78}
+                      y2={4.22}
+                      fill={c}
+                      fillOpacity={e.open ? 0.25 : 0.4}
+                      stroke={c}
+                      strokeOpacity={e.open ? 0.6 : 0.9}
+                      strokeDasharray={e.open ? '4 3' : undefined}
+                    />
+                  )
+                })}
+
                 <Scatter
                   name="signals"
                   data={sigPts}
                   fill={KIND_COLOR.signal}
                   onClick={(d: unknown) => {
                     const p = d as TimelinePoint
-                    openLineage('signal', p.id, p.title)
+                    openLineage('signal', p.id, p.title, p.ts)
                   }}
                 >
                   {/* Recency fade — older signal marks dim so the band reads as
@@ -224,7 +281,7 @@ export default function TargetTimelinePanel({ registration, scope }: PanelProps)
                   fill={KIND_COLOR.finding}
                   onClick={(d: unknown) => {
                     const p = d as TimelinePoint
-                    openLineage('finding', p.id, p.title)
+                    openLineage('finding', p.id, p.title, p.ts)
                   }}
                 >
                   {/* Severity-coloured finding marks (analyst-output overlay),
@@ -243,9 +300,27 @@ export default function TargetTimelinePanel({ registration, scope }: PanelProps)
                   fill={KIND_COLOR.situation}
                   onClick={(d: unknown) => {
                     const p = d as TimelinePoint
-                    openLineage('situation', p.id, p.title)
+                    openLineage('situation', p.id, p.title, p.ts)
                   }}
                 />
+                <Scatter
+                  name="events"
+                  data={evPts}
+                  fill={KIND_COLOR.event}
+                  onClick={(d: unknown) => {
+                    const p = d as TimelinePoint
+                    openLineage('event', p.id, p.title, p.ts)
+                  }}
+                >
+                  {/* Lifecycle badge color per event mark (the same map the
+                      span stroke uses). */}
+                  {evPts.map((p) => (
+                    <Cell
+                      key={p.id}
+                      fill={EVENT_LIFECYCLE_COLOR[p.subtitle] ?? KIND_COLOR.event}
+                    />
+                  ))}
+                </Scatter>
               </ScatterChart>
             </ResponsiveContainer>
           </div>
@@ -262,6 +337,7 @@ export default function TargetTimelinePanel({ registration, scope }: PanelProps)
             <Legend color={KIND_COLOR.finding} label="n/a" />
           </span>
           <Legend color={KIND_COLOR.situation} label="situation (band = lifecycle span)" />
+          <Legend color={KIND_COLOR.event} label="event (band = occurrence span · lifecycle badge)" />
           <span className="opacity-60">click a point to open lineage</span>
         </div>
       </div>

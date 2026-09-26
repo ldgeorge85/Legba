@@ -66,6 +66,7 @@ from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 from uuid import UUID
 
 from ...runtime.analyst_method import AnalystMethodResult, LLMHandlerLike
+from .. import critic_fold
 from ..provenance.kinds import OutputKind
 from ..provenance.models import SituationUpdatePayload
 from ..situations.trajectory import (
@@ -348,24 +349,25 @@ _OPEN_SITUATIONS_SQL = """
 # ``analyst_outputs.situation_signature`` COLUMN is not a substitute: supersession
 # stamps it on the superseded LOSER, so the newest member of a cluster is exactly
 # the row a column-keyed join would miss.
-_NEW_EVIDENCE_SQL = """
+#
+# H17 — SET-BASED. The member set ($1) bounds the outer CTE, so the fold is one
+# `DISTINCT ON` pass over the critiques naming those ids, through the expression
+# index. The INNER join to `v` is the same "verify must have run" gate the INNER
+# lateral was.
+_NEW_EVIDENCE_SQL = f"""
+    WITH f AS MATERIALIZED (
+        SELECT f.id, f.title, f.body, f.produced_at, f.analyst_id, f.target_id,
+               f.confidence
+          FROM analyst_outputs f
+         WHERE f.id = ANY($1::uuid[])
+           AND f.kind = 'finding'
+           AND f.produced_at > $2
+    ), {critic_fold.faithfulness_score_cte()}
     SELECT f.id, f.title, f.body, f.produced_at, f.analyst_id, f.target_id,
            LEAST(f.confidence, v.faithfulness_score) AS effective_confidence
-      FROM analyst_outputs f
-      JOIN LATERAL (
-          SELECT (cr.data->>'overall_score')::real AS faithfulness_score
-            FROM analyst_outputs cr
-           WHERE cr.kind = 'critique'
-             AND cr.data->>'analyzed_output_id' = f.id::text
-             AND cr.data->>'overall_score' IS NOT NULL
-             AND cr.title LIKE 'Faithfulness verify%'
-           ORDER BY cr.produced_at DESC, cr.id DESC
-           LIMIT 1
-      ) v ON TRUE
-     WHERE f.id = ANY($1::uuid[])
-       AND f.kind = 'finding'
-       AND f.produced_at > $2
-       AND LEAST(f.confidence, v.faithfulness_score) >= $3
+      FROM f
+      JOIN v ON v.fid = f.id::text
+     WHERE LEAST(f.confidence, v.faithfulness_score) >= $3
      ORDER BY f.produced_at ASC, f.id ASC
      LIMIT $4
 """

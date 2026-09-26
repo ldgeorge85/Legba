@@ -38,6 +38,29 @@
 #                           are `gauge_*` method.options (see
 #                           handler_options.HANDLER_OPTIONS) so precision is
 #                           retunable with no deploy.
+#   8. situation_escalation — a VERIFIED `escalates` row landed on the
+#                           trajectory ledger for a frame at or above an
+#                           intensity floor. First class whose subject is a
+#                           FRAME. Fire-once on the ledger row id.
+#   9. coverage_floor     — #82: a desk's OWN salience-scored 14-day slice
+#                           keeps naming a foreign polity that NOT ONE of its
+#                           open situation frames names. The class whose
+#                           subject is the GAP between two of the engine's own
+#                           artifacts — what the evidence carries vs what the
+#                           register represents. Exists because
+#                           IL_BLINDNESS_DIAGNOSIS.md proved a desk can be
+#                           structurally silent about the war it is fighting
+#                           when the register never opened a frame for it, and
+#                           because migration 0188's mega-frame split retired
+#                           that diagnosis's frame-COUNT predictor without
+#                           retiring the blindness. Fires `low` (a
+#                           register-quality signal, never a world event),
+#                           once per newly-uncovered polity per desk, and is
+#                           INTERVAL-GATED (default 6h) because the 14-day
+#                           entity aggregate is ~20s and a coverage gap does
+#                           not move on a 10-minute clock. Thresholds are
+#                           `coverage_floor_*` method.options over
+#                           LEGBA_COVERAGE_FLOOR_* env defaults.
 #
 # Statefulness: durable per-transition watermarks in alert_trigger_watermarks
 # (migration 0091) — the same transition NEVER refires, and each class's
@@ -92,6 +115,11 @@ mapping:
 
 method:
   kind: deterministic
+  options:
+    # 2026-09-20 operator: the fleet-wide page budget deferred 616 of 1,319 alerts in 7 days (47 %) — the platform could not
+    # tell anyone the external audit had died. 5/day -> 50/day, per-kind 3 -> 20. Declared knobs (handler_options).
+    daily_page_budget: 50
+    budget_per_kind_cap: 20
   impl: legba.data.analysts.deterministic:run_method
   sub_handler: alert_trigger_scan
   # Deterministic kinds carry no LLM block and no per-day token budget — the

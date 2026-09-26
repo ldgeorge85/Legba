@@ -90,6 +90,7 @@ scope:
   languages: [en]
   tags: [news, world, geopolitical, global, rsshub_lane, source_batch_2026_08]
   source_class: reporting
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

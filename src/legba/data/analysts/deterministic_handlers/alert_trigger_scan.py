@@ -7,7 +7,7 @@ A deterministic META analyst on a ~10-minute cadence that watches VERIFIED
 substrate state for TRANSITIONS and side-writes one ``kind='alert'``
 ``analyst_outputs`` row per fired trigger, then fans each outward through the
 shared P1-1 :class:`legba.data.alerts.AlertSinkDispatcher` (ledger row per sink
-outcome + webhook when configured). Seven trigger classes:
+outcome + webhook when configured). Nine trigger classes:
 
   1. **band_crossing** — a desk×dimension scorecard band changed vs the
      previous scorecard row (the T1 bands rest ONLY on verified claims, so a
@@ -99,6 +99,26 @@ outcome + webhook when configured). Seven trigger classes:
      ABSENCE, not error (ENGINE_REVIEW_2026-08-02 §1): five AP feeds polled
      130 times each over six days, every poll ``success`` and ``healthy``,
      writing zero signals, and no alert ever fired for any of them.
+  8. **situation_escalation** (continuity P2) — a VERIFIED ``escalates`` row
+     landed on the trajectory ledger for a frame at or above an intensity
+     floor. The first class whose subject is a FRAME. Bar + judgment:
+     :mod:`._situation_escalation_scan`.
+  9. **coverage_floor** (#82, 2026-09-03) — a desk's OWN salience-scored
+     14-day slice keeps naming a foreign polity that NOT ONE of its open
+     situation frames names. The second engine-subject class, and the first
+     whose subject is the GAP between two of the engine's own artifacts:
+     what the evidence carries versus what the register represents.
+
+     It exists because ``IL_BLINDNESS_DIAGNOSIS.md`` proved a desk can be
+     structurally silent about the war it is fighting when no frame was ever
+     opened for it — ingest, screening and the slice all clean. Migration 0188
+     split the mega-frames (89 -> 295 situations, one per dimension), which
+     retired the diagnosis's *frame-count* predictor without retiring the
+     blindness, so this class measures COVERAGE rather than cardinality.
+     Fires ``low`` (a register-quality signal, never a world event), once per
+     newly-uncovered polity per desk, and is INTERVAL-GATED. Bar, thresholds
+     and the alias/demonym matching that keeps it honest:
+     :mod:`._coverage_floor_scan`.
 
 Statefulness — the no-refire contract
 -------------------------------------
@@ -185,6 +205,7 @@ from typing import Any, Mapping, Optional
 from uuid import UUID, uuid4
 
 from ...provenance import AnalystContext, write_analyst_output
+from ...provenance.origin import origin_class_clause
 from ...provenance.kinds import (
     STRUCTURAL_VERIFY_EXEMPT_ANALYSTS,
     OutputKind,
@@ -196,10 +217,16 @@ from ...provenance.models import (
     severity_from_tags,
 )
 from ....runtime.analyst_method import AnalystMethodResult
+from ... import _geo_routing
+from ... import critic_fold
 from . import (
     _band_crossing_scan,
+    _contention_flip_scan,
+    _coverage_floor_scan,
     _daily_page_budget,
+    _external_audit_paging,
     _production_deficit_scan,
+    _research_dispatch,
     _situation_escalation_scan,
     _steady_state_guard,
     _watchlist_scan,
@@ -208,6 +235,14 @@ from . import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: P7/7g-1 — the origin-class leg on BOTH signal-count reads (SEAMS #57
+#: sweep; `alerts` and `surge_detection` are two of the eight surfaces a
+#: collection is fenced from). These two queries ARE the edge detector: the
+#: current 24h window against a trailing baseline. A ten-year load landing in
+#: the window would read as the largest surge in the platform's history and
+#: fire an alert on the act of loading it.
+_LIVE_SIGNALS = origin_class_clause("")
 
 SUB_HANDLER_NAME = "alert_trigger_scan"
 
@@ -241,6 +276,20 @@ TRIGGER_PRODUCTION_DEFICIT = "production_deficit"
 #: Continuity P2 — a VERIFIED `escalates` row on the trajectory ledger; the
 #: first class whose subject is a FRAME. Bar + judgment: the sibling module.
 TRIGGER_SITUATION_ESCALATION = _situation_escalation_scan.TRIGGER_CLASS
+#: #82 — a desk's own salience-scored slice keeps naming a foreign polity that
+#: NONE of its open frames names. The first class whose subject is the GAP
+#: between two of the engine's own artifacts. Bar + judgment: the sibling module.
+TRIGGER_COVERAGE_FLOOR = _coverage_floor_scan.TRIGGER_CLASS
+#: W-8 (EXTERNAL GRADING AT WIDTH) — the standing auditor found a Tier-1/2
+#: source, published inside the read's own evidence window, carrying a resolved
+#: span that CONTRADICTS a high-severity claim we published, and a second grader
+#: family agreed. The first class whose subject is one of our own reads being
+#: wrong about the WORLD rather than unfaithful to its cites. The auditor writes
+#: the alert ROW itself and does no fan-out; registering the class here is what
+#: gives it a slot in the budget's kind vocabulary so a contradiction is RANKED
+#: against the other classes instead of jumping them. Bar + judgment: the
+#: sibling module (all five preconditions).
+TRIGGER_EXTERNAL_AUDIT = _external_audit_paging.TRIGGER_CLASS
 
 #: Per-class seed marker key — present ⇒ the class completed its first scan.
 SEED_KEY = "_seeded"
@@ -280,7 +329,6 @@ MIN_CURRENT_FINDINGS = 3
 
 #: Bounds (defensive) on per-scan result sizes.
 _MAX_FINDINGS_PER_SCAN = 200
-_MAX_CONTENTIONS_PER_SCAN = 500
 _MAX_DESKS = 200
 #: Cap on derived_from refs carried per alert row (lineage stays skimmable).
 _MAX_DERIVED_REFS = 8
@@ -306,6 +354,17 @@ _CLASS_PRIORITY = {
     TRIGGER_GEO_CONVERGENCE: 5,
     TRIGGER_PRODUCTION_DEFICIT: 6,
     TRIGGER_SITUATION_ESCALATION: 7,
+    # #82: appended, never displacing an established pair — and it costs it
+    # nothing, because apply_desk_cap sorts by SEVERITY first and this class
+    # only ever emits `low`. It is meant to lose every tie it enters.
+    TRIGGER_COVERAGE_FLOOR: 8,
+    # W-8: appended, never displacing an established pair — the same
+    # conservative treatment production_deficit and coverage_floor took. It
+    # costs it nothing: apply_desk_cap sorts by SEVERITY first, and this class
+    # only ever reaches a candidate list on high/critical (precondition 4), so a
+    # real external contradiction still outranks a lower-severity world event
+    # regardless of where it sits here.
+    TRIGGER_EXTERNAL_AUDIT: 9,
 }
 
 #: geo_convergence scan window / diversity-bar defaults — the CANONICAL
@@ -361,6 +420,15 @@ class AlertCandidate:
     effective_confidence: Optional[float] = None
     faithfulness_score: Optional[float] = None
     event_at: Optional[datetime] = None
+    #: R-B (RESEARCH_PROGRAM_SPEC §2.2) — dispatch descriptors this candidate
+    #: hands to ``_research_dispatch.dispatch_open_questions`` AFTER its row
+    #: lands (the row id is the dispatching alert id, and a candidate that
+    #: failed to write must dispatch nothing). Populated only by
+    #: ``_coverage_floor_scan`` and only behind ``LEGBA_RESEARCH_EVIDENCE``;
+    #: empty on every other candidate, on every other class, forever. Carried
+    #: through ``apply_desk_cap``'s rollup merge exactly as ``watermarks`` is —
+    #: see that function's note for why dropping it would be a silent loss.
+    research_dispatch: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def desk_key(self) -> str:
@@ -438,6 +506,14 @@ def apply_desk_cap(
     """Per-desk cap: keep the worst ``cap`` per desk, fold the rest into ONE
     per-desk rollup candidate (count stated honestly; watermarks carried over
     so the summarized transitions never refire). Returns (kept, rollups).
+
+    R-B: ``research_dispatch`` descriptors are merged onto the rollup for the
+    SAME reason watermarks are. A suppressed candidate's watermark advances
+    when the rollup lands, so the transition never re-fires — which means a
+    coverage gap folded in here would, if its dispatch were dropped, advance
+    past its only rising edge having dispatched nothing. The rollup row then
+    becomes that question's dispatching alert, which is honest: it is the row
+    that durably recorded the transition.
     """
     by_desk: dict[str, list[AlertCandidate]] = {}
     for cand in candidates:
@@ -471,8 +547,10 @@ def apply_desk_cap(
         ]
         merged_watermarks: list[tuple[str, str, dict[str, Any]]] = []
         merged_refs: list[UUID] = []
+        merged_dispatch: list[dict[str, Any]] = []
         for c in rest:
             merged_watermarks.extend(c.watermarks)
+            merged_dispatch.extend(c.research_dispatch)
             for ref in c.derived_from:
                 if ref not in merged_refs and len(merged_refs) < _MAX_DERIVED_REFS:
                     merged_refs.append(ref)
@@ -498,6 +576,7 @@ def apply_desk_cap(
                     "suppressed": summaries,
                 },
                 watermarks=merged_watermarks,
+                research_dispatch=merged_dispatch,
             )
         )
     return kept, rollups
@@ -616,44 +695,45 @@ _count_paged_today = _daily_page_budget.count_paged_today
 # Trigger 2 — new high-severity VERIFIED finding
 # ---------------------------------------------------------------------------
 
-# INNER lateral join: the verified bar REQUIRES a faithfulness verdict — a
+# INNER fold join: the verified bar REQUIRES a faithfulness verdict — a
 # finding with no critique cannot qualify, so (unlike the banding gather) there
 # is nothing honest to report about its absence here.
-_VERIFIED_FINDINGS_SQL = """
+#
+# H17 — SET-BASED. Window + severity + the un-watermarked anti-join bound the
+# outer CTE; ONE `DISTINCT ON` pass then reads those ids' critiques through
+# `idx_analyst_outputs_critique_analyzed_output_id`. The floor and the page
+# LIMIT stay outside, where they were.
+_VERIFIED_FINDINGS_SQL = f"""
+    WITH f AS MATERIALIZED (
+        SELECT f.id, f.analyst_id, f.target_id, f.title, f.confidence,
+               f.severity, f.data -> 'tags' AS tags, f.produced_at
+          FROM analyst_outputs f
+         WHERE f.kind = 'finding'
+           AND f.superseded_by IS NULL
+           AND f.produced_at > now() - make_interval(hours => $1)
+           AND f.analyst_id <> ALL($2::text[])
+           AND (
+                 f.severity IN ('high', 'critical')
+                 OR f.data -> 'tags' ?| ARRAY['severity:high', 'severity:critical']
+               )
+           AND NOT EXISTS (
+                 SELECT 1 FROM alert_trigger_watermarks w
+                  WHERE w.trigger_class = $4
+                    AND w.watermark_key = f.id::text
+           )
+    ), {critic_fold.faithfulness_score_cte()}
     SELECT f.id::text            AS finding_id,
            f.analyst_id          AS analyst_id,
            f.target_id           AS target_id,
            f.title               AS title,
            f.confidence          AS confidence,
            f.severity            AS severity,
-           f.data -> 'tags'      AS tags,
+           f.tags                AS tags,
            f.produced_at         AS produced_at,
            v.faithfulness_score  AS faithfulness_score
-      FROM analyst_outputs f
-      JOIN LATERAL (
-          SELECT (cr.data->>'overall_score')::real AS faithfulness_score
-            FROM analyst_outputs cr
-           WHERE cr.kind = 'critique'
-             AND cr.data->>'analyzed_output_id' = f.id::text
-             AND cr.data->>'overall_score' IS NOT NULL
-             AND cr.title LIKE 'Faithfulness verify%'
-           ORDER BY cr.produced_at DESC, cr.id DESC
-           LIMIT 1
-      ) v ON TRUE
-     WHERE f.kind = 'finding'
-       AND f.superseded_by IS NULL
-       AND f.produced_at > now() - make_interval(hours => $1)
-       AND f.analyst_id <> ALL($2::text[])
-       AND (
-             f.severity IN ('high', 'critical')
-             OR f.data -> 'tags' ?| ARRAY['severity:high', 'severity:critical']
-           )
-       AND LEAST(f.confidence, v.faithfulness_score) >= $3
-       AND NOT EXISTS (
-             SELECT 1 FROM alert_trigger_watermarks w
-              WHERE w.trigger_class = $4
-                AND w.watermark_key = f.id::text
-       )
+      FROM f
+      JOIN v ON v.fid = f.id::text
+     WHERE LEAST(f.confidence, v.faithfulness_score) >= $3
      ORDER BY f.produced_at DESC
      LIMIT $5
 """
@@ -816,193 +896,10 @@ async def _scan_verified_findings(
 # ---------------------------------------------------------------------------
 # Trigger 3 — contention flip (verified-tied fact_contention state change)
 # ---------------------------------------------------------------------------
-
-# Every contention group + its non-junk supporting fact ids + the SIGNALS those
-# facts were derived from + (when one exists) the freshest non-superseded
-# finding that RESTS ON the dispute and meets the verified bar. The GIN indexes
-# on analyst_outputs.derived_from and facts.derived_from carry the && probes;
-# the contention table is small by construction.
 #
-# W1-C3 — WHY THE SIGNAL BRIDGE. Until 2026-08-03 this LATERAL matched
-# `f.derived_from && v.fact_ids` alone, and the class had NEVER fired an alert
-# in its life despite 1,606 watermark rows. The reason is not tuning, it is a
-# type mismatch between two id populations that never meet:
-#
-#   * a contention group tracks FACT ids — all 7,602 non-junk
-#     `supporting_fact_ids` live in `facts`;
-#   * a finding's `derived_from` holds SIGNAL ids — of 229,768 refs carried by
-#     findings in the trailing 7 days, 221,268 resolved to `signals`, 7,874 to
-#     other `analyst_outputs`, and **0 to `facts`**. All-time it is 34 of
-#     757,436 (0.0045%).
-#
-# So the join could not fire, and did not: exactly 1 of 2,152 groups with
-# supporting facts had ANY finding citing them, verified or not. That is a
-# structurally impossible predicate reported as a quiet gauge — the worst shape
-# a trigger can have, because "0 alerts" reads as "nothing happened".
-#
-# The bridge is the substrate's own lineage, not a heuristic: a fact carries the
-# signals it was derived from (`facts.derived_from`), and a finding cites those
-# same signals. A finding "rests on" a contested fact when it cites evidence
-# that fact was built from. Measured on the live substrate: 1,243 of 2,152
-# groups (58%) acquire a live finding under the bridge, and the shipped query
-# shape resolves 157 verified-bar findings over the 500-group scan window
-# (vs 0), with no latency regression (9.4s bridged vs 12.5s before).
-#
-# Volume is NOT unbounded by this change: the trigger still fires only on a
-# status/surfaced_fact_id CHANGE against the watermark, and real surface changes
-# run ~40/day fleet-wide (352 all-time supersessions in `surface_history`), so
-# expect low tens of medium-severity candidates/day, further bounded by
-# `apply_desk_cap` (3/desk/scan) + rollup coalescing like every other class.
-_CONTENTIONS_SQL = """
-    SELECT c.id::text          AS contention_id,
-           c.subject_key       AS subject_key,
-           c.predicate_key     AS predicate_key,
-           c.status            AS status,
-           c.surfaced_value    AS surfaced_value,
-           c.surfaced_fact_id::text AS surfaced_fact_id,
-           c.value_count       AS value_count,
-           c.updated_at        AS updated_at,
-           v.fact_ids          AS fact_ids,
-           vf.finding_id       AS verified_finding_id,
-           vf.eff_conf         AS verified_eff_conf
-      FROM fact_contention c
-      LEFT JOIN LATERAL (
-          SELECT COALESCE(array_agg(DISTINCT u.fid), '{}'::uuid[]) AS fact_ids,
-                 COALESCE(
-                     array_agg(DISTINCT s.sid) FILTER (WHERE s.sid IS NOT NULL),
-                     '{}'::uuid[]
-                 ) AS evidence_ids
-            FROM (
-              SELECT unnest(fcv.supporting_fact_ids) AS fid
-                FROM fact_contention_values fcv
-               WHERE fcv.contention_id = c.id
-                 AND NOT fcv.is_junk
-            ) u
-            LEFT JOIN LATERAL (
-              SELECT unnest(f2.derived_from) AS sid
-                FROM facts f2
-               WHERE f2.id = u.fid
-            ) s ON TRUE
-      ) v ON TRUE
-      LEFT JOIN LATERAL (
-          SELECT f.id::text AS finding_id,
-                 LEAST(f.confidence, cr.faithfulness_score) AS eff_conf
-            FROM analyst_outputs f
-            JOIN LATERAL (
-                SELECT (c2.data->>'overall_score')::real AS faithfulness_score
-                  FROM analyst_outputs c2
-                 WHERE c2.kind = 'critique'
-                   AND c2.data->>'analyzed_output_id' = f.id::text
-                   AND c2.data->>'overall_score' IS NOT NULL
-                   AND c2.title LIKE 'Faithfulness verify%'
-                 ORDER BY c2.produced_at DESC, c2.id DESC
-                 LIMIT 1
-            ) cr ON TRUE
-           WHERE f.kind = 'finding'
-             AND f.superseded_by IS NULL
-             AND f.derived_from && (v.fact_ids || v.evidence_ids)
-             AND f.analyst_id <> ALL($1::text[])
-             AND LEAST(f.confidence, cr.faithfulness_score) >= $2
-           ORDER BY f.produced_at DESC, f.id DESC
-           LIMIT 1
-      ) vf ON TRUE
-     ORDER BY c.updated_at DESC
-     LIMIT $3
-"""
-
-
-async def _scan_contention_flips(
-    conn: Any,
-    *,
-    floor: float,
-) -> tuple[list[AlertCandidate], list[tuple[str, str, dict[str, Any]]], bool]:
-    seeded, watermarks = await _load_class_watermarks(conn, TRIGGER_CONTENTION)
-    rows = await conn.fetch(
-        _CONTENTIONS_SQL,
-        sorted(STRUCTURAL_VERIFY_EXEMPT_ANALYSTS),
-        float(floor),
-        _MAX_CONTENTIONS_PER_SCAN,
-    )
-
-    candidates: list[AlertCandidate] = []
-    silent: list[tuple[str, str, dict[str, Any]]] = []
-    for row in rows:
-        cid = str(row["contention_id"])
-        state = {
-            "status": str(row["status"] or ""),
-            "surfaced_fact_id": row["surfaced_fact_id"],
-        }
-        prev = watermarks.get(cid)
-        verified_finding_id = row["verified_finding_id"]
-        if not seeded:
-            silent.append((TRIGGER_CONTENTION, cid, state))
-            continue
-        if prev is None:
-            change = "new-contention"
-        elif (
-            str(prev.get("status") or "") != state["status"]
-            or prev.get("surfaced_fact_id") != state["surfaced_fact_id"]
-        ):
-            change = f"{prev.get('status') or '?'}->{state['status']}"
-        else:
-            continue  # unchanged
-        if verified_finding_id is None:
-            # No verified finding rests on this dispute — record the state so
-            # the SAME change can't fire later, but page nobody.
-            silent.append((TRIGGER_CONTENTION, cid, state))
-            continue
-
-        refs: list[UUID] = []
-        vf = _uuid_or_none(verified_finding_id)
-        if vf is not None:
-            refs.append(vf)
-        for fid in list(row["fact_ids"] or []):
-            f = _uuid_or_none(fid)
-            if f is not None and f not in refs and len(refs) < _MAX_DERIVED_REFS:
-                refs.append(f)
-        candidates.append(
-            AlertCandidate(
-                trigger_class=TRIGGER_CONTENTION,
-                severity="medium",
-                title=(
-                    f"Contention {change}: "
-                    f"{row['subject_key']} / {row['predicate_key']} "
-                    f"[{state['status']}]"
-                ),
-                body=(
-                    f"contention={cid}\n"
-                    f"subject={row['subject_key']} predicate={row['predicate_key']}\n"
-                    f"change={change} status={state['status']} "
-                    f"surfaced_value={row['surfaced_value']} "
-                    f"value_count={row['value_count']}\n"
-                    f"verified_finding={verified_finding_id} "
-                    f"(effective_confidence={row['verified_eff_conf']}, "
-                    f"floor={floor})"
-                ),
-                target_id=None,
-                derived_from=refs,
-                data={
-                    "trigger_class": TRIGGER_CONTENTION,
-                    "contention_id": cid,
-                    "subject_key": str(row["subject_key"] or ""),
-                    "predicate_key": str(row["predicate_key"] or ""),
-                    "change": change,
-                    "from_state": dict(prev) if prev else None,
-                    "to_state": state,
-                    "surfaced_value": row["surfaced_value"],
-                    "value_count": int(row["value_count"] or 0),
-                    "verified_finding_id": str(verified_finding_id),
-                    "verified_effective_confidence": (
-                        float(row["verified_eff_conf"])
-                        if row["verified_eff_conf"] is not None
-                        else None
-                    ),
-                },
-                watermarks=[(TRIGGER_CONTENTION, cid, state)],
-                event_at=row["updated_at"],
-            )
-        )
-    return candidates, silent, seeded
+# Moved to `_contention_flip_scan` 2026-09-24 (H17), the seam every other
+# trigger class already sits on. Its gather SQL and its scan live there;
+# `handle` calls `_contention_flip_scan.scan_contention_flips`.
 
 
 # ---------------------------------------------------------------------------
@@ -1022,12 +919,13 @@ _DESKS_SQL = """
 
 # Zero-filled 24h buckets relative to NOW: bucket 0 = the current 24h window,
 # buckets 1..N = the trailing baseline. One pass over the (indexed) window.
-_SIGNAL_BUCKETS_SQL = """
+_SIGNAL_BUCKETS_SQL = f"""
     WITH hits AS (
         SELECT floor(extract(epoch FROM (now() - fetched_at)) / 86400.0)::int
                  AS bucket
           FROM signals
          WHERE geo && $1::text[]
+           AND {_LIVE_SIGNALS}
            AND fetched_at > now() - make_interval(days => $2 + 1)
     ), counts AS (
         SELECT gs.n AS bucket, count(h.bucket) AS c
@@ -1098,10 +996,11 @@ _SIDECAR_BASELINES_SQL = """
 # trailing-window scan) — used on the sidecar-preferred path, where the
 # baseline mean/sigma come from the stored row but the CURRENT window (the
 # thing the edge detector triggers on) must always be live.
-_SIGNAL_CURRENT_SQL = """
+_SIGNAL_CURRENT_SQL = f"""
     SELECT count(*)::float AS current
       FROM signals
      WHERE geo && $1::text[]
+       AND {_LIVE_SIGNALS}
        AND fetched_at > now() - interval '24 hours'
 """
 
@@ -1334,6 +1233,8 @@ _UNVERIFIED_REASONS = {
         "prose and no claim about the world)"
     ),
     TRIGGER_SITUATION_ESCALATION: _situation_escalation_scan.UNVERIFIED_REASON,
+    TRIGGER_COVERAGE_FLOOR: _coverage_floor_scan.UNVERIFIED_REASON,
+    TRIGGER_EXTERNAL_AUDIT: _external_audit_paging.UNVERIFIED_REASON,
     "rollup": "deterministic per-desk rollup of trigger alerts (no LLM prose)",
 }
 
@@ -1347,6 +1248,10 @@ _UNVERIFIED_REASONS = {
 #: bearing on dedup/cooldown semantics.
 _CHANNEL_BY_CLASS = {
     TRIGGER_GEO_CONVERGENCE: geo_convergence_scan.CHANNEL_NAME,
+    # W-8: the same labeling preservation — the auditor's rows already carry
+    # this identity, so the outward page and the ledger row agree on where the
+    # verdict came from.
+    TRIGGER_EXTERNAL_AUDIT: _external_audit_paging.CHANNEL_NAME,
 }
 
 
@@ -1470,6 +1375,8 @@ def _build_receipt(
     already_paged_today: int = 0,
     budget_per_kind_cap: int = 0,
     already_paged_today_by_kind: dict[str, int] | None = None,
+    research_dispatched: int = 0,
+    research_dispatch_failures: int = 0,
 ) -> FindingPayload:
     title = (
         f"Alert trigger scan: {fired} alert(s) fired, {rollups} rollup(s), "
@@ -1505,6 +1412,13 @@ def _build_receipt(
             f"already_paged_today_by_kind={already_paged_today_by_kind or {}}"
         ),
     ]
+    # R-B — appended ONLY when the dispatch leg actually did something, so a
+    # flag-off scan's receipt is byte-identical to its pre-program self.
+    if research_dispatched or research_dispatch_failures:
+        body_lines.append(
+            f"research_dispatched={research_dispatched} "
+            f"research_dispatch_failures={research_dispatch_failures}"
+        )
     for cls in sorted(counts_by_class):
         c = counts_by_class[cls]
         extra = ""
@@ -1541,6 +1455,15 @@ def _build_receipt(
             "budget_deferred": budget_deferred,
             "budget_per_kind_cap": budget_per_kind_cap,
             "already_paged_today_by_kind": already_paged_today_by_kind or {},
+            # R-B — see the body note: present only when the dispatch leg ran.
+            **(
+                {
+                    "research_dispatched": research_dispatched,
+                    "research_dispatch_failures": research_dispatch_failures,
+                }
+                if (research_dispatched or research_dispatch_failures)
+                else {}
+            ),
         },
     )
 
@@ -1638,6 +1561,14 @@ async def handle(
     # options with no deploy. Unknown or uncoercible keys keep their default
     # — a mistyped knob must not take the gauge offline.
     gauge_config = _production_deficit_scan.config_from_options(options)
+    # #82 coverage floor — same shape: every threshold is a
+    # CoverageFloorConfig field under the `coverage_floor_` option prefix over
+    # a LEGBA_COVERAGE_FLOOR_* env default, so the operator retunes precision
+    # (or takes the class silent with min_slice_share=1.0) with no deploy.
+    coverage_floor_config = _coverage_floor_scan.config_from_options(options)
+    # GEO ROUTING v2 — the coverage floor's routed-elsewhere receipt counts at
+    # this family's `min_magnitude`; its other knobs are slice-reader env-only.
+    geo_routing_config = _geo_routing.config_from_options(options)
 
     candidates: list[AlertCandidate] = []
     silent: list[tuple[str, str, dict[str, Any]]] = []
@@ -1699,8 +1630,8 @@ async def handle(
 
         # Trigger 3 — contention flip. D2 KILL LIST (default OFF — see the
         # module docstring's "D2" section and _daily_page_budget.handle_kill_switch).
-        c_candidates, c_silent, c_seeded = await _scan_contention_flips(
-            conn, floor=floor
+        c_candidates, c_silent, c_seeded = (
+            await _contention_flip_scan.scan_contention_flips(conn, floor=floor)
         )
         silent.extend(c_silent)
         if not c_seeded:
@@ -1798,6 +1729,25 @@ async def handle(
         if not se_seeded:
             seeded_classes.append(TRIGGER_SITUATION_ESCALATION)
 
+        # Trigger 9 — coverage floor (#82). Same 4-tuple shape. The scan is
+        # INTERVAL-GATED (a 14-day coverage gap does not move on a 10-minute
+        # clock); a declined tick reports `skipped_interval` and advances
+        # nothing, so no transition can be lost to the gate.
+        cf_candidates, cf_silent, cf_seeded, cf_stats = (
+            await _coverage_floor_scan.scan_coverage_floor(
+                conn, config=coverage_floor_config,
+                geo_config=geo_routing_config,
+            )
+        )
+        candidates.extend(cf_candidates)
+        silent.extend(cf_silent)
+        counts_by_class[TRIGGER_COVERAGE_FLOOR] = {
+            "candidates": len(cf_candidates),
+            **cf_stats,
+        }
+        if not cf_seeded:
+            seeded_classes.append(TRIGGER_COVERAGE_FLOOR)
+
         # Silent bookkeeping (seeds / no-change refreshes / non-fired state
         # advances) — these represent OBSERVED state, never a fired alert.
         for wm_class, wm_key, wm_state in silent:
@@ -1816,6 +1766,11 @@ async def handle(
     write_failures = 0
     fanout_ok = 0
     fanout_failed = 0
+    # R-B — standing research questions minted from this scan's alerts, and the
+    # rows whose dispatch degraded. Both ride the receipt so a dispatch leg that
+    # silently stops is visible in analyst_traces rather than only in the logs.
+    dispatched = 0
+    dispatch_failures = 0
     to_fan_out: list[tuple[UUID, AlertCandidate]] = []
 
     async with pool.acquire() as conn:
@@ -1858,6 +1813,28 @@ async def handle(
                 rollups_written += 1
             else:
                 fired += 1
+            # R-B (RESEARCH_PROGRAM_SPEC §2.2) — POST-PERSIST dispatch: the
+            # coverage gap this row just recorded becomes ONE standing open
+            # question the corpus_researcher's existing backlog drain picks up.
+            # Runs here and not in the scan because the question must name the
+            # dispatching alert, whose id does not exist until the write above
+            # returns. DEGRADE-NOT-BREAK: the row is already durable, and a
+            # research side-write may never cost the operator a detector — the
+            # K-2b `convert_open_questions` contract, verbatim.
+            if cand.research_dispatch:
+                try:
+                    dispatched += await _research_dispatch.dispatch_open_questions(
+                        conn,
+                        cand.research_dispatch,
+                        alert_output_id=row_id,
+                        run_id=run_uuid,
+                    )
+                except Exception as exc:  # noqa: BLE001 — never fail the scan
+                    dispatch_failures += 1
+                    logger.warning(
+                        "alert_trigger_scan.research_dispatch_failed alert_row=%s "
+                        "err=%s", row_id, exc,
+                    )
             for wm_class, wm_key, wm_state in cand.watermarks:
                 await _upsert_watermark(
                     conn, wm_class, wm_key, wm_state, fired=True
@@ -1930,6 +1907,8 @@ async def handle(
         already_paged_today=already_paged_today,
         budget_per_kind_cap=budget_per_kind_cap,
         already_paged_today_by_kind=already_paged_today_by_kind,
+        research_dispatched=dispatched,
+        research_dispatch_failures=dispatch_failures,
     )
     return AnalystMethodResult(
         finding=finding,
@@ -1937,9 +1916,21 @@ async def handle(
     )
 
 
+#: W-8 — the five paging preconditions, re-exported so ``ats.*`` reads the same
+#: for this class as for every other. The auditor's drain calls
+#: :func:`external_audit_pages` before it decides whether the row it is about to
+#: write is also a page; a single-rater CONTRADICTED writes the row and does not
+#: page.
+external_audit_page_decision = _external_audit_paging.external_audit_page_decision
+external_audit_pages = _external_audit_paging.external_audit_pages
+EXTERNAL_AUDIT_PAGE_CAP = _external_audit_paging.EXTERNAL_AUDIT_PAGE_CAP
+
 __all__ = [
+    "EXTERNAL_AUDIT_PAGE_CAP",
     "AlertCandidate",
     "apply_daily_page_budget",
+    "external_audit_page_decision",
+    "external_audit_pages",
     "apply_desk_cap",
     "baseline_exceeds",
     "budget_magnitude_tier",
@@ -1963,4 +1954,6 @@ TRIGGER_CLASSES: tuple[str, ...] = (
     TRIGGER_GEO_CONVERGENCE,
     TRIGGER_PRODUCTION_DEFICIT,
     TRIGGER_SITUATION_ESCALATION,
+    TRIGGER_COVERAGE_FLOOR,
+    TRIGGER_EXTERNAL_AUDIT,
 )

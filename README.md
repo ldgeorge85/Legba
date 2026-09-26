@@ -1,265 +1,191 @@
-<p align="center">
-  <img src="logo_small.png" alt="Legba" width="400">
-</p>
+<!-- SPDX-FileCopyrightText: 2026 Lewis George
+     SPDX-License-Identifier: AGPL-3.0-or-later -->
+# Legba
 
-<h1 align="center">Legba</h1>
-<p align="center"><em>Cited, grounding-verified intelligence you can drill to source — over any feed you can reach, self-hostable.</em></p>
-<p align="center">
-  <a href="docs/TOUR.md"><b>Tour</b></a> ·
-  <a href="docs/FAQ.md"><b>FAQ</b></a> ·
-  <a href="docs/SETUP.md">Setup</a> ·
-  <a href="docs/STATUS.md">Status</a> ·
-  <a href="docs/README.md">All docs</a>
-</p>
+**An intelligence service you define in YAML, and that measures its own correctness.**
 
-## What it is
+Legba watches sources, writes short analytic reads about the things you tell it to care about, and
+checks its own work. Every sentence it writes is cited to a source item; a second pass verifies that
+each claim follows from what it cites; the desks are graded against references built independently of
+the platform; and a standing audit checks its claims against the open web. The numbers are published,
+including the bad ones. You run it yourself.
 
-Legba watches a set of feeds and writes intelligence assessments you can check.
-Point it at sources (news RSS, GeoJSON hazard feeds, APIs, webhooks), declare
-what you care about (we run 32 country desks — 19 G20 plus a 13-country watch
-tier; counts are generated — see [docs/RELEASE_STATE.md](docs/RELEASE_STATE.md)),
-and it produces short analytic reads — each
-claim cited to a source, each citation checked by a second verification pass,
-and everything auditable hop-by-hop back to the original item.
+The part that is unusual is the **checking layer**: the machinery that decides whether what has
+already been written holds up, and that answers in typed, drillable terms instead of a blank. A
+correctness figure never appears without the coverage it was drawn from. A contrary pass goes looking
+for evidence against a claim and records the disagreement rather than a verdict. And where there is
+nothing to say, `GET /v3/absence?scope=<desk>` says which kind of nothing it is — from a closed
+eight-kind vocabulary, with the proof of what was checked and how long that answer is good for —
+because *not checked* and *nothing found* are different answers and a blank cell hides both.
+
+It is **software-defined**: an instance of Legba is a set of descriptors. Sources, desks, analyst
+units, capability packs, model routes, cadences, grants and budgets are YAML documents registered
+through one API, and the runtime is generic and reads them. Adding a country is a target descriptor.
+Adding a feed is a source descriptor. Changing what the platform watches, thinks about, or is allowed
+to do is a descriptor change, not a code change.
+
+It is a **long-horizon agentic environment**: the analysts are scheduled actors with memory. They
+keep a journal and a chronicle, read the record through declared interpretive lenses, act through
+governed tool packs, and are graded over time on three axes that are never pooled: faithfulness to the
+evidence on every layer, correctness against independent references, and the external audit.
+
+## The tower
 
 ```
- feeds ──► signals ──► facts / entities / situations      (the knowledge substrate)
-                          │
-                          ▼
-              9 bounded reasoning units                    (one narrow question each,
-   leadership · energy · escalation · narrative ·          per country desk — except
-   internal-stability · military-posture · economic-coercion  proliferation, narrow:
-   · proliferation · disruption-status                      8 nuclear-relevant desks;
-                                                            disruption-status, narrow:
-                                                            thematic supply-chain desks)
-                          │  cited [N] → grounding-verified
-                          ▼
-   country ──► region ──► world composition                (synthesis over GROUNDING-
-        (+ a cross-desk thematic escalation read)           VERIFIED sub-claims only)
-                          │
-                          ▼
-                   banded scorecard                        (one row per desk; missing
-                                                            evidence says so honestly)
+ sources ──► signals ──► facts · entities · relations · situations · events   (the substrate)
+                            │
+                            ▼
+              nine bounded units, one narrow question each                    (per desk: 32 country
+              leadership · energy · escalation · narrative · stability ·      desks + thematic desks;
+              posture · coercion · proliferation · disruption                 cited [N], judge-verified)
+                            │
+                            ▼
+              country composition ──► region rollup ──► world record          (verified spans quoted
+              + the country voice        (deterministic)   + the world voice   byte-for-byte; the voice
+                                                                              is its own graded row)
+                            │
+                            ▼
+              scorecard · alerts · journal · lenses · consult                 (what a reader sees)
+
+  beside every floor: the faithfulness judge · the correctness grader · the external audit ·
+                      the contrary pass · typed absence (GET /v3/absence?scope=<desk>)
 ```
 
-The pitch is the discipline, not the data: most tools let an LLM *assert*.
-Here every assertion is **cited**, a **mandatory second pass checks that each
-claim actually follows from what it cites** (an LLM judge plus a deterministic
-citation check), and a hash-chained receipt trail connects every output back to
-source. The whole chain — source item, citation, verify verdict, composed
-conclusion — is preserved and replayable after the fact. You run it yourself
-(AGPL, self-hosted), so you can inspect all of it.
+Each floor rests on the floor below and cites it. A reader can drill any sentence down to the source
+item: the citation, the verify verdict, the receipt, the archived bytes. Where the evidence supports
+nothing, the read says so instead of filling the gap.
 
-**What "self-hosted" does and doesn't mean.** The *analysis core* is genuinely
-self-hosted and $0-per-run: every scheduled analyst — the bounded units, the
-composition tower, the deterministic sidecars — generates on a local
-OpenAI-compatible vLLM plane, with local embeddings, Postgres, Qdrant,
-OpenSearch, NATS and SearxNG alongside it. No scheduled analytic work bills a
-third party. Two hosted endpoints *are* in the loop today and it would be
-dishonest to call the deployment SaaS-free: the cross-family **verify judge**
-runs on a hosted Nemotron endpoint (OpenRouter), and the operator-invoked
-**`consult` / `deep_consult`** analysts run on Anthropic — those two are the
-only sanctioned Anthropic users, enforced in the deps builder rather than by
-convention. Both are single config lines (`LEGBA_JUDGE_STACK_REF` and the
-`deep_consult` descriptor's `llm.primary.raw`) and both can be pointed back at
-the local plane, at the cost of returning the judge to same-model grading.
-Several optional source handlers (Firecrawl, MediaCloud, Telegram, Discord)
-and any proxy pool are likewise commercial and credential-gated — they are
-opt-in, not required, and the catalog runs without them. The generated
-[docs/RELEASE_STATE.md](docs/RELEASE_STATE.md) reports the *effective* judge
-route for a given deployment rather than the descriptor default, so this
-distinction stays checkable instead of asserted.
-
-**What "grounding-verified" means — and doesn't.** The verify pass measures
-*groundedness*: "does this claim follow from the evidence it cites?" — not "is
-this claim true in the world?" Faithfulness is a `[0,1]` score folded into
-`effective_confidence = min(confidence, faithfulness)`; a fabricated claim gets
-flagged and demoted to a visible low-confidence tier, never silently deleted.
-Legba makes **no forecast-accuracy claim** and ships single-operator /
-single-tenant. Weak spots are reported, not hidden — see
-[docs/STATUS.md](docs/STATUS.md).
-
-The engine is domain-agnostic — sources, desks, and analysts are declarative
-descriptors, so swapping the geopolitics exemplar for another domain is
-configuration, not code.
+The engine is domain-agnostic. The geopolitics desks are the shipped exemplar; a desk is a registered
+subject frame, and a second family of thematic supply-chain desks runs on the same primitive with no
+new code.
 
 ## Quick start
 
 ```bash
-docker compose --profile runtime build      # one-time image build
-deploy/deploy.sh                            # phased, idempotent bring-up (project "legba")
-deploy/deploy.sh --seed                     # optional: + curated knowledge seeds
+docker compose --profile runtime build      # build the app images once
+deploy/deploy.sh                            # phased, idempotent bring-up
+deploy/deploy.sh --seed                     # optional: add the curated knowledge seeds
 ```
 
-One script stands up the whole thing in the load-bearing order: schema →
-credential vault → the substrate stack → the source catalog → the 32 country
-desks → the analyst set → runtime.
-Clean-slate only (no migration path from
-pre-pivot Legba). Step-by-step manual bring-up, a throwaway validation stack,
-and troubleshooting live in [docs/SETUP.md](docs/SETUP.md) and
-[docs/RUNBOOK.md](docs/RUNBOOK.md).
-
-**What that actually registers: 53 sources, 52 of them polling.** The 46-entry
-no-auth catalog (43 `rss` + 3 `geojson`), plus 7 pinned standalone descriptors —
-three shared global wires, three state-media voices, and the UCDP conflict-event
-feed, which ships inert pending its token. That is the whole out-of-box number
-and it is deliberately smaller than this deployment's live scope: **another 64
-verified descriptors ship in-tree as opt-in breadth batches that `deploy.sh`
-does NOT run**, because every one of them registers `state: draft` — inert, no
-actor, activated per-feed by an operator who has confirmed the route is live on
-their instance:
-
-```bash
-python scripts/bringup_register_wave_a_sources.py         # 41 no-auth breadth feeds
-python scripts/bringup_register_rsshub_sources.py         # 10 starved-desk feeds (rsshub sidecar)
-python scripts/bringup_register_supply_chain_sources.py   #  7 supply-chain domain feeds
-python scripts/bringup_register_source_batch_2026_08.py   #  6 AP re-route + Niger coverage
-```
-
-53 registered + 64 available is how this deployment reaches the ~117 sources
-that have actually produced signals. Full tiering, the per-source table, and
-the activation story: [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
+One script stands the platform up in the order that matters: schema, credential vault, substrate,
+the source catalog, the desks, the analysts, then the runtime. Fresh volumes only; there is no
+migration path from earlier designs.
 
 ```bash
 # Is it alive? Signals landing, analysts producing:
-docker exec legba-postgres-1 psql -U legba -d legba -c \
+docker compose exec -T postgres psql -U legba -d legba -c \
   "SELECT count(*) FROM signals; SELECT kind, count(*) FROM analyst_outputs GROUP BY kind;"
 ```
 
-The operator UI is served by Caddy on `:443` (basic-auth perimeter); the
-registry API on `:8090` (bearer token). All model inference is hosted
-out-of-process — nothing heavy runs in-container.
+The operator console is served by Caddy on `:443` behind a basic-auth perimeter; the registry API on
+`:8090` with a bearer token. Model inference is hosted out of process; nothing heavy runs in a
+container. What `deploy.sh` registers out of the box is a fixed, unauthenticated catalog; further
+verified sources ship in the tree as drafts and are activated one feed at a time by the operator, so a
+running deployment carries more than the catalog. The live counts are generated, not typed:
+[docs/RELEASE_STATE.md](docs/RELEASE_STATE.md).
 
-**Then take the [Tour](docs/TOUR.md)** — your first ten minutes: see a finding,
-read its citations, check its verification, and drill it to the source article.
+Then take the [Tour](docs/TOUR.md): see a finding, read its citations, check its verification, and
+drill it to the source article.
 
 ## How it works, in one paragraph
 
-Sources own acquisition: a source polls (or receives a push), emits one
-canonical, target-agnostic **signal**, enriched once (language, geo, entities)
-and published once. A fan-out plane routes each signal to every subscribed
-**desk** by predicate — one BBC feed serves all 32 desks without
-re-fetching. Per country desk, up to eight of the nine bounded **units** each
-answer one narrow
-question — seven run on every desk; the eighth, `proliferation_watch`, only on
-the 8 nuclear-relevant desks; the ninth, `disruption_status`, runs on the
-thematic supply-chain desks instead — over a cited 72-hour slice plus accumulated
-context from the temporal knowledge
-substrate (facts and relationships with validity windows — so it integrates
-over weeks, not just today, and stale model priors get overridden). Unit
-findings pass the **verify gate**; only sub-claims that were verified AND clear
-the composition floor (`effective_confidence ≥ 0.50` by default, operator-tunable)
-compose upward into the per-country read, the regional and world reads, and the
-scorecard. Every derived row
-carries lineage (`derived_from`) plus a SHA-256 receipt chain, walkable via
-`GET /api/v1/lineage`. Deep dives: [architecture](docs/ARCHITECTURE.md) ·
-[flows](docs/FLOWS.md) · [analysis methodology](docs/ANALYSIS.md).
+A source polls or receives a push and emits one canonical signal, enriched once with language, geo and
+entities, and published once. A fan-out plane routes each signal to every desk whose predicate matches
+it, so one feed serves every desk without refetching. Per desk, each bounded unit answers its one
+question over a cited slice plus the temporal substrate, which carries facts and relations with
+validity windows, so a unit integrates over weeks rather than a day. Unit findings pass the faithfulness
+judge; only verified sub-claims above the composition floor are quoted upward into the country record,
+the regional rollup and the world record, and only those records are read by the voices. Every derived
+row carries lineage and a hash-chained receipt, walkable through the lineage API. Deep dives:
+[architecture](docs/ARCHITECTURE.md), [flows](docs/FLOWS.md), [analysis](docs/ANALYSIS.md).
 
-## What's in the box
+## What is in the box
 
-- **Descriptor-driven everything** — sources, desks, analysts, and capability
-  packs are declarative, registered at runtime (content-hashed, Ed25519-signed
-  audit log). Adding a desk or a feed is registration, not a deploy.
-- **A dozen-plus source kinds, one signal shape** — `rss`, `geojson`,
-  `json_api`, `gdelt_query`, `acled`, `opensanctions`, `scraper`, `firecrawl`,
-  `telegram_channel`, `generic_webhook`, more ([catalog](docs/DATA_SOURCES.md)).
-- **The grounding-verified analysis spine** — units → compositions → scorecard, with the
-  faithfulness gate between every layer ([how to read one](docs/TOUR.md)).
-- **Provenance you can walk** — lineage API + receipt chains
-  ("chain-consistent (single-node)" — an honest badge, not a tamper-proof claim).
-- **Verification-gated alerts, with receipts** — deterministic triggers on
-  *verified* state changes (band crossings, new high-severity verified
-  findings, contested-claim flips, deviation from a desk's own statistical
-  baseline, hits on operator-defined **watchlists**) fan out through a
-  ledgered sink plane (webhook / ntfy push, operator-activated); every alert
-  states its verification posture and links back to its receipt chain, and
-  cooldown-suppressed alerts coalesce rather than vanish. A steady-state
-  suppression guard plus a daily page budget with per-kind caps keep paging
-  scarce; everything suppressed is still recorded and inspectable.
-- **A standing external auditor** — a daily deterministic rotation samples
-  top-layer claims and checks them against live web search (the one plane
-  that grades the product against the world rather than against itself);
-  verdicts land as their own critique class, heartbeat-watched.
-- **Read receipts** — an append-only (trigger-enforced) ledger of what the
-  operator actually opened, drilled, and read, with a daily rollup — the
-  honesty instrument for whether the product is consumed, not just produced.
-- **An evidence archive** — signals cited by verified findings have their
-  original bytes fetched and stored content-addressed (SHA-256), license-gated,
-  so a citation resolves to a preserved copy rather than a rotting URL.
-- **A calibration record** — scorecard band changes are logged as resolvable
-  claims and graded at 14/28-day horizons, published as persistence and
-  reversal rates (deliberately not a Brier score — bands aren't probabilities).
-- **Temporal and narrative views** — a validity-window timeline over the
-  temporal substrate, and contested-claim families reified as narratives with
-  a who-publishes-first source-echo graph (detect-only, descriptive-not-causal).
-- **On-demand consult** — ask questions against the live substrate
-  (`POST /api/v1/consult`; ReAct over governed read tools).
-- **An introspective journal + voice roster** — the system's first-person voice
-  about its own state, plus a weekly third-person chronicle and four
-  falsifiable-prior "lens" reads with a chorus diff — all kept off the product
-  chain so they can never pollute findings.
-- **Measured experiments, labeled as such** — a prompt self-optimizer and an
-  acute-forecast scoreboard exist behind honesty gates; neither claims skill it
-  hasn't measured ([details](docs/STATUS.md)).
-- **Operator UI** — a composable panel workstation opening on a Morning Read
-  landing, with six workspace presets (read / desk / investigate / trust /
-  gate / engine), a verb-folded panel catalog, and the classic feed /
-  inspector / map / scorecard / lineage / entity-graph panels —
-  [guide](docs/UI.md).
+- **Everything is a descriptor.** Sources, desks, analysts, packs and model routes are registered at
+  runtime through a content-hashed, signed, audited registry. Adding a desk or a feed is registration.
+- **One signal shape from many source kinds:** RSS, GeoJSON, JSON APIs, GDELT, Telegram channels,
+  webhooks, scrapers and more. [Catalog](docs/DATA_SOURCES.md).
+- **The verified spine:** units, compositions, voices and scorecard, with the faithfulness gate between
+  every layer, and provenance you can walk hop by hop.
+- **Three graders that never pool.** The faithfulness judge on every written layer. The correctness
+  grader, which builds its own references and scores the desks with three model families. The external
+  audit, which samples top-layer claims and checks them against live web search, including claims that
+  something did not happen. [How it is measured](docs/ANALYSIS.md#measurement).
+- **Verification-gated alerts** on verified state changes and operator watchlists, through a ledgered
+  sink plane with a daily page budget; what is suppressed is recorded, not lost.
+- **An evidence archive.** Cited pages are fetched and stored content-addressed and licence-gated, so a
+  citation resolves to a preserved copy rather than a rotting link.
+- **A temporal substrate**, with validity windows on facts, relations, situations and events, a
+  situation ledger that records how each open situation evolved, and as-of reads — `as_of` on the
+  substrate readers and `GET /api/v1/v3/belief` answer "what did Legba believe on date D". Every
+  substrate row also carries an `origin_class` — live, seed, web-retrieval or a refused-until-swept
+  history class — so imported history can never silently read as "now".
+- **An event plane, dark by default.** Deterministic event clustering and reconciliation upsert
+  evidence-linked event rows from signal clusters and tower findings, write every lifecycle
+  transition to an append-only ledger, and reconcile occurrences with correlated-with and
+  evolves-from edges. Every event write is gated by `LEGBA_EVENTS`. The read side is `GET
+  /api/v1/v3/events` (+ `/{id}` dossier and `/{id}/lifecycle` ledger) and the
+  `query_events`/`inspect_event` tools in `action_pack_substrate_read`; the world map draws
+  geocoded events as lifecycle-colored rings and both timelines put them on their own lane.
+- **Event citations.** A finding may cite `event:<uuid>`; the citation builder expands it to the
+  event's member signals at build time, so the judge grounds on raw signal text — the event's own
+  summary is never evidence. Off by default (`LEGBA_EVENT_CITATIONS`).
+- **A cross-layer graph projection, dark by default.** `graph_arcs` is a disposable,
+  plane-tagged (world / evidence / lineage) projection of every cross-layer arc, rebuilt whole
+  by the `graph_projector` sweep and read at `GET /api/v1/v3/graph/arcs` with an `as_of`
+  temporal filter — never an incremental mirror. A stale, empty or disabled projection refuses
+  by name (`projection_stale` / `projection_empty` / `projection_disabled`), never a quiet
+  empty graph. Gated by `LEGBA_GRAPH_PROJECTION`; the descriptor ships `draft`.
+- **The journal and the lenses.** A first-person journal with consolidation, a third-person chronicle,
+  and a faculty of interpretive lenses, each with one declared falsifiable prior, kept off the product
+  chain so they can never pollute a finding.
+- **On-demand consult** against the live substrate through governed read tools, the one billed path,
+  run only when the operator presses it.
+- **An operator workstation:** composable panels opening on a Morning Read, with feed, inspector, map,
+  scorecard, lineage and entity-graph views. [Guide](docs/UI.md).
+- **Honesty gates.** Anything not built is a declared seam that fails loud. Experiments that have not
+  measured skill say so. [Status](docs/STATUS.md), [Seams](docs/SEAMS.md).
 
-## AI models
+## AI models, and who pays
 
-The analyst plane runs on a self-hosted **gpt-oss-120b** (vLLM, $0/token);
-consult uses **Claude Opus 4.8** (billed, sparingly); the faithfulness judge
-runs **cross-family** on a hosted Nemotron endpoint (OpenRouter) via the
-repointable judge route — the shipped descriptor default is same-model, and
-one config line points it back at the local plane. Enrichment: bge-m3
-embeddings, NLLB translation, spaCy/GLiREL NER. All hosted out-of-process and
-resolved through the stack registry. Details:
-[docs/AI_MODELS.md](docs/AI_MODELS.md).
+Every scheduled analyst runs on a self-hosted OpenAI-compatible plane at no per-run cost: the units,
+the compositions, the voices, the lenses, enrichment and the reference builder. Three hosted routes
+are in the loop and are single config lines: the faithfulness judge runs cross-family on a hosted
+endpoint, the external audit's grader and second rater run on hosted models, and consult runs on
+Anthropic's Claude, only when pressed. The generated release state reports the effective routes for a
+deployment, so the claim stays checkable. Every cap, budget and route, with the plane that pays for it,
+is in one table: [docs/TUNABLES.md](docs/TUNABLES.md). Details: [docs/AI_MODELS.md](docs/AI_MODELS.md).
 
 ## Documentation
 
-| I want to… | Read |
+| Tier | Read |
 |---|---|
-| [docs/DESIGN.md](docs/DESIGN.md) | Implementation design — core abstractions, data flows, decisions |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Conceptual orientation — the four planes and why the system is shaped this way |
-| [docs/ACQUISITION.md](docs/ACQUISITION.md) | The acquisition plane — `SourceActor`, baseline enrichment, fan-out / subscription |
-| [docs/ANALYSIS.md](docs/ANALYSIS.md) | The analysis plane — units, composition, verify, coalescing triggers, action-pack agency |
-| [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md) | The source catalog — the tiered scope model (46-entry catalog / 53 registered by `deploy.sh` / a moving live scope), the per-source table, and the source-handler kinds reachable through them |
-| [docs/MANUAL_INGEST_FORMAT.md](docs/MANUAL_INGEST_FORMAT.md) | The manual-ingest batch format — manifest + per-kind JSONL schemas for hand-supplied data |
-| [docs/AI_MODELS.md](docs/AI_MODELS.md) | The hosted models, providers, and how the runtime reaches them |
-| [docs/RUNBOOK.md](docs/RUNBOOK.md) | Operator runbook — bring-up, migrations, registration, troubleshooting |
-| [docs/CODE_MAP.md](docs/CODE_MAP.md) | Code map — modules, function flows, dependencies |
-| [docs/UI.md](docs/UI.md) | Operator UI guide — panels, auth chain, daily-driver workflow |
-| [docs/DIRECTION.md](docs/DIRECTION.md) | Engineering direction — designed-not-built: RBAC/SSO, tenancy, STIX/TAXII, MCP, multimodal, scale-out, budget fallback, deep crawl |
+| Front door | [Direction](docs/DIRECTION.md) · [Tour](docs/TOUR.md) · [Setup](docs/SETUP.md) · [Operating your instance](docs/OPERATING_YOUR_INSTANCE.md) · [FAQ](docs/FAQ.md) |
+| Design | [Architecture](docs/ARCHITECTURE.md) · [Design rules](docs/DESIGN.md) · [Analysis](docs/ANALYSIS.md) · [Flows](docs/FLOWS.md) · [Data model](docs/DATA_MODEL.md) · [Data model v3](docs/DATA_MODEL_V3.md) · [Acquisition](docs/ACQUISITION.md) · [Sources](docs/DATA_SOURCES.md) · [Models](docs/AI_MODELS.md) · [UI](docs/UI.md) |
+| Reference | [Runbook](docs/RUNBOOK.md) · [Tunables](docs/TUNABLES.md) · [Status](docs/STATUS.md) · [Release state](docs/RELEASE_STATE.md) · [Code map](docs/CODE_MAP.md) · [Glossary](docs/GLOSSARY.md) · [Seams](docs/SEAMS.md) |
+| History | [Changelog](CHANGELOG.md) · [docs/history](docs/history/README.md) |
 
-Full index with reading paths: [docs/README.md](docs/README.md).
+The full index: [docs/README.md](docs/README.md).
 
 ## Status, honestly
 
-The spine runs end-to-end today — cold-start from empty volumes to a verified
-scorecard is proven. It is also plainly imperfect: some desks band from
-verified claims while others honestly read `insufficient-evidence`; the
-correctness gold set is tiny; the forecast pilot reports **no proven skill**;
-the self-optimizer has yet to produce a promotable improvement. Every gap is
-declared: [docs/STATUS.md](docs/STATUS.md) is the truth-in-labeling table,
-[docs/SEAMS.md](docs/SEAMS.md) the registry of intentionally-not-built things
-(they fail loud, never fake output). Release history: [CHANGELOG.md](CHANGELOG.md)
-(public history is squashed per release; the changelog is the record). Retired legacy analysts and what replaced
-them: [docs/STATUS.md §Retirements](docs/STATUS.md#retirements--freezes).
+The spine runs end to end, from empty volumes to a verified scorecard. It is single-operator,
+single-tenant and single-node. Some desks band from verified claims while others honestly read
+"insufficient evidence"; the correctness gold set is small; the forecast pilot reports no proven skill;
+composed prose is a quotation assembly because free-text synthesis did not survive grading. Every gap
+is declared in [docs/STATUS.md](docs/STATUS.md), and everything deliberately not built is in
+[docs/SEAMS.md](docs/SEAMS.md). The record of what changed and when is [CHANGELOG.md](CHANGELOG.md);
+public history is squashed per release.
 
 ## Contributing
 
-[CONTRIBUTING.md](CONTRIBUTING.md) — the four gates the tree enforces
-mechanically (no undeclared stubs, tests on the real binding path, module-size
-ceilings, the ruff ratchet), what CI does and does not cover, and why an outside
-code contribution needs a CLA. Bug reports and *"your docs say X, your code does
-Y"* findings need no CLA and are the most useful thing you can send.
+[CONTRIBUTING.md](CONTRIBUTING.md): the four gates the tree enforces mechanically (no undeclared
+stubs, tests on the real binding path, module-size ceilings, the lint ratchet), what CI does and does
+not cover, and why an outside code contribution needs a CLA. Bug reports and "your docs say X, your
+code does Y" findings need no CLA and are the most useful thing you can send.
 
-## Contact & license
+## Contact and license
 
-Talk shop: legba@civislux.us. Copyright (C) 2026 Lewis George. Licensed
-**AGPL-3.0-or-later** — see [LICENSE](LICENSE); note the network clause (§13).
-A commercial license is available for uses the copyleft doesn't fit — enquire
-via the [repository](https://github.com/ldgeorge85/legba).
+Talk shop: legba@civislux.us. Copyright (C) 2026 Lewis George. Licensed AGPL-3.0-or-later; see
+[LICENSE](LICENSE) and note the network clause. A commercial license is available for uses the
+copyleft does not fit; enquire via the [repository](https://github.com/ldgeorge85/legba).

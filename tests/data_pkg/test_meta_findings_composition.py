@@ -76,7 +76,7 @@ async def test_global_run_is_unfiltered_legacy_query():
     query, params = conn.calls[0]
     assert "target_id =" not in query
     assert "Faithfulness verify" not in query
-    assert "JOIN LATERAL" not in query
+    assert "JOIN v ON v.fid = f.id::text" not in query
     # Only the two legacy params: analyst id list + window hours.
     assert params == (["country_assessor", "world_assessor"], 24)
 
@@ -99,7 +99,7 @@ async def test_target_scoped_run_adds_target_and_verify_floor():
 
     # (b) VERIFY-FLOOR gate — INNER JOIN to the faithfulness critique + the
     # effective_confidence floor + coerce-fallback tag exclusion.
-    assert "JOIN LATERAL" in query
+    assert "JOIN v ON v.fid = f.id::text" in query
     assert "Faithfulness verify%" in query
     assert "LEAST(f.confidence, v.faithfulness_score) >= $4" in query
     assert "?| array['unstructured','coerce_failed']" in query
@@ -143,7 +143,7 @@ async def test_direct_reader_legacy_path_unchanged():
         conn, analyst_ids=["a", "b"], time_window_hours=48
     )
     query, params = conn.calls[0]
-    assert "JOIN LATERAL" not in query
+    assert "JOIN v ON v.fid = f.id::text" not in query
     assert "target_id =" not in query
     assert params == (["a", "b"], 48)
 
@@ -158,7 +158,7 @@ async def test_direct_reader_target_only_no_verify_join():
     )
     query, params = conn.calls[0]
     assert "f.target_id = $3" in query
-    assert "JOIN LATERAL" not in query
+    assert "JOIN v ON v.fid = f.id::text" not in query
     assert params[2] == "country_g20_de"
 
 
@@ -817,7 +817,7 @@ async def test_world_composition_read_slice_includes_meta_and_verify_floor():
     assert "target_descriptors" not in query
     assert "f.target_id =" not in query          # no target scope on a global run
     assert "'meta'" not in query                 # include_meta=True → exclusion dropped
-    assert "JOIN LATERAL" in query               # verify-floor gate present
+    assert "JOIN v ON v.fid = f.id::text" in query   # H17 fold, verify-floor gate present
     assert "Faithfulness verify%" in query
     assert params[0] == ["region_composition"]   # the region layer, not country
     assert params[-1] == synth.DEFAULT_VERIFY_FLOOR  # floor (last positional)
@@ -835,7 +835,7 @@ async def test_global_meta_without_verify_still_excludes_meta_and_no_join():
     assert not any("target_descriptors" in q for q, _ in conn.calls)
     query, params = conn.calls[0]
     assert "'meta'" in query  # exclusion clause kept
-    assert "JOIN LATERAL" not in query
+    assert "JOIN v ON v.fid = f.id::text" not in query
     assert params == (["region_composition"], 24)
 
 

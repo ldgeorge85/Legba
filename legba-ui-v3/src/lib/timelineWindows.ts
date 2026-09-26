@@ -2,8 +2,9 @@
  * timelineWindows — the `system.timeline` validity-window panel's non-DOM logic
  * (P4-4).
  *
- * The temporal substrate (facts with `[valid_from, valid_until)`, situations
- * with a lifecycle window, findings with `[produced_at, superseded_at)` +
+ * The temporal substrate (events with `[time_start, time_end)` — V3/P6 —
+ * facts with `[valid_from, valid_until)`, situations with a lifecycle
+ * window, findings with `[produced_at, superseded_at)` +
  * supersession chains) had NO temporal view. This is the pure shaping layer for
  * it: turn the `GET /api/v1/v3/timeline` ranged-item rows into laned, bounded
  * spans the panel draws as an SVG timeline — brushable against a time axis,
@@ -20,13 +21,13 @@
  *     surfaced on the item, not invented as a floating edge.
  */
 
-import { SEVERITY_COLOR as SEVERITY_RAMP } from '@/v4/world/types'
+import { SEVERITY_COLOR as SEVERITY_RAMP, EVENT_LIFECYCLE_COLOR as EVENT_LC } from '@/v4/world/types'
 
 // ---------------------------------------------------------------------------
 // Wire shapes — mirror `timeline_api.TimelineItem` / `TimelineResponse` 1:1.
 // ---------------------------------------------------------------------------
 
-export type TimelineItemKind = 'fact' | 'situation' | 'finding'
+export type TimelineItemKind = 'event' | 'fact' | 'situation' | 'finding'
 
 export interface TimelineItem {
   id: string
@@ -54,28 +55,46 @@ export interface TimelineResponse {
 // Lanes + palette
 // ---------------------------------------------------------------------------
 
-/** Lane order (top → bottom). Situations first (the widest spans), then the
- *  finding supersession sequence, then the fact validity bands. */
-export const LANE_ORDER: readonly TimelineItemKind[] = ['situation', 'finding', 'fact']
+/** Lane order (top → bottom). Events first (V3/P6 — the bounded occurrences),
+ *  then situations (the widest frames), the finding supersession sequence,
+ *  then the fact validity bands. */
+export const LANE_ORDER: readonly TimelineItemKind[] = [
+  'event',
+  'situation',
+  'finding',
+  'fact',
+]
 
 export const LANE: Record<TimelineItemKind, number> = {
-  situation: 0,
-  finding: 1,
-  fact: 2,
+  event: 0,
+  situation: 1,
+  finding: 2,
+  fact: 3,
 }
 
 export const LANE_LABEL: Record<TimelineItemKind, string> = {
+  event: 'events',
   situation: 'situations',
   finding: 'findings',
   fact: 'facts',
 }
 
-/** Base per-kind color (findings recolor by severity — see `itemColor`). */
+/** Base per-kind color (findings recolor by severity — see `itemColor`).
+ *  An event's bar colors by its LIFECYCLE state (the badge), not by this
+ *  kind color — `itemColor` routes event items through
+ *  `EVENT_LIFECYCLE_COLOR` (V3/P6). */
 export const KIND_COLOR: Record<TimelineItemKind, string> = {
+  event: '#a78bfa', // violet-400 — an unclassified lifecycle reads as event
   situation: '#fb7185', // rose-400
   finding: '#fbbf24', // amber-400
   fact: '#34d399', // emerald-400
 }
+
+/** V3/P6 — the event five-state lifecycle → badge color. Re-exported from
+ *  the ONE definition in `v4/world/types.ts` (same rule as the severity
+ *  ramp) — the World map reads the same map so an event reads identically
+ *  on the timeline and the map. */
+export const EVENT_LIFECYCLE_COLOR: Record<string, string> = EVENT_LC
 
 /**
  * Severity → finding-bar color. The ONE severity ramp (v4/world/types.ts), not
@@ -152,10 +171,14 @@ export function shapeItems(items: TimelineItem[], nowMs: number): ShapedItem[] {
   return out
 }
 
-/** The bar color for a shaped item — findings by severity, else the kind color. */
+/** The bar color for a shaped item — findings by severity, events by their
+ *  lifecycle-state badge (V3/P6), else the kind color. */
 export function itemColor(item: ShapedItem): string {
   if (item.kind === 'finding' && item.severity && SEVERITY_COLOR[item.severity]) {
     return SEVERITY_COLOR[item.severity]
+  }
+  if (item.kind === 'event' && item.status && EVENT_LIFECYCLE_COLOR[item.status]) {
+    return EVENT_LIFECYCLE_COLOR[item.status]
   }
   return KIND_COLOR[item.kind]
 }

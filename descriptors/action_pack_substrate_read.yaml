@@ -87,6 +87,19 @@ tools:
     config: {}
   - name: query_predictions
     config: {}
+  # V3/P3 — the decision-time register: "what did Legba believe on date D"
+  # (spec §3.4). Read-only; the findings it returns are citable by id.
+  - name: belief_as_of
+    config: {}
+  # V3/P6 — the event surface (spec §6.1): the filtered bounded-occurrence
+  # list (lifecycle / geo / entity / time-window / as_of filters) and the
+  # one-event dossier (ranked signals, actors with roles, event edges,
+  # tracking situations, the lifecycle ledger). Read-only; every id the
+  # dossier returns is a citable ref.
+  - name: query_events
+    config: {}
+  - name: inspect_event
+    config: {}
   # Navigation readers — consult-surface only (the GATHER assessors don't offer
   # these; an assessor already has its target). They MUST be pack tools anyway:
   # the production consult loop is GOVERNED through this pack, so a tool absent
@@ -95,15 +108,45 @@ tools:
     config: {}
   - name: list_sources
     config: {}
+  # 7g-2 — the COLLECTION series reads. HISTORY, not now: the only tools in
+  # this pack that read `observations`, the bitemporal store a curated holding
+  # loads once and nothing schedules. Read-only; every row carries its valid
+  # period, its record time and the sha256 of the file the number came from.
+  - name: series_history
+    config: {}
+  - name: series_compare
+    config: {}
 
 prompt_fragments:
   - >-
     Query the substrate before answering: search_signals for full-text,
     query_facts for the fact store, inspect_entity for entity profiles,
     vector_search for semantic similarity. Cite returned UUIDs.
+  - >-
+    For real-world occurrences: query_events lists bounded events (filter
+    by target, geo ISO2, category, lifecycle_state, actor, or time window —
+    it is a thing that HAPPENED, where list_situations is a thing being
+    watched); inspect_event returns one event's dossier — ranked evidence
+    signals, actors with roles, event edges, tracking situations, and the
+    lifecycle ledger. belief_as_of(as_of) reads what Legba believed on a
+    date. Every id these tools return is citable.
+  - >-
+    For the PAST as numbers: series_history(series_id, subject, from, to)
+    reads one curated historical series for one subject over a valid-time
+    window, and series_compare(series_id, subjects, from, to) reads the same
+    series across several subjects in one call. from/to are required and
+    bound the period the numbers are ABOUT; the optional as_of bounds the
+    provider's RECORD time (which revision had been published by then).
+    These rows are HISTORY, never current reporting: a figure valid for 2016
+    is never evidence about now, and citing one obliges you to state its
+    valid period.
 
 rules:
   - "Never fabricate substrate refs — cite only UUIDs the tools returned."
+  - >-
+    A number from series_history / series_compare is a HISTORICAL
+    observation. State its valid period whenever you use it, and never
+    present it as a current value.
 
 governor:
   budget_account: substrate_read

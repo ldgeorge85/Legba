@@ -66,7 +66,13 @@ from ..schemas import (
     content_hash,
 )
 from ..schemas.analyst import ANALYST_KIND_REGISTRY
+from ..schemas.collection import CollectionDescriptor
 from .audit import AuditLogger
+from .descriptor_families import (
+    insert_descriptor_row,
+    state_machine_for,
+    terminal_state_for,
+)
 from .dlq import DescriptorDeadLetter
 from .errors import (
     DescriptorNotFound,
@@ -95,6 +101,13 @@ class Family(str, Enum):
     ANALYST = "analyst"
     SOURCE = "source"
     ACTION_PACK = "action_pack"
+    # Program 7g — a bounded, versioned HOLDING of the past. Its own family
+    # rather than "a source with a date range": a collection has no cadence,
+    # no cooldown and no health, and it carries a firewall block naming the
+    # eight surfaces it is fenced from. File convention
+    # `descriptors/collection_*.yaml`, never `source_` (the source machinery
+    # globs the latter and would pick a collection up as a live feed).
+    COLLECTION = "collection"
 
     @property
     def table(self) -> str:
@@ -103,6 +116,7 @@ class Family(str, Enum):
             Family.ANALYST: "analyst_descriptors",
             Family.SOURCE: "source_descriptors",
             Family.ACTION_PACK: "action_pack_descriptors",
+            Family.COLLECTION: "collection_descriptors",
         }[self]
 
     @property
@@ -112,10 +126,17 @@ class Family(str, Enum):
             Family.ANALYST: AnalystDescriptor,
             Family.SOURCE: SourceDescriptor,
             Family.ACTION_PACK: ActionPack,
+            Family.COLLECTION: CollectionDescriptor,
         }[self]
 
 
-DescriptorT = TargetDescriptor | AnalystDescriptor | SourceDescriptor | ActionPack
+DescriptorT = (
+    TargetDescriptor
+    | AnalystDescriptor
+    | SourceDescriptor
+    | ActionPack
+    | CollectionDescriptor
+)
 
 
 # ---------------------------------------------------------------------------
@@ -531,9 +552,10 @@ class DescriptorRegistry:
         # explicitly set a different one (and that other one is legal under
         # the state machine).
         if new_descriptor.identity.state.value != from_state:
-            cur = LifecycleState(from_state)
+            state_cls, transitions = state_machine_for(family.value)
+            cur = state_cls(from_state)
             new_state_val = new_descriptor.identity.state
-            if new_state_val not in ALLOWED_TRANSITIONS[cur] and new_state_val != cur:
+            if new_state_val not in transitions[cur] and new_state_val != cur:
                 raise IllegalLifecycleTransition(cur.value, new_state_val.value)
         else:
             new_descriptor = _stamp_state(new_descriptor, from_state)
@@ -678,9 +700,13 @@ class DescriptorRegistry:
             )
             if head is None:
                 raise DescriptorNotFound(family.value, descriptor_id)
-            cur = LifecycleState(head["state"])
-            new = LifecycleState.RETIRED
-            if new not in ALLOWED_TRANSITIONS[cur]:
+            state_cls, transitions = state_machine_for(family.value)
+            cur = state_cls(head["state"])
+            # A collection's terminal state is `superseded`, not `retired` —
+            # a holding is not switched off, it is replaced by a newer
+            # version of the same manifest.
+            new = terminal_state_for(family.value)
+            if new not in transitions[cur]:
                 raise IllegalLifecycleTransition(cur.value, new.value)
             await conn.execute(
                 f"UPDATE {family.table} SET state = $1 "
@@ -1403,101 +1429,9 @@ class DescriptorRegistry:
         version: str,
         body: dict[str, Any],
     ) -> None:
-        if family is Family.TARGET:
-            assert isinstance(descriptor, TargetDescriptor)
-            await conn.execute(
-                """
-                INSERT INTO target_descriptors
-                    (descriptor_id, version, schema_uri, is_head,
-                     abstraction_level, state, owner, name, body,
-                     inherits, created_at, retire_after)
-                VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)
-                """,
-                descriptor.identity.id,
-                version,
-                descriptor.identity.schema_uri,
-                descriptor.identity.abstraction_level.value,
-                descriptor.identity.state.value,
-                descriptor.identity.owner,
-                descriptor.identity.name,
-                json.dumps(body, default=_jsonify),
-                list(descriptor.identity.inherits),
-                datetime.now(tz=timezone.utc),
-                descriptor.identity.retire_after,
-            )
-        elif family is Family.ANALYST:
-            assert isinstance(descriptor, AnalystDescriptor)
-            await conn.execute(
-                """
-                INSERT INTO analyst_descriptors
-                    (descriptor_id, version, schema_uri, is_head,
-                     kind, state, owner, name, body,
-                     type_signature, inherits, created_at)
-                VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8::jsonb,
-                        $9::jsonb, $10, $11)
-                """,
-                descriptor.identity.id,
-                version,
-                descriptor.identity.schema_uri,
-                descriptor.identity.kind,
-                descriptor.identity.state.value,
-                descriptor.identity.owner,
-                descriptor.identity.name,
-                json.dumps(body, default=_jsonify),
-                json.dumps(
-                    descriptor.identity.type_signature.model_dump(mode="json"),
-                    default=_jsonify,
-                ),
-                list(descriptor.identity.inherits),
-                datetime.now(tz=timezone.utc),
-            )
-        elif family is Family.SOURCE:
-            assert isinstance(descriptor, SourceDescriptor)
-            await conn.execute(
-                """
-                INSERT INTO source_descriptors
-                    (descriptor_id, version, schema_uri, is_head,
-                     abstraction_level, kind, state, owner, name, body,
-                     inherits, created_at, retire_after)
-                VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8, $9::jsonb,
-                        $10, $11, $12)
-                """,
-                descriptor.identity.id,
-                version,
-                descriptor.identity.schema_uri,
-                descriptor.identity.abstraction_level.value,
-                descriptor.identity.kind,
-                descriptor.identity.state.value,
-                descriptor.identity.owner,
-                descriptor.identity.name,
-                json.dumps(body, default=_jsonify),
-                list(descriptor.identity.inherits),
-                datetime.now(tz=timezone.utc),
-                descriptor.identity.retire_after,
-            )
-        else:  # Family.ACTION_PACK
-            assert isinstance(descriptor, ActionPack)
-            await conn.execute(
-                """
-                INSERT INTO action_pack_descriptors
-                    (descriptor_id, version, schema_uri, is_head,
-                     abstraction_level, state, owner, name, body,
-                     inherits, created_at, retire_after)
-                VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8::jsonb,
-                        $9, $10, $11)
-                """,
-                descriptor.identity.id,
-                version,
-                descriptor.identity.schema_uri,
-                descriptor.identity.abstraction_level.value,
-                descriptor.identity.state.value,
-                descriptor.identity.owner,
-                descriptor.identity.name,
-                json.dumps(body, default=_jsonify),
-                list(descriptor.identity.inherits),
-                datetime.now(tz=timezone.utc),
-                descriptor.identity.retire_after,
-            )
+        """INSERT the new head row — the per-family SQL lives in
+        :mod:`legba.data.registry.descriptor_families`."""
+        await insert_descriptor_row(conn, family.value, descriptor, version, body)
 
     async def _write_audit(
         self,
@@ -1736,6 +1670,8 @@ def _family_of(descriptor: DescriptorT) -> Family:
         return Family.ANALYST
     if isinstance(descriptor, SourceDescriptor):
         return Family.SOURCE
+    if isinstance(descriptor, CollectionDescriptor):
+        return Family.COLLECTION
     if isinstance(descriptor, ActionPack):
         return Family.ACTION_PACK
     raise TypeError(f"unsupported descriptor type: {type(descriptor).__name__}")
@@ -1748,22 +1684,11 @@ def _stamp_version(descriptor: DescriptorT, version: str) -> DescriptorT:
 
 
 def _stamp_state(descriptor: DescriptorT, state: str) -> DescriptorT:
+    state_cls, _ = state_machine_for(_family_of(descriptor).value)
     new_identity = descriptor.identity.model_copy(
-        update={"state": LifecycleState(state)}
+        update={"state": state_cls(state)}
     )
     return descriptor.model_copy(update={"identity": new_identity})
-
-
-def _jsonify(value: Any) -> Any:
-    if isinstance(value, UUID):
-        return str(value)
-    if isinstance(value, datetime):
-        return value.astimezone(timezone.utc).isoformat()
-    if isinstance(value, set):
-        return sorted(value)
-    if isinstance(value, BaseModel):
-        return value.model_dump(mode="json")
-    raise TypeError(f"cannot serialize {value!r}")
 
 
 def _json_loads_maybe(value: Any) -> dict[str, Any]:
@@ -1838,10 +1763,18 @@ def _row_to_descriptor_row(family: Family, row: asyncpg.Record) -> DescriptorRow
             kind=row["kind"],
             retire_after=row["retire_after"],
         )
-    if family is Family.ACTION_PACK:
+    if family in (Family.ACTION_PACK, Family.COLLECTION):
+        # A collection's `kind` is its loader kind — the row-level answer to
+        # "how is this holding fetched" without opening the body, the same
+        # way a source row carries its handler kind.
         return DescriptorRow(
             **base,
             abstraction_level=row["abstraction_level"],
+            kind=(
+                (body.get("loader") or {}).get("kind")
+                if family is Family.COLLECTION
+                else None
+            ),
             retire_after=row["retire_after"],
         )
     # ANALYST

@@ -26,8 +26,11 @@ from uuid import uuid4
 import pytest
 
 from legba.data.analysts.unit_grounding import (
+    GROUNDING_OPEN_EVENTS,
     GROUNDING_PRIOR_READ,
     GROUNDING_SITUATIONS,
+    OPEN_EVENTS_CAP,
+    OPEN_EVENTS_MAX_CAP,
     UNIT_GROUNDING_ROW_KEY,
 )
 from legba.runtime.actor_substrate_slice import (
@@ -200,14 +203,31 @@ class _SliceConn:
     def __init__(self, *, signals: list[dict[str, Any]] | None = None) -> None:
         self._signals = signals or []
         self.queries: list[str] = []
+        self.params: list[tuple[Any, ...]] = []
 
     async def fetchrow(self, _query: str, *_params: Any) -> dict[str, Any] | None:
         return {"body": json.dumps({"sources": [], "scope": {"geo": ["IR"]}})}
 
     async def fetch(self, query: str, *_params: Any) -> list[dict[str, Any]]:
         self.queries.append(query)
+        self.params.append(_params)
         if "FROM signals" in query:
             return list(self._signals)
+        # V3/P2 — the OPEN EVENTS family. Served unconditionally so an
+        # UNGRANTED run cannot pass by returning nothing: the assertion that
+        # matters is that it never ASKS.
+        if "situation_event_links sel" in query:
+            return [{
+                "id": uuid4(),
+                "title": "Iran - bounded occurrence",
+                "time_start": "2026-07-25T06:00:00+00:00",
+                "time_end": None,
+                "distinct_source_count": 31,
+                "lifecycle_state": "active",
+                "updated_at": "2026-07-31T09:00:00+00:00",
+                "updated_age_days": 1.4,
+                "report_count": 120,
+            }]
         if "FROM graph_metrics" in query:
             return []
         if "FROM situations" in query:
@@ -229,13 +249,19 @@ class _SliceConn:
         return any(needle in q for q in self.queries)
 
 
-def _descriptor(kind: Any) -> SimpleNamespace:
-    return SimpleNamespace(
+def _descriptor(kind: Any, options: dict[str, Any] | None = None) -> SimpleNamespace:
+    """A descriptor with NO ``method`` attribute unless options are asked for —
+    which is itself load-bearing: the V3/P2 grant resolution must tolerate a
+    descriptor shape that predates ``method.options`` entirely."""
+    desc = SimpleNamespace(
         identity=SimpleNamespace(id="escalation", kind=kind),
         subscription=SimpleNamespace(
             substrate={}, targets=SimpleNamespace(time_window="72h"),
         ),
     )
+    if options is not None:
+        desc.method = SimpleNamespace(options=options)
+    return desc
 
 
 def _signal_row() -> dict[str, Any]:
@@ -310,3 +336,110 @@ async def test_a_target_less_unit_run_gathers_no_grounding():
     )
     assert all(UNIT_GROUNDING_ROW_KEY not in r for r in rows)
     assert not conn.fired("FROM situations")
+
+
+# ---------------------------------------------------------------------------
+# V3/P2 — the OPEN EVENTS GRANT, through the real slice-reader binding
+# ---------------------------------------------------------------------------
+#
+# The knob is declared on the inline_target KIND catalog and read HERE, not in
+# run_method: the grounding gather fires inside the slice reader, which runs
+# before the runtime merges descriptor options into the run options mapping.
+# These are the behavioural half of that reachability claim — the source-level
+# half lives in tests/data_pkg/test_unit_grounding.py.
+
+
+@pytest.mark.asyncio
+async def test_a_granted_unit_gets_the_open_events_block():
+    conn = _SliceConn(signals=[_signal_row()])
+    rows = await _read_substrate_slice(
+        conn,
+        descriptor=_descriptor("inline_target", {"offer_events": True}),
+        target_filter="country_watch_ir",
+    )
+    kinds = [r.get(UNIT_GROUNDING_ROW_KEY) for r in rows]
+    assert GROUNDING_OPEN_EVENTS in kinds
+    assert GROUNDING_SITUATIONS in kinds, "the grant never costs a sibling block"
+    block = next(
+        r for r in rows if r.get(UNIT_GROUNDING_ROW_KEY) == GROUNDING_OPEN_EVENTS
+    )
+    payload = block["_grounding_payload"]
+    assert payload and payload[0]["source_count"] == 31
+    # Desk-scoped, and bounded by the in-source default.
+    _q, params = next(
+        (q, pr) for q, pr in zip(conn.queries, conn.params)
+        if "situation_event_links sel" in q
+    )
+    assert params == ("country_watch_ir", OPEN_EVENTS_CAP)
+
+
+@pytest.mark.asyncio
+async def test_an_ungranted_unit_never_even_asks_for_events():
+    """Absent knob AND explicit false — both must skip the query entirely. A
+    block nobody asked for is a live read per desk per tick, and the plan's
+    acceptance step is ONE granted analyst."""
+    for options in (None, {}, {"offer_events": False}):
+        conn = _SliceConn(signals=[_signal_row()])
+        rows = await _read_substrate_slice(
+            conn,
+            descriptor=_descriptor("inline_target", options),
+            target_filter="country_watch_ir",
+        )
+        assert not conn.fired("situation_event_links sel"), options
+        assert all(
+            r.get(UNIT_GROUNDING_ROW_KEY) != GROUNDING_OPEN_EVENTS for r in rows
+        ), options
+        # ...and the run still carries every block it carried before.
+        assert GROUNDING_SITUATIONS in {
+            r.get(UNIT_GROUNDING_ROW_KEY) for r in rows
+        }
+
+
+@pytest.mark.asyncio
+async def test_the_grants_bound_is_honoured_and_a_bad_value_degrades():
+    """The descriptor-settable limit reaches the SQL, and an out-of-range one
+    is dropped at the X-1 catalog so the in-source default stands — never the
+    nonsense value. A registry row outlives the code that validated it."""
+    conn = _SliceConn(signals=[_signal_row()])
+    await _read_substrate_slice(
+        conn,
+        descriptor=_descriptor(
+            "inline_target", {"offer_events": True, "open_events_limit": 3},
+        ),
+        target_filter="country_watch_ir",
+    )
+    params = next(
+        pr for q, pr in zip(conn.queries, conn.params)
+        if "situation_event_links sel" in q
+    )
+    assert params == ("country_watch_ir", 3)
+
+    conn = _SliceConn(signals=[_signal_row()])
+    await _read_substrate_slice(
+        conn,
+        descriptor=_descriptor(
+            "inline_target", {"offer_events": True, "open_events_limit": 10_000},
+        ),
+        target_filter="country_watch_ir",
+    )
+    params = next(
+        pr for q, pr in zip(conn.queries, conn.params)
+        if "situation_event_links sel" in q
+    )
+    assert params == ("country_watch_ir", OPEN_EVENTS_CAP)
+    assert params[1] <= OPEN_EVENTS_MAX_CAP
+
+
+@pytest.mark.asyncio
+async def test_a_non_unit_kind_can_never_be_granted_events():
+    """The kind gate sits OUTSIDE the grant: only inline_target's run_method
+    knows how to partition a marked row, so an options block on any other kind
+    must not reach the gather at all."""
+    conn = _SliceConn(signals=[_signal_row()])
+    rows = await _read_substrate_slice(
+        conn,
+        descriptor=_descriptor("predictor", {"offer_events": True}),
+        target_filter="country_watch_ir",
+    )
+    assert not conn.fired("situation_event_links sel")
+    assert all(UNIT_GROUNDING_ROW_KEY not in r for r in rows)

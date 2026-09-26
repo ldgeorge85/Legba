@@ -17,7 +17,10 @@ identity:
   schema_uri: legba/source/1.0.0
   version: "0000000000000000"        # placeholder — registry stamps content hash
   abstraction_level: L1
-  state: active
+  # PAUSED live (was active in-tree) — tree reconciled 2026-09-06
+  # (production_gauge.descriptor_state_drift) so a re-register from this file
+  # cannot silently re-activate a source the operator paused.
+  state: paused
   owner: s1_t8_source_class
   created: "2026-07-02T00:00:00Z"
 
@@ -27,6 +30,7 @@ scope:
   languages: [en]
   tags: [news, state_media, middle_east, iran]
   source_class: state_media
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

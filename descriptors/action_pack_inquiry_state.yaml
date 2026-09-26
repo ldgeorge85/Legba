@@ -1,0 +1,75 @@
+# inquiry_state action pack (Program 5 lane 1 — the inquiry kind's own
+# continuity ledger; planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §3).
+#
+# An inquiry is STATEFUL: it carries hypotheses (each with a resolution test
+# frozen at write), questions it has dispatched into the platform's own
+# machinery, and observations it expects a desk to later carry forward. This
+# pack is the ONLY read/write surface onto its one table (inquiry_ledger,
+# migration 0215) — three tools, every one scoped to the CALLING descriptor
+# by the deps builder / binding (never cross-inquiry — see
+# src/legba/data/analysts/agency/inquiry_state.py:scope_fence).
+#
+# WHY A SEPARATE PACK (not folding into journal_propose / substrate_read):
+# the same §7.6 grant invariant journal_propose already holds — a pack's
+# tools must all share ONE write surface, so granting it can never become an
+# implicit write-anything grant. This pack writes ONLY inquiry_ledger.
+#
+# Dispatch is NOT a tool of its own (§3): a question row with dispatched_to
+# set is written by ledger_write when the inquiry raises an open question
+# through the EXISTING journal_propose shapes — nothing new can spend money,
+# the paid rung stays behind the operator's word, as today.
+#
+# FOUR-SURFACE convergence (memory: consult-tools-must-be-pack-tools): this
+# `tools` list MUST equal INQUIRY_STATE_TOOLS == register_inquiry_state_tools
+# == every tool a bound inquiry can dispatch through this pack.
+#
+# Registered via scripts/bringup_register_action_packs.py.
+
+identity:
+  id: inquiry_state
+  name: Inquiry State (the ledger an inquiry carries)
+  schema_uri: legba/action_pack/1.0.0
+  version: "<content-hash stamped at register time>"
+  abstraction_level: L1
+  state: active
+  owner: program5_inquiry
+  created: "2026-09-24T00:00:00Z"
+
+tools:
+  - name: ledger_read
+    config: {}
+  - name: ledger_write
+    config: {}
+  - name: ledger_close
+    config: {}
+
+prompt_fragments:
+  - >-
+    You carry a ledger of what you are looking into: hypotheses (each with a
+    resolution test, frozen at write), questions you have dispatched into the
+    platform's own machinery, observations you expect a desk to later carry
+    forward, and expectations. ledger_read reads YOUR OWN rows (optionally
+    filtered by status); ledger_write opens one new row; ledger_close settles
+    one you already opened, with a reason and (when you have one) the
+    substrate ref that warrants the close.
+  - >-
+    A hypothesis needs a resolution_test at write — a test you decide later is
+    a test you can soften to fit the outcome, so it is refused, not optional.
+    A question you dispatch (into an open question / a contention / a desk)
+    names WHERE in dispatched_to — dispatch itself still goes through your
+    existing journal_propose / substrate faucets; this only records it.
+  - >-
+    You never see another inquiry's ledger — every tool here is scoped to
+    YOUR OWN descriptor id. Close honestly: a hypothesis you never test scores
+    as a hypothesis that opened nothing (your yield is read weekly, never a
+    gate).
+
+rules:
+  - "ledger_read / ledger_write / ledger_close touch ONLY your own inquiry_ledger rows — never another inquiry's."
+  - "A hypothesis without a resolution_test is refused at write, not accepted and softened later."
+  - "cited_refs is set ONLY at ledger_close — the warrant for HOW a row was settled, never a decoration at open."
+
+governor:
+  budget_account: inquiry_state
+  max_invocations_per_hour: 240
+  api_rate_per_minute: 60

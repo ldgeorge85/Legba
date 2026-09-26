@@ -727,6 +727,17 @@ def _fold_soft(report: Any, *, text: str, reason: str, markers: list[Any],
         unsupported_spans=list(report.unsupported_spans) + [span],
         judge_status=report.judge_status,
         judge_unavailable_reason=report.judge_unavailable_reason,
+        # 2026-09-08/1 — the judge TRANSPORT receipts ride every rebuild of a
+        # report, or a fold that adds one span would erase the evidence that
+        # the judge had to be asked three times. ``report`` is typed ``Any``
+        # here (these folds take report-SHAPED objects, doubles included), so
+        # the read is defensive — a missing field is absent, never a raise.
+        judge_attempts=getattr(report, "judge_attempts", None),
+        judge_http_statuses=list(
+            getattr(report, "judge_http_statuses", None) or []
+        ),
+        # H3 (2026-09-25/1) — the same defensive carry as the pair above.
+        judge_miscount_claims=getattr(report, "judge_miscount_claims", 0) or 0,
         confidence_ceiling=report.confidence_ceiling,
         branch_scores=report.branch_scores,
         claim_verdicts=list(report.claim_verdicts)

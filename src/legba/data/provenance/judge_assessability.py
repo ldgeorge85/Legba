@@ -392,18 +392,38 @@ def gate_score(
     return out
 
 
-def is_provisional(judge_status: Any) -> bool:
-    """A verdict the LLM judge did not produce is PROVISIONAL.
+#: The judge statuses that carry AT LEAST ONE adjudicated verdict, and are
+#: therefore not provisional. ``llm`` = every partition graded. ``partial``
+#: (2026-09-08/1) = one partition graded and another came back empty; its claims
+#: fell to the deterministic floor and are CHARGED there (their unsupported floor
+#: spans enter the denominator), so the row is already paying for the gap and the
+#: 0.85 ceiling would charge it twice for one provider's overload. See
+#: ``judge_transport.resolve_partition_outcome`` for the rule in full.
+ADJUDICATED_JUDGE_STATUSES: frozenset[str] = frozenset({"llm", "partial"})
 
-    Covers every non-``llm`` path with one test: the flag being off, the judge
+
+def is_provisional(judge_status: Any) -> bool:
+    """A verdict NO grader adjudicated is PROVISIONAL.
+
+    Covers every unadjudicated path with one test: the flag being off, the judge
     erroring (``judge_error`` — the 26-hour outage that produced 611 scored
     critiques and a 0.21 fleet-wide mean drop with no alarm), a degraded
-    response, or a caller that wired no judge at all. The distinction the
-    surfaces owe their reader is not WHICH of those happened — the existing
-    ``judge_unavailable_reason`` already says that — it is that the number in
-    front of them was never adjudicated.
+    response, the sampling gate declining, or a caller that wired no judge at
+    all. The distinction the surfaces owe their reader is not WHICH of those
+    happened — the existing ``judge_unavailable_reason`` already says that — it
+    is that the number in front of them was never adjudicated.
+
+    2026-09-08/1 widens the adjudicated set from ``{'llm'}`` to
+    :data:`ADJUDICATED_JUDGE_STATUSES`. Every OTHER reader in the tree still
+    tests ``judge_status == 'llm'`` and so treats a ``partial`` row exactly as it
+    treated the ``deterministic`` row this state replaces (the journal
+    no-critique gate, the escalation re-grade, the GEPA skip, the
+    adjudicated-share gauge) — conservative in every one of them, and a
+    deliberate choice: a partial pass earns relief from the CEILING, which is a
+    statement about double-charging, and it does not earn the name of a fully
+    adjudicated one.
     """
-    return str(judge_status or "") != "llm"
+    return str(judge_status or "") not in ADJUDICATED_JUDGE_STATUSES
 
 
 # ---------------------------------------------------------------------------
@@ -521,6 +541,19 @@ class JudgeSamplingPolicy:
 def _verify():
     from . import verify
     return verify
+
+
+def _judge_transport_receipts(report: Any) -> dict[str, Any]:
+    """``judge_transport.judge_transport_receipts``, imported LAZILY.
+
+    ``judge_transport`` reaches this module through ``judge_absence_rubric``
+    (``judge_transport`` → ``judge_absence_rubric`` → ``judge_assessability``),
+    so a module-level import here would close the cycle. Same reason, same
+    shape, and the same one-way discipline as :func:`_verify`.
+    """
+    from .judge_transport import judge_transport_receipts
+
+    return judge_transport_receipts(report)
 
 
 def build_faithfulness_critique_payload(
@@ -771,6 +804,33 @@ def build_faithfulness_critique_payload(
                 # are what let a reader tell "checked and clean" from "never
                 # checked" from "checked by a floor that cannot certify" — three
                 # states the schema previously rendered as one number.
+                # 2026-09-08 — the judge TRANSPORT receipts (``judge_attempts``,
+                # ``judge_http_statuses``). Folded from the ONE function that
+                # decides their shape, rather than re-typed here, because
+                # re-typing them here is precisely the defect this line repairs:
+                # this whole block is HAND-WRITTEN and does not derive from
+                # ``FaithfulnessReport.as_dict``, so the receipts landed on the
+                # trace envelope (``actor_critic`` returns ``report.as_dict()``)
+                # and NOWHERE on the persisted row. Three live ``judge_status=
+                # 'llm'`` rows at 2026-09-08 21:02Z carried no receipt at all.
+                # Present iff the judge was ASKED; see the function's docstring.
+                **_judge_transport_receipts(report),
+                # H3-MEASURE (2026-09-25/1) — the alignment audit
+                # (``miscount_claims``, ``aligned_by_id``,
+                # ``aligned_positionally``, ``unmatched_claims``), folded from
+                # the ONE function that shapes it. The wave-F lane put these
+                # four keys on ``FaithfulnessReport.as_dict()`` — the TRACE
+                # envelope — and its test read them back off that dict; the
+                # persisted row is THIS hand-written block, so the first 51
+                # live verdicts stamped 2026-09-25/1 carried none of them and
+                # ``/system/judge-stats`` read ``positional_share`` null at
+                # 2026-09-24 22:30Z. The same defect class as the transport
+                # receipts one line up (2026-09-08); the same repair.
+                **_verify().alignment_audit_fields(
+                    report.claim_verdicts,
+                    report.judge_miscount_claims,
+                    report.judge_partial,
+                ),
                 "score_state": report.score_state,
                 "score_state_reason": report.score_state_reason,
                 "provisional": report.provisional,
@@ -789,6 +849,7 @@ def build_faithfulness_critique_payload(
 
 
 __all__ = [
+    "ADJUDICATED_JUDGE_STATUSES",
     "DENOMINATOR_COVERAGE_STATEMENT",
     "DENOMINATOR_TRIGGERED_INDICATOR",
     "JUDGE_SAMPLE_ALWAYS_DEFAULT",

@@ -92,13 +92,20 @@ class _Conn:
             }
             return {"id": sid}
         if "INSERT INTO consult_turns" in s:
+            # Migration 0195 added five recovery columns. Unpacked explicitly
+            # (not by slice) so that the NEXT column added to this INSERT fails
+            # here, loudly, rather than silently binding into the wrong field.
             (session_id, role, content, steps, tool_calls, cited_refs,
-             finding_id) = args
+             finding_id, request_id, parent_turn_id, synthesis_status,
+             replay_transcript, usage) = args
             tid = str(uuid4())
             self.pg.turns.append({
                 "id": tid, "session_id": session_id, "role": role,
                 "content": content, "steps": steps, "tool_calls": tool_calls,
                 "cited_refs": cited_refs, "finding_id": finding_id,
+                "request_id": request_id, "parent_turn_id": parent_turn_id,
+                "synthesis_status": synthesis_status,
+                "replay_transcript": replay_transcript, "usage": usage,
                 "created_at": datetime.now(timezone.utc),
             })
             return {"id": tid}

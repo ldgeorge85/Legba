@@ -180,10 +180,17 @@ async def _call_instrument(call: ToolCall, ctx: ToolContext, name: str) -> ToolR
             # imported into the runtime port) — the kind-module constant lives in
             # the analyst layer, this pack is the analyst layer, so importing it
             # here does NOT cross the port boundary the design guards.
-            from legba.data.analysts.journal_assessor import LENS_ANALYST_IDS
+            #
+            # The set is LENS_DIFF_ROSTER_IDS (the four FUNCTION-typed faculties),
+            # not every lens id on the kind: this instrument exists to feed the
+            # chorus diff, whose persona declares a four-prior aperture verbatim.
+            # The 2026-09-21 stance-typed leans write 'lens' rows like any other
+            # lens and are reachable through get_journal_delta; folding them in
+            # here would re-scope lens_diff's read without touching its persona.
+            from legba.data.analysts.journal_assessor import LENS_DIFF_ROSTER_IDS
 
             out = await port.get_lens_reads(
-                lens_analyst_ids=list(LENS_ANALYST_IDS),
+                lens_analyst_ids=list(LENS_DIFF_ROSTER_IDS),
                 since=args.get("since"),
                 limit=int(args.get("limit", 20)),
             )

@@ -1,0 +1,2107 @@
+{
+ "_provenance": "WORLD tier. Built 2026-09-04 by read-only SELECT against legba-postgres-1/legba over the 2026-09-03 cycle. Candidate pool = the day's 32 country_composition heads, one lead span each (spec 4.2: the world assembler reads COUNTRY assemblies, not region heads); BLOCK_CAP 8 (F-10). Blocks quote the ORIGIN DESK HEAD, depth-1. Salience is cited_mass.v1 over signals.salience (1.5.2). Tensions are BLUF-grain direction conflicts with the ambivalence guard (1.6).",
+ "id": "7c8170f9-3464-4f65-b5b8-979dd9d82b6d",
+ "kind": "finding",
+ "analyst_id": "world_assessor",
+ "target_id": null,
+ "title": "World read · 3 Sep — “Saudi Arabia remains under high energy‑security pressure as recent tanker attacks in the Strait of Hormuz and…”",
+ "body": null,
+ "severity": "high",
+ "confidence": 1.0,
+ "produced_at": "2026-09-03T12:00:00Z",
+ "derived_from": [
+  "bc2482d2-88c9-41da-89c5-f861fb95bdd1",
+  "beb00bb8-e56f-42b4-84ed-d4d03a578990",
+  "05bf3176-0f9c-49eb-b052-9890ffd0c873",
+  "1950728e-6cd3-4874-b22f-c28e3e70a228",
+  "c653c2bb-669d-480f-bad0-5b64fb55ba33",
+  "426698eb-ed55-4347-8963-cf3966bf8b6b",
+  "5c2fe2f2-55f8-4456-b50c-957f4b6a6dad",
+  "d6d3a897-2fc1-4747-a38e-7263c55f07db",
+  "e0767cdb-05c6-4c70-a708-42d2504a9d2f",
+  "f48e79b4-b7ae-404f-85fc-f10878439663",
+  "c5a269ac-3bd6-4fac-90c1-4fa5be5726f2",
+  "0a86c092-aba9-4c99-858f-5df73e8236fe",
+  "b4dd4c49-8172-48c2-b3a6-4021fc8dbdc8",
+  "c02fe5ec-7c2f-4375-ad83-093e1e4c6140",
+  "14c23c06-8358-4043-85c8-ff25700569e9",
+  "04c10975-e66f-45cf-8cb9-1c75bca6cf0d",
+  "184ac6e9-26f3-41e1-bb6c-13e6d67f0fd1",
+  "480a288d-10f0-4f85-ad20-9eebcbb2559d",
+  "71dcc848-4780-4a25-b503-537e35b90410",
+  "805dd51e-9f03-49a2-a072-b3728cef82de",
+  "8f074706-ffbb-4e0c-b928-3fe82576f9e3",
+  "a26cc0c0-51ae-4099-a806-a20783e42a12",
+  "6c504eaa-303a-41d3-b24b-53ada1d51eba",
+  "9a5750f3-cc73-43c3-9a7b-d5c60220ea06",
+  "87a6cfc5-3c27-465d-b125-a41ef79b85ac",
+  "0ba1887b-ced1-47d1-ac44-830ead75b22b",
+  "d6c29a2d-af49-4e4e-adf6-c174500a2f4a",
+  "89d4725a-dcff-49e8-84b7-f1cebbe4db84",
+  "e9d2854e-9a2c-4691-a680-37bd79ae696e",
+  "b123f235-df74-423a-a6f5-40f8dce34521",
+  "2ed932bc-a140-4978-896b-538fe70c1b8c",
+  "2fd8d0ee-e123-42a6-b940-550d32f1f2f2"
+ ],
+ "data": {
+  "data": {
+   "meta": true,
+   "assembly": {
+    "schema": "assembly.v1",
+    "regime": "assembly",
+    "tier": "world",
+    "as_of": "2026-09-03T12:00:00Z",
+    "lead": {
+     "kind": "earned_single",
+     "block_ordinals": [
+      1
+     ],
+     "test": {
+      "key": "cited_mass.v1",
+      "top_share": 0.1536,
+      "ratio_12": 1.7907,
+      "bar_share": 0.15,
+      "bar_ratio": 1.5,
+      "earned": true,
+      "n_candidates": 32
+     }
+    },
+    "blocks": [
+     {
+      "ordinal": 1,
+      "finding_id": "bc2482d2-88c9-41da-89c5-f861fb95bdd1",
+      "desk": "energy_security",
+      "target_id": "country_g20_sa",
+      "target_name": "G20 — Saudi Arabia",
+      "question": "Is this country's energy supply or price under new strain — and is it a flow constraint or a volume constraint?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 04:04:47.801143+00",
+      "evidence_age_h": 7.92,
+      "tier": "basis",
+      "severity": "high",
+      "verify": {
+       "overall_score": 1.0,
+       "effective_confidence": 0.9,
+       "checkable_claims": 8,
+       "supported_claims": 8,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.9,
+       "cited_mass": 1.9,
+       "n_above": 6,
+       "n_cited_scored": 7,
+       "legacy_magnitude": 0.95
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "Saudi Arabia remains under high energy‑security pressure as recent tanker attacks in the Strait of Hormuz and Yemen’s maritime embargo continue to disrupt its oil export chain.",
+        "origin": {
+         "head_id": "bc2482d2-88c9-41da-89c5-f861fb95bdd1",
+         "start": 87,
+         "end": 267,
+         "body_sha256": "0a39f2ba1a0f4b3ef4fcedb9ad4470680a4cbd10aee0a3d88cb4b1bc1c978b9c",
+         "body_len": 2424
+        },
+        "markers": [],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "On 2 September 2026, Bloomberg‑sourced reporting noted two seafarers were killed when a Saudi‑flagged tanker was hit in the Strait of Hormuz and that Saudi crude exports slipped to about 3 million barrels per day in August, the lowest in nine years [2].",
+        "origin": {
+         "head_id": "bc2482d2-88c9-41da-89c5-f861fb95bdd1",
+         "start": 484,
+         "end": 747,
+         "body_sha256": "0a39f2ba1a0f4b3ef4fcedb9ad4470680a4cbd10aee0a3d88cb4b1bc1c978b9c",
+         "body_len": 2424
+        },
+        "markers": [
+         "[2]"
+        ],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[67]",
+        "signal_id": null,
+        "source_id": null,
+        "title": "Saudi Arabia’s oil export chain under strain from tanker attacks and Yemeni embargo",
+        "url": null,
+        "age_h": null,
+        "salience_magnitude": null,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[68]",
+        "signal_id": null,
+        "source_id": null,
+        "title": "Window ledger (this unit's trailing 14-day record)",
+        "url": null,
+        "age_h": null,
+        "salience_magnitude": null,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[2]",
+        "signal_id": "7e98612b-b6db-436b-ac07-dfe5d014d98c",
+        "source_id": "source.gcaptain.all",
+        "title": "Saudi Oil Exports Dive as Tankers at Risk From Hormuz to Red Sea",
+        "url": "https://gcaptain.com/saudi-oil-exports-dive-as-tankers-at-risk-from-hormuz-to-red-sea/",
+        "age_h": 16.4,
+        "salience_magnitude": 0.7,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "internal_stability",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "leadership_transition",
+          "target_id": "country_g20_sa"
+         }
+        ]
+       },
+       {
+        "marker": "[3]",
+        "signal_id": "ad41ae55-28dd-4e96-b301-4700d6102766",
+        "source_id": "source.aljazeera.world",
+        "title": "Saudi Arabia condemns deadly Iranian attack on tanker in Strait of Hormuz",
+        "url": "https://www.aljazeera.com/news/2026/9/2/saudi-arabia-condemns-deadly-iranian-attack-on-tanker-in-strait-of-hormuz?traffic_source=rss",
+        "age_h": 16.5,
+        "salience_magnitude": 0.9,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "economic_coercion",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_sa"
+         }
+        ]
+       },
+       {
+        "marker": "[5]",
+        "signal_id": "28b38636-76c4-4421-b5e4-4c702495852c",
+        "source_id": "source.bbc.world",
+        "title": "Iranian attack on Saudi tanker killed two Filipino sailors, Saudi Arabia says",
+        "url": "https://www.bbc.co.uk/news/articles/cx2zxgg4mx9o?at_medium=RSS&at_campaign=rss",
+        "age_h": 18.0,
+        "salience_magnitude": 0.85,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_sa"
+         }
+        ]
+       },
+       {
+        "marker": "[14]",
+        "signal_id": "6088bd60-875c-4e2f-a6f9-0d3c1a2ad205",
+        "source_id": "source.middleeasteye.news",
+        "title": "Two dead after Monday attack on Saudi oil tanker in Hormuz, says shipping firm",
+        "url": "https://www.middleeasteye.net/live-blog/live-blog-update/two-dead-after-monday-attack-saudi-oil-tanker-hormuz-says-shipping-firm",
+        "age_h": 25.4,
+        "salience_magnitude": 0.8,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "internal_stability",
+          "target_id": "country_g20_sa"
+         }
+        ]
+       },
+       {
+        "marker": "[16]",
+        "signal_id": "6a49f73b-362f-470d-a87e-1280abc88b15",
+        "source_id": "source.anadolu.english",
+        "title": "2 sailors killed in security incident involving Saudi tanker in Hormuz 2 days ago: Saudi shipping company",
+        "url": "https://www.aa.com.tr/en/middle-east/2-sailors-killed-in-security-incident-involving-saudi-tanker-in-hormuz-2-days-ago-saudi-shipping-company/4044968",
+        "age_h": 26.3,
+        "salience_magnitude": 0.3,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "internal_stability",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_sa"
+         }
+        ]
+       },
+       {
+        "marker": "[30]",
+        "signal_id": "ab24cd1d-3ecb-4f5a-9c05-e30770b8af2d",
+        "source_id": "source.gcaptain.all",
+        "title": "Two Tankers Carrying Saudi Oil Attacked in Strait of Hormuz",
+        "url": "https://gcaptain.com/two-tankers-carrying-saudi-oil-attacked-in-strait-of-hormuz/",
+        "age_h": 46.4,
+        "salience_magnitude": 0.9,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "internal_stability",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_sa"
+         }
+        ]
+       },
+       {
+        "marker": "[59]",
+        "signal_id": "25ceae14-0ca9-4e6b-a2b8-9545d145ea85",
+        "source_id": "source.telegram.org_channels",
+        "title": "(untitled wire item)",
+        "url": "https://t.me/ansarollah1/431265",
+        "age_h": 71.5,
+        "salience_magnitude": 0.75,
+        "also_cited_by": []
+       }
+      ],
+      "corroboration": {
+       "n_sources": 6,
+       "n_desks_sharing": 5
+      },
+      "_via_assembly": {
+       "assembly_id": "667763ef-a0c9-48d5-860f-ee0207005aa5",
+       "target_id": "country_g20_sa",
+       "target_name": "G20 — Saudi Arabia"
+      }
+     },
+     {
+      "ordinal": 2,
+      "finding_id": "beb00bb8-e56f-42b4-84ed-d4d03a578990",
+      "desk": "escalation",
+      "target_id": "country_watch_pk",
+      "target_name": "Watch — Pakistan",
+      "question": "Is the risk of armed escalation rising, holding or falling here — and on what evidence?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 07:12:21.303326+00",
+      "evidence_age_h": 4.79,
+      "tier": "basis",
+      "severity": "high",
+      "verify": {
+       "overall_score": 0.6667,
+       "effective_confidence": 0.6667,
+       "checkable_claims": 6,
+       "supported_claims": 4,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.9,
+       "cited_mass": 1.54,
+       "n_above": 4,
+       "n_cited_scored": 6,
+       "legacy_magnitude": 0.9
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "Pakistan’s escalation risk is rising because proxy militant attacks in Balochistan have surged, with multiple deadly engagements in early September that outpace prior activity, while strong security responses are tempering broader fallout.",
+        "origin": {
+         "head_id": "beb00bb8-e56f-42b4-84ed-d4d03a578990",
+         "start": 94,
+         "end": 335,
+         "body_sha256": "505b63e599ca36aacd6ad250bec002f3b9bfa85aba7f8bb745a18dd01c4bb05a",
+         "body_len": 2368
+        },
+        "markers": [],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "The prior read noted no concrete incidents in the latest window, but this slice records several confirmed proxy‑militant attacks: ISPR reported security forces killed 21 militants and five personnel in coordinated operations on 31 August–1 September 2026 [58] and again 21 militants with six security personnel killed on 1 September 2026 [59]; another ISPR release described 21 militants killed in separate Balochistan operations on 1 September 2026 [61]; a further ISPR statement listed 21 militants killed in a customs‑house attack on 1 September 2026 [65]; and the Pakistan Institute of Conflict and Security Studies documented a 38 % rise in terrorist incidents in August 2026 [56]. Additionally, ISPR confirmed the killing of 15 cross‑border terrorists on 3 September 2026 [3].",
+        "origin": {
+         "head_id": "beb00bb8-e56f-42b4-84ed-d4d03a578990",
+         "start": 355,
+         "end": 1185,
+         "body_sha256": "505b63e599ca36aacd6ad250bec002f3b9bfa85aba7f8bb745a18dd01c4bb05a",
+         "body_len": 2368
+        },
+        "markers": [
+         "[58]",
+         "[59]",
+         "[61]",
+         "[65]",
+         "[56]",
+         "[3]"
+        ],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[58]",
+        "signal_id": "fb04f6a2-9938-441e-9703-d7823f1ef07d",
+        "source_id": "source.dawn.home",
+        "title": "5 security personnel among 6 martyred in Balochistan Customs House attack, 21 terrorists killed across province: ISPR",
+        "url": "https://www.dawn.com/news/2026635/5-security-personnel-among-6-martyred-in-balochistan-customs-house-attack-21-terrorists-killed-across-province-ispr",
+        "age_h": 45.2,
+        "salience_magnitude": 0.9,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_pk"
+         }
+        ]
+       },
+       {
+        "marker": "[59]",
+        "signal_id": "2a893461-e559-42c9-9a86-c0d57f590e58",
+        "source_id": "source.anadolu.english",
+        "title": "6 security personnel, 21 militants killed in operations in southwest Pakistan",
+        "url": "https://www.aa.com.tr/en/asia-pacific/6-security-personnel-21-militants-killed-in-operations-in-southwest-pakistan-/4044124",
+        "age_h": 45.3,
+        "salience_magnitude": 0.88,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_pk"
+         }
+        ]
+       },
+       {
+        "marker": "[61]",
+        "signal_id": "6d29c3c5-51bb-4593-966b-d51ffbce7449",
+        "source_id": "source.gdelt.files",
+        "title": "TERRORIST: fight in Pishin District, Balochistan, Pakistan",
+        "url": "https://www.geo.tv/latest/680152-security-forces-kill-21-terrorists-in-separate-balochistan-shootouts",
+        "age_h": 46.0,
+        "salience_magnitude": 0.86,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_pk"
+         }
+        ]
+       },
+       {
+        "marker": "[65]",
+        "signal_id": "ef0fc12f-3c36-49e8-bcb2-6bc8690c0005",
+        "source_id": "source.gdelt.files",
+        "title": "TERRORIST: fight",
+        "url": "https://en.dailypakistan.com.pk/01-Sep-2026/21-terrorists-killed-in-balochistan-operations-ispr",
+        "age_h": 47.2,
+        "salience_magnitude": 0.2,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[56]",
+        "signal_id": "f65927a1-0d9d-460b-94d8-131083e26191",
+        "source_id": "source.dawn.home",
+        "title": "Terrorist attacks increase but fatalities decline during August: PICSS",
+        "url": "https://www.dawn.com/news/2026645/terrorist-attacks-increase-but-fatalities-decline-during-august-picss",
+        "age_h": 45.2,
+        "salience_magnitude": 0.15,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[3]",
+        "signal_id": "136cc727-5b93-4162-a579-d2d852c16e0e",
+        "source_id": "source.dawn.home",
+        "title": "Security forces kill 15 terrorists trying to cross into Pakistan through Afghan border: ISPR",
+        "url": "https://www.dawn.com/news/2027139/security-forces-kill-15-terrorists-trying-to-cross-into-pakistan-through-afghan-border-ispr",
+        "age_h": 5.2,
+        "salience_magnitude": 0.9,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_pk"
+         },
+         {
+          "desk": "proliferation_watch",
+          "target_id": "country_watch_pk"
+         }
+        ]
+       }
+      ],
+      "corroboration": {
+       "n_sources": 3,
+       "n_desks_sharing": 2
+      },
+      "_via_assembly": {
+       "assembly_id": "1899a610-8127-4a32-a9c3-0b4592754ac0",
+       "target_id": "country_watch_pk",
+       "target_name": "Watch — Pakistan"
+      }
+     },
+     {
+      "ordinal": 3,
+      "finding_id": "05bf3176-0f9c-49eb-b052-9890ffd0c873",
+      "desk": "energy_security",
+      "target_id": "country_g20_us",
+      "target_name": "G20 — United States",
+      "question": "Is this country's energy supply or price under new strain — and is it a flow constraint or a volume constraint?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 04:04:51.844369+00",
+      "evidence_age_h": 7.92,
+      "tier": "basis",
+      "severity": "high",
+      "verify": {
+       "overall_score": 1.0,
+       "effective_confidence": 0.9,
+       "checkable_claims": 7,
+       "supported_claims": 7,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.9,
+       "cited_mass": 0.5,
+       "n_above": 1,
+       "n_cited_scored": 4,
+       "legacy_magnitude": 0.92
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "The United States continues to face high energy‑security pressure, driven by depleted strategic oil reserves, elevated diesel prices, and ongoing shipping risks in the Strait of Hormuz.",
+        "origin": {
+         "head_id": "05bf3176-0f9c-49eb-b052-9890ffd0c873",
+         "start": 88,
+         "end": 275,
+         "body_sha256": "3757aba91dd84dbade4605094b6f26a097931a2a2c4495fd685973939de0594d",
+         "body_len": 2306
+        },
+        "markers": [],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "The U.S. Strategic Petroleum Reserve has been drawn down, leaving the nation with limited buffer capacity and heightening vulnerability to price spikes [69].",
+        "origin": {
+         "head_id": "05bf3176-0f9c-49eb-b052-9890ffd0c873",
+         "start": 706,
+         "end": 865,
+         "body_sha256": "3757aba91dd84dbade4605094b6f26a097931a2a2c4495fd685973939de0594d",
+         "body_len": 2306
+        },
+        "markers": [
+         "[69]"
+        ],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[121]",
+        "signal_id": null,
+        "source_id": null,
+        "title": "U.S. energy‑security pressure remains high as heat‑wave blackout risk and Hormuz shipping uncertainty linger",
+        "url": null,
+        "age_h": null,
+        "salience_magnitude": null,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[69]",
+        "signal_id": "62acd66c-2d94-4b6a-a1d7-adfe837d2da8",
+        "source_id": "source.oilprice.news",
+        "title": "U.S. SPR Depletion Threatens Further Oil Price Volatility",
+        "url": "https://oilprice.com/Energy/Crude-Oil/US-SPR-Depletion-Threatens-Further-Oil-Price-Volatility.html",
+        "age_h": 11.3,
+        "salience_magnitude": 0.55,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[53]",
+        "signal_id": "792d87bf-ee01-4e1b-a088-66c3556e7be5",
+        "source_id": "source.anadolu.english",
+        "title": "US forces escort 18M barrels of oil through Strait of Hormuz: Report",
+        "url": "https://www.aa.com.tr/en/us-israel-iran-war/us-forces-escort-18m-barrels-of-oil-through-strait-of-hormuz-report/4045871",
+        "age_h": 10.3,
+        "salience_magnitude": 0.9,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[81]",
+        "signal_id": "bb0c219d-90b8-4766-8cae-5488082922b2",
+        "source_id": "source.atlanticcouncil.all",
+        "title": "The diesel shock is here. Which US states will be hit the hardest?",
+        "url": "https://www.atlanticcouncil.org/blogs/energysource/the-diesel-shock-is-here-which-us-states-will-be-hit-the-hardest/",
+        "age_h": 11.9,
+        "salience_magnitude": 0.55,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[56]",
+        "signal_id": "aa8dbd2f-7453-4c20-8563-1fc080e62b67",
+        "source_id": "source.cna.all",
+        "title": "Oil edges down as investors weigh uncertainty over US-Iran strikes",
+        "url": "https://www.channelnewsasia.com/business/oil-edges-down-investors-weigh-uncertainty-over-us-iran-strikes-6359096",
+        "age_h": 10.5,
+        "salience_magnitude": 0.5,
+        "also_cited_by": []
+       }
+      ],
+      "corroboration": {
+       "n_sources": 4,
+       "n_desks_sharing": 0
+      },
+      "_via_assembly": {
+       "assembly_id": "e68e9f7c-9baf-4215-b55c-b762948093ba",
+       "target_id": "country_g20_us",
+       "target_name": "G20 — United States"
+      }
+     },
+     {
+      "ordinal": 4,
+      "finding_id": "1950728e-6cd3-4874-b22f-c28e3e70a228",
+      "desk": "energy_security",
+      "target_id": "country_g20_cn",
+      "target_name": "G20 — China",
+      "question": "Is this country's energy supply or price under new strain — and is it a flow constraint or a volume constraint?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 04:02:05.050452+00",
+      "evidence_age_h": 7.97,
+      "tier": "basis",
+      "severity": "high",
+      "verify": {
+       "overall_score": 0.8,
+       "effective_confidence": 0.8,
+       "checkable_claims": 5,
+       "supported_claims": 4,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.55,
+       "cited_mass": 0.05,
+       "n_above": 0,
+       "n_cited_scored": 3,
+       "legacy_magnitude": 0.95
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "China continues to face high energy‑security pressure, driven by oil import reductions and sanctions risk even as it pursues new gas cooperation with Russia.",
+        "origin": {
+         "head_id": "1950728e-6cd3-4874-b22f-c28e3e70a228",
+         "start": 88,
+         "end": 247,
+         "body_sha256": "c8faaf098bf52dc4019f0a603b9670af688258b4798ef333d054663f04ab40ca",
+         "body_len": 1745
+        },
+        "markers": [],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "A sharp drop in oil imports (‑32 %) and a 60 % surge in global oil prices after the US‑Israel war on Iran kept China’s oil supply tight and heightened price‑shock risk[10].",
+        "origin": {
+         "head_id": "1950728e-6cd3-4874-b22f-c28e3e70a228",
+         "start": 422,
+         "end": 606,
+         "body_sha256": "c8faaf098bf52dc4019f0a603b9670af688258b4798ef333d054663f04ab40ca",
+         "body_len": 1745
+        },
+        "markers": [
+         "[10]"
+        ],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[120]",
+        "signal_id": null,
+        "source_id": null,
+        "title": "Window ledger (this unit's trailing 14-day record)",
+        "url": null,
+        "age_h": null,
+        "salience_magnitude": null,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[10]",
+        "signal_id": "82d9ee54-a9d2-444d-b994-175de47e3d7b",
+        "source_id": "source.guardian.world",
+        "title": "China’s falling emissions amid Iran war spark hope of decarbonisation watershed",
+        "url": "https://www.theguardian.com/environment/2026/sep/03/china-co2-emissions-iran-war",
+        "age_h": 12.8,
+        "salience_magnitude": 0.5,
+        "also_cited_by": [
+         {
+          "desk": "energy_security",
+          "target_id": "country_g20_cn"
+         },
+         {
+          "desk": "disruption_status",
+          "target_id": "lane_malacca_south_china_sea"
+         }
+        ]
+       },
+       {
+        "marker": "[58]",
+        "signal_id": "7e9bcbe0-009d-4c58-ad9c-51ee22829751",
+        "source_id": "source.africanews.all",
+        "title": "Chinese President Xi starts state visit to Egypt with energy, AI on agenda",
+        "url": "http://www.africanews.com/2026/09/02/chinese-president-xi-starts-state-visit-to-egypt-with-energy-ai-on-agenda/",
+        "age_h": 29.5,
+        "salience_magnitude": 0.3,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[119]",
+        "signal_id": "d5f1bb79-cee0-4da3-8e5f-2e31ca5d8616",
+        "source_id": "source.tass.english",
+        "title": "China ready to deepen energy cooperation with Russia, including Power of Siberia 2 — MFA",
+        "url": "https://tass.com/economy/2180221",
+        "age_h": 52.7,
+        "salience_magnitude": 0.55,
+        "also_cited_by": []
+       }
+      ],
+      "corroboration": {
+       "n_sources": 3,
+       "n_desks_sharing": 2
+      },
+      "_via_assembly": {
+       "assembly_id": "a1a6bfbf-8fc8-4761-9a90-d7fcea5c53c6",
+       "target_id": "country_g20_cn",
+       "target_name": "G20 — China"
+      }
+     },
+     {
+      "ordinal": 5,
+      "finding_id": "c653c2bb-669d-480f-bad0-5b64fb55ba33",
+      "desk": "narrative_coordination",
+      "target_id": "country_watch_ir",
+      "target_name": "Watch — Iran, Islamic Republic of",
+      "question": "Is a coordinated narrative emerging across this country's sources — and around what — versus organic coverage?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 10:11:59.938818+00",
+      "evidence_age_h": 1.8,
+      "tier": "basis",
+      "severity": "elevated",
+      "verify": {
+       "overall_score": 0.6667,
+       "effective_confidence": 0.6667,
+       "checkable_claims": 9,
+       "supported_claims": 6,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.9,
+       "cited_mass": 3.85,
+       "n_above": 10,
+       "n_cited_scored": 16,
+       "legacy_magnitude": 0.95
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "A coordinated escalation narrative is emerging that links recent U.S.",
+        "origin": {
+         "head_id": "c653c2bb-669d-480f-bad0-5b64fb55ba33",
+         "start": 88,
+         "end": 157,
+         "body_sha256": "84f5e5c7e7edd646524415162427a83c4de9931590994429a4d8a1b4f66d220c",
+         "body_len": 3136
+        },
+        "markers": [],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "On 2 September, President Donald Trump posted on Truth Social that the United States “now controls the Strait of Hormuz” and mused about renaming it “Trump Strait” [61]; earlier Trump statements on “hitting them hard” and “anytime we want” also appeared on 2 September [45][39][42][46].",
+        "origin": {
+         "head_id": "c653c2bb-669d-480f-bad0-5b64fb55ba33",
+         "start": 318,
+         "end": 632,
+         "body_sha256": "84f5e5c7e7edd646524415162427a83c4de9931590994429a4d8a1b4f66d220c",
+         "body_len": 3136
+        },
+        "markers": [
+         "[61]",
+         "[45]",
+         "[39]",
+         "[42]",
+         "[46]"
+        ],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[61]",
+        "signal_id": "30d82bec-0342-49b4-851d-a2c4a9eeaea8",
+        "source_id": "source.gdelt.files",
+        "title": "IRAN: fight in Tehran, Tehran, Iran",
+        "url": "https://www.ky3.com/2026/09/02/trump-strait-heres-presidents-latest-map-change-suggestion/",
+        "age_h": 15.5,
+        "salience_magnitude": 0.5,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[45]",
+        "signal_id": "cf0424d9-8b78-4af0-95c9-10059abf3160",
+        "source_id": "source.middleeasteye.news",
+        "title": "Trump says he is prepared to strike Iran again at 'any time'",
+        "url": "https://www.middleeasteye.net/live-blog/live-blog-update/trump-says-he-prepared-strike-iran-again-any-time",
+        "age_h": 11.4,
+        "salience_magnitude": 0.3,
+        "also_cited_by": [
+         {
+          "desk": "leadership_transition",
+          "target_id": "country_watch_ir"
+         }
+        ]
+       },
+       {
+        "marker": "[39]",
+        "signal_id": "145618ef-e77c-4166-8b01-4eee12e5c791",
+        "source_id": "source.middleeasteye.news",
+        "title": "Trump says hits on Iran 'help' Israel, Middle East and Europe",
+        "url": "https://www.middleeasteye.net/live-blog/live-blog-update/trump-says-hits-iran-help-israel-middle-east-and-europe",
+        "age_h": 9.4,
+        "salience_magnitude": 0.25,
+        "also_cited_by": [
+         {
+          "desk": "corpus_researcher",
+          "target_id": null
+         }
+        ]
+       },
+       {
+        "marker": "[42]",
+        "signal_id": "e929d074-dde7-41cd-b3c4-a8f6e7418bfd",
+        "source_id": "source.aljazeera.world",
+        "title": "Trump threatens more strikes as death toll in Iran rises to 18",
+        "url": "https://www.aljazeera.com/news/2026/9/3/trump-threatens-more-strikes-as-death-toll-in-iran-rises-to-19?traffic_source=rss",
+        "age_h": 9.5,
+        "salience_magnitude": 0.65,
+        "also_cited_by": [
+         {
+          "desk": "leadership_transition",
+          "target_id": "country_watch_ir"
+         }
+        ]
+       },
+       {
+        "marker": "[46]",
+        "signal_id": "42173786-4301-42e5-a7c4-8a1d1096a897",
+        "source_id": "source.aljazeera.world",
+        "title": "Iran war live: Trump says renewed US-Iran clashes will not last ‘too long’",
+        "url": "https://www.aljazeera.com/news/liveblog/2026/9/3/iran-war-live-trump-says-renewed-us-iran-clashes-will-not-last-too?traffic_source=rss",
+        "age_h": 11.7,
+        "salience_magnitude": 0.6,
+        "also_cited_by": [
+         {
+          "desk": "leadership_transition",
+          "target_id": "country_watch_ir"
+         }
+        ]
+       },
+       {
+        "marker": "[4]",
+        "signal_id": "0115e794-3550-4fdd-9579-0004e0f83032",
+        "source_id": "source.telegram.org_channels",
+        "title": "(untitled wire item)",
+        "url": "https://t.me/Almasirah_En/92939",
+        "age_h": 2.0,
+        "salience_magnitude": 0.9,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[5]",
+        "signal_id": "32474eca-61a7-4e47-b327-7904766b4cca",
+        "source_id": "source.telegram.org_channels",
+        "title": "(untitled wire item)",
+        "url": "https://t.me/Almasirah_En/92938",
+        "age_h": 2.0,
+        "salience_magnitude": 0.9,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[6]",
+        "signal_id": "3e84b780-e806-4e8e-8c44-624c29bdcf9c",
+        "source_id": "source.anadolu.english",
+        "title": "Iranian army claims latest attacks on US bases in Kuwait, UAE",
+        "url": "https://www.aa.com.tr/en/middle-east/iranian-army-claims-latest-attacks-on-us-bases-in-kuwait-uae/4046206",
+        "age_h": 2.3,
+        "salience_magnitude": 0.9,
+        "also_cited_by": [
+         {
+          "desk": "proliferation_watch",
+          "target_id": "country_watch_ir"
+         },
+         {
+          "desk": "leadership_transition",
+          "target_id": "country_watch_ir"
+         }
+        ]
+       },
+       {
+        "marker": "[30]",
+        "signal_id": "4df73fd2-8a79-48b1-b121-d5766ea1a8b2",
+        "source_id": "source.telegram.org_channels",
+        "title": "(untitled wire item)",
+        "url": "https://t.me/tassagency_en/92257",
+        "age_h": 7.5,
+        "salience_magnitude": 0.9,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_ir"
+         }
+        ]
+       },
+       {
+        "marker": "[8]",
+        "signal_id": "fe913441-5f2b-4415-a47e-c9f0a5eada81",
+        "source_id": "source.telegram.org_channels",
+        "title": "(untitled wire item)",
+        "url": "https://t.me/Almasirah_En/92936",
+        "age_h": 2.5,
+        "salience_magnitude": 0.9,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[17]",
+        "signal_id": "65cae8f3-1810-41c5-bb48-61f3680accb6",
+        "source_id": "source.aljazeera.world",
+        "title": "Iran Red Crescent urges ICC probe into deadly US strike on wedding party",
+        "url": "https://www.aljazeera.com/news/2026/9/3/iran-red-crescent-urges-icc-probe-into-deadly-us-strike-on-wedding-party?traffic_source=rss",
+        "age_h": 4.0,
+        "salience_magnitude": 0.9,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[26]",
+        "signal_id": "b64441ab-59a4-4710-b199-9728f947d053",
+        "source_id": "source.telegram.org_channels",
+        "title": "(untitled wire item)",
+        "url": "https://t.me/Irna_en/38861",
+        "age_h": 6.0,
+        "salience_magnitude": 0.9,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[55]",
+        "signal_id": "81b087b6-6cff-455a-bb31-66f65edc8381",
+        "source_id": "source.aljazeera.arabic",
+        "title": "إيران مباشر.. واشنطن وطهران تتبادلان رسائل التهديد و\"الطاقة الذرية\" تشكك بالتزامات إيران",
+        "url": "https://www.aljazeera.net/news/liveblog/2026/9/3/%d8%a5%d9%8a%d8%b1%d8%a7%d9%86-%d9%85%d8%a8%d8%a7%d8%b4%d8%b1-%d9%88%d8%a7%d8%b4%d9%86%d8%b7%d9%86-%d9%88%d8%b7%d9%87%d8%b1%d8%a7%d9%86-%d8%aa%d8%aa%d8%a8%d8%a7%d8%af%d9%84%d8%a7%d9%86?traffic_source=rss",
+        "age_h": 14.1,
+        "salience_magnitude": 0.7,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[86]",
+        "signal_id": "024e9666-24d9-4540-8620-9d336eb807d2",
+        "source_id": "source.aljazeera.arabic",
+        "title": "إيران تهدد بإستراتيجية حرب جديدة ردا على الهجمات الأمريكية",
+        "url": "https://www.aljazeera.net/news/2026/9/2/%d9%85%d8%ad%d8%b3%d9%86-%d8%b1%d8%b6%d8%a7%d8%a6%d9%8a-%d8%a7%d8%b3%d8%aa%d8%b1%d8%a7%d8%aa%d9%8a%d8%ac%d9%8a%d8%a9-%d8%a7%d9%84%d8%ad%d8%b1%d8%a8-%d8%a7%d9%84%d8%ac%d8%af%d9%8a%d8%af%d8%a9?traffic_source=rss",
+        "age_h": 19.1,
+        "salience_magnitude": 0.7,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[12]",
+        "signal_id": "6d23a5ab-3fb5-4f84-9eed-6ba99a9021e9",
+        "source_id": "source.anadolu.english",
+        "title": "Iran receives over $1B in oil revenues in 11 days: Report",
+        "url": "https://www.aa.com.tr/en/middle-east/iran-receives-over-1b-in-oil-revenues-in-11-days-report/4046091",
+        "age_h": 3.3,
+        "salience_magnitude": 0.5,
+        "also_cited_by": [
+         {
+          "desk": "energy_security",
+          "target_id": "country_watch_ir"
+         },
+         {
+          "desk": "economic_coercion",
+          "target_id": "country_watch_ir"
+         }
+        ]
+       },
+       {
+        "marker": "[34]",
+        "signal_id": "aac92d71-9a3d-45d9-8e69-4d69cf2bcfa2",
+        "source_id": "source.anadolu.english",
+        "title": "Iran claims new naval mines laid in Strait of Hormuz",
+        "url": "https://www.aa.com.tr/en/us-israel-iran-war/iran-claims-new-naval-mines-laid-in-strait-of-hormuz/4045877",
+        "age_h": 8.3,
+        "salience_magnitude": 0.9,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_ir"
+         },
+         {
+          "desk": "disruption_status",
+          "target_id": "lane_hormuz"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_watch_ir"
+         },
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_ir"
+         }
+        ]
+       }
+      ],
+      "corroboration": {
+       "n_sources": 6,
+       "n_desks_sharing": 7
+      },
+      "_via_assembly": {
+       "assembly_id": "e0d770bd-570e-43bd-bbcc-ff3833543305",
+       "target_id": "country_watch_ir",
+       "target_name": "Watch — Iran, Islamic Republic of"
+      }
+     },
+     {
+      "ordinal": 6,
+      "finding_id": "426698eb-ed55-4347-8963-cf3966bf8b6b",
+      "desk": "escalation",
+      "target_id": "country_g20_ru",
+      "target_name": "G20 — Russian Federation",
+      "question": "Is the risk of armed escalation rising, holding or falling here — and on what evidence?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 07:07:43.166448+00",
+      "evidence_age_h": 4.87,
+      "tier": "basis",
+      "severity": "elevated",
+      "verify": {
+       "overall_score": 0.6,
+       "effective_confidence": 0.6,
+       "checkable_claims": 6,
+       "supported_claims": 4,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.9,
+       "cited_mass": 1.8,
+       "n_above": 5,
+       "n_cited_scored": 7,
+       "legacy_magnitude": 0.9
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "Russia’s cross‑border drone and missile strikes on Ukraine keep near‑term escalation risk elevated.",
+        "origin": {
+         "head_id": "426698eb-ed55-4347-8963-cf3966bf8b6b",
+         "start": 88,
+         "end": 193,
+         "body_sha256": "cadc4f5be74710e6fe141b5efdd511e07e3764a2394b5b364c64897eef111860",
+         "body_len": 1796
+        },
+        "markers": [],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[120]",
+        "signal_id": null,
+        "source_id": null,
+        "title": "Russia’s intensified cross‑border drone strikes on Ukraine raise near‑term escalation risk",
+        "url": null,
+        "age_h": null,
+        "salience_magnitude": null,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[16]",
+        "signal_id": "05225e32-f3da-41eb-93ba-4ca486a2bfcf",
+        "source_id": "source.ukrinform.english",
+        "title": "Russian forces launch over 20 attacks on Dnipropetrovsk region, enterprise damaged",
+        "url": "https://www.ukrinform.net/rubric-ato/4160349-russian-forces-launch-over-20-attacks-on-dnipropetrovsk-region-enterprise-damaged.html",
+        "age_h": 6.2,
+        "salience_magnitude": 0.9,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[60]",
+        "signal_id": "f5c93c84-dc75-430a-be57-1c19514b6b40",
+        "source_id": "source.ukrinform.english",
+        "title": "Russian drone attack sparks fires in high-rise buildings in Kramatorsk",
+        "url": "https://www.ukrinform.net/rubric-ato/4160268-russian-drone-attack-sparks-fires-in-highrise-buildings-in-kramatorsk.html",
+        "age_h": 17.2,
+        "salience_magnitude": 0.9,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[62]",
+        "signal_id": "17e55bc6-67a4-4ba8-885c-695486babd33",
+        "source_id": "source.ukrinform.english",
+        "title": "Russians strike Odesa–Dnipro train with drone",
+        "url": "https://www.ukrinform.net/rubric-ato/4160289-russians-strike-odesadnipro-train-with-a-drone.html",
+        "age_h": 17.2,
+        "salience_magnitude": 0.7,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[75]",
+        "signal_id": "2ff0564b-9649-4245-8abc-ee9f15c3b94e",
+        "source_id": "source.ukrinform.english",
+        "title": "General Staff confirms destruction of Russian MiG-29 jet, Ka-27 helicopter",
+        "url": "https://www.ukrinform.net/rubric-ato/4160192-general-staff-confirms-destruction-of-russian-mig29-jet-ka27-helicopter.html",
+        "age_h": 20.2,
+        "salience_magnitude": 0.9,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[18]",
+        "signal_id": "e4c605f4-6425-4d05-b2e5-c0e6a8be2fe7",
+        "source_id": "source.anadolu.english",
+        "title": "Russia destroys 37 drones flying toward Moscow",
+        "url": "https://www.aa.com.tr/en/russia-ukraine-war/russia-destroys-37-drones-flying-toward-moscow/4045888",
+        "age_h": 6.3,
+        "salience_magnitude": 0.9,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_ru"
+         }
+        ]
+       },
+       {
+        "marker": "[12]",
+        "signal_id": "dfebded6-7730-4a15-970c-12d1b6223bfc",
+        "source_id": "source.tass.english",
+        "title": "Attempts to destabilize society take place in Russia ahead of parliamentary vote — Lavrov",
+        "url": "https://tass.com/politics/2181705",
+        "age_h": 5.7,
+        "salience_magnitude": 0.2,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[119]",
+        "signal_id": "036dd50f-ca3d-4e44-8e99-2d3c5b732a2e",
+        "source_id": "source.jpost.frontpage",
+        "title": "Putin says Russia is winning on battlefield, will not negotiate with 'terrorists'",
+        "url": "https://www.jpost.com/international/internationalrussia-ukraine-war/article-907289",
+        "age_h": 32.8,
+        "salience_magnitude": 0.3,
+        "also_cited_by": [
+         {
+          "desk": "leadership_transition",
+          "target_id": "country_g20_ru"
+         }
+        ]
+       }
+      ],
+      "corroboration": {
+       "n_sources": 4,
+       "n_desks_sharing": 2
+      },
+      "_via_assembly": {
+       "assembly_id": "1fe5450a-fd9d-41c3-ad7a-81f200163b15",
+       "target_id": "country_g20_ru",
+       "target_name": "G20 — Russian Federation"
+      }
+     },
+     {
+      "ordinal": 7,
+      "finding_id": "5c2fe2f2-55f8-4456-b50c-957f4b6a6dad",
+      "desk": "escalation",
+      "target_id": "country_watch_cd",
+      "target_name": "Watch — Congo, The Democratic Republic of the",
+      "question": "Is the risk of armed escalation rising, holding or falling here — and on what evidence?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 07:08:36.079942+00",
+      "evidence_age_h": 4.86,
+      "tier": "basis",
+      "severity": "elevated",
+      "verify": {
+       "overall_score": 1.0,
+       "effective_confidence": 0.88,
+       "checkable_claims": 8,
+       "supported_claims": 8,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.92,
+       "cited_mass": 1.79,
+       "n_above": 4,
+       "n_cited_scored": 7,
+       "legacy_magnitude": 0.92
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "The Democratic Republic of Congo’s Ebola outbreak continues to expand, keeping spillover escalation risk elevated despite early signs of localized transmission slowdown.",
+        "origin": {
+         "head_id": "5c2fe2f2-55f8-4456-b50c-957f4b6a6dad",
+         "start": 87,
+         "end": 258,
+         "body_sha256": "190190cb69936bdde3da13f45ceecae9ce79f784d853c9da16005c9a2c03b25c",
+         "body_len": 1732
+        },
+        "markers": [],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[15]",
+        "signal_id": null,
+        "source_id": null,
+        "title": "DR Congo’s Ebola outbreak drives rising spillover escalation risk",
+        "url": null,
+        "age_h": null,
+        "salience_magnitude": null,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[1]",
+        "signal_id": "4b84a38d-e4d1-436d-974e-133bceb04eb9",
+        "source_id": "source.rsshub.rfi.afrique",
+        "title": "Ebola en RDC: l'épidémie passe la barre des 3 000 morts",
+        "url": "https://www.rfi.fr/fr/afrique/20260903-ebola-en-rdc-l-%C3%A9pid%C3%A9mie-passe-la-barre-des-3-000-morts",
+        "age_h": 8.9,
+        "salience_magnitude": 0.92,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_cd"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_cd"
+         },
+         {
+          "desk": "leadership_transition",
+          "target_id": "country_watch_cd"
+         },
+         {
+          "desk": "narrative_coordination",
+          "target_id": "country_watch_cd"
+         }
+        ]
+       },
+       {
+        "marker": "[2]",
+        "signal_id": "426c126a-37d9-4a07-a907-1595060a9ae8",
+        "source_id": "source.rsshub.aljazeera.drcongo",
+        "title": "WHO chief warns Ebola response must ramp up to stem DRC outbreak",
+        "url": "https://www.aljazeera.com/news/2026/9/2/who-chief-warns-ebola-response-must-ramp-up-to-stem-drc-outbreak",
+        "age_h": 15.4,
+        "salience_magnitude": 0.3,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_cd"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_cd"
+         },
+         {
+          "desk": "leadership_transition",
+          "target_id": "country_watch_cd"
+         },
+         {
+          "desk": "narrative_coordination",
+          "target_id": "country_watch_cd"
+         }
+        ]
+       },
+       {
+        "marker": "[3]",
+        "signal_id": "779c7062-f3bd-4fef-a27b-7cb0356ebbe7",
+        "source_id": "source.aljazeera.world",
+        "title": "WHO chief warns Ebola response must ramp up to stem DRC outbreak",
+        "url": "https://www.aljazeera.com/news/2026/9/2/who-chief-warns-ebola-response-must-ramp-up-to-stem-drc-outbreak?traffic_source=rss",
+        "age_h": 19.2,
+        "salience_magnitude": 0.55,
+        "also_cited_by": [
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_cd"
+         },
+         {
+          "desk": "narrative_coordination",
+          "target_id": "country_watch_cd"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_cd"
+         }
+        ]
+       },
+       {
+        "marker": "[11]",
+        "signal_id": "abf8aefa-f9b4-4e0d-a3ad-3a71833f354b",
+        "source_id": "source.rsshub.aljazeera.drcongo",
+        "title": "Over 6,000 Ebola cases confirmed in DRC as death toll nears 3,000",
+        "url": "https://www.aljazeera.com/news/2026/8/31/over-6000-ebola-cases-confirmed-in-drc-as-death-toll-nears-3000",
+        "age_h": 63.4,
+        "salience_magnitude": 0.85,
+        "also_cited_by": [
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_cd"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_cd"
+         },
+         {
+          "desk": "leadership_transition",
+          "target_id": "country_watch_cd"
+         }
+        ]
+       },
+       {
+        "marker": "[12]",
+        "signal_id": "42f694a5-9f0c-4eee-97d8-5967e4655bae",
+        "source_id": "source.aljazeera.world",
+        "title": "Over 6,000 Ebola cases confirmed in DRC as death toll nears 3,000",
+        "url": "https://www.aljazeera.com/news/2026/8/31/over-6000-ebola-cases-confirmed-in-drc-as-death-toll-nears-3000?traffic_source=rss",
+        "age_h": 67.2,
+        "salience_magnitude": 0.92,
+        "also_cited_by": [
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_cd"
+         }
+        ]
+       },
+       {
+        "marker": "[13]",
+        "signal_id": "2d1fcb97-84d3-4b0c-b85e-202563323794",
+        "source_id": "source.africanews.all",
+        "title": "DRC Ebola outbreak surges past 6,000 cases as death toll nears 3,000",
+        "url": "http://www.africanews.com/2026/08/31/drc-ebola-outbreak-surges-past-6000-cases-as-death-toll-nears-3000/",
+        "age_h": 67.5,
+        "salience_magnitude": 0.9,
+        "also_cited_by": [
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_cd"
+         },
+         {
+          "desk": "leadership_transition",
+          "target_id": "country_watch_cd"
+         }
+        ]
+       },
+       {
+        "marker": "[7]",
+        "signal_id": "569f5872-ecf0-4f67-853b-52d6f9645926",
+        "source_id": "source.gdelt.files",
+        "title": "CIVILIAN: fight in Kivu, Congo, Democratic Republic of The (general), Democratic Republic Of The Congo",
+        "url": "https://english.news.cn/20260902/98d55a2101fc4af2a1657a9d35d43797/c.html",
+        "age_h": 38.5,
+        "salience_magnitude": 0.65,
+        "also_cited_by": [
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_cd"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_cd"
+         }
+        ]
+       }
+      ],
+      "corroboration": {
+       "n_sources": 5,
+       "n_desks_sharing": 4
+      },
+      "_via_assembly": {
+       "assembly_id": "87512904-ddad-4be6-9f95-78fc05c7f462",
+       "target_id": "country_watch_cd",
+       "target_name": "Watch — Congo, The Democratic Republic of the"
+      }
+     },
+     {
+      "ordinal": 8,
+      "finding_id": "d6d3a897-2fc1-4747-a38e-7263c55f07db",
+      "desk": "escalation",
+      "target_id": "country_watch_ua",
+      "target_name": "Watch — Ukraine",
+      "question": "Is the risk of armed escalation rising, holding or falling here — and on what evidence?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 07:12:21.05867+00",
+      "evidence_age_h": 4.79,
+      "tier": "basis",
+      "severity": "elevated",
+      "verify": {
+       "overall_score": 0.7,
+       "effective_confidence": 0.7,
+       "checkable_claims": 11,
+       "supported_claims": 8,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.9,
+       "cited_mass": 1.25,
+       "n_above": 3,
+       "n_cited_scored": 4,
+       "legacy_magnitude": 0.92
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "Ukrainian cross‑border drone strikes into Russia are intensifying, driving a rise in near‑term escalation risk.",
+        "origin": {
+         "head_id": "d6d3a897-2fc1-4747-a38e-7263c55f07db",
+         "start": 88,
+         "end": 203,
+         "body_sha256": "c78e31c12802838e4cd588ec4064c6ecb0f64545a3a5ef10910d4f25d196b7eb",
+         "body_len": 2834
+        },
+        "markers": [],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "The prior read noted a generic cross‑border drone threat but lacked concrete incidents (prior read [120]).",
+        "origin": {
+         "head_id": "d6d3a897-2fc1-4747-a38e-7263c55f07db",
+         "start": 223,
+         "end": 333,
+         "body_sha256": "c78e31c12802838e4cd588ec4064c6ecb0f64545a3a5ef10910d4f25d196b7eb",
+         "body_len": 2834
+        },
+        "markers": [
+         "[120]"
+        ],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[120]",
+        "signal_id": null,
+        "source_id": null,
+        "title": "Ukrainian cross‑border drone strikes into Russia intensify escalation",
+        "url": null,
+        "age_h": null,
+        "salience_magnitude": null,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[77]",
+        "signal_id": "6bdec580-4fc3-4e0b-8afa-e7749c5947f8",
+        "source_id": "source.maritimeexecutive.news",
+        "title": "Ukraine Strikes Russia’s Ust-Luga Oil Terminal as Attacks Intensify",
+        "url": "https://maritime-executive.com/article/ukraine-strikes-russia-s-ust-luga-oil-terminal-as-attacks-intensify",
+        "age_h": 39.8,
+        "salience_magnitude": 0.9,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_ua"
+         },
+         {
+          "desk": "narrative_coordination",
+          "target_id": "country_watch_ua"
+         },
+         {
+          "desk": "economic_coercion",
+          "target_id": "country_watch_ua"
+         }
+        ]
+       },
+       {
+        "marker": "[113]",
+        "signal_id": "e7ac49b8-a635-4707-b087-150c62eeb8b7",
+        "source_id": "source.meduza.english",
+        "title": "Ukrainian drones attack Russia’s Yekaterinburg. Three apartment buildings damaged, four people injured.",
+        "url": "https://meduza.io/en/news/2026/08/31/ukrainian-drones-attack-russia-s-yekaterinburg-three-apartment-buildings-damaged-four-people-injured",
+        "age_h": 70.2,
+        "salience_magnitude": 0.9,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[64]",
+        "signal_id": "e69fe59f-0499-489f-b857-d207689a0286",
+        "source_id": "source.ukrinform.english",
+        "title": "Ukraine’s air defenses down 138 Russian drones, three Banderol UAVs overnight",
+        "url": "https://www.ukrinform.net/rubric-ato/4159992-ukraines-air-defenses-down-138-russian-drones-three-banderol-uavs-overnight.html",
+        "age_h": 28.2,
+        "salience_magnitude": 0.6,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[5]",
+        "signal_id": "bc6fd565-a2d4-4c97-a92d-269476d54650",
+        "source_id": "source.telegram.org_channels",
+        "title": "(untitled wire item)",
+        "url": "https://t.me/tassagency_en/92264",
+        "age_h": 6.0,
+        "salience_magnitude": 0.85,
+        "also_cited_by": [
+         {
+          "desk": "economic_coercion",
+          "target_id": "country_watch_ua"
+         }
+        ]
+       }
+      ],
+      "corroboration": {
+       "n_sources": 4,
+       "n_desks_sharing": 3
+      },
+      "_via_assembly": {
+       "assembly_id": "3d9b1a33-ce00-4190-9659-4c19e0f99fc0",
+       "target_id": "country_watch_ua",
+       "target_name": "Watch — Ukraine"
+      }
+     }
+    ],
+    "tensions": [
+     {
+      "kind": "carried_vs_dropped",
+      "a": {
+       "ordinal": 4,
+       "span_index": 0
+      },
+      "b": null,
+      "b_ref": {
+       "finding_id": "f48e79b4-b7ae-404f-85fc-f10878439663",
+       "desk": "escalation",
+       "target_id": "country_watch_mm",
+       "target_name": "Watch — Myanmar",
+       "span": "Myanmar’s ongoing airstrike campaign, highlighted by a civilian‑casualty strike on 30 August and intensified use of long‑range wea…"
+      },
+      "statement": "Block 4 and a head that did not reach this read (escalation / Watch — Myanmar) point in opposite directions inside the same 72-hour window.",
+      "statement_source": "template",
+      "detector": "direction_conflict",
+      "detector_version": "composition_integrity.v1",
+      "same_target": false,
+      "same_window_h": 72
+     }
+    ],
+    "tension_checked": {
+     "pairs_examined": 28,
+     "pairs_found": 1,
+     "scope": "shown_and_dropped",
+     "scope_note": "BLUF-grain; ambivalent pairs declined"
+    },
+    "drops": {
+     "shown_not_carried": [],
+     "not_selected": [
+      {
+       "finding_id": "e0767cdb-05c6-4c70-a708-42d2504a9d2f",
+       "desk": "escalation",
+       "target_id": "country_watch_ht",
+       "target_name": "Watch — Haiti",
+       "title": "Haiti’s gang‑driven massacre in Kenscoff keeps escalation risk elevated but its forward momentum is constrained by limited gang ca…",
+       "rank": 9,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": 1.0,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "f48e79b4-b7ae-404f-85fc-f10878439663",
+       "desk": "escalation",
+       "target_id": "country_watch_mm",
+       "target_name": "Watch — Myanmar",
+       "title": "Myanmar’s ongoing airstrike campaign, highlighted by a civilian‑casualty strike on 30 August and intensified use of long‑range wea…",
+       "rank": 10,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": 0.7,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "c5a269ac-3bd6-4fac-90c1-4fa5be5726f2",
+       "desk": "energy_security",
+       "target_id": "country_g20_id",
+       "target_name": "G20 — Indonesia",
+       "title": "Indonesia’s energy‑security pressure stays elevated, driven by ongoing wildfires and haze, volcanic‑ash‑linked flight disruptions …",
+       "rank": 11,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": 0.55,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "0a86c092-aba9-4c99-858f-5df73e8236fe",
+       "desk": "escalation",
+       "target_id": "country_g20_ar",
+       "target_name": "G20 — Argentina",
+       "title": "Diplomatic tension over the Falkland Islands, highlighted by President Milei’s pending sanctions bill and U.S.…",
+       "rank": 12,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": 0.4,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "b4dd4c49-8172-48c2-b3a6-4021fc8dbdc8",
+       "desk": "escalation",
+       "target_id": "country_watch_il",
+       "target_name": "Watch — Israel",
+       "title": "Israel is accelerating demolition of West Bank structures and conducting military exercises there, raising the border‑force buildu…",
+       "rank": 13,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": 0.4,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "c02fe5ec-7c2f-4375-ad83-093e1e4c6140",
+       "desk": "escalation",
+       "target_id": "country_g20_gb",
+       "target_name": "G20 — United Kingdom",
+       "title": "Diplomatic rupture with Israel is pushing the United Kingdom’s escalation risk higher.…",
+       "rank": 14,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": 0.31,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "14c23c06-8358-4043-85c8-ff25700569e9",
+       "desk": "energy_security",
+       "target_id": "country_g20_tr",
+       "target_name": "G20 — Türkiye",
+       "title": "Turkey’s energy‑security pressure remains elevated, with ongoing Black Sea shipping threats and a recent shift toward U.S.…",
+       "rank": 15,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": 0.25,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "04c10975-e66f-45cf-8cb9-1c75bca6cf0d",
+       "desk": "energy_security",
+       "target_id": "country_g20_kr",
+       "target_name": "G20 — Korea, Republic of",
+       "title": "South Korea’s energy‑security pressure stays elevated, driven by ongoing oil‑price volatility, with no new supply disruptions.…",
+       "rank": 16,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": 0.15,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "184ac6e9-26f3-41e1-bb6c-13e6d67f0fd1",
+       "desk": "escalation",
+       "target_id": "country_g20_za",
+       "target_name": "G20 — South Africa",
+       "title": "South Africa’s diplomatic confrontation with Israel remains the only escalation driver, persisting at a steady, elevated level wit…",
+       "rank": 17,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": 0.15,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "480a288d-10f0-4f85-ad20-9eebcbb2559d",
+       "desk": "escalation",
+       "target_id": "country_g20_br",
+       "target_name": "G20 — Brazil",
+       "title": "The European Union’s suspension of Brazil’s meat exports intensifies trade‑related escalation risk, pushing it higher despite Braz…",
+       "rank": 18,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": 0.05,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "71dcc848-4780-4a25-b503-537e35b90410",
+       "desk": "narrative_coordination",
+       "target_id": "country_watch_ne",
+       "target_name": "Watch — Niger",
+       "title": "A coordinated narrative portraying the Niamey mutiny as a brief “mouvement d’humeur” driven by foreign interference—especially Fra…",
+       "rank": 19,
+       "tier": "basis",
+       "severity": "moderate",
+       "cited_mass": 2.15,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "805dd51e-9f03-49a2-a072-b3728cef82de",
+       "desk": "narrative_coordination",
+       "target_id": "country_g20_de",
+       "target_name": "G20 — Germany",
+       "title": "A coordinated German narrative is actively blaming Russia for the Leipzig drone attack and driving diplomatic and visa measures.…",
+       "rank": 20,
+       "tier": "basis",
+       "severity": "moderate",
+       "cited_mass": 1.63,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "8f074706-ffbb-4e0c-b928-3fe82576f9e3",
+       "desk": "narrative_coordination",
+       "target_id": "country_g20_in",
+       "target_name": "G20 — India",
+       "title": "India’s government is pushing a coordinated narrative that the Hague‑issued Indus Waters Tribunal decision is illegitimate and mus…",
+       "rank": 21,
+       "tier": "basis",
+       "severity": "moderate",
+       "cited_mass": 0.6,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "a26cc0c0-51ae-4099-a806-a20783e42a12",
+       "desk": "escalation",
+       "target_id": "country_g20_fr",
+       "target_name": "G20 — France",
+       "title": "A Colombian guerrilla’s seizure of a French Foreign Legion corporal confirms proxy mercenary activity, keeping France’s near‑term …",
+       "rank": 22,
+       "tier": "basis",
+       "severity": "moderate",
+       "cited_mass": 0.1,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "6c504eaa-303a-41d3-b24b-53ada1d51eba",
+       "desk": "economic_coercion",
+       "target_id": "country_watch_kp",
+       "target_name": "Watch — Korea, Democratic People's Republic of",
+       "title": "North Korea continues to wield moderate internal capital‑control tightening, keeping foreign‑exchange outflows limited with no new…",
+       "rank": 23,
+       "tier": "basis",
+       "severity": "moderate",
+       "cited_mass": 0.1,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "9a5750f3-cc73-43c3-9a7b-d5c60220ea06",
+       "desk": "escalation",
+       "target_id": "country_watch_bf",
+       "target_name": "Watch — Burkina Faso",
+       "title": "Burkina Faso’s escalation risk remains modest, driven by unchanged border‑security cooperation, with no new developments in the pa…",
+       "rank": 24,
+       "tier": "basis",
+       "severity": "moderate",
+       "cited_mass": 0.0,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "87a6cfc5-3c27-465d-b125-a41ef79b85ac",
+       "desk": "narrative_coordination",
+       "target_id": "country_watch_sd",
+       "target_name": "Watch — Sudan",
+       "title": "No coordinated narrative emerges across Sudanese sources in the last 72 hours; coverage remains fragmented and event‑driven.…",
+       "rank": 25,
+       "tier": "basis",
+       "severity": "low",
+       "cited_mass": 2.03,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "0ba1887b-ced1-47d1-ac44-830ead75b22b",
+       "desk": "narrative_coordination",
+       "target_id": "country_g20_mx",
+       "target_name": "G20 — Mexico",
+       "title": "No coordinated narrative is evident across Mexican sources in this 72‑hour slice; reporting reflects independent coverage of unrel…",
+       "rank": 26,
+       "tier": "basis",
+       "severity": "low",
+       "cited_mass": 0.56,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "d6c29a2d-af49-4e4e-adf6-c174500a2f4a",
+       "desk": "narrative_coordination",
+       "target_id": "country_watch_tw",
+       "target_name": "Watch — Taiwan, Province of China",
+       "title": "No coordinated narrative is evident in Taiwan’s media over the past three days; reporting remains largely organic and centered on …",
+       "rank": 27,
+       "tier": "basis",
+       "severity": "low",
+       "cited_mass": 0.35,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "89d4725a-dcff-49e8-84b7-f1cebbe4db84",
+       "desk": "narrative_coordination",
+       "target_id": "country_g20_it",
+       "target_name": "G20 — Italy",
+       "title": "No coordinated narrative emerges across Italian sources in this slice; coverage appears organic.…",
+       "rank": 28,
+       "tier": "basis",
+       "severity": "low",
+       "cited_mass": 0.3,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "e9d2854e-9a2c-4691-a680-37bd79ae696e",
+       "desk": "leadership_transition",
+       "target_id": "country_g20_ca",
+       "target_name": "G20 — Canada",
+       "title": "The risk of a near‑term change in Canada’s top political leadership is low, with no credible signs of resignation, election upset,…",
+       "rank": 29,
+       "tier": "basis",
+       "severity": "low",
+       "cited_mass": 0.2,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "b123f235-df74-423a-a6f5-40f8dce34521",
+       "desk": "leadership_transition",
+       "target_id": "country_watch_ml",
+       "target_name": "Watch — Mali",
+       "title": "The likelihood of a change in Mali’s top leadership in the next 30 days is low.…",
+       "rank": 30,
+       "tier": "basis",
+       "severity": "low",
+       "cited_mass": 0.15,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "2ed932bc-a140-4978-896b-538fe70c1b8c",
+       "desk": "narrative_coordination",
+       "target_id": "country_g20_jp",
+       "target_name": "G20 — Japan",
+       "title": "No coordinated narrative appears in Japan’s media collection over the past three days; the surge in defence‑budget and security re…",
+       "rank": 31,
+       "tier": "basis",
+       "severity": "low",
+       "cited_mass": 0.15,
+       "why": "not_selected"
+      },
+      {
+       "finding_id": "2fd8d0ee-e123-42a6-b940-550d32f1f2f2",
+       "desk": "narrative_coordination",
+       "target_id": "country_g20_au",
+       "target_name": "G20 — Australia",
+       "title": "No coordinated narrative appears in this desk’s collection through 3 September 2026.…",
+       "rank": 32,
+       "tier": "basis",
+       "severity": "low",
+       "cited_mass": 0.1,
+       "why": "not_selected"
+      }
+     ],
+     "trimmed": [],
+     "below_floor": [],
+     "no_head": [],
+     "counts": {
+      "shown": 32,
+      "carried": 8,
+      "shown_not_carried": 0,
+      "candidates": 32,
+      "not_selected": 24,
+      "trimmed": 0,
+      "below_floor": 0,
+      "no_head": 0,
+      "invisible_heads": 421
+     },
+     "why_classes": [
+      "shown_not_selected",
+      "not_selected",
+      "cap_trimmed",
+      "below_floor",
+      "no_head_in_horizon",
+      "superseded",
+      "correlated_duplicate",
+      "not_a_candidate"
+     ]
+    },
+    "coverage": [
+     {
+      "unit": "country_g20_ar",
+      "unit_name": "G20 — Argentina",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_g20_au",
+      "unit_name": "G20 — Australia",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_g20_br",
+      "unit_name": "G20 — Brazil",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_g20_ca",
+      "unit_name": "G20 — Canada",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_g20_cn",
+      "unit_name": "G20 — China",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_g20_de",
+      "unit_name": "G20 — Germany",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_g20_fr",
+      "unit_name": "G20 — France",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_g20_gb",
+      "unit_name": "G20 — United Kingdom",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_g20_id",
+      "unit_name": "G20 — Indonesia",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_g20_in",
+      "unit_name": "G20 — India",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_g20_it",
+      "unit_name": "G20 — Italy",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_g20_jp",
+      "unit_name": "G20 — Japan",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_g20_kr",
+      "unit_name": "G20 — Korea, Republic of",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_g20_mx",
+      "unit_name": "G20 — Mexico",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_g20_ru",
+      "unit_name": "G20 — Russian Federation",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_g20_sa",
+      "unit_name": "G20 — Saudi Arabia",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_g20_tr",
+      "unit_name": "G20 — Türkiye",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_g20_us",
+      "unit_name": "G20 — United States",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_g20_za",
+      "unit_name": "G20 — South Africa",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_watch_bf",
+      "unit_name": "Watch — Burkina Faso",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_watch_cd",
+      "unit_name": "Watch — Congo, The Democratic Republic of the",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_watch_ht",
+      "unit_name": "Watch — Haiti",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_watch_il",
+      "unit_name": "Watch — Israel",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_watch_ir",
+      "unit_name": "Watch — Iran, Islamic Republic of",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_watch_kp",
+      "unit_name": "Watch — Korea, Democratic People's Republic of",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_watch_ml",
+      "unit_name": "Watch — Mali",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_watch_mm",
+      "unit_name": "Watch — Myanmar",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_watch_ne",
+      "unit_name": "Watch — Niger",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_watch_pk",
+      "unit_name": "Watch — Pakistan",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_watch_sd",
+      "unit_name": "Watch — Sudan",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_watch_tw",
+      "unit_name": "Watch — Taiwan, Province of China",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     },
+     {
+      "unit": "country_watch_ua",
+      "unit_name": "Watch — Ukraine",
+      "status": "in_basis",
+      "read_date": "2026-09-03",
+      "age_h": null
+     }
+    ],
+    "connectives": {
+     "vocabulary_version": "connective.v1"
+    }
+   }
+  }
+ },
+ "verification": {
+  "overall_score": 1.0,
+  "score_state": "scored",
+  "judge_status": "deterministic",
+  "assembly_arms": {
+   "gate": "passed",
+   "schema": "assembly_arms.v1",
+   "quote_fidelity": 1.0,
+   "scope_preservation": 1.0,
+   "attribution_equality": 1.0,
+   "coverage_completeness": 1.0,
+   "spans": 14,
+   "failed_ordinals": []
+  }
+ }
+}

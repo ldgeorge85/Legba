@@ -31,6 +31,7 @@ What these tests hold, in the order the design commits to it:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -77,12 +78,19 @@ class _RoutingConn:
         baseline_rows: list[dict[str, Any]] | list[Exception] | None = None,
         question_rows: list[dict[str, Any]] | None = None,
         ledger_rows: list[dict[str, Any]] | None = None,
+        event_rows: list[dict[str, Any]] | None = None,
         raise_on: tuple[str, ...] = (),
     ) -> None:
         self._prior = prior_rows or []
         self._situations = situation_rows or []
         self._baselines = baseline_rows or []
         self._questions = question_rows or []
+        # V3/P2 — the OPEN EVENTS family. Defaults to rows PRESENT rather than
+        # empty (the opposite of the ledger's default) because the thing most
+        # worth proving about this block is that an UNGRANTED unit never fires
+        # the query at all: a default of [] would let a leaked query pass as an
+        # absent block.
+        self._events = event_rows if event_rows is not None else [_event_db_row()]
         # FRAME-2 — the WINDOW LEDGER is a fifth query family. It defaults to
         # EMPTY so every pre-FRAME-2 test in this file asserts exactly what it
         # did; without the explicit route it would fall through to the prior-read
@@ -96,6 +104,8 @@ class _RoutingConn:
         for needle in self._raise_on:
             if needle in query:
                 raise RuntimeError(f"boom: {needle}")
+        if _OPEN_EVENTS_SQL_MARKER in query:
+            return [dict(r) for r in self._events]
         if "FROM desk_baselines" in query:
             return [dict(r) for r in self._baselines]
         if "FROM hypotheses" in query:
@@ -206,6 +216,50 @@ def _baseline_row() -> dict[str, Any]:
     }
 
 
+_EVENT_ID = uuid4()
+
+#: The OPEN EVENTS gather's own query family — present in no other query this
+#: module fires, and the routing needle the fake connection keys on.
+_OPEN_EVENTS_SQL_MARKER = "situation_event_links sel"
+
+
+def _open_events_row(n: int = 2) -> dict[str, Any]:
+    return {
+        ug.UNIT_GROUNDING_ROW_KEY: ug.GROUNDING_OPEN_EVENTS,
+        ug.GROUNDING_PAYLOAD_KEY: [
+            {
+                "event_id": str(_EVENT_ID if i == 0 else uuid4()),
+                "title": f"Iran - bounded occurrence {i}",
+                "time_start": f"2026-07-2{5 + i}T06:00:00+00:00",
+                "time_end": "2026-07-29T06:00:00+00:00" if i == 0 else None,
+                "report_count": 120 - i,
+                "source_count": 31 - i,
+                "lifecycle_state": "active",
+                "updated_at": "2026-07-31T09:00:00+00:00",
+                "updated_age_days": 1.4,
+            }
+            for i in range(n)
+        ],
+    }
+
+
+def _event_db_row(**over: Any) -> dict[str, Any]:
+    """A row shaped like the reader's SELECT hands it back."""
+    row: dict[str, Any] = {
+        "id": _EVENT_ID,
+        "title": "Iran - bounded occurrence",
+        "time_start": "2026-07-25T06:00:00+00:00",
+        "time_end": None,
+        "distinct_source_count": 31,
+        "lifecycle_state": "active",
+        "updated_at": "2026-07-31T09:00:00+00:00",
+        "updated_age_days": 1.4,
+        "report_count": 120,
+    }
+    row.update(over)
+    return row
+
+
 def _questions_row() -> dict[str, Any]:
     return {
         ug.UNIT_GROUNDING_ROW_KEY: ug.GROUNDING_QUESTIONS,
@@ -270,6 +324,25 @@ def test_receipts_always_report_every_block_kind():
 # ---------------------------------------------------------------------------
 
 
+def _history_row():
+    """7g-2 — the seventh block. Payload shape is one observations row; the
+    block's own behaviour is covered in tests/data_pkg/test_history_grounding.py."""
+    return {
+        ug.UNIT_GROUNDING_ROW_KEY: ug.GROUNDING_HISTORY,
+        ug.GROUNDING_PAYLOAD_KEY: [{
+            "observation_id": "11111111-1111-4111-8111-111111111111",
+            "series_id": "wb.gdp",
+            "subject": "US",
+            "value_display": "2.8",
+            "unit": "pct_per_year",
+            "valid_from": "2025-01-01",
+            "valid_to": "2025-12-31",
+            "record_time": "2026-07-13T00:00:00+00:00",
+            "collection_id": "collection.pilot",
+        }],
+    }
+
+
 def test_partition_lifts_marked_rows_in_canonical_order():
     """Ordinals must not depend on the order the reader happened to append."""
     rows = [
@@ -280,6 +353,8 @@ def test_partition_lifts_marked_rows_in_canonical_order():
         _ledger_row(),
         _prior_row(),
         _situations_row(),
+        _open_events_row(),
+        _history_row(),
     ]
     signals, grounding = ug.partition_grounding_rows(rows)
     assert [r["title"] for r in signals] == ["signal 1", "signal 2"]
@@ -463,8 +538,9 @@ def test_every_grounding_citation_declares_what_its_ordinal_indexes():
     for row, ordinal in (
         (_prior_row(), 121),
         (_situations_row(), 122),
-        (_baseline_row(), 123),
-        (_questions_row(), 124),
+        (_open_events_row(), 123),
+        (_baseline_row(), 124),
+        (_questions_row(), 125),
     ):
         citation = ug.citation_for_block(row, ordinal)
         assert citation is not None
@@ -501,6 +577,7 @@ def test_prior_read_with_no_resolvable_id_is_never_cited():
     "row_factory,id_key,expected",
     [
         (_situations_row, "situation_ids", str(_SITUATION_ID)),
+        (_open_events_row, "event_ids", str(_EVENT_ID)),
         (_questions_row, "question_ids", str(_QUESTION_ID)),
     ],
 )
@@ -525,7 +602,7 @@ def test_baseline_citation_uses_the_tables_real_composite_key():
 
 @pytest.mark.parametrize(
     "row_factory",
-    [_prior_row, _situations_row, _baseline_row, _questions_row],
+    [_prior_row, _situations_row, _open_events_row, _baseline_row, _questions_row],
 )
 def test_no_block_ever_stamps_the_composition_discriminator(row_factory):
     """``ref_kind='finding'`` is ``verify._uses_subclaim_convention``'s trigger —
@@ -542,7 +619,8 @@ def test_every_block_captures_the_bytes_the_model_was_shown():
     """``evidence_text`` IS what the judge grades against — it must be the
     rendered block, bounded, not a summary of it."""
     _signals, grounding = ug.partition_grounding_rows(
-        [_prior_row(), _situations_row(), _baseline_row(), _questions_row()]
+        [_prior_row(), _situations_row(), _open_events_row(),
+         _baseline_row(), _questions_row()]
     )
     text, stamped = ug.render_grounding_section(grounding, start_ordinal=1)
     for n, row in stamped:
@@ -763,6 +841,331 @@ async def test_prior_read_is_scoped_to_this_unit_and_this_target():
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# V3/P2 — OPEN EVENTS: the OFFER, its GRANT, and the byte-identity it owes
+# ---------------------------------------------------------------------------
+#
+# P2 built the whole CITATION side of the ``event:<uuid>`` ref kind and no lane
+# built the OFFER, so no model had ever emitted the token (59 live receipts at
+# ``LEGBA_EVENT_CITATIONS=1``, every one ``event_citations: 0``). This block is
+# the offer. It is the ONE grounding block behind a descriptor grant, which
+# makes two things testable that the other five never had to prove: that the
+# grant is what makes it exist at all, and that an UNGRANTED unit's prompt did
+# not move by one byte.
+
+
+def test_the_open_events_block_prints_the_expansions_exact_token_grammar():
+    """The whole point of the block. A token the expansion's own regex does
+    not match is an offer that goes nowhere — so the grammar is asserted
+    against ``event_citations.EVENT_ID_RE`` itself, never against a re-typed
+    copy of it."""
+    from legba.data.provenance.event_citations import EVENT_ID_RE
+
+    row = _open_events_row(2)
+    lines = ug._render_open_events(row[ug.GROUNDING_PAYLOAD_KEY], 44)
+    rendered = "\n".join(lines)
+    ids = EVENT_ID_RE.findall(rendered)
+    assert ids == [e["event_id"] for e in row[ug.GROUNDING_PAYLOAD_KEY]], (
+        "one resolvable token per event, in payload order"
+    )
+    # ...and in the spelling the WRITE-TIME splice parses, not just the leaf's.
+    from legba.data.analysts.inline_target import (
+        _EVENT_BODY_REF_RE,
+        _event_ref_uuid,
+    )
+
+    assert [
+        _event_ref_uuid(m) for m in _EVENT_BODY_REF_RE.finditer(rendered)
+    ] == ids
+
+
+def test_the_open_events_block_closes_with_the_offers_one_instruction():
+    """The block is self-describing: the shared unit clause does NOT name it
+    (naming it would change all nine units' prompts), so this sentence is the
+    only thing telling a desk what the token buys."""
+    lines = ug._render_open_events(_open_events_row(1)[ug.GROUNDING_PAYLOAD_KEY], 3)
+    assert lines[-1] == f"    {ug.OPEN_EVENTS_CITE_RULE}"
+    rule = ug.OPEN_EVENTS_CITE_RULE
+    assert "exactly as shown" in rule
+    assert "inline in the body or as an evidence entry" in rule
+    assert "The event's own summary is never evidence." in rule
+
+
+def test_the_open_events_block_never_prints_a_count_it_cannot_stand_behind():
+    """``report_count`` is DERIVED from ``signal_event_links``, never read off
+    ``events.signal_count`` — that column read wrong on 244 of the 317 live
+    open events (worst: 59,808 against 168 real link rows) before the
+    lifecycle scan stopped counting (member x actor) pairs, and the membership
+    itself is the definition, so neither the SQL nor the render reaches for the
+    rollup even now that it is correct."""
+    assert "signal_count" not in ug._OPEN_EVENTS_SQL
+    row = _open_events_row(1)
+    rendered = "\n".join(
+        ug._render_open_events(row[ug.GROUNDING_PAYLOAD_KEY], 1)
+    )
+    assert "reports=120 sources=31" in rendered
+    # A row whose count never resolved prints the honest n/a, never a zero.
+    blank = {**row[ug.GROUNDING_PAYLOAD_KEY][0], "report_count": None}
+    assert "reports=n/a" in "\n".join(ug._render_open_events([blank], 1))
+
+
+def test_the_open_events_block_prints_its_own_clock_and_span():
+    """TEMPORAL COLLAPSE guard, the same one every other block carries: a
+    desk anchors 'when' on the block, never on run time. An event with no
+    end is printed OPEN, never dressed up as ongoing."""
+    rendered = "\n".join(
+        ug._render_open_events(_open_events_row(2)[ug.GROUNDING_PAYLOAD_KEY], 1)
+    )
+    assert "updated_at=2026-07-31T09:00:00+00:00 updated_age=1.4d" in rendered
+    assert "2026-07-25T06:00:00+00:00..2026-07-29T06:00:00+00:00" in rendered
+    assert "state=active" in rendered
+    # Neither span column present => the honest absence, never a guess.
+    spanless = {
+        **_open_events_row(1)[ug.GROUNDING_PAYLOAD_KEY][0],
+        "time_start": None, "time_end": None,
+    }
+    assert "(no span)" in "\n".join(ug._render_open_events([spanless], 1))
+
+
+def test_the_open_events_ordinal_and_citation_match_the_registers_shape():
+    """The block cites the way the REGISTER cites — one ordinal for the whole
+    index, the real underlying ids, no fabricated ``ref_id``, no
+    ``signal_id`` — because it is the same kind of thing: a synthetic
+    orienting block with no single substrate row behind it."""
+    events, register = _open_events_row(2), _situations_row(2)
+    ev_cit = ug.citation_for_block(events, 9)
+    reg_cit = ug.citation_for_block(register, 9)
+    assert ev_cit is not None and reg_cit is not None
+    assert ev_cit["marker"] == reg_cit["marker"] == "[9]"
+    assert ev_cit["ordinal"] == reg_cit["ordinal"] == 9
+    assert ev_cit["marker_class"] == reg_cit["marker_class"] == "desk_grounding"
+    assert (
+        ev_cit["resolves_against"] == reg_cit["resolves_against"] == "data.citations"
+    )
+    assert "ref_id" not in ev_cit and "signal_id" not in ev_cit
+    assert ev_cit["ref_kind"] == ug.GROUNDING_OPEN_EVENTS
+    assert ev_cit["ref_kind"] in GROUNDING_REF_KINDS
+    assert is_grounding_citation(ev_cit) is True
+    # The block's ordinal resolves to the BLOCK; the event ids ride as data and
+    # are NOT the expansion's lineage (that arrives via _expand_event_refs).
+    assert ev_cit["event_ids"] == [
+        e["event_id"] for e in events[ug.GROUNDING_PAYLOAD_KEY]
+    ]
+
+
+def test_the_open_events_sql_is_a_pinned_set_based_read():
+    """The SQL constant, pinned. The review rule this file answers to names the
+    correlated per-row probe as the shape that has failed four times, so the
+    count leg is a GROUPED AGGREGATE over a bounded driving set and the desk
+    scope is the register's ``situations.target_id`` — never ``events
+    .target_id``, which is NULL on 259 of the 317 live open events."""
+    sql = ug._OPEN_EVENTS_SQL
+    lowered = sql.lower()
+    # Desk scope, lifecycle and supersession — the four WHERE legs.
+    assert "s.target_id = $1" in sql
+    assert "s.status IS DISTINCT FROM 'closed'" in sql
+    assert "e.lifecycle_state <> 'resolved'" in sql
+    assert "e.superseded_by IS NULL" in sql
+    assert "e.target_id" not in sql
+    # One row per event, most recently updated first, id breaking the tie.
+    assert "SELECT DISTINCT" in sql
+    assert "ORDER BY e.updated_at DESC, e.id" in sql
+    assert "LIMIT $2" in sql
+    # The count is an aggregate over the bounded CTE, not a per-row probe.
+    assert "WITH desk_events AS" in sql
+    assert "count(l.signal_id) AS report_count" in sql
+    assert "GROUP BY" in sql
+    assert lowered.count("select") == 2, "no third (correlated) SELECT"
+    assert "limit 1" not in lowered
+    # Never the event's own prose.
+    assert "summary" not in lowered
+
+
+@pytest.mark.asyncio
+async def test_the_grant_is_what_makes_the_block_exist():
+    """The GRANT, both ways, against a connection that WOULD serve events.
+
+    An ungranted unit must not even fire the query: a block nobody asked for
+    costs a live read per desk per tick, and the plan's acceptance step is
+    "ONE analyst granted event citations"."""
+    ungranted = _RoutingConn(situation_rows=[], baseline_rows=[], question_rows=[])
+    rows = await ug.gather_unit_grounding_rows(
+        ungranted, analyst_id=None, target_filter="country_watch_ir",
+    )
+    assert not ungranted.has_query(_OPEN_EVENTS_SQL_MARKER)
+    assert all(
+        r.get(ug.UNIT_GROUNDING_ROW_KEY) != ug.GROUNDING_OPEN_EVENTS for r in rows
+    )
+
+    granted = _RoutingConn(situation_rows=[], baseline_rows=[], question_rows=[])
+    rows = await ug.gather_unit_grounding_rows(
+        granted, analyst_id=None, target_filter="country_watch_ir",
+        offer_events=True,
+    )
+    assert granted.has_query(_OPEN_EVENTS_SQL_MARKER)
+    marked = [
+        r for r in rows
+        if r.get(ug.UNIT_GROUNDING_ROW_KEY) == ug.GROUNDING_OPEN_EVENTS
+    ]
+    assert len(marked) == 1
+    payload = marked[0][ug.GROUNDING_PAYLOAD_KEY]
+    assert [e["event_id"] for e in payload] == [str(_EVENT_ID)]
+    assert payload[0]["report_count"] == 120 and payload[0]["source_count"] == 31
+
+
+@pytest.mark.asyncio
+async def test_the_open_events_limit_is_clamped_to_the_declared_ceiling():
+    """The descriptor knob is bounded at the catalog (1-20) AND at the reader,
+    because a registry row outlives the code that validated it."""
+    conn = _RoutingConn(situation_rows=[], baseline_rows=[], question_rows=[])
+    await ug.gather_unit_grounding_rows(
+        conn, analyst_id=None, target_filter="country_watch_ir",
+        offer_events=True, open_events_limit=9999,
+    )
+    _sql, params = conn.query_of(_OPEN_EVENTS_SQL_MARKER)
+    assert params == ("country_watch_ir", ug.OPEN_EVENTS_MAX_CAP)
+
+    conn = _RoutingConn(situation_rows=[], baseline_rows=[], question_rows=[])
+    await ug.gather_unit_grounding_rows(
+        conn, analyst_id=None, target_filter="country_watch_ir",
+        offer_events=True,
+    )
+    assert conn.query_of(_OPEN_EVENTS_SQL_MARKER)[1] == (
+        "country_watch_ir", ug.OPEN_EVENTS_CAP,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_desk_with_no_live_event_renders_no_block_at_all():
+    """HONEST ABSENCE. A desk whose open frames carry no live event gets NO
+    header, no empty list and no receipt — the same posture the baseline block
+    takes for thin history. An empty header would read as "we looked and the
+    world is quiet", which is a claim this reader cannot make."""
+    conn = _RoutingConn(
+        situation_rows=[], baseline_rows=[], question_rows=[], event_rows=[],
+    )
+    rows = await ug.gather_unit_grounding_rows(
+        conn, analyst_id=None, target_filter="country_watch_ir",
+        offer_events=True,
+    )
+    assert conn.has_query(_OPEN_EVENTS_SQL_MARKER)
+    assert rows == []
+    text, stamped = ug.render_grounding_section(rows, start_ordinal=1)
+    assert (text, stamped) == ("", [])
+    assert ug.grounding_receipts(rows)["grounding_open_events_ref"] == 0
+
+
+@pytest.mark.asyncio
+async def test_the_reader_never_offers_a_token_that_cannot_resolve():
+    """A row with no id or no title is SKIPPED, never padded. In a block whose
+    entire purpose is citation, an unciteable line is worse than a short
+    block."""
+    conn = _RoutingConn(
+        situation_rows=[], baseline_rows=[], question_rows=[],
+        event_rows=[
+            _event_db_row(id=None),
+            _event_db_row(id="not-a-uuid"),
+            _event_db_row(title="   "),
+            _event_db_row(id=_EVENT_ID),
+        ],
+    )
+    events = await ug.read_desk_open_events(conn, target_id="country_watch_ir")
+    assert [e["event_id"] for e in events] == [str(_EVENT_ID)]
+
+
+@pytest.mark.asyncio
+async def test_a_failing_open_events_read_never_suppresses_its_siblings():
+    """BEST-EFFORT by contract — the offer is enrichment on top of a complete
+    slice, so a dead events read costs the block and nothing else."""
+    conn = _RoutingConn(
+        situation_rows=[{
+            "id": _SITUATION_ID, "name": "Iran - open frame", "status": "active",
+            "intensity_score": 50.0, "event_count": 3, "last_event_at": None,
+            "opened_at": None, "age_days": 4.0, "target_id": "country_watch_ir",
+        }],
+        baseline_rows=[], question_rows=[],
+        raise_on=(_OPEN_EVENTS_SQL_MARKER,),
+    )
+    rows = await ug.gather_unit_grounding_rows(
+        conn, analyst_id=None, target_filter="country_watch_ir",
+        offer_events=True,
+    )
+    kinds = [r.get(ug.UNIT_GROUNDING_ROW_KEY) for r in rows]
+    assert ug.GROUNDING_SITUATIONS in kinds
+    assert ug.GROUNDING_OPEN_EVENTS not in kinds
+
+
+def test_an_ungranted_units_grounding_render_did_not_move_one_byte():
+    """THE BYTE-IDENTITY PIN. ``GROUNDING_BLOCK_KINDS`` gained a member in the
+    MIDDLE of the sequence, which is exactly the edit that silently renumbers
+    every block after it — and a renumbered ordinal is a mis-cited finding.
+    An ungranted unit emits no OPEN EVENTS row, so its five blocks must still
+    take 1-5 in the order they always took."""
+    _signals, grounding = ug.partition_grounding_rows([
+        _prior_row(), _ledger_row(), _situations_row(),
+        _baseline_row(), _questions_row(),
+    ])
+    text, stamped = ug.render_grounding_section(grounding, start_ordinal=1)
+    assert [n for n, _row in stamped] == [1, 2, 3, 4, 5]
+    assert [r.get(ug.UNIT_GROUNDING_ROW_KEY) for _n, r in stamped] == [
+        ug.GROUNDING_PRIOR_READ,
+        ug.GROUNDING_WINDOW_LEDGER,
+        ug.GROUNDING_SITUATIONS,
+        ug.GROUNDING_BASELINE,
+        ug.GROUNDING_QUESTIONS,
+    ]
+    assert "[1] PRIOR READ" in text
+    assert "[3] OPEN SITUATION REGISTER" in text
+    assert "[4] DESK BASELINE" in text
+    assert "[5] STANDING OPEN QUESTIONS" in text
+    assert "OPEN EVENTS" not in text
+    assert "event:" not in text
+
+
+def test_the_shared_unit_clause_is_unchanged_by_the_offer():
+    """The other half of byte-identity: the clause is appended to EVERY unit
+    prompt, granted or not, so widening it to name a sixth block would move
+    all nine units at once. The block carries its own instruction instead —
+    see ``OPEN_EVENTS_CITE_RULE``. When the grant widens past one analyst,
+    THIS is the test that must be revisited deliberately."""
+    assert "up to five blocks" in ug.UNIT_GROUNDING_CLAUSE
+    assert "OPEN EVENTS" not in ug.UNIT_GROUNDING_CLAUSE
+    assert ug.OPEN_EVENTS_CITE_RULE not in ug.UNIT_GROUNDING_CLAUSE
+    # 7g-2 — the SAME rule for the SAME reason. HISTORICAL SERIES is the
+    # second granted block and it is likewise absent from the shared clause:
+    # naming it here would move all nine units' prompts at once, granted or
+    # not. Its instruction rides the block (`HISTORY_CITE_RULE`).
+    from legba.data.analysts import history_grounding as _hg
+
+    assert "HISTORICAL SERIES" not in ug.UNIT_GROUNDING_CLAUSE
+    assert _hg.HISTORY_CITE_RULE not in ug.UNIT_GROUNDING_CLAUSE
+
+
+def test_the_granted_block_slots_after_the_register():
+    """Frames, then the occurrences inside them — the order a reader already
+    holds. With the grant on, the register's ordinal is unchanged and the new
+    block takes the one after it."""
+    _signals, grounding = ug.partition_grounding_rows([
+        _questions_row(), _open_events_row(), _baseline_row(),
+        _situations_row(), _prior_row(),
+    ])
+    _text, stamped = ug.render_grounding_section(grounding, start_ordinal=1)
+    assert [r.get(ug.UNIT_GROUNDING_ROW_KEY) for _n, r in stamped] == [
+        ug.GROUNDING_PRIOR_READ,
+        ug.GROUNDING_SITUATIONS,
+        ug.GROUNDING_OPEN_EVENTS,
+        ug.GROUNDING_BASELINE,
+        ug.GROUNDING_QUESTIONS,
+    ]
+
+
+def test_receipts_report_the_offer_block_like_every_other():
+    some = ug.grounding_receipts([_open_events_row()])
+    assert some["grounding_open_events_ref"] == 1
+    assert some["grounding_situations_ref"] == 0
+    assert "grounding_open_events_ref" in ug.grounding_receipts([])
+
+
 def test_the_clause_is_appended_once_and_only_once():
     base = "You are the ESCALATION RISK unit."
     once = ug.with_grounding_clause(base)
@@ -893,6 +1296,34 @@ _INLINE_TARGET_SRC = (
 #: reachability proof for these is the seam source, below.
 _VERIFY_SEAM_KIND_KNOBS = frozenset({"judge_sample_rate", "judge_sample_always"})
 
+#: 7e — kind knobs read by run_method's PLAN phase directly (a bool that engages
+#: a pre-computed block in the slice header), not by the slice-focus resolver.
+#: Reachability is proven against the run_method source here and BEHAVIOURALLY
+#: in ``test_spread_block.py`` (the engaged run renders the block; every other
+#: unit's render is byte-identical).
+_RUN_PHASE_KIND_KNOBS = frozenset({"spread_block"})
+
+#: V3/P2 — kind knobs read by the SLICE READER, not by run_method and not by
+#: the verify seam. The DESK GROUNDING gather fires inside
+#: ``actor_substrate_slice._read_substrate_slice``, which runs BEFORE the
+#: runtime merges descriptor options into the run options mapping — so these
+#: two resolve the descriptor's own block there, through the same X-1 kind
+#: catalog. Reachability is proven against that module's source here and
+#: BEHAVIOURALLY in ``tests/runtime/test_actor_substrate_slice_scope.py`` (the
+#: granted descriptor fires the query and carries the block; the ungranted one
+#: fires neither).
+_SLICE_READER_KIND_KNOBS = frozenset({
+    "offer_events", "open_events_limit",
+    # 7g-2 — the HISTORICAL SERIES grant and its bound, resolved in the
+    # same place and for the same reason as the events pair above.
+    "offer_history", "history_series_limit",
+})
+
+_SLICE_READER_SRC = (
+    Path(__file__).resolve().parents[2]
+    / "src" / "legba" / "runtime" / "actor_substrate_slice.py"
+).read_text()
+
 _DAPR_ACTORS_SRC = (
     Path(__file__).resolve().parents[2]
     / "src" / "legba" / "runtime" / "dapr_actors.py"
@@ -908,9 +1339,12 @@ def test_every_declared_kind_knob_is_actually_read_by_its_kind():
     """A declared-but-unread knob is dead config with extra steps. Proven
     BEHAVIOURALLY (the resolver must change what run_method sees), not by grep —
     the reads go through module constants, and a grep would pass on a constant
-    nothing consumes. The J2 judge-sampling knobs are the one declared
-    exception: they are read by the actor verify seam (the judge runs AFTER
-    run_method), so their reachability is proven against that seam instead."""
+    nothing consumes. Three families of knob are read somewhere OTHER than
+    run_method's option resolution and carry their own reachability proof: the
+    J2 judge-sampling knobs (the actor verify seam — the judge runs AFTER
+    run_method), the 7e run-phase flags, and the V3/P2 OPEN EVENTS grant (the
+    SLICE READER — the grounding gather runs BEFORE the runtime's option
+    merge)."""
     for name in known_kind_option_names("inline_target"):
         if name in _VERIFY_SEAM_KIND_KNOBS:
             assert f'options.get("{name}")' in _DAPR_ACTORS_SRC, (
@@ -920,6 +1354,23 @@ def test_every_declared_kind_knob_is_actually_read_by_its_kind():
             )
             assert name in _ACTOR_CRITIC_SRC, (
                 f"{name} never reaches the verify call in actor_critic"
+            )
+            continue
+        if name in _RUN_PHASE_KIND_KNOBS:
+            assert f'options.get("{name}")' in _INLINE_TARGET_SRC, (
+                f"ANALYST_KIND_OPTIONS declares inline_target.{name} as a "
+                "run-phase knob but run_method never reads it off the options"
+            )
+            continue
+        if name in _SLICE_READER_KIND_KNOBS:
+            assert f'"{name}"' in _SLICE_READER_SRC, (
+                f"ANALYST_KIND_OPTIONS declares inline_target.{name} as a "
+                "slice-reader knob but actor_substrate_slice never reads it "
+                "off the descriptor's resolved kind options"
+            )
+            assert "resolve_kind_options" in _SLICE_READER_SRC, (
+                "the slice reader must resolve through the X-1 catalog — a "
+                "raw method.options read would take a bad value at face value"
             )
             continue
         assert f'"{name}"' in _INLINE_TARGET_SRC or f"'{name}'" in _INLINE_TARGET_SRC
@@ -1053,6 +1504,60 @@ def test_an_inline_target_descriptor_may_declare_slice_focus():
         strict=False,
     )
     assert desc.method.options["slice_focus"] == ["hormuz", "tanker:2"]
+
+
+def test_an_inline_target_descriptor_may_declare_the_open_events_grant():
+    """The GRANT is descriptor-borne so it can name ONE analyst; it must
+    therefore survive registration validation on an inline_target unit."""
+    from legba.data.schemas.analyst import AnalystDescriptor
+
+    desc = AnalystDescriptor.model_validate(
+        _descriptor_body("inline_target", "llm_planner",
+                         {"offer_events": True, "open_events_limit": 12}),
+        strict=False,
+    )
+    assert desc.method.options["offer_events"] is True
+    assert desc.method.options["open_events_limit"] == 12
+
+
+def test_the_shipped_escalation_descriptor_carries_the_grant():
+    """The plan's acceptance step is "ONE analyst granted event citations".
+    escalation is that analyst — and it is the ONLY one, because a fleet-wide
+    offer would put an un-piloted token in nine units' prompts at once."""
+    import yaml
+
+    desc_dir = Path(__file__).resolve().parents[2] / "descriptors"
+    granted = []
+    for path in sorted(desc_dir.glob("analyst_*.yaml")):
+        body = yaml.safe_load(path.read_text()) or {}
+        options = ((body.get("method") or {}).get("options") or {})
+        if options.get("offer_events"):
+            granted.append(body.get("identity", {}).get("id"))
+    assert granted == ["escalation"], (
+        f"exactly one analyst may hold the P2 offer today; got {granted}"
+    )
+
+    body = yaml.safe_load((desc_dir / "analyst_escalation.yaml").read_text())
+    # House rules ride along unchanged on any descriptor this lane touched.
+    assert body["method"]["budget_tokens_per_day"] == 0
+    assert body["method"]["llm"]["temperature"] == 1.0
+    assert "max_tokens" not in body["method"]
+    assert body["method"]["options"]["offer_events"] is True
+
+
+def test_the_grant_knobs_are_range_bound_at_the_catalog():
+    """A registry row outlives the code that validated it, so the ceiling is
+    declared (and the value degrades LOUDLY rather than taking effect)."""
+    assert resolve_kind_options(
+        "inline_target", {"open_events_limit": 20},
+    ).accepted == {"open_events_limit": 20}
+    rejected = resolve_kind_options(
+        "inline_target", {"open_events_limit": 21},
+    ).rejected
+    assert [r.cause for r in rejected] == ["invalid_value"]
+    assert resolve_kind_options(
+        "inline_target", {"offer_events": "yes"},
+    ).rejected[0].cause == "invalid_value"
 
 
 def test_a_kind_with_no_catalog_still_cannot_carry_options():
@@ -1210,6 +1715,109 @@ async def test_run_method_renders_the_section_after_the_signals_and_cites_it():
     # The whole prose grades clean on the deterministic floor — the blocks are
     # real evidence, not decoration.
     assert _deterministic_floor(body, citations).faithfulness_score == 1.0
+
+
+@pytest.mark.asyncio
+async def test_run_method_offers_the_token_and_the_write_path_expands_it(
+    monkeypatch,
+):
+    """V3/P2 END TO END — the whole lane in one run.
+
+    The granted unit's prompt renders the OPEN EVENTS block; a model copies a
+    token OUT of that prompt (the stub lifts it from the assembled text rather
+    than being handed it, which is the only way this proves the OFFER and the
+    EXPANSION agree on the grammar); the write path expands it into ordinary
+    per-signal citations and puts the event id on the lineage.
+
+    Before this lane, every piece of that chain existed except the first, and
+    the live consequence was 59 receipts reading ``event_citations: 0``.
+    """
+    from legba.data.analysts.inline_target import InlineTargetDeps, run_method
+    from legba.data.provenance.event_citations import EVENT_ID_RE
+
+    monkeypatch.setenv("LEGBA_EVENT_CITATIONS", "1")
+    member_id = uuid4()
+
+    class _EventPg:
+        """Serves the expansion's signal_event_links read, nothing else."""
+
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        async def fetch(self, sql: str, *_args: Any) -> list[dict[str, Any]]:
+            self.queries.append(sql)
+            return [{
+                "id": member_id,
+                "payload": {
+                    "title": "Refinery fire reported",
+                    "body": "Drone strike set the Kapotnya refinery alight.",
+                },
+                "canonical_url": "https://example.test/refinery",
+                "source_id": "src.test",
+                "relevance": 1.0,
+                "linked_at": "2026-07-31T00:00:00+00:00",
+            }]
+
+    class _TokenCopyingLLM(_CapturingLLM):
+        """A model that cites what it was actually shown."""
+
+        async def chat_complete(self, messages: Any, **kwargs: Any):
+            for m in messages or []:
+                if m.get("role") == "user":
+                    self.user_prompt = m.get("content", "")
+            tokens = EVENT_ID_RE.findall(self.user_prompt)
+            assert tokens, "the granted prompt carried no citable event token"
+            # Both acts, in one body: the BLOCK's [N] handle (what the desk
+            # was shown) and the event's TOKEN (the occurrence's reports).
+            handle = re.search(r"\[(\d+)\] OPEN EVENTS", self.user_prompt)
+            assert handle, "the block rendered without its own [N] handle"
+            self.body = (
+                f"The desk's open frames carry a live occurrence [{handle.group(1)}]. "
+                "The refinery strike is this window's escalation driver "
+                f"event:{tokens[0]}."
+            )
+            return await super().chat_complete(messages, **kwargs)
+
+    llm = _TokenCopyingLLM("")
+    pg = _EventPg()
+    inputs = _focus_slice() + [_situations_row(), _open_events_row(1)]
+    result = await run_method(
+        inputs,
+        {"target_id": "country_watch_ir", "analyst_id": "escalation"},
+        InlineTargetDeps(llm=llm, pg=pg),
+    )
+
+    # 1. THE OFFER reached the prompt, with its instruction.
+    prompt = llm.user_prompt
+    assert "OPEN EVENTS" in prompt
+    assert ug.OPEN_EVENTS_CITE_RULE in prompt
+    assert f"event:{_EVENT_ID}" in prompt
+
+    # 2. THE EXPANSION fired on what the model wrote back.
+    assert f"event:{_EVENT_ID}" not in result.finding.body, (
+        "the token must be REWRITTEN to ordinary markers, never left in prose"
+    )
+    citations = result.finding.data["citations"]
+    expanded = [c for c in citations if c.get("ref_kind") == "event"]
+    assert len(expanded) == 1
+    assert expanded[0]["signal_id"] == str(member_id)
+    assert expanded[0]["event_id"] == str(_EVENT_ID)
+    assert expanded[0]["source_text"], "the judge grades the REPORT's own text"
+    assert expanded[0]["marker"] in result.finding.body
+    assert pg.queries and "signal_event_links" in pg.queries[0]
+
+    # 3. The BLOCK's own citation is a separate, honest thing.
+    blocks = [
+        c for c in citations if c.get("ref_kind") == ug.GROUNDING_OPEN_EVENTS
+    ]
+    assert len(blocks) == 1, f"the cited block did not resolve: {citations}"
+    block = blocks[0]
+    assert "signal_id" not in block and "ref_id" not in block
+    assert block["event_ids"] == [str(_EVENT_ID)]
+
+    # 4. Lineage: the event id rides derived_from beside the expanded signal.
+    derived = {str(d) for d in result.derived_from}
+    assert str(_EVENT_ID) in derived and str(member_id) in derived
 
 
 @pytest.mark.asyncio

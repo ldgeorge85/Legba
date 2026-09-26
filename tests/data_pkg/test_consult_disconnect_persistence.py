@@ -51,13 +51,33 @@ and asserts the server observed it.  Together the two say what one alone
 cannot — the client really did vanish, and the handler really did finish
 anyway.
 
-Consequence for the panel: the assistant turn is durable across a disconnect,
-so ``_persist_assistant_turn`` is deliberately left ON the request lifecycle.
-It does NOT need the detached shape ``deep_consult_api`` uses (a background
-workflow whose completion is recorded by the status poll via
-``consult_persistence.record_deep_completion``) — that shape exists there
-because a deep consult outlives ANY request by design, not because a
-disconnect would lose it.
+2026-09-16: the verdict was right and the conclusion drawn from it was wrong
+===========================================================================
+
+Everything above still holds — a client disconnect does not cancel the
+handler. What this module then concluded was that persistence was therefore
+safe on the request lifecycle. That conclusion had a gap it never examined:
+**the handler's own clock**.
+
+Run ``3ae77c64`` died at 00:48:35Z. No browser went away; the registry's own
+``httpx`` read timeout (300s) fired, the handler raised 504, and for a
+``mode=chat`` consult the registry is the ONLY writer — the actor's chat
+branch returns its typed payload in the invoke envelope and writes no
+``analyst_outputs`` row, no ``analyst_traces`` row. So the answer existed in
+exactly one place, a response nobody was left to receive, and it went nowhere.
+The 504's text promised the actor "may still complete in the background and
+write its row"; for chat mode there is no row to write.
+
+(The re-activation logged 18s later looked like a teardown and was not: it is
+the 5-minute ``actorScanInterval`` resync, which reactivated ~46 actors in the
+same order that evening, on cadence, before and after.)
+
+D-7's answer is to take persistence OFF the request lifecycle — not because a
+disconnect threatens it, but because the request's *timeout* did. The run is
+owned by ``consult_runs.ConsultRunManager``, carries a timeout sized above the
+analyst's own wall-clock budget, and persists under ``asyncio.shield``. The
+tests below now prove the stronger property: the turn lands even when the
+handler is cancelled outright.
 
 What is NOT covered (documented gaps, not silent ones)
 ======================================================
@@ -65,6 +85,8 @@ What is NOT covered (documented gaps, not silent ones)
   * A registry process that dies mid-run loses the in-flight assistant turn.
     Nothing in-process can survive SIGKILL; the user turn is already durable
     (it is appended before the actor runs), so the question is never lost.
+    Detaching the run does not change this — a restart also drops every SSE
+    connection, so the blast radius is unchanged.
   * A FIRST turn interrupted before the POST response arrives leaves a
     session the client never learned the id of.  The row is written and the
     history sidebar lists it, but automatic reattach-by-id is impossible —
@@ -478,6 +500,9 @@ def _wait_for(predicate: Any, *, timeout_s: float = 10.0, what: str = "condition
 def consult_server(monkeypatch: pytest.MonkeyPatch) -> Any:
     """The real consult router on a real uvicorn, with a parkable sidecar."""
     monkeypatch.setenv(API_TOKEN_ENV, TEST_TOKEN)
+    # Keep the POST's brief wait-for-a-fast-answer short so these tests spend
+    # their time on the socket teardown they are about, not on that window.
+    monkeypatch.setenv("LEGBA_CONSULT_SYNC_WAIT_SECONDS", "1.0")
     pg = _RecordingPg()
     gate = _Gate()
     probe_gate = _Gate()
@@ -505,6 +530,7 @@ def consult_server(monkeypatch: pytest.MonkeyPatch) -> Any:
 def cancelling_consult_server(monkeypatch: pytest.MonkeyPatch) -> Any:
     """The same router, wrapped so a disconnect DOES cancel the handler."""
     monkeypatch.setenv(API_TOKEN_ENV, TEST_TOKEN)
+    monkeypatch.setenv("LEGBA_CONSULT_SYNC_WAIT_SECONDS", "1.0")
     pg = _RecordingPg()
     gate = _Gate()
     _install_gated_dapr(monkeypatch, gate, CHAT_ENVELOPE)
@@ -611,19 +637,28 @@ def test_control_probe_proves_the_server_observes_the_disconnect(
     )
 
 
-def test_the_write_would_be_lost_if_the_handler_were_cancelled(
+def test_the_write_survives_even_when_the_handler_IS_cancelled(
     cancelling_consult_server: Any,
 ) -> None:
-    """The counterfactual: under cancellation, the answer IS lost.
+    """The answer lands even under the harshest cancellation we can stage.
 
-    Same router, same abort, same actor — the only difference is a middleware
-    that cancels the handler on ``http.disconnect``.  The user turn (written
-    before the actor runs) survives; the assistant turn never happens.
+    This test used to assert the OPPOSITE, and its inversion is the D-7 fix.
+    Before detachment, ``_persist_assistant_turn`` was awaited inside the
+    request handler, so a middleware that cancelled the handler on
+    ``http.disconnect`` dropped the assistant turn — that was the documented
+    counterfactual, and the module leaned on it to prove the survival test was
+    not vacuous.
 
-    This is what makes the passing verdict meaningful rather than vacuous: the
-    harness demonstrably detects a lost write, so
-    :func:`test_assistant_turn_survives_client_disconnect` passing says
-    something about the production stack instead of about the test.
+    Now the invoke belongs to a task the request does not own. Cancelling the
+    handler cancels its ``asyncio.wait``; it does not reach into the run, which
+    finishes and persists regardless. So the write survives a cancellation the
+    production stack does not even inflict — which is the property that
+    matters, because the thing that actually lost run 3ae77c64 was not a
+    disconnect at all (see the module docstring).
+
+    The negative control moved rather than disappeared: the assertion below,
+    made while the sidecar is still parked, is the harness demonstrating that
+    it DOES observe a missing assistant turn.
     """
     port = cancelling_consult_server["port"]
     pg: _RecordingPg = cancelling_consult_server["pg"]
@@ -635,17 +670,22 @@ def test_the_write_would_be_lost_if_the_handler_were_cancelled(
         {"question": "what if the handler were cancelled?", "mode": "chat", "messages": []},
     )
     _wait_for(gate.reached.is_set, what="the handler to reach the actor invoke")
+    # The negative control: mid-run, the harness sees the assistant turn absent.
     assert pg.roles() == ["user"]
 
     _abort(sock, how="rst")
-    time.sleep(0.3)  # let the cancellation propagate
+    time.sleep(0.3)  # let the cancellation propagate into the handler
     gate.release.set()
-    time.sleep(0.5)  # give a surviving handler every chance to write
 
-    assert pg.roles() == ["user"], (
-        "the cancelling middleware was supposed to drop the assistant turn — if "
-        "it landed anyway this counterfactual no longer proves anything, and the "
-        "survival test above needs a new negative control"
+    _wait_for(
+        lambda: pg.roles() == ["user", "assistant"],
+        what="the detached run to persist the assistant turn after the handler died",
+    )
+    assistant = pg.turn("assistant")
+    assert assistant is not None
+    assert assistant["content"] == CHAT_ENVELOPE["consult_response"]["answer"], (
+        "the run completed but persisted a partial — under cancellation of the "
+        "REQUEST the run itself is untouched, so the full answer is expected"
     )
 
 
@@ -693,31 +733,47 @@ def test_dependency_versions_that_the_verdict_rests_on() -> None:
     )
 
 
-def test_persistence_is_deliberately_on_the_request_lifecycle() -> None:
+def test_persistence_is_on_the_RUN_lifecycle_and_is_shielded() -> None:
     """Pin the DECISION, so a future reader sees it was made, not overlooked.
 
-    ``consult_api._persist_assistant_turn`` is awaited inline in the request
-    handler.  ``deep_consult_api`` uses the detached shape instead
-    (``consult_persistence.record_deep_completion``, driven by the status
-    poll) because a deep consult outlives any request BY DESIGN — not because
-    a disconnect would lose the write.  The tests above prove the chat path
-    does not need that shape; this asserts both shapes still exist as
-    described so the comparison in the module docstring stays true.
+    The chat path used to persist inline in the request handler, and this test
+    used to assert exactly that. D-7 moved it: the write is now driven by
+    ``consult_runs.ConsultRunManager``, off the run's own lifecycle, under
+    ``asyncio.shield`` so a cancel landing between the answer and the write
+    cannot skip it.
+
+    Two properties are pinned because losing either silently re-opens the
+    2026-09-16 hole: the delivery hook must still be what persists, and the
+    shield must still be around it.
     """
     import inspect
 
-    from legba.data.registry import consult_persistence, deep_consult_api
+    from legba.data.registry import consult_persistence, consult_runs
 
-    chat_src = inspect.getsource(consult_api.build_consult_router)
-    assert "await _persist_assistant_turn(" in chat_src, (
-        "the chat path no longer persists inline — if it was detached, update "
-        "this module's verdict and the UI reconcile that depends on it"
+    delivery_src = inspect.getsource(consult_api._deliver_run)
+    assert "_persist_assistant_turn(" in delivery_src, (
+        "the run's delivery hook no longer persists the answer — for a chat "
+        "consult the registry is the ONLY writer (the actor's chat branch "
+        "writes no analyst_outputs row), so this is the whole durability story"
     )
-    assert not any(
-        marker in chat_src
-        for marker in ("create_task(", "BackgroundTask", "background_tasks")
-    ), "the chat path acquired a detached write — re-derive the verdict"
+    assert "_persist_partial_turn(" in delivery_src, (
+        "a failed run no longer persists its partial — the panel would go "
+        "blank on failure, which the operator contract forbids"
+    )
 
-    deep_src = inspect.getsource(deep_consult_api)
-    assert "record_deep_completion" in deep_src
+    drive_src = inspect.getsource(consult_runs.ConsultRunManager._deliver)
+    assert "asyncio.shield(" in drive_src, (
+        "delivery lost its cancellation shield — a cancel between the answer "
+        "and the write would silently drop the turn again"
+    )
+
+    handler_src = inspect.getsource(consult_api.build_consult_router)
+    assert "runs.start(" in handler_src, (
+        "the handler no longer detaches the run — if it went back to blocking "
+        "on the invoke, re-read this module's docstring before shipping it"
+    )
+    # And the deep path's own detached shape is untouched by all of this.
+    from legba.data.registry import deep_consult_api
+
+    assert "record_deep_completion" in inspect.getsource(deep_consult_api)
     assert hasattr(consult_persistence, "record_deep_completion")

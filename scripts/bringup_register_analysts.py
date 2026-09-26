@@ -159,6 +159,23 @@ ANALYST_FILES = [
     # the T7 cross-desk correlation guard de-dupes shared underlying signals.
     "analyst_escalation_composition.yaml",   # NEW — S2-T4 (thematic escalation composition over all desks)
     "analyst_escalation_dyad.yaml",          # NEW — S2-T5 (IR-IL thematic escalation dyad; thematic_desks=[ir,il], guard fires on shared signals)
+    # D-6 — THE ASSESSMENT CHANNEL. Registered so it EXISTS in the registry and
+    # can be promoted through the lifecycle route without a deploy; it ships
+    # `state: draft`, which creates no live actor and registers no cadence
+    # reminder, because the record it reads (a world_assessor row under
+    # `regime: assembly`) does not exist in production until the operator flips
+    # LEGBA_COMPOSITION_ASSEMBLY at the D-3 cutover. Same
+    # meta_findings_synthesizer kind as every composition (no new Python kind,
+    # no verify-dispatch edit); the `subscription.substrate.assessment_spine`
+    # marker routes READ_SLICE to the ONE-row spine read instead of the
+    # world-over-regions branch.
+    "analyst_world_assessment.yaml",         # NEW — D-6 (the interpretive channel; derived_from = [assembly_id], draft until the cutover)
+    # P3 LANE A — the PER-COUNTRY interpretive channel. Same kind, same fence,
+    # same draft state; it carries `subscription.targets` so the runtime fans it
+    # out one worker per desk with `target_filter` set, and READ_SLICE scopes the
+    # spine read to that desk's own country_composition head. Draft because
+    # activation is ~32 always-judged runs per cycle — an operator's number.
+    "analyst_country_assessment.yaml",       # NEW — P3 Lane A (the cross-dimension per-country read; derived_from = [country_composition head id], draft)
     "analyst_composition_lineage_sweep.yaml", # NEW — P3-T6 (deterministic META sweep: multi-floor lineage-integrity over world+country composition outputs via validate_lineage; read-only audit)
     "analyst_scorecard_producer.yaml",  # NEW — P4-T2 (banded-scorecard producer; deterministic META, one scorecard row per active G20 country; data.bands = the T1 verdict, T5 eval folded)
     "analyst_forecast_scoreboard.yaml",  # NEW — P4-T7 (acute-forecast scoreboard producer; deterministic META, weekly-idempotent driver of the forecast_acute pilot: issue → exogenous-resolve → count. Side-writes acute_forecasts rows only; TRACE_ONLY counts receipt; forecasting surfaces ONLY in the T4 scoreboard, never as a claim)

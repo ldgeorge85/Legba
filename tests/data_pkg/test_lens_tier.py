@@ -16,9 +16,19 @@ plumbing:
     full + partial input, most-recent-per-id dedup);
   * the ``JournalPayload`` Literal admits the new kinds (the today's-chronicle
     stumble: an unwidened Literal rejected the new kind at validation);
-  * the five descriptor YAMLs validate on the shared kind, declare verify, carry
-    the staggered crons + journal_read-only grants;
+  * the descriptor YAMLs validate on the shared kind, declare verify, carry the
+    staggered crons + journal_read-only grants;
   * ``get_lens_reads`` is registered in the pack (the four-surface guard).
+
+2026-09-21 — the VOICES LEANS (planning/VOICES_LEAN_PRIORS_2026-09-21.md; operator
+decision D-4 accepted the six priors as drafts) add SIX stance-typed ids on the
+same kind: lens_left / lens_right / lens_centre / lens_pragmatist /
+lens_militarist / lens_isolationist. They ride the same plumbing (entry_kind
+'lens', V1 verify, journal_read-only, one declared prior per persona module) on a
+DAILY 09:00–11:30 UTC band, and they ship ``state: draft`` — the orchestrator
+promotes. The chorus diff's roster is fenced at the four FUNCTION-typed faculties
+(``LENS_DIFF_ROSTER_IDS``) so the leans landing cannot silently re-scope an active
+analyst whose persona declares a four-prior aperture verbatim.
 """
 from __future__ import annotations
 
@@ -33,6 +43,9 @@ from legba.data.analysts.journal_assessor import (
     CHRONICLE_ANALYST_ID,
     LENS_ANALYST_IDS,
     LENS_DIFF_ANALYST_ID,
+    LENS_DIFF_ROSTER_IDS,
+    LENS_FACULTY_ANALYST_IDS,
+    LENS_LEAN_ANALYST_IDS,
     _entry_kind_for_analyst,
     _lens_diff_roster_from_reads,
     _render_user_prompt,
@@ -55,16 +68,37 @@ _LENS_DESCRIPTORS = {
     "lens_capability": "descriptors/analyst_lens_capability.yaml",
     "lens_intent": "descriptors/analyst_lens_intent.yaml",
     "lens_diff": "descriptors/analyst_lens_diff.yaml",
+    # the 2026-09-21 stance-typed leans
+    "lens_left": "descriptors/analyst_lens_left.yaml",
+    "lens_right": "descriptors/analyst_lens_right.yaml",
+    "lens_centre": "descriptors/analyst_lens_centre.yaml",
+    "lens_pragmatist": "descriptors/analyst_lens_pragmatist.yaml",
+    "lens_militarist": "descriptors/analyst_lens_militarist.yaml",
+    "lens_isolationist": "descriptors/analyst_lens_isolationist.yaml",
 }
 
-# The staggered crons (VOICES_BUILD_DESIGN §4.1) — all AFTER the chronicle's
-# `0 6 * * 1`, 30-min spaced.
+# The staggered crons. The four faculties + the diff (VOICES_BUILD_DESIGN §4.1)
+# run WEEKLY, all AFTER the chronicle's `0 6 * * 1`, 30-min spaced. The six leans
+# (VOICES_LEAN_PRIORS_2026-09-21) run DAILY in the 09:00–11:30 UTC band, 30-min
+# spaced and clear of the faculties' Monday 06:30–08:30 window.
 _EXPECTED_CRONS = {
     "lens_trend": "30 6 * * 1",
     "lens_baserate": "0 7 * * 1",
     "lens_capability": "30 7 * * 1",
     "lens_intent": "0 8 * * 1",
     "lens_diff": "30 8 * * 1",
+    "lens_left": "0 9 * * *",
+    "lens_right": "30 9 * * *",
+    "lens_centre": "0 10 * * *",
+    "lens_pragmatist": "30 10 * * *",
+    "lens_militarist": "0 11 * * *",
+    "lens_isolationist": "30 11 * * *",
+}
+
+# The leans ship as DRAFTS (the orchestrator promotes); the LV-1 five are live.
+_EXPECTED_STATES = {
+    lens_id: ("draft" if lens_id in LENS_LEAN_ANALYST_IDS else "active")
+    for lens_id in _LENS_DESCRIPTORS
 }
 
 
@@ -207,7 +241,7 @@ def test_lens_diff_roster_helper_over_fake_rows() -> None:
         {"analyst_id": "lens_intent", "produced_at": "2026-07-21T08:03:00+00:00"},
     ]
     m = _lens_diff_roster_from_reads(full)
-    assert set(m["analyst_ids_seen"]) == set(LENS_ANALYST_IDS)
+    assert set(m["analyst_ids_seen"]) == set(LENS_DIFF_ROSTER_IDS)
     assert m["analyst_ids_missing"] == []
     assert m["topics"] == []  # topic alignment is NARRATE's job, not deterministic
 
@@ -230,7 +264,68 @@ def test_lens_diff_roster_helper_over_fake_rows() -> None:
     noise = [{"analyst_id": "journal_assessor", "produced_at": "2026-07-21T08:00:00+00:00"}]
     mn = _lens_diff_roster_from_reads(noise)
     assert mn["analyst_ids_seen"] == []
-    assert set(mn["analyst_ids_missing"]) == set(LENS_ANALYST_IDS)
+    assert set(mn["analyst_ids_missing"]) == set(LENS_DIFF_ROSTER_IDS)
+
+
+def test_lens_diff_roster_is_fenced_to_the_four_faculties() -> None:
+    """The 2026-09-21 leans ride the same kind and write the same entry_kind, but
+    the chorus diff's matrix stays the FOUR function-typed faculties: its persona
+    declares a four-prior aperture verbatim, so a lean must be neither 'seen' nor
+    counted 'missing' by the roster."""
+    assert LENS_DIFF_ROSTER_IDS == LENS_FACULTY_ANALYST_IDS
+    assert set(LENS_DIFF_ROSTER_IDS).isdisjoint(LENS_LEAN_ANALYST_IDS)
+
+    leans = [
+        {"analyst_id": aid, "produced_at": "2026-09-21T09:00:00+00:00"}
+        for aid in LENS_LEAN_ANALYST_IDS
+    ]
+    m = _lens_diff_roster_from_reads(leans)
+    assert m["analyst_ids_seen"] == []
+    assert set(m["analyst_ids_missing"]) == set(LENS_FACULTY_ANALYST_IDS)
+
+    # a mixed cycle: the lean rows are dropped, the faculty row is kept
+    mixed = _lens_diff_roster_from_reads(
+        leans + [{"analyst_id": "lens_trend",
+                  "produced_at": "2026-09-21T09:05:00+00:00"}]
+    )
+    assert mixed["analyst_ids_seen"] == ["lens_trend"]
+    for aid in LENS_LEAN_ANALYST_IDS:
+        assert aid not in mixed["analyst_ids_missing"]
+
+
+@pytest.mark.asyncio
+async def test_get_lens_reads_passes_the_fenced_diff_roster() -> None:
+    """Through the REAL registered handler: the pack dispatch hands the port the
+    DIFF roster, not every lens id on the kind — otherwise the leans landing
+    would silently widen what lens_diff reads without touching its persona."""
+    from legba.data.analysts.agency.journal_read import register_journal_read_tools
+    from legba.data.analysts.agency.tools import (
+        ToolCall,
+        ToolContext,
+        ToolRegistry,
+    )
+
+    seen: dict[str, object] = {}
+
+    class _Port:
+        async def get_lens_reads(self, *, lens_analyst_ids, since=None, limit=20):
+            seen["ids"] = list(lens_analyst_ids)
+            return {"rows": []}
+
+    reg = ToolRegistry()
+    register_journal_read_tools(reg)
+    handler = reg.handler_for("get_lens_reads")
+    assert handler is not None
+
+    out = await handler(
+        ToolCall(pack_id="journal_read", tool_name="get_lens_reads", args={}),
+        None,
+        ToolContext(substrate=_Port()),
+    )
+    assert out.status == "completed"
+    assert seen["ids"] == list(LENS_DIFF_ROSTER_IDS)
+    for aid in LENS_LEAN_ANALYST_IDS:
+        assert aid not in seen["ids"]
 
 
 @pytest.mark.parametrize("lens_id", list(_LENS_DESCRIPTORS))
@@ -242,23 +337,53 @@ def test_lens_descriptor_yaml_validates(lens_id: str) -> None:
     desc = AnalystDescriptor.model_validate(body, strict=False)
     assert desc.identity.id == lens_id
     assert desc.identity.kind == "journal_assessor"      # shared kind module
-    assert desc.identity.state.value == "active"
+    assert desc.identity.state.value == _EXPECTED_STATES[lens_id]
     # the V1 lens gate must be declared
     assert "verify" in body["method"]["llm"]
-    # weekly beat, staggered off the burst window
+    # the beat, staggered off the burst window
     assert body["cadence"]["fallback_schedule"] == _EXPECTED_CRONS[lens_id]
-    assert int(body["cadence"]["cooldown_seconds"]) < 7 * 86400
+    # cooldown sits below the cadence interval (weekly for LV-1, daily for the leans)
+    interval = 86400 if lens_id in LENS_LEAN_ANALYST_IDS else 7 * 86400
+    assert int(body["cadence"]["cooldown_seconds"]) < interval
     # tower-output-only: journal_read ONLY (no substrate_read, no propose, no sink)
     packs = {p["pack_id"] for p in body["action_packs"]}
     assert packs == {"journal_read"}
     assert body["outputs"] == []
     # grounding off by default (§4.3)
     assert body.get("grounding", {}).get("enabled") is False
+    # house rules: $0 core plane + model-card sampling on every LLM route
+    assert int(body["method"]["budget_tokens_per_day"]) == 0
+    assert float(body["method"]["llm"]["temperature"]) == 1.0
+    # the leans declare NO max_tokens — the core plane never caps model output
+    # (the LV-1 five carry an inert legacy 12288; it is not re-introduced here)
+    if lens_id in LENS_LEAN_ANALYST_IDS:
+        assert "max_tokens" not in body["method"]["llm"]
+
+
+def test_lens_roster_constants_partition_cleanly() -> None:
+    """``LENS_ANALYST_IDS`` is faculties THEN leans, with no overlap and no
+    duplicates — it is what drives entry_kind distillation, the persona map and
+    the declared-prior lookup, so a stray id here is a silently mis-tiered run."""
+    assert LENS_ANALYST_IDS == LENS_FACULTY_ANALYST_IDS + LENS_LEAN_ANALYST_IDS
+    assert len(set(LENS_ANALYST_IDS)) == len(LENS_ANALYST_IDS)
+    assert set(LENS_FACULTY_ANALYST_IDS).isdisjoint(LENS_LEAN_ANALYST_IDS)
+    assert LENS_LEAN_ANALYST_IDS == (
+        "lens_left", "lens_right", "lens_centre",
+        "lens_pragmatist", "lens_militarist", "lens_isolationist",
+    )
+    assert LENS_DIFF_ANALYST_ID not in LENS_ANALYST_IDS
+    # every lens id has a descriptor and a persona-module path
+    from legba.data.analysts.journal_assessor import LENS_PROMPT_MODULE_PATHS
+
+    for aid in LENS_ANALYST_IDS:
+        assert aid in _LENS_DESCRIPTORS
+        assert LENS_PROMPT_MODULE_PATHS[aid] == f"legba.prompts.{aid}:LENS_SYSTEM"
 
 
 def test_faculty_prompt_module_resolves_prior_and_id() -> None:
-    """Each faculty module exports the SAME three names; the prior block resolves
-    and is non-trivial (the persona RENDERS it; the user prompt echoes it)."""
+    """Each lens module (faculty AND lean) exports the SAME three names; the prior
+    block resolves, names ITS OWN id, and is non-trivial (the persona RENDERS it;
+    the user prompt echoes it)."""
     import importlib
 
     for aid in LENS_ANALYST_IDS:
@@ -266,9 +391,46 @@ def test_faculty_prompt_module_resolves_prior_and_id() -> None:
         assert mod.LENS_ID == aid
         assert isinstance(mod.LENS_PRIOR_BLOCK, str) and "DECLARED PRIOR" in mod.LENS_PRIOR_BLOCK
         assert "BLIND SPOT" in mod.LENS_PRIOR_BLOCK  # the load-bearing field
+        # the block is the id's OWN prior, not a neighbour's copied across
+        assert aid in mod.LENS_PRIOR_BLOCK, aid
+        assert mod.LENS_PRIOR_BLOCK.rstrip().endswith("--- END DECLARED PRIOR ---")
         # the composed system prompt carries the prior + the shared no-new-fact stance
         assert mod.LENS_PRIOR_BLOCK in mod.LENS_SYSTEM
         assert "you never assert a new fact" in mod.LENS_SYSTEM
+        assert set(mod.__all__) == {"LENS_SYSTEM", "LENS_PRIOR_BLOCK", "LENS_ID"}
+
+
+def test_every_lens_system_carries_the_shared_persona_and_its_own_prior() -> None:
+    """``compose_lens_system`` is the ONE place the lens register lives: every id
+    must carry the shared LENS_PERSONA / LENS_TASK / narrate contract verbatim,
+    plus its own prior and NOBODY else's. A lean that hand-rolled its system
+    prompt (or imported the wrong prior) fails here."""
+    import importlib
+
+    from legba.prompts.lens_common import (
+        LENS_NARRATE_PREAMBLE,
+        LENS_PERSONA,
+        LENS_TASK,
+    )
+
+    priors = {
+        aid: importlib.import_module(f"legba.prompts.{aid}").LENS_PRIOR_BLOCK
+        for aid in LENS_ANALYST_IDS
+    }
+    for aid in LENS_ANALYST_IDS:
+        system = importlib.import_module(f"legba.prompts.{aid}").LENS_SYSTEM
+        assert LENS_PERSONA in system, aid
+        assert LENS_TASK in system, aid
+        assert LENS_NARRATE_PREAMBLE in system, aid
+        assert priors[aid] in system, aid
+        # exactly ONE declared prior per read — no other lens's block rides along
+        assert system.count("--- DECLARED PRIOR") == 1, aid
+        for other, block in priors.items():
+            if other != aid:
+                assert block not in system, (aid, other)
+        # the voice sketch renders the prior; it never re-opens the diary
+        assert "YOUR VOICE" in system, aid
+        assert "the apparatus is your POSTSCRIPT" not in system, aid
 
 
 def test_lens_diff_persona_carries_verbatim_aperture() -> None:

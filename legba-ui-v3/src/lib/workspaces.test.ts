@@ -178,17 +178,69 @@ describe('the landing (Morning Read) still answers "what changed"', () => {
     )
   })
 
-  it('puts the glance strip above the Wall, and the feed below it', () => {
-    expect(morning.seed[0]).toEqual({ kind: 'v4.kpi' })
+  it('anchors on the NAVIGATOR and opens the read beside it, dashboard behind', () => {
+    // WORKSTATION_V2_FLOW_DESIGN §8 redraws the landing. The old order was
+    // glance strip → Wall → feed: the first screenful was a dashboard, and the
+    // day's read was a tab on the right. It is now
+    //   NAVIGATOR │ REPORT │ FINDINGS/ENTITIES │ CONSULT   over   GRAPH·MAP·TIME
+    // — the rail that says WHICH read, the read itself, the records it scopes,
+    // and the conversation, with the dashboard one tab behind the read.
+    //
+    // Nothing was removed from the stance (see the assertion above): the Wall
+    // and the glance strip are still seeded, still one click away, and
+    // `system.wall_movers` is still not mounted twice.
+    expect(morning.seed[0]).toEqual({ kind: 'system.navigator' })
+    const read = morning.seed.find((p) => p.kind === 'v4.morning_read')!
+    expect(read.position).toEqual({ referencePanel: 'system.navigator', direction: 'right' })
     const wall = morning.seed.find((p) => p.kind === 'system.wall')!
-    expect(wall.position).toEqual({ referencePanel: 'v4.kpi', direction: 'below' })
+    expect(wall.position).toEqual({ referencePanel: 'v4.morning_read', direction: 'within' })
+    const kpi = morning.seed.find((p) => p.kind === 'v4.kpi')!
+    expect(kpi.position).toEqual({ referencePanel: 'v4.morning_read', direction: 'within' })
     const feed = morning.seed.find((p) => p.kind === 'system.findings')!
-    expect(feed.position).toEqual({ referencePanel: 'system.wall', direction: 'below' })
+    expect(feed.position).toEqual({ referencePanel: 'v4.morning_read', direction: 'right' })
   })
 
-  it('opens on the World Assessment, not the Inspector (the report is the read; the Inspector waits for a selection)', () => {
-    expect(morning.active).toContain('v4.assessment')
+  it('docks CONSULT open on the right — its own group, never `within` another', () => {
+    // Design §5.1. In `investigate` Consult is tabbed inside `system.entities`,
+    // so it opens HIDDEN; that is exactly how the operator's centre surface
+    // disappeared. A `within` placement here would reproduce it silently, so
+    // the shape is asserted rather than trusted.
+    const consult = morning.seed.find((p) => p.kind === 'system.consult')!
+    expect(consult.position?.direction).toBe('right')
+    expect(morning.sizes?.find((h) => h.kind === 'system.consult')?.widthFraction).toBe(0.26)
+  })
+
+  it('puts a graph, the map and the timeline in one bottom band — three views of one scope', () => {
+    const kindsSeeded = new Set(kinds)
+    expect(kindsSeeded.has('system.graph_walk')).toBe(true)
+    expect(kindsSeeded.has('v4.map')).toBe(true)
+    expect(kindsSeeded.has('system.timeline')).toBe(true)
+    const graph = morning.seed.find((p) => p.kind === 'system.graph_walk')!
+    expect(graph.position).toEqual({ referencePanel: 'v4.morning_read', direction: 'below' })
+  })
+
+  it('opens on the READ, not the Inspector (the report is the read; the Inspector waits for a selection)', () => {
+    // D-4 moved the default-active tab from `v4.assessment` (the composed-prose
+    // one-pager) to `v4.morning_read` (the assembly reader). The property under
+    // test is unchanged and is the one that matters: the stance opens on the
+    // day's READ, and the Inspector stays quiet until something is selected.
+    expect(morning.active).toContain('v4.morning_read')
     expect(morning.active).not.toContain('system.inspector')
+  })
+
+  it('keeps the composed-prose one-pager seeded beside the reader for the A/B', () => {
+    // Spec §5.2: the old path stays runnable for the whole demotion program.
+    // Both surfaces read the SAME producer, so they share a Dockview group —
+    // one tab apart, never two places on the screen. The §8 redraw inverts
+    // WHICH of the pair anchors the group (the reader does now, because it is
+    // the landing's centre), but the property — one group, one tab apart —
+    // is the one that was ever load-bearing, and it holds.
+    expect(kinds).toContain('v4.assessment')
+    const assessment = morning.seed.find((p) => p.kind === 'v4.assessment')!
+    expect(assessment.position).toEqual({
+      referencePanel: 'v4.morning_read',
+      direction: 'within',
+    })
   })
 })
 

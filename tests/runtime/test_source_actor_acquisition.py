@@ -495,6 +495,97 @@ async def test_lic2_license_class_stamped_scope_to_signal(pool):
             await conn.execute("DELETE FROM signals WHERE owner_tenant=$1", tenant)
 
 
+@pytest.mark.asyncio
+async def test_wave_e_access_class_stamped_scope_to_signal(pool):
+    """Wave-E: a descriptor's ``scope.access_class`` is copied onto every
+    written signal's ``access_class`` COLUMN at ingest (migration 0216) —
+    through the REAL path (``SourceCore._process_one`` ->
+    ``write_canonical_signal``), the same route the LIC-2 test above
+    exercises. Unlike LIC-2's payload key, this is a first-class column with
+    no override path to prove — the descriptor's classified value is what
+    every signal it produces carries."""
+    from datetime import datetime
+
+    source_id = f"source.test.wavee_{uuid4().hex[:8]}"
+    tenant = f"waveE_{uuid4().hex[:8]}"
+    sd = SourceDescriptor(
+        identity=SourceIdentity(
+            id=source_id, name="waveE", kind="generic_webhook",
+            schema_uri="legba/source/3.0.0", version="d" * 16, owner="test:waveE",
+            created=datetime.now(tz=timezone.utc), state=LifecycleState.ACTIVE,
+        ),
+        scope=SourceScope(owner_tenant=tenant, access_class="licensed_commercial"),
+        acquisition="push",
+    )
+    core = SourceCore(
+        f"source::{source_id}::waveE",
+        SourceDeps(descriptor=sd, deps=StandardDeps(pg_pool=pool)),
+    )
+    ctx = core._make_context()
+    sig = Signal(
+        source_id=source_id, modality="text",
+        payload={"title": "WaveE item"},
+        canonical_url="https://example.org/waveE",
+        content_hash=f"waveE_{uuid4().hex}",
+    )
+    try:
+        async with pool.acquire() as conn:
+            out = await core._process_one(conn, ctx, sig)
+            assert out is not None
+            row = await conn.fetchrow(
+                "SELECT access_class FROM signals WHERE owner_tenant=$1", tenant,
+            )
+        assert row is not None
+        assert row["access_class"] == "licensed_commercial"
+    finally:
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM signals WHERE owner_tenant=$1", tenant)
+
+
+@pytest.mark.asyncio
+async def test_wave_e_access_class_defaults_fail_closed_to_restricted(pool):
+    """A descriptor that never sets ``scope.access_class`` stamps
+    ``restricted`` on every signal it produces — fail-closed, never
+    ``public`` by implicit default (mirrors the schema-level default in
+    ``SourceScope``, proven here through the real ingest path)."""
+    from datetime import datetime
+
+    source_id = f"source.test.wavee_default_{uuid4().hex[:8]}"
+    tenant = f"waveEdef_{uuid4().hex[:8]}"
+    sd = SourceDescriptor(
+        identity=SourceIdentity(
+            id=source_id, name="waveEdefault", kind="generic_webhook",
+            schema_uri="legba/source/3.0.0", version="c" * 16, owner="test:waveE",
+            created=datetime.now(tz=timezone.utc), state=LifecycleState.ACTIVE,
+        ),
+        scope=SourceScope(owner_tenant=tenant),  # access_class unset
+        acquisition="push",
+    )
+    core = SourceCore(
+        f"source::{source_id}::waveEdefault",
+        SourceDeps(descriptor=sd, deps=StandardDeps(pg_pool=pool)),
+    )
+    ctx = core._make_context()
+    sig = Signal(
+        source_id=source_id, modality="text",
+        payload={"title": "WaveE default item"},
+        canonical_url="https://example.org/waveEdefault",
+        content_hash=f"waveEdef_{uuid4().hex}",
+    )
+    try:
+        async with pool.acquire() as conn:
+            out = await core._process_one(conn, ctx, sig)
+            assert out is not None
+            row = await conn.fetchrow(
+                "SELECT access_class FROM signals WHERE owner_tenant=$1", tenant,
+            )
+        assert row is not None
+        assert row["access_class"] == "restricted"
+    finally:
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM signals WHERE owner_tenant=$1", tenant)
+
+
 # ---------------------------------------------------------------------------
 # 2. Push source: inbound POST ingest → canonical structured write
 # ---------------------------------------------------------------------------

@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
+
 import httpx
+import yaml
 
 import sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
@@ -149,6 +152,59 @@ COMPONENTS: list[tuple[str, dict]] = [
                 "price_output_per_m": _n(0),
                 # No daily_burn_alert_usd: a $0 lane cannot burn, and absent
                 # = never pages. Set it WITH the prices if a paid lane lands.
+            },
+        },
+    ),
+    (
+        # THE FOURTH FAMILY — the external audit's AUDIT RATER (W-4).
+        #
+        # Config-only, no code: one registrar entry is the whole train. It exists
+        # because instrument validity has to be a STANDING property rather than a
+        # post-hoc verdict. R3 died at raw overlap 0.7451 < 0.75 on 51 shared
+        # items after R2 called its 0.804 "the round's methodological result" —
+        # it did not replicate, and nothing was watching between rounds.
+        #
+        # So a hash-gated 10% of each day's searched claims PLUS 100% of
+        # CONTRADICTED are re-graded here, over the BYTE-IDENTICAL cached
+        # evidence envelope the primary grader saw. ~329 double-graded
+        # claims/week against R3's overlap n of 51 — 6x better powered than any
+        # round, at ~$0.02/day.
+        #
+        # WHY META/LLAMA. It is a FOURTH family: cross-family from the writer
+        # (gpt-oss-120b, OpenAI open-weights), from the judge (NVIDIA nemotron) and
+        # from the primary grader (Google/Gemma). Anthropic is refused by a HARD
+        # standing rule (consult-only, never scheduled) and by the fence in
+        # `resolve_grader_route`; Chinese open models are refused by standing
+        # rule. Llama is allowed and available.
+        #
+        # STATE: draft. The design ships it draft on purpose — it is a NEW
+        # outbound spend lane on a third-party router, and the operator flips it
+        # active. Until then the width plane grades with the primary and reports
+        # its instrument overlap as UNMEASURED, which is not agreement.
+        "llm.audit.openrouter_llama33_70b.openai_compat",
+        {
+            "id": "llm.audit.openrouter_llama33_70b.openai_compat",
+            "name": "OpenRouter Llama-3.3-70B (external-audit rater, fourth family)",
+            "schema_uri": "legba/stack/llm_provider/1.0.0",
+            "state": "draft",
+            "owner": "lewis@local",
+            "config": {
+                "api_endpoint": _t("https://openrouter.ai/api"),
+                "api_key": _s("llm.judge.openrouter.api_key"),
+                "model_name": _t("meta-llama/llama-3.3-70b-instruct"),
+                "max_tokens": _n(4096),
+                "timeout_seconds": _n(120),
+                "tier": _dd("cheap", ["primary", "fallback", "cheap"]),
+                # OpenRouter list price for llama-3.3-70b-instruct, USD per 1M
+                # tokens. RE-VERIFY at openrouter.ai/models before trusting a
+                # burn number across a provider price change — the price table
+                # is what turns a call into a cost estimate, and a stale one
+                # under-reports silently.
+                "price_input_per_m": _n(0.13),
+                "price_output_per_m": _n(0.40),
+                # ~50 calls/day at ~2.1k in / 0.4k out is ~$0.02/day. $2 pages
+                # on a runaway (a 100x fault), never on normal volume.
+                "daily_burn_alert_usd": _n(2.0),
             },
         },
     ),
@@ -390,7 +446,7 @@ COMPONENTS: list[tuple[str, dict]] = [
                 "subprovider": _dd(
                     "searxng",
                     ["searxng", "json", "firecrawl", "jina", "tavily", "brave",
-                     "agent"],
+                     "serper", "agent"],
                 ),
                 "endpoint": _t(
                     os.environ.get(
@@ -398,7 +454,13 @@ COMPONENTS: list[tuple[str, dict]] = [
                     )
                 ),
                 "timeout_seconds": _n(15),
-                "max_results": _n(10),
+                # 30, matching MAX_RESULTS_CAP. A census of this instance
+                # returned 27-29 results per query, so the old 10 discarded
+                # roughly two thirds of every search before any caller saw it.
+                # An already-registered component keeps its stored 10 until an
+                # operator PUTs this body again — the code cap alone cannot
+                # raise it, because the clamp is min(config, cap, ask).
+                "max_results": _n(30),
                 # Empty = the instance's own configured engine set. WHICH
                 # engines survive sustained automated use is an empirical
                 # first-week question measured by the control-query canary —
@@ -412,6 +474,62 @@ COMPONENTS: list[tuple[str, dict]] = [
         },
     ),
 ]
+
+
+# R-C — the PAID rung of the search provider ladder. Its body lives in
+# `descriptors/stack_component_search_brave.yaml` and is LOADED here rather
+# than restated, so the reviewable tree file and the registrar cannot drift
+# into two different components with one id. Ships `state: draft`: registering
+# it activates nothing (no draft component is resolved into a live handler),
+# and it stays inert until the operator ALSO declares it on the web_access
+# pack's `web_search` ToolSpec `fallback_providers` and transitions it active.
+# See the descriptor header for the full four-step flip.
+#
+# The THIRD-FAMILY GRADER (Mistral Large 3 on OpenRouter) is loaded the same
+# way, and for the same reason. It ships `state: draft` too: registering it
+# activates nothing, and it stays inert until the operator transitions it AND
+# repoints the three refs that name the unfunded Cerebras Gemma slot today
+# (planning/PROOF_ROUND_2026-09-12/GRADER_REPOINT.md). See that descriptor's
+# header for why the model family is declared in the fence's
+# `GRADER_FAMILY_BY_COMPONENT` map and not in the YAML: both stack schemas are
+# `extra="forbid"`, so a `family:` key would be a register-time validation
+# error rather than an annotation.
+#
+# F1 model picker's SELECTABLE Anthropic plane (Claude Fable 5.1) is loaded
+# the same way too. Unlike the two above it ships `state: active` — it reuses
+# the already-funded `llm.anthropic.api_key` vault ref and the already-live
+# Anthropic handler, so there is no draft→active flip. See that descriptor's
+# header for the config-shape provenance (read off the live
+# `llm.anthropic.opus_4_7` component) and why no `subprovider` field is
+# needed (the `llm.anthropic.` id prefix alone drives
+# `infer_llm_subprovider`).
+DESCRIPTORS_DIR = Path(__file__).resolve().parents[1] / "descriptors"
+_STACK_DESCRIPTOR_FILES = [
+    "stack_component_search_brave.yaml",
+    "stack_component_llm_judge_openrouter_mistral_large.yaml",
+    "stack_component_llm_anthropic_fable_5_1.yaml",
+]
+
+
+def _load_descriptor_components() -> list[tuple[str, dict]]:
+    loaded: list[tuple[str, dict]] = []
+    for name in _STACK_DESCRIPTOR_FILES:
+        path = DESCRIPTORS_DIR / name
+        if not path.exists():
+            raise RuntimeError(
+                f"stack descriptor {name!r} is listed in this registrar but "
+                f"missing at {path} — a registrar that quietly skips a declared "
+                "component is how a capability goes missing on the run that "
+                "needs it."
+            )
+        body = yaml.safe_load(path.read_text())
+        if not isinstance(body, dict) or not body.get("id"):
+            raise RuntimeError(f"stack descriptor {name!r} has no 'id'")
+        loaded.append((str(body["id"]), body))
+    return loaded
+
+
+COMPONENTS.extend(_load_descriptor_components())
 
 
 def _ensure_pg_password_secret(client: httpx.Client) -> None:

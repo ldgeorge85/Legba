@@ -42,13 +42,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Mapping, Type
+from typing import Any, Mapping, Type
 
 from pydantic import BaseModel
 
 from .models import (
     AlertPayload,
     CritiquePayload,
+    EventPayload,
     FactPayload,
     FindingPayload,
     HypothesisPayload,
@@ -116,6 +117,12 @@ class OutputKind(str, Enum):
     # we were already watching" is a claim about the world, and the ledger rows
     # in `situation_events` point back at THIS row for their grading.
     SITUATION_UPDATE = "situation_update"
+    # The 14th kind — DATA MODEL V3 / P0's bounded occurrence. Lands in the
+    # dedicated `events` table (migration 0202), keyed by
+    # (event_signature, analyst_id). Every live write is gated behind
+    # LEGBA_EVENTS (writes._insert_event refuses while it is off); P0 ships no
+    # consumer — nothing reads this kind yet.
+    EVENT = "event"
 
 
 class _TraceOnly:
@@ -190,6 +197,61 @@ STRUCTURAL_VERIFY_EXEMPT_ANALYSTS: frozenset[str] = frozenset({
     "source_track_record",
     "narrative_mapper",
     "desk_baseline",
+    # A-1 (ATTENTION_MEASUREMENT_DESIGN §3.1) — the attention instrument is an
+    # INSTRUMENT, not a claim about the world, and it must never enter the
+    # verify/judge population: this design would otherwise itself add to the
+    # ~84% of LLM calls that are the system watching itself. It is also required
+    # here by the drift guard, which asserts this set EQUALS the FINDING-emitting
+    # deterministic sub-handlers.
+    "desk_reference",
+    # R-D: the research program's three counters. Pure SQL arithmetic over the
+    # research signals — there is no model prose in the row to grade, and its
+    # own honest-null discipline (every rate beside its n, null below gate G9's
+    # floor) is a stronger statement than a faithfulness score would be. Added
+    # here because OUTPUT_KIND_BY_SUB_HANDLER marks it FINDING and this set
+    # MUST stay equal to the FINDING emitters; it changes no existing analyst's
+    # verify routing.
+    "research_measurement",
+    # G1 (LEDGER_RESET_2026-09-16 §3, Program 2): the correctness grader is an
+    # INSTRUMENT. Its receipt reports what the instrument did — which units it
+    # graded, against which reference, under which calibration, at what cost —
+    # and asserts nothing about the world that a faithfulness judge could grade.
+    # Routing it into the verify population would also be circular in the worst
+    # way: the pass that measures groundedness would be scoring the output of
+    # the pass that exists because groundedness is not truth. Added here because
+    # OUTPUT_KIND_BY_SUB_HANDLER marks it FINDING and this set MUST stay equal
+    # to the FINDING emitters.
+    "correctness_grader",
+    # R2 (LEDGER_RESET_2026-09-16 §3, Program 2): the reference builder is the
+    # correctness grader's other half and the same argument binds. Its receipt
+    # reports what the instrument did — which target it built, how many
+    # committed developments survived which fence, which dimensions came out
+    # thin, what it cost the core plane — and asserts nothing about the world a
+    # faithfulness judge could grade. The REFERENCE it writes is deliberately
+    # not a finding at all: it is an INPUT to a measurement, and routing it
+    # through the pass that scores our prose against our own citations is
+    # exactly the circularity the reference exists to escape. Added here
+    # because OUTPUT_KIND_BY_SUB_HANDLER marks it FINDING and this set MUST
+    # stay equal to the FINDING emitters.
+    "reference_builder",
+    # H12 (Program 5 lane 1, PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §4):
+    # inquiry_yield is a deterministic weekly COUNT over the inquiry_ledger —
+    # hypotheses opened/confirmed/refuted/expired, questions dispatched/
+    # answered, observations later carried forward, blind spots — no model
+    # prose in the row to grade. Added here because OUTPUT_KIND_BY_SUB_HANDLER
+    # marks it FINDING and this set MUST stay equal to the FINDING emitters.
+    "inquiry_yield",
+    # Program 6 L2: the layer-divergence unit is an INSTRUMENT over counts.
+    # Its finding asserts arithmetic — this layer carried N folded dispatches
+    # on this day, that ratio sits Z MAD-scaled deviations from its own
+    # fortnight — and every sentence of its body is generated FROM those
+    # numbers, so there is no model prose in the row for a faithfulness judge
+    # to grade. It does carry re-derivable identities, which is why it also
+    # joins STRUCTURAL_CLAIMS_VERIFY_ANALYSTS below: the honest badge and a
+    # REAL re-derivation, rather than the badge alone. Added here because
+    # OUTPUT_KIND_BY_SUB_HANDLER marks it FINDING and this set MUST stay equal
+    # to the FINDING emitters.
+    "layer_divergence",
 })
 
 
@@ -235,16 +297,144 @@ STRUCTURAL_CLAIMS_VERIFY_ANALYSTS: frozenset[str] = frozenset({
     # surfaced, always true by REIFIED_STATUSES construction) — so it joins the
     # claims-verified set per the C2b merge note. Subset drift guard holds.
     "narrative_mapper",
+    # Program 6 L2 — the layer-divergence unit asserts two identities that are
+    # re-derivable from its own payload with no DB access: the divergence
+    # partition (total = widening + narrowing, true by construction of
+    # `evaluate_pair`'s single direction label) and the distinct-desk count
+    # over its per-desk receipts. A partition bug in either would surface as a
+    # flagged critique rather than as a number nobody checked.
+    "layer_divergence",
 })
+
+
+# ---------------------------------------------------------------------------
+# D-5 (DEMOTION_D1_SPEC_2026-09-04 §4) — the DETERMINISTIC ROLLUP registry
+# ---------------------------------------------------------------------------
+# Under the assembly regime ``region_composition`` stops generating prose and
+# emits a ``region_rollup.v1`` payload: no LLM, no prompt, no faithfulness
+# judge. It therefore needs the same two things a structural analyst needs —
+# an honest badge instead of a silent nothing, and a REAL deterministic
+# verification of the numbers it asserts.
+#
+# WHY THIS IS A SEPARATE SET AND NOT A MEMBER OF THE TWO ABOVE. §4.3 item 5
+# proposed adding ``region_composition`` to both. It cannot go in either:
+#
+#   * ``STRUCTURAL_VERIFY_EXEMPT_ANALYSTS`` is drift-guarded to be EQUAL to the
+#     FINDING-emitting deterministic SUB-HANDLERS (test_trace_only_output_split
+#     ``test_structural_verify_exempt_registry_matches_finding_sub_handlers``).
+#     ``region_composition`` is a ``meta_findings_synthesizer``, not a
+#     sub-handler. Adding it makes that guard assert something false, and the
+#     guard is load-bearing: it is what keeps the badge registry honest as
+#     handlers come and go.
+#   * ``STRUCTURAL_CLAIMS_VERIFY_ANALYSTS`` is guarded to be a SUBSET of the
+#     first, so it inherits the same problem.
+#
+# And the deeper reason: those sets are claims about an ANALYST ("this producer
+# is deterministic, always"). A region row's determinism is a property of the
+# REGIME IT WAS WRITTEN UNDER — the same analyst_id produced graded LLM prose
+# last week. A set that means "always deterministic" cannot hold an id that is
+# only sometimes deterministic without becoming a lie in one direction or the
+# other. So the ANALYST joins its own registry, and the ROW carries the
+# discriminator (:func:`is_deterministic_rollup`).
+DETERMINISTIC_ROLLUP_ANALYSTS: frozenset[str] = frozenset({
+    "region_composition",
+})
+
+#: The finding-``data`` key + schema that MARK a row as a deterministic rollup.
+#: Declared here, in the verify-registry module, and imported by the producer
+#: (``data.analysts.region_rollup``) rather than the other way round — every
+#: guard that must recognise a rollup lives on this side of the layering, and
+#: none of them may import an analyst module to do it.
+ROLLUP_PAYLOAD_KEY: str = "rollup"
+ROLLUP_PAYLOAD_SCHEMA: str = "region_rollup.v1"
+
+#: ``members[].lead_source`` for a member whose lead block WAS carried — the
+#: token that selects the rollup's rendered member sections, in order.
+#:
+#: Declared here for the same layering reason as the two above, and needed on
+#: this side since the 2026-09-07 citation-order fix: the EXPORT re-maps a
+#: historical rollup row's citations onto the order the body actually renders
+#: (``export_api._rollup_aligned_citations``), and a read-side guard may not
+#: import an analyst module to learn the token it filters on. The producer
+#: aliases it (``region_rollup.LEAD_CARRIED``).
+ROLLUP_LEAD_CARRIED: str = "carried"
+
+#: The badge a rollup row carries. NOT ``"structural"``: a reader who is told
+#: "structural" goes looking for a mining/aggregate handler and finds a
+#: composition analyst, which is a worse answer than no answer. This names what
+#: actually happened.
+ROLLUP_EXEMPT_REASON: str = "deterministic-rollup"
+
+
+def is_deterministic_rollup(data: Any) -> bool:
+    """True iff a finding's ``data`` carries a ``region_rollup.v1`` payload.
+
+    THE REGIME DISCRIMINATOR, and it reads the ROW rather than the environment.
+    A row composed under the rollup regime keeps its own semantics forever,
+    including after the flag flips back; an env read here would retroactively
+    re-label history, which is the 08-12 pooling failure in a new costume.
+
+    Accepts either the ``analyst_outputs.data`` envelope (payload at
+    ``data.data.rollup``) or the inner payload dict directly, because the
+    callers sit on both sides of that boundary.
+    """
+    if not isinstance(data, Mapping):
+        return False
+    for candidate in (data.get("data"), data):
+        if not isinstance(candidate, Mapping):
+            continue
+        rollup = candidate.get(ROLLUP_PAYLOAD_KEY)
+        if (
+            isinstance(rollup, Mapping)
+            and str(rollup.get("schema") or "") == ROLLUP_PAYLOAD_SCHEMA
+        ):
+            return True
+    return False
+
+
+def rollup_exempt_reason(analyst_id: str | None, data: Any = None) -> str | None:
+    """The verify-exemption tag for a DETERMINISTIC ROLLUP row, or ``None``.
+
+    Both conditions are required — the analyst must be registered above AND the
+    row must actually carry the payload — so a legacy generative region read
+    keeps its ordinary "unverified / verified" semantics untouched, and a stray
+    ``rollup`` key on some other analyst's row never earns a badge.
+    """
+    if analyst_id is None or analyst_id not in DETERMINISTIC_ROLLUP_ANALYSTS:
+        return None
+    return ROLLUP_EXEMPT_REASON if is_deterministic_rollup(data) else None
 
 
 def structural_claims_verify_opt_in(analyst_id: str | None) -> bool:
     """Whether ``analyst_id`` opts into the deterministic structural_claims
-    verify profile (C2b). False for every non-opted-in analyst."""
-    return analyst_id is not None and analyst_id in STRUCTURAL_CLAIMS_VERIFY_ANALYSTS
+    verify profile (C2b). False for every non-opted-in analyst.
+
+    D-5 widens this to :data:`DETERMINISTIC_ROLLUP_ANALYSTS`, and the widening
+    is SAFE WITHOUT A FLAG READ because of the profile's own contract: *"An
+    opted-in analyst whose finding carries no ``data['structural_claims']``
+    block is a NO-OP (no critique written; the row keeps its honest badge)."*
+    A legacy generative region read declares no claims → no critique → the
+    flag-off path is byte-identical. A rollup declares four → they are
+    re-derived. The REGIME gates itself, on the row, with nothing to configure.
+    """
+    return analyst_id is not None and (
+        analyst_id in STRUCTURAL_CLAIMS_VERIFY_ANALYSTS
+        or analyst_id in DETERMINISTIC_ROLLUP_ANALYSTS
+    )
 
 
-def structural_badge(analyst_id: str | None, structural_verified: bool | None) -> str | None:
+#: The badge a rollup row carries once its arithmetic has been re-derived and
+#: PASSED. Mirrors the ``structural`` / ``structural-verified`` pair, so the
+#: reader's question ("was anything actually checked?") gets the same two-state
+#: answer everywhere it is asked.
+ROLLUP_VERIFIED_REASON: str = "deterministic-rollup-verified"
+
+
+def structural_badge(
+    analyst_id: str | None,
+    structural_verified: bool | None,
+    data: Any = None,
+) -> str | None:
     """The ``verify_exempt`` badge stamp, folding a structural verdict (C2b).
 
     Extends :func:`verify_exempt_reason`: a structural finding that now carries a
@@ -252,7 +442,15 @@ def structural_badge(analyst_id: str | None, structural_verified: bool | None) -
     ``"structural-verified"``; one without (or a failed / unverifiable verdict)
     keeps the honest ``"structural"`` (rendered ``unverified — structural``).
     ``None`` for every non-structural analyst — never fabricated.
+
+    D-5 adds the ROLLUP pair on the same two-state pattern. ``data`` is optional
+    and defaults to ``None``, so every existing call site keeps its exact
+    behaviour: a caller that does not pass the row cannot produce a rollup badge
+    and falls through to the structural branch unchanged.
     """
+    rollup = rollup_exempt_reason(analyst_id, data)
+    if rollup is not None:
+        return ROLLUP_VERIFIED_REASON if structural_verified is True else rollup
     base = verify_exempt_reason(analyst_id)
     if base == "structural" and structural_verified is True:
         return "structural-verified"
@@ -263,8 +461,8 @@ def structural_badge(analyst_id: str | None, structural_verified: bool | None) -
 #
 # A bounded unit's ``data['citations']`` used to hold exactly one entry shape:
 # a ``[N]`` marker bound to a ``signals`` row id. QW1-B adds four MORE citable
-# block kinds (see :mod:`legba.data.analysts.unit_grounding`), and FRAME-2 a
-# fifth, none of which is a signal: this unit's own PRIOR READ (a real
+# block kinds (see :mod:`legba.data.analysts.unit_grounding`), FRAME-2 a fifth
+# and V3/P2 a sixth, none of which is a signal: this unit's own PRIOR READ (a real
 # ``analyst_outputs`` uuid, carried as ``ref_id``), and four SYNTHETIC blocks —
 # the WINDOW LEDGER, the open-situation REGISTER, the DESK BASELINE and the
 # STANDING OPEN QUESTIONS — which have no single substrate id and therefore
@@ -282,11 +480,61 @@ def structural_badge(analyst_id: str | None, structural_verified: bool | None) -
 # discriminator (``verify._uses_subclaim_convention``); stamping it on a unit's
 # prior-read citation would route the whole unit finding to the sub-claim verify
 # floor. The prior read gets its own ``ref_kind`` instead.
+#
+# ALSO ABSENT, BY DESIGN (V3/P2): ``'event'``. An event citation is EXPANDED at
+# build time into ordinary per-signal entries — each carries a ``signal_id``,
+# so :func:`is_grounding_citation` correctly returns False on it and the judge
+# grounds on the signals' raw source text. Admitting ``event`` here would let
+# an event be cited with ``evidence_text`` set to the event's OWN summary —
+# the exact rubber-stamp DATA_MODEL_V3 §2.5 rules 1–2 exist to prevent.
 GROUNDING_REF_KINDS: frozenset[str] = frozenset({
     "prior_read",
     "situation_register",
     "desk_baseline",
     "open_questions",
+    # V3/P2 (2026-09-24) — OPEN EVENTS, the sixth block and the OFFER half of
+    # the event ref kind: the desk's live ``events``, reached through its open
+    # ``situations``, each line carrying the event's ``event:<uuid>`` TOKEN so
+    # a unit can cite the occurrence's underlying REPORTS. Registered here for
+    # the same reason the other five are — without it the verify path scores an
+    # events-block-backed clause as an unresolved citation and false-demotes a
+    # read that cited exactly what it was shown.
+    #
+    # READ THIS BESIDE THE ``'event'`` PARAGRAPH ABOVE — they are two different
+    # things and keeping them apart is the whole design. ``'open_events'`` is a
+    # GROUNDING BLOCK: no ``signal_id``, graded on its own rendered
+    # ``evidence_text``, which is a bounded list of titles/spans/counts and
+    # NEVER an event summary. ``'event'`` is what an EXPANDED citation carries:
+    # it has a ``signal_id``, is graded on the report's raw source text, and
+    # stays out of this set forever. Admitting ``'event'`` here — or rendering
+    # a summary into the block's text — is the same rubber-stamp by two routes.
+    "open_events",
+    # 7g-2 (2026-09-25) — the OBSERVATION: ONE row of a curated historical
+    # holding (`observations`), cited by the ordinal its line took in the
+    # HISTORICAL SERIES grounding block, or returned by the `series_history` /
+    # `series_compare` pack tools and cited by the consult/research loop.
+    #
+    # WHY IT BELONGS HERE AND NOT BESIDE ``'event'``. An observation entry
+    # carries NO ``signal_id`` — an observations row is not a signals row, has
+    # no article behind it and no outlet — and it IS graded on its own
+    # captured ``evidence_text``, which is the deterministic rendering of the
+    # row itself: provider, series, subject, the VALUE with its unit, the
+    # valid period, the record time, the source URL and the sha256 of the file
+    # the number was read out of. That text is not a summary of evidence, it
+    # IS the evidence, which is exactly the property ``'event'`` lacks (an
+    # event's own summary is never evidence, §2.5) and exactly why ``'event'``
+    # stays out of this set while this one belongs in it.
+    #
+    # Registered here for the same reason all six above are: without it the
+    # verify path scores an observation-backed clause as an unresolved
+    # citation and false-demotes a read that cited a number it was actually
+    # shown — and the judge would be handed nothing to grade the PERIOD
+    # against, which is the one thing a historical figure must be graded on.
+    #
+    # UNLIKE the five synthetic blocks, an observation DOES carry ``ref_id``:
+    # an observations row has a real, single uuid, so pointing at it is not a
+    # fabricated anchor but the honest drill target.
+    "observation",
     # FRAME-2 (2026-08-20) — the WINDOW LEDGER, the fifth block: a bounded,
     # dated record of the verified severity-tagged heads this scope itself
     # produced over the trailing fortnight. Same synthetic shape as the register
@@ -352,6 +600,8 @@ _SCORECARD_URI     = "iglu:legba/scorecard/jsonschema/1-0-0"
 # Continuity P2 trajectory read — generic `analyst_outputs` table (no dedicated
 # table / DB default), so the URI is declared here only.
 _SITUATION_UPDATE_URI = "iglu:legba/situation_update/jsonschema/1-0-0"
+# Matches the DB default on `events.schema_uri` (0202_events.sql).
+_EVENT_URI         = "iglu:legba/event/jsonschema/1-0-0"
 
 
 KIND_REGISTRY: dict[OutputKind, OutputKindSpec] = {
@@ -463,6 +713,13 @@ KIND_REGISTRY: dict[OutputKind, OutputKindSpec] = {
         # → renders as `_`, so the {target_id}-less subject is correct (the
         # journal / scorecard pattern).
         nats_subject_pattern="analyst.{analyst_id}.situation_update",
+    ),
+    OutputKind.EVENT: OutputKindSpec(
+        kind=OutputKind.EVENT,
+        table="events",                       # dedicated table — NOT analyst_outputs
+        payload_model=EventPayload,
+        schema_uri=_EVENT_URI,
+        nats_subject_pattern="analyst.{analyst_id}.event",
     ),
 }
 

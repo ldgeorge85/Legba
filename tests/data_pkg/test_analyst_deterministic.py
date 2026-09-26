@@ -162,6 +162,51 @@ async def test_run_method_each_real_sub_handler_returns_method_result():
             # and audited nothing" is actionable. Both paths are exercised with
             # a real pool in test_standing_auditor.py.
             "standing_auditor",
+            # R-D: same refuse-loud contract, and here the reason is sharper
+            # than elsewhere — ZERO is also this handler's honest verified
+            # baseline (229,945 signals, 100% NULL retrieval_origin), so a
+            # zeroed finding emitted because the pool was missing would be
+            # byte-indistinguishable from the real pre-R-A measurement.
+            # Exercised with a real pool in test_research_measurement_db.py.
+            "research_measurement",
+            # A-1 desk_reference: same refuse-loud contract — it must read the
+            # desk's slice, so without a live pg_pool it raises rather than
+            # report an attention measurement it never took. Exercised with a
+            # real pool in test_desk_reference.py.
+            "desk_reference",
+            # G1 correctness_grader: same refuse-loud contract, with the
+            # sharpest version of the reason on the board — this handler's whole
+            # product is a CORRECTNESS number, and one emitted without reading
+            # the reference table, the heads and the calibration row would be a
+            # measurement of nothing wearing the label of a measurement of
+            # truth. Exercised with a real pool in test_correctness_grader.py,
+            # which also pins the flag-off, no-reference and no-calibration
+            # paths (each of which DEGRADES to a named status rather than
+            # raising — the same deliberate asymmetry as the standing auditor).
+            "correctness_grader",
+            # R2 reference_builder: same refuse-loud contract — the roster, the
+            # cadence, the attempt ledger and the write all live in the
+            # substrate, so without a live pg_pool it raises rather than emit a
+            # clean-looking zero for a build it never ran. WAS MISSING FROM THIS
+            # LIST WHEN R2 LANDED (merge 66469577) and has been red on the
+            # merged tree since, the same way band_calibration_tracker and
+            # narrative_mapper were before it; found by the R2-FIX(2) sweep.
+            # Exercised with a real pool throughout
+            # test_reference_builder.py, which also pins the flag-off, no-model
+            # and no-web paths — each of which DEGRADES to a named status
+            # rather than raising, the same deliberate asymmetry as the
+            # standing auditor's.
+            "reference_builder",
+            # 7a contrary_evidence_pass: same refuse-loud contract — it takes
+            # the standing auditor's own material claims from the tower and
+            # lands contention records, so without a live pg_pool it raises
+            # rather than report a clean contrary pass over claims it never
+            # read ("requires a live deps.pg_pool — refusing to report a clean
+            # contrary pass without reading the tower"). Exercised with a real
+            # pool and the real web_access binding in
+            # test_contrary_evidence_pass.py, which also pins the no-binding
+            # and 0221-missing paths (each DEGRADES to a named heartbeat).
+            "contrary_evidence_pass",
         ):
             # These REFUSE LOUD without a live pg_pool by design — they must never
             # emit a zeroed clean finding without actually running their checks

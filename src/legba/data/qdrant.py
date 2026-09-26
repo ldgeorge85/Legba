@@ -41,8 +41,9 @@ class QdrantStore:
 
     Exposes only what the L-001 substrate factor needs:
       * ensure_signals_collection() — idempotent create with BGE-M3 dims
-      * ensure_world_context_collection() / ensure_tradecraft_collection() —
-        the Lane-4 RAG corpus collections (S5-T2), same dim/distance
+      * ensure_world_context_collection() / ensure_tradecraft_collection() /
+        ensure_exemplar_collection() — the Lane-4 RAG corpus collections
+        (S5-T2), same dim/distance
       * retire_dormant_collections() — drop the three deprecated collections
       * ensure_target_collection(target_id) — collection-per-target pattern
         per L-091 §6 (kept here; the lifecycle hook is L-114)
@@ -139,6 +140,18 @@ class QdrantStore:
         Returns True if newly created, False if it existed.
         """
         return await self._ensure_collection(self._cfg.tradecraft_collection)
+
+    async def ensure_exemplar_collection(self) -> bool:
+        """Create the `exemplar` RAG corpus collection (Lane-4, S5-T2).
+
+        The pattern-thread SHELF's template/doctrine corpus
+        (EXEMPLAR_SHELF_DRAFT_2026-07-31.md §4 step 4): baseline + doctrine
+        material behind a `legba.data.seed.exemplar_shelf` pattern — NEVER
+        live evidence, `source_class='template'` on every chunk. Same
+        1024-dim cosine / bge-m3 as the other two RAG corpora. Returns True
+        if newly created, False if it existed.
+        """
+        return await self._ensure_collection(self._cfg.exemplar_collection)
 
     async def retire_dormant_collections(self) -> list[str]:
         """Drop the three dormant Qdrant collections per L-091 §3.4.

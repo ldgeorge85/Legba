@@ -47,7 +47,9 @@ from legba.data.sources.geojson import (
     GeoJSONConfig,
     GeoJSONSourceHandler,
     _GEOJSON_CURSOR_KEY,
+    _GEOJSON_FEATURE_CURSOR_KEY,
     _GEOJSON_HEALTH_KEY,
+    _MAX_CONSECUTIVE_EMPTY,
 )
 
 
@@ -160,6 +162,38 @@ EONET_FEATURE_COLLECTION = json.dumps({
         },
     ],
 })
+
+
+# --- 2026-09-07 fix fixtures: live-shaped NASA EONET document -------------
+#
+# Byte-shaped after the LIVE `curl` on 2026-09-07 against
+# `https://eonet.gsfc.nasa.gov/api/v3/events/geojson?days=3` (see the
+# handler's `_GEOJSON_FEATURE_CURSOR_KEY` docstring): the event id AND the
+# `date` update-marker both live INSIDE `properties` (not the Feature's
+# top-level `id`), `closed` is `null` for an open event, and the live
+# endpoint sends neither ETag nor Last-Modified at all — every poll is an
+# unconditional 200 of the same still-open events until one of them
+# actually gets a new IRWIN detection (`date` advances).
+def _eonet_doc(*, event_id: str = "EONET_23868", date: str = "2026-09-02T22:16:00Z") -> str:
+    return json.dumps({
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {
+                    "id": event_id,
+                    "title": "Wildfire Snow, Custer, Montana",
+                    "description": "Wildfires",
+                    "link": f"https://eonet.gsfc.nasa.gov/api/v3/events/{event_id}/geojson",
+                    "closed": None,
+                    "date": date,
+                    "magnitudeValue": 1100.0,
+                    "magnitudeUnit": "acres",
+                },
+                "geometry": {"type": "Point", "coordinates": [-105.185017, 46.48575]},
+            },
+        ],
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -437,6 +471,203 @@ async def test_pull_304_yields_nothing_and_stays_healthy():
     # Cursor unchanged; health healthy.
     assert state.snapshot()[_GEOJSON_CURSOR_KEY]["etag"] == 'W/"gj123"'
     assert state.snapshot()[_GEOJSON_HEALTH_KEY]["state"] == "healthy"
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-07 fix: per-feature unchanged cursor, newest_entry_ts evidence,
+# and the consecutive-empty safety valve
+#
+# nasa.eonet_events landed ZERO signals for 2 days while every poll recorded
+# outcome=success (24/24 on 09-06). Live investigation (curl -I against the
+# EONET endpoint, source_poll_outcomes, and the actor_filter_state cursor
+# row) showed: NASA sends neither ETag nor Last-Modified at all (so the
+# HTTP conditional-GET cursor was never the mechanism — every poll was an
+# unconditional 200), the response consistently parsed 3 open events, and
+# S-4 intra-source content-hash dedupe correctly recognised all 3 as
+# byte-identical re-serves of already-landed rows (`reserve_unchanged=3`
+# every poll) — which source_actor classifies `outcome='success'`. The
+# liveness watchdog's per-source cadence check only grants its honest-quiet
+# exemption when `outcome == 'empty'`, so a source stuck re-serving
+# unchanged content can never claim it, and pages `source_stall` once
+# `last_signal` staleness crosses the cadence threshold regardless of how
+# healthy the polls otherwise look. These tests exercise the handler-level
+# fix: skip yielding an already-seen, byte-identical feature (so the
+# now-truly-empty poll settles to `outcome='empty'` upstream) while still
+# stamping `newest_entry_ts` evidence, plus the stale-cursor safety valve.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_second_poll_of_identical_eonet_event_yields_nothing():
+    """200 with an IDENTICAL body (same event, same `date` marker) on the
+    second poll → zero signals yielded, feature cursor kept, HTTP cursor's
+    consecutive-empty counter increments — this is the exact
+    nasa.eonet_events mechanism (a repeat of the SAME 3 open events with no
+    IRWIN update) reproduced at the handler level."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=_eonet_doc(), request=req)
+
+    state = InMemoryStateStore()
+    ctx = _make_ctx(state)
+    gj = _make_handler(handler)
+
+    first = await _collect(gj.pull(ctx, since=None))
+    second = await _collect(gj.pull(ctx, since=None))
+    await gj.aclose()
+
+    assert len(first) == 1
+    assert second == []  # the fix: an unchanged re-serve yields nothing
+
+    health = state.snapshot()[_GEOJSON_HEALTH_KEY]
+    assert health["detail"]["features_yielded"] == 0
+    assert health["detail"]["features_seen"] == 1
+    # B0-12 evidence still stamped even though nothing was yielded — from
+    # EONET's `date` property, not a content hash.
+    assert health["detail"]["newest_entry_ts"] == "2026-09-02T22:16:00+00:00"
+
+    cursor = state.snapshot()[_GEOJSON_CURSOR_KEY]
+    assert cursor["consecutive_empty"] == 1
+    # 200-with-identical-body: the feature cursor is KEPT (same signature),
+    # not reset.
+    fc = state.snapshot()[_GEOJSON_FEATURE_CURSOR_KEY]["features"]
+    assert fc["EONET_23868"] == "marker:2026-09-02T22:16:00Z"
+
+
+@pytest.mark.asyncio
+async def test_eonet_event_update_past_cursor_lands_as_new_signal():
+    """200 with a NEW body — the same event, but its `date` marker has
+    ADVANCED (a fresh IRWIN detection on an ongoing wildfire) — lands as a
+    signal on the second poll, exactly like a legitimate update should."""
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        date = "2026-09-02T22:16:00Z" if calls["n"] == 1 else "2026-09-04T08:00:00Z"
+        return httpx.Response(200, text=_eonet_doc(date=date), request=req)
+
+    state = InMemoryStateStore()
+    ctx = _make_ctx(state)
+    gj = _make_handler(handler)
+
+    first = await _collect(gj.pull(ctx, since=None))
+    second = await _collect(gj.pull(ctx, since=None))
+    await gj.aclose()
+
+    assert len(first) == 1
+    assert len(second) == 1  # the marker advanced — a real update, not a repeat
+
+    health = state.snapshot()[_GEOJSON_HEALTH_KEY]
+    assert health["detail"]["newest_entry_ts"] == "2026-09-04T08:00:00+00:00"
+    cursor = state.snapshot()[_GEOJSON_CURSOR_KEY]
+    assert cursor["consecutive_empty"] == 0
+    fc = state.snapshot()[_GEOJSON_FEATURE_CURSOR_KEY]["features"]
+    assert fc["EONET_23868"] == "marker:2026-09-04T08:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_repeated_identical_polls_keep_cursor_and_signal_count_zero():
+    """Several consecutive 200-identical-body polls (below the safety-valve
+    threshold) each yield zero and never re-write the same feature cursor
+    value — the S-4-masking 'success' streak nasa.eonet_events showed."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=_eonet_doc(), request=req)
+
+    state = InMemoryStateStore()
+    ctx = _make_ctx(state)
+    gj = _make_handler(handler)
+
+    counts = []
+    for _ in range(5):
+        counts.append(len(await _collect(gj.pull(ctx, since=None))))
+    await gj.aclose()
+
+    assert counts == [1, 0, 0, 0, 0]
+    assert state.snapshot()[_GEOJSON_CURSOR_KEY]["consecutive_empty"] == 4
+    fc = state.snapshot()[_GEOJSON_FEATURE_CURSOR_KEY]["features"]
+    assert fc["EONET_23868"] == "marker:2026-09-02T22:16:00Z"
+
+
+@pytest.mark.asyncio
+async def test_consecutive_empty_200s_trigger_reset_valve_and_reyield():
+    """After `_MAX_CONSECUTIVE_EMPTY` straight zero-yield polls, the NEXT
+    poll clears the per-feature cursor and re-baselines — re-yielding the
+    (still byte-identical) feature once — then the counter resets to 0. This
+    is the safety valve for a stuck per-feature comparator; downstream S-4
+    dedupe is still free to collapse the re-yielded content as unchanged."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=_eonet_doc(), request=req)
+
+    state = InMemoryStateStore()
+    ctx = _make_ctx(state)
+    gj = _make_handler(handler)
+
+    # First poll seeds the feature cursor (1 yielded); the next
+    # _MAX_CONSECUTIVE_EMPTY polls are all-unchanged (0 yielded each).
+    await _collect(gj.pull(ctx, since=None))
+    for _ in range(_MAX_CONSECUTIVE_EMPTY):
+        empty = await _collect(gj.pull(ctx, since=None))
+        assert empty == []
+    assert state.snapshot()[_GEOJSON_CURSOR_KEY]["consecutive_empty"] == (
+        _MAX_CONSECUTIVE_EMPTY
+    )
+
+    # The valve fires on the NEXT poll: the per-feature cursor is dropped for
+    # this pull, so the (unchanged) feature is treated as never-seen and
+    # re-yielded.
+    reset_poll = await _collect(gj.pull(ctx, since=None))
+    await gj.aclose()
+
+    assert len(reset_poll) == 1
+    assert state.snapshot()[_GEOJSON_CURSOR_KEY]["consecutive_empty"] == 0
+
+
+@pytest.mark.asyncio
+async def test_consecutive_304s_trigger_reset_valve_drops_conditional_headers():
+    """Mirrors the RSS handler's stale-edge guard: after
+    `_MAX_CONSECUTIVE_EMPTY` consecutive 304s, the next poll drops the
+    conditional-GET headers for one unconditional refetch, then the counter
+    resets. Protects a geojson source whose CDN pins a stuck ETag even
+    though it is not the mechanism nasa.eonet_events itself hit (NASA sends
+    no ETag at all)."""
+    captured: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured.append(req)
+        return httpx.Response(304, request=req)
+
+    state = InMemoryStateStore(
+        {_GEOJSON_CURSOR_KEY: {"etag": '"pinned"', "last_modified": "", "consecutive_empty": 0}}
+    )
+    ctx = _make_ctx(state)
+    gj = _make_handler(handler)
+
+    for _ in range(_MAX_CONSECUTIVE_EMPTY):
+        await _collect(gj.pull(ctx, since=None))
+    assert all(r.headers.get("If-None-Match") == '"pinned"' for r in captured)
+    assert state.snapshot()[_GEOJSON_CURSOR_KEY]["consecutive_empty"] == (
+        _MAX_CONSECUTIVE_EMPTY
+    )
+
+    await _collect(gj.pull(ctx, since=None))
+    await gj.aclose()
+
+    assert "If-None-Match" not in captured[-1].headers
+    assert "If-Modified-Since" not in captured[-1].headers
+    assert state.snapshot()[_GEOJSON_CURSOR_KEY]["consecutive_empty"] == 0
+
+
+@pytest.mark.asyncio
+async def test_newest_entry_ts_none_when_no_update_marker_present():
+    """A feed with no update-marker property at all (USGS-shaped, like the
+    existing FEATURE_COLLECTION fixture) records `newest_entry_ts=None` —
+    the pre-existing no-evidence behavior, unchanged."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=FEATURE_COLLECTION, request=req)
+
+    state = InMemoryStateStore()
+    signals = await _collect(_make_handler(handler).pull(_make_ctx(state), since=None))
+    assert len(signals) == 2
+    assert state.snapshot()[_GEOJSON_HEALTH_KEY]["detail"]["newest_entry_ts"] is None
 
 
 # ---------------------------------------------------------------------------

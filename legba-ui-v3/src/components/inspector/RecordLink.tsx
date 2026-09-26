@@ -33,6 +33,21 @@ const KIND_BADGE: Record<SelectionKind, string> = {
   target: 'bg-teal-900/60 text-teal-200',
   analyst: 'bg-violet-900/60 text-violet-200',
   source: 'bg-amber-900/60 text-amber-200',
+  // A report is a finding row wearing a product's name — same substrate, its
+  // own badge so the operator can tell the read from a row inside it.
+  report: 'bg-emerald-800/60 text-emerald-100',
+  journal_entry: 'bg-rose-900/60 text-rose-200',
+  // V3/P6 — bounded occurrences get their own badge.
+  event: 'bg-violet-800/60 text-violet-100',
+  // 7b/k5 — a typed absence. Deliberately the only OUTLINED badge in the set:
+  // it is the one kind that names something the substrate does not contain,
+  // and a filled chip would read as just another record.
+  absence: 'border border-dashed border-slate-600 text-slate-300',
+  // 7a — a contention is not one of OUR rows: it names a page on the open web
+  // that states the opposite of something we published. The dashed border it
+  // shares with `absence` says the same thing both times — what is behind this
+  // badge is not a substrate record.
+  contention: 'border border-dashed border-amber-600 text-amber-200',
 }
 
 export function RecordLink({

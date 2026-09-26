@@ -85,6 +85,9 @@ export interface LineageReport {
 /** Substrate row kinds the lineage walk can surface (lineage_api `_TABLES_BY_KIND`). */
 export const ROW_KINDS = [
   'signal',
+  // V3/P2-P6 — `event` is a first-class root kind in `_TABLES_BY_KIND`
+  // (the lineage walk resolves the event ids a derived_from carries).
+  'event',
   'finding',
   'meta_finding',
   'alert',
@@ -102,6 +105,7 @@ export type RowKind = (typeof ROW_KINDS)[number]
  */
 export const KIND_COLORS: Record<string, string> = {
   signal: '#60a5fa', // blue-400
+  event: '#a78bfa', // violet-400 — V3/P6 bounded occurrences
   finding: '#fcd34d', // amber-300
   meta_finding: '#fbbf24', // amber-400
   alert: '#f87171', // red-400
@@ -557,6 +561,39 @@ export function projectGraph(
 /** Coerce an arbitrary lineage row_kind string to a known RowKind, else 'finding'. */
 export function toRowKind(k: string | null | undefined): RowKind {
   return (ROW_KINDS as readonly string[]).includes(k ?? '') ? (k as RowKind) : 'finding'
+}
+
+/**
+ * The row kinds `GET /api/v1/lineage/{row_kind}/{row_id}` can actually ROOT a
+ * walk at — i.e. the exact keys of `lineage_api._TABLES_BY_KIND`.
+ *
+ * Deliberately NOT `ROW_KINDS`: that list is the set of kinds the walk can
+ * *surface as a node* (it drives the filter chips and the palette), and it
+ * includes `prediction`, which has no entry in `_TABLES_BY_KIND` and so cannot
+ * be a root. Rooting is the narrower question, and asking it with the wider
+ * list is how a walk 404s.
+ *
+ * `toRowKind` must never be used to decide whether to root: it COERCES an
+ * unknown kind to `'finding'`, so a `target` / `entity` / `source` / `analyst`
+ * selection came back as a plausible-looking `'finding'` and the Graph panel
+ * fired `GET /lineage/finding/<target-uuid>` — one 404 per desk click. Guard
+ * with `isLineageRootKind` on the RAW kind first, then coerce.
+ */
+export const LINEAGE_ROOT_KINDS = [
+  'signal',
+  'situation',
+  'hypothesis',
+  'finding',
+  'meta_finding',
+  'alert',
+  'critique',
+  'prompt_module_candidate',
+] as const
+export type LineageRootKind = (typeof LINEAGE_ROOT_KINDS)[number]
+
+/** True when the lineage endpoint can root a walk at `k` (no coercion). */
+export function isLineageRootKind(k: string | null | undefined): k is LineageRootKind {
+  return (LINEAGE_ROOT_KINDS as readonly string[]).includes(k ?? '')
 }
 
 /**

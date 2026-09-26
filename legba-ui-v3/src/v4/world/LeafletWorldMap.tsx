@@ -27,14 +27,19 @@ import {
   useWorldSignals,
   useWorldFindings,
   useWorldSituations,
+  useWorldEvents,
 } from './mapData'
 import { useWorldState } from './worldState'
 import { useSelection, selectRow } from '@/state/selection'
+import { useScope } from '@/state/scope'
+import { COUNTRY_BY_ISO2 } from '@/lib/countryGeo'
+import { iso2FromTargetId } from '@/lib/deskNames'
 import type { GeoPoint } from '@/lib/geoPoints'
 import { cn } from '@/lib/cn'
 import {
   SEVERITY_COLOR,
   SITUATION_COLOR,
+  eventLifecycleColor,
   type Severity,
   type WorldSignal,
 } from './types'
@@ -110,6 +115,52 @@ function ResizeFix() {
   return null
 }
 
+/**
+ * Fly the camera to whatever is selected — the Leaflet half of design §3.1's
+ * "map camera reads nothing" defect. Modelled on {@link ResizeFix}: a child of
+ * `<MapContainer>` so it can take the map instance off `useMap()` rather than
+ * threading a ref out of the container.
+ *
+ * A record the map itself holds (signal / finding / situation) flies to its own
+ * lat/lon; a desk flies to its country centroid. Anything unresolvable leaves
+ * the camera exactly where the operator left it.
+ */
+interface FlyPoint {
+  id: string
+  lat: number | null
+  lon: number | null
+}
+
+function FlyToSelection({ points }: { points: FlyPoint[] }) {
+  const map = useMap()
+  const selection = useSelection((s) => s.selection)
+  const wallScope = useScope((s) => s.scope)
+  useEffect(() => {
+    if (!selection) return
+    let dest: [number, number] | null = null
+    const hit = points.find((p) => p.id === selection.id)
+    if (hit && hit.lat != null && hit.lon != null) dest = [hit.lat, hit.lon]
+    if (!dest) {
+      const targetId =
+        selection.kind === 'target'
+          ? selection.id
+          : wallScope?.members.targetIds.length === 1
+            ? wallScope.members.targetIds[0]
+            : null
+      const iso2 = targetId ? iso2FromTargetId(targetId) : null
+      const fix = iso2 ? COUNTRY_BY_ISO2[iso2] : undefined
+      if (fix) dest = [fix.lat, fix.lon]
+    }
+    if (!dest) return
+    try {
+      map.flyTo(dest, Math.max(map.getZoom(), 4), { duration: 0.7 })
+    } catch {
+      // Best-effort camera move; never take the panel down for it.
+    }
+  }, [map, selection, wallScope, points])
+  return null
+}
+
 /** Severity ramp shown on the map, high→low — mirrors the marker encoding and
  *  the feed's severity colors so the dots read at a glance (matches the old map's
  *  corner legend). Static; reads the same SEVERITY_COLOR source as the markers. */
@@ -146,6 +197,7 @@ export default function LeafletWorldMap() {
   const { signals } = useWorldSignals()
   const { findings } = useWorldFindings()
   const { situations } = useWorldSituations()
+  const { events } = useWorldEvents()
   const layers = useWorldState((s) => s.layers)
   const windowStartMs = useWorldState((s) => s.windowStartMs)
   const windowEndMs = useWorldState((s) => s.windowEndMs)
@@ -214,6 +266,20 @@ export default function LeafletWorldMap() {
       ),
     [situations, windowStartMs, windowEndMs, filters.country],
   )
+  // V3/P6 — bounded occurrences. Lat/lon are guaranteed non-null by
+  // useWorldEvents (an un-geocoded event never places); the same window +
+  // severity-floor + country filters apply.
+  const winEvents = useMemo(
+    () =>
+      events.filter(
+        (e) =>
+          e.ts >= windowStartMs &&
+          e.ts <= windowEndMs &&
+          SEVERITY_RANK[e.severity] >= minRank &&
+          (filters.country == null || e.countries.includes(filters.country)),
+      ),
+    [events, windowStartMs, windowEndMs, minRank, filters.country],
+  )
 
   // Publish the source/country option lists for the LayerPanel dropdowns,
   // derived from the in-window data (pre source/country filter so the operator
@@ -237,14 +303,28 @@ export default function LeafletWorldMap() {
     }
     for (const f of findings) for (const c of f.countries) countries.add(c)
     for (const s of situations) for (const c of s.countries) countries.add(c)
+    for (const e of events) for (const c of e.countries) countries.add(c)
     return {
       sources: [...sources].sort(),
       countries: [...countries].sort(),
     }
-  }, [winSignalsForOptions, findings, situations])
+  }, [winSignalsForOptions, findings, situations, events])
   useEffect(
     () => setFilterOptions(filterOptions),
     [filterOptions, setFilterOptions],
+  )
+
+  // The placeable records the camera can resolve a selection against (design
+  // §3.1). One flat list rather than three lookups, so `FlyToSelection` stays a
+  // dumb child with no knowledge of the map's slices.
+  const flyPoints = useMemo<FlyPoint[]>(
+    () => [
+      ...winSignals.map((x) => ({ id: x.id, lat: x.lat, lon: x.lon })),
+      ...winFindings.map((x) => ({ id: x.id, lat: x.lat, lon: x.lon })),
+      ...winSituations.map((x) => ({ id: x.id, lat: x.lat, lon: x.lon })),
+      ...winEvents.map((x) => ({ id: x.id, lat: x.lat, lon: x.lon })),
+    ],
+    [winSignals, winFindings, winSituations, winEvents],
   )
 
   // Aggregate signals onto their geocoded point so the map shows a clean set of
@@ -277,6 +357,7 @@ export default function LeafletWorldMap() {
   useEffect(() => setCount('signals', winSignals.length), [winSignals.length, setCount])
   useEffect(() => setCount('findings', winFindings.length), [winFindings.length, setCount])
   useEffect(() => setCount('situations', winSituations.length), [winSituations.length, setCount])
+  useEffect(() => setCount('events', winEvents.length), [winEvents.length, setCount])
 
   return (
     <div className="h-full w-full" style={{ background: '#0a0c10' }}>
@@ -291,6 +372,7 @@ export default function LeafletWorldMap() {
         style={{ height: '100%', width: '100%', background: '#0a0c10' }}
       >
         <ResizeFix />
+        <FlyToSelection points={flyPoints} />
         {base.data ? <GeoJSON data={base.data} style={() => LAND_STYLE} /> : null}
 
         {layers.signals &&
@@ -380,6 +462,37 @@ export default function LeafletWorldMap() {
               }}
             >
               <Tooltip>{s.title}</Tooltip>
+            </CircleMarker>
+            )
+          })}
+
+        {/* V3/P6 — events: a hollow RING colored by the lifecycle-state
+            badge (distinct from the solid signal/finding/situation circles —
+            an occurrence is a marker of what happened, not a standing frame). */}
+        {layers.events &&
+          winEvents.map((e) => {
+            const d = decayFactor(e.ts, windowStartMs, windowEndMs, decay)
+            const c = eventLifecycleColor(e.lifecycle)
+            return (
+            <CircleMarker
+              key={`ev-${e.id}`}
+              center={[e.lat, e.lon]}
+              radius={8 * (0.5 + 0.5 * d)}
+              pathOptions={{
+                color: c,
+                fillColor: c,
+                fillOpacity: 0.15 * d,
+                opacity: d,
+                weight: 2.5,
+              }}
+              eventHandlers={{
+                click: () => {
+                  openDrawer({ title: e.title, signals: [], findings: [] })
+                  select({ kind: 'event', id: e.id, label: e.title })
+                },
+              }}
+            >
+              <Tooltip>{`${e.title} · ${e.lifecycle}`}</Tooltip>
             </CircleMarker>
             )
           })}

@@ -216,12 +216,20 @@ async def test_gather_admits_superseded_rows_deliberately():
 
 @pytest.mark.asyncio
 async def test_gather_keeps_every_other_admissibility_leg():
-    """Verify GATE (INNER lateral), the floor fold, the severity bar, the meta
-    exclusion, the coerce-fallback drop and the window — the house pattern."""
+    """Verify GATE (INNER join to the fold), the floor fold, the severity bar,
+    the meta exclusion, the coerce-fallback drop and the window — the house
+    pattern.
+
+    H17: the verify leg is a SET-BASED fold CTE rather than a per-row lateral.
+    INNER is still the gate — an unverified head is inadmissible, never merely
+    low — so the join stays INNER and no LEFT JOIN appears anywhere.
+    """
     conn = _CapturingConn()
     await wl.read_window_ledger(conn, target_id="country_g20_ar")
     sql, params = conn.query_of(LEDGER_SQL_MARKER)
-    assert "JOIN LATERAL" in sql and "LEFT JOIN" not in sql
+    assert "JOIN v ON v.fid = f.id::text" in sql and "LEFT JOIN" not in sql
+    assert "LATERAL" not in sql
+    assert "DISTINCT ON (cr.data->>'analyzed_output_id')" in sql
     assert "Faithfulness verify%" in sql
     assert "LEAST(f.confidence, v.faithfulness_score) >= $3" in sql
     assert "f.severity = ANY($4::TEXT[])" in sql

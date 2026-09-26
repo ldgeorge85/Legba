@@ -393,8 +393,12 @@ async def test_per_row_count_failure_warns_with_error_class_and_id(caplog):
         )
 
     assert n == 0
-    assert conn.updates == []  # never graded on a failed count
+    # Never graded on a failed count — but H13 marks it 'unresolved:expired'
+    # (the honest denominator): the only write is the expiry mark, not a grade.
+    assert len(conn.updates) == 1
+    assert conn.updates[0][1] == fa.UNRESOLVED_EXPIRED
     assert receipt["count_failed"] == 1
+    assert receipt["newly_expired"] == 1
     # due>0 with resolved=0 must NOT read as "nothing_due".
     assert receipt["reason"] == "all_due_rows_skipped"
 
@@ -442,5 +446,6 @@ def test_voided_rows_are_excluded_by_the_open_row_scan():
     re-admit the known-degenerate batch."""
     src = inspect.getsource(fa.resolve_open_acute_forecasts)
     assert "NOT LIKE 'voided:%'" in src
-    # ...and in the backlog self-check, so the counter is not pinned forever.
-    assert src.count("NOT LIKE 'voided:%'") == 2
+    # ...and in the backlog self-check AND the H13 expired-mark UPDATE, so
+    # neither the counter nor the denominator is pinned by a withdrawn row.
+    assert src.count("NOT LIKE 'voided:%'") == 3

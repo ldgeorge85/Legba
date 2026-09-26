@@ -90,6 +90,12 @@ class DeepConsultWorkflowInput:
     max_analyze_tokens: int = 8192
     emit_facts: bool = True                # gated by write_fact existence (PIECE 2)
     emit_hypotheses: bool = True
+    # Records the operator pinned to the conversation, normalized to the
+    # ``{kind, id, title, text}`` rows ``data.pinned_context`` defines. The
+    # plan stage renders them into its own prompt; the analyze stage forwards
+    # them to the consult ReAct loop, which renders the same block. Empty for
+    # every pre-pin run, so an in-flight workflow input deserializes unchanged.
+    pinned_context: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -141,6 +147,7 @@ class DeepConsultStageDeps:
 
 
 from ...data.analysts._tradecraft import with_preamble  # noqa: E402
+from ...data.pinned_context import render_pinned_context_block  # noqa: E402
 
 _PLAN_SYSTEM_PROMPT = with_preamble(
     """TASK — you are the PLAN stage of a deep intelligence analysis job. Decompose the operator's question into a broad-first acquisition plan over the substrate.
@@ -187,6 +194,12 @@ async def _run_plan(
     user = f"Operator question:\n{question}"
     if wf_input.scope_predicate:
         user += f"\n\nScope predicate (apply to queries): {wf_input.scope_predicate}"
+    # The operator's pinned records lead the turn: the plan stage decides WHICH
+    # tools to spend, and knowing the operator already has a report in hand is
+    # exactly the input that should shape that plan.
+    pinned_block = render_pinned_context_block(wf_input.pinned_context)
+    if pinned_block:
+        user = f"{pinned_block}\n\n{user}"
 
     try:
         content, usage = await _reason_via_llm(
@@ -485,6 +498,9 @@ async def _run_analyze(
             inputs=[{
                 "question": question,
                 "scope_predicate": wf_input.scope_predicate,
+                # Same rows the plan stage saw — the synthesis turn must not
+                # be the one place in the deep run where the pins go missing.
+                "pinned_context": wf_input.pinned_context,
             }],
             options={"analyst_id": wf_input.analyst_id},
             deps=consult_deps,

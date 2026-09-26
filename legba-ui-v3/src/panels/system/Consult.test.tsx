@@ -15,8 +15,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import ConsultPanel from './Consult'
-import { useConsultSessions } from '@/state/consultSession'
+import { consultActions, useConsultSessions } from '@/state/consultSession'
 import type { PanelRegistration } from '@/types'
+import { resetScope, useScope } from '@/state/scope'
+import { scopeFromTarget } from '@/lib/scopeFromReport'
+import { selectRow, useSelection } from '@/state/selection'
+import { SCOPE_PIN_ORIGIN } from '@/lib/consultContext'
 
 function reg(overrides: Partial<PanelRegistration> = {}): PanelRegistration {
   return {
@@ -71,6 +75,8 @@ beforeEach(() => {
   // localStorage no longer isolates these tests — the slices have to go too,
   // or each test inherits the previous one's transcript.
   useConsultSessions.setState({ panels: {} })
+  resetScope()
+  useSelection.getState().clear()
   FakeEventSource.instances = []
   vi.stubGlobal('EventSource', FakeEventSource as unknown as typeof EventSource)
   // Deterministic request id.
@@ -205,16 +211,25 @@ describe('ConsultPanel (chat)', () => {
       expect(screen.getByTestId('consult-live-steps')).toHaveTextContent('Thinking… (2 steps)')
     })
 
-    // final closes the stream.
+    // The ACTOR's bare `final` no longer closes the stream: it carries no
+    // answer, and the registry still has to persist and publish one. Closing
+    // here is what used to leave the panel with nowhere for the answer to
+    // arrive from except the POST — the dependency the 2026-09-16 504 severed.
     act(() => {
       es.emit({ type: 'final', request_id: 'x', output_id: null, mode: 'chat' })
     })
-    expect(es.closed).toBe(true)
+    expect(es.closed).toBe(false)
+    // ...and the operator is told what it is waiting for, rather than watching
+    // a frozen ticker.
+    await waitFor(() => {
+      expect(screen.getByTestId('consult-live-steps')).toHaveTextContent('3 steps')
+    })
 
     // Now let the POST resolve.
     await act(async () => {
       resolveFetch({
         ok: true,
+        status: 200,
         json: async () => ({
           answer: 'done',
           finding_id: null,
@@ -225,6 +240,7 @@ describe('ConsultPanel (chat)', () => {
       })
     })
     await waitFor(() => expect(screen.getByText('done')).toBeInTheDocument())
+    expect(es.closed).toBe(true)
   })
 
   it('renders error text and preserves the question on failure', async () => {
@@ -292,5 +308,114 @@ describe('ConsultPanel (F1 model picker)', () => {
     localStorage.setItem('legba_consult_model', 'core')
     render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
     expect((screen.getByTestId('consult-model') as HTMLSelectElement).value).toBe('core')
+  })
+
+  it('offers Fable 5.1 and sends/persists/echoes it like the other planes', async () => {
+    const fetchMock = answerOnce('ok', { model: 'fable' })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    fireEvent.change(screen.getByTestId('consult-model'), { target: { value: 'fable' } })
+    expect(localStorage.getItem('legba_consult_model')).toBe('fable')
+
+    fireEvent.change(screen.getByTestId('consult-question'), { target: { value: 'q' } })
+    fireEvent.click(screen.getByTestId('consult-submit'))
+    await waitFor(() => expect(screen.getByTestId('consult-answer')).toBeInTheDocument())
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)
+    expect(body.model).toBe('fable')
+    expect(screen.getByTestId('consult-answer-model')).toHaveTextContent('via fable')
+  })
+
+  it('restores a persisted fable choice on mount', () => {
+    localStorage.setItem('legba_consult_model', 'fable')
+    render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    expect((screen.getByTestId('consult-model') as HTMLSelectElement).value).toBe('fable')
+  })
+
+  it('falls back to opus for a garbage / stale stored value', () => {
+    localStorage.setItem('legba_consult_model', 'some-old-raw-component-id')
+    render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    expect((screen.getByTestId('consult-model') as HTMLSelectElement).value).toBe('opus')
+  })
+})
+
+/**
+ * Consult at the centre (WORKSTATION_V2_FLOW_DESIGN §5).
+ *
+ * The model used to be answering questions about "the world" while the operator
+ * was looking at one region's read, and neither of them said so. The scope pin
+ * is that missing sentence — ONE ambient pin, replaced rather than appended,
+ * beside whatever the operator pinned by hand.
+ */
+describe('ConsultPanel — scope auto-pins, focus pins by hand', () => {
+  it('auto-pins the scope, tagged so it can be told from a manual pin', async () => {
+    render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    act(() => useScope.getState().setScope(scopeFromTarget('country_g20_br', 'Brazil')))
+
+    await waitFor(() => expect(consultActions().panel('c1').pins.length).toBe(1))
+    const pin = consultActions().panel('c1').pins[0]
+    expect(pin.id).toBe('country_g20_br')
+    expect(pin.origin).toBe(SCOPE_PIN_ORIGIN)
+  })
+
+  it('REPLACES the scope pin on every scope change — never a stack of stale scopes', async () => {
+    render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    act(() => useScope.getState().setScope(scopeFromTarget('a', 'A')))
+    await waitFor(() => expect(consultActions().panel('c1').pins.length).toBe(1))
+    act(() => useScope.getState().setScope(scopeFromTarget('b', 'B')))
+    await waitFor(() => expect(consultActions().panel('c1').pins[0].id).toBe('b'))
+    expect(consultActions().panel('c1').pins.length).toBe(1)
+  })
+
+  it('clearing the scope removes the pin and pins nothing in its place', async () => {
+    render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    act(() => useScope.getState().setScope(scopeFromTarget('a', 'A')))
+    await waitFor(() => expect(consultActions().panel('c1').pins.length).toBe(1))
+    act(() => useScope.getState().clear())
+    await waitFor(() => expect(consultActions().panel('c1').pins.length).toBe(0))
+  })
+
+  it('the manual pin still pins FOCUS — three findings under one report scope', async () => {
+    render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    act(() => useScope.getState().setScope(scopeFromTarget('country_g20_br', 'Brazil')))
+    await waitFor(() => expect(consultActions().panel('c1').pins.length).toBe(1))
+
+    for (const id of ['f1', 'f2', 'f3']) {
+      act(() => selectRow('finding', id, id))
+      fireEvent.click(screen.getByTestId('consult-pin'))
+    }
+
+    const pins = consultActions().panel('c1').pins
+    expect(pins.map((p) => p.id)).toEqual(['country_g20_br', 'f1', 'f2', 'f3'])
+    // …and the scope survived all three row clicks.
+    expect(useScope.getState().scope?.id).toBe('country_g20_br')
+  })
+
+  it('sends both channels: the [Pinned …] prefix AND structured pinned_context', async () => {
+    const fetchMock = answerOnce('ok')
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(wrap(<ConsultPanel registration={reg()} scope={{}} mode="personal" />))
+    act(() => useScope.getState().setScope(scopeFromTarget('country_g20_br', 'Brazil')))
+    await waitFor(() => expect(consultActions().panel('c1').pins.length).toBe(1))
+
+    fireEvent.change(screen.getByTestId('consult-question'), { target: { value: 'what moved?' } })
+    fireEvent.click(screen.getByTestId('consult-submit'))
+    await waitFor(() => expect(screen.getByTestId('consult-answer')).toBeInTheDocument())
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)
+    // Channel 1 — works against today's text-only backend.
+    expect(body.question).toContain('[Pinned report: "Brazil"')
+    expect(body.question).toContain('what moved?')
+    // Channel 2 — `{kind, id, title, text}`, for a backend that hydrates.
+    expect(body.pinned_context).toEqual([
+      {
+        kind: 'report',
+        id: 'country_g20_br',
+        title: 'Brazil',
+        text: expect.stringContaining('scoped to this target'),
+      },
+    ])
   })
 })

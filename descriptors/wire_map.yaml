@@ -1,0 +1,125 @@
+# THE OUTLET -> WIRE MAP (Program 7 piece 7d — the independence gate).
+#
+# WHAT IT IS FOR. A claim the record quotes upward is marked `[single-source]`
+# when everything behind it comes from ONE source. Counting sources by
+# `signals.source_id` alone gets that wrong in one specific, measured way: two
+# mastheads running the same Reuters dispatch are two source_ids and one
+# source. This file names the syndication relationships the corpus proves, so
+# the count can fold them.
+#
+# WHAT IT IS NOT. It is NOT a licence to fold. A row here NEVER collapses two
+# items on its own — it only RELAXES the near-verbatim bar that the items'
+# headlines/ledes still have to clear (`analysts/source_independence.py`,
+# HEADLINE_MAX_DISTANCE_DECLARED / BODY_MAX_DISTANCE_DECLARED). "CNA
+# re-carries Reuters" is true and says nothing about whether THIS CNA item and
+# THIS Dawn item are the same dispatch; a map that folded on the relationship
+# alone would erase real, distinct reporting by two outlets that share an
+# agency. The one exception is `same_publisher`, which is an identity
+# statement rather than a content judgement — see its own note below.
+#
+# NOT A REGISTERED DESCRIPTOR. This document has no lifecycle in the registry:
+# it declares no handler, no cadence, no schedule and no `identity.state`, and
+# no bringup script registers it. It is a plain static map in the descriptor
+# family, in the tradition of `source_telegram_monitor.yaml`'s per-channel
+# `config.classes` override map — a table an operator reads and edits, kept
+# beside the sources it talks about.
+#
+# THE MAP IS DECLARED TWICE, ON PURPOSE. `descriptors/` is in neither
+# container image and is not volume-mounted (see
+# `scripts/gen_descriptor_prompt_manifest.py`'s own note), so code that read
+# this tree at assembly time would work in tests and return NOTHING in
+# production — the worst failure shape available for a map whose absence is
+# invisible. What RUNS is `SYNDICATION` / `SAME_PUBLISHER` in
+# `src/legba/data/analysts/source_independence.py`, which ships inside the
+# package; `tests/data_pkg/test_source_independence.py` pins the two equal, so
+# editing one side without the other turns red rather than drifting.
+#
+# HOW THE ROWS WERE CHOSEN — measured, not guessed. Read-only over the live
+# substrate on 2026-09-23, 30 days, 81,662 titled signals: normalize each
+# headline (lowercase, punctuation -> space, collapse whitespace), require >= 5
+# tokens, key by (headline, publication day) and count DISTINCT-OUTLET
+# collisions. The top ten pairs, with their counts:
+#
+#     46  source.aawsat.english        + source.cna.all                 Reuters
+#     32  source.hindustantimes.world  + source.rsshub.apnews.world     AP
+#     28  source.africanews.all        + source.euronews.news           one newsroom
+#     24  source.aljazeera.world       + source.rsshub.aljazeera.drcongo same publisher
+#     17  source.aawsat.english        + source.rsshub.apnews.world     AP
+#     15  source.npr.world             + source.rsshub.apnews.world     AP
+#     13  source.cna.all               + source.dawn.home               Reuters
+#     11  source.cna.all               + source.jpost.frontpage         Reuters
+#     11  source.cna.all               + source.dailymaverick.news      Reuters
+#     10  source.cna.all               + source.rsshub.apnews.world     AP
+#
+# Every pair above was sampled by hand: agency copy under two mastheads, or
+# one newsroom under two feeds. Nothing else. The map states that and no more
+# — an outlet absent from this file is not thereby "independent", it is
+# UNMEASURED, and the content test still folds it when two items are plainly
+# the same dispatch.
+
+identity:
+  id: source.wire_map
+  name: Outlet to wire syndication map
+  schema_uri: legba/source_wire_map/1.0.0
+  kind: static_map
+  owner: composition_floor
+
+wire_map:
+  # Bumped when the SHAPE changes (a new section, a changed key meaning),
+  # never when a row is added — the rows are visible in the diff either way.
+  version: wire_map.v1
+
+  # source_id -> the wire services / shared newsrooms that outlet is known to
+  # RE-CARRY. An outlet carries several agencies AND its own reporting, so a
+  # row is never "this outlet IS Reuters"; it is "a Reuters dispatch can
+  # appear under this masthead".
+  syndication:
+    # --- the agencies' own feeds ---
+    source.rsshub.apnews.world: [ap]
+    source.rsshub.apnews.drcongo: [ap]
+    source.rsshub.apnews.haiti: [ap]
+    source.rsshub.apnews.niger: [ap]
+    source.rsshub.apnews.north_korea: [ap]
+    source.rsshub.apnews.taiwan: [ap]
+
+    # --- mastheads measured re-carrying agency copy (30 d, 2026-09-23) ---
+    source.cna.all: [reuters, ap]
+    source.aawsat.english: [reuters, ap]
+    source.hindustantimes.world: [ap, reuters]
+    source.npr.world: [ap]
+    source.dawn.home: [reuters]
+    source.jpost.frontpage: [reuters]
+    source.dailymaverick.news: [reuters]
+    source.lemonde.english: [reuters, afp]
+    source.france24.english: [afp, reuters]
+    source.japantimes.news: [reuters]
+    source.gcaptain.all: [reuters]
+
+    # --- one newsroom, two mastheads (Euronews Group) ---
+    # Deliberately NOT under same_publisher: africanews and euronews are
+    # distinct mastheads with distinct desks that republish each other. The
+    # relationship is real (28 verbatim-headline days in 30) and the content
+    # test still has to pass before anything folds.
+    source.euronews.news: [euronews_group]
+    source.africanews.all: [euronews_group]
+
+  # publisher key -> the source_ids that are FEEDS OF ONE OUTLET. This is an
+  # identity statement, not a content judgement, so it folds unconditionally
+  # and needs no near-verbatim test: a claim resting on two UN News feeds
+  # rests on the UN News desk, once.
+  same_publisher:
+    aljazeera:
+      - source.aljazeera.world
+      - source.aljazeera.arabic
+      - source.rsshub.aljazeera.drcongo
+    ap:
+      - source.rsshub.apnews.world
+      - source.rsshub.apnews.drcongo
+      - source.rsshub.apnews.haiti
+      - source.rsshub.apnews.niger
+      - source.rsshub.apnews.north_korea
+      - source.rsshub.apnews.taiwan
+    un_news:
+      - source.un_news.africa
+      - source.un_news.middle_east
+      - source.un_news.peace_security

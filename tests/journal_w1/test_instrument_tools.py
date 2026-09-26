@@ -421,6 +421,12 @@ async def test_get_source_health_reports_silence_and_errors(pg_pool, port):
     # covered vs the fleet.
     assert out["scanned"] >= 1
     assert out["truncated"] == (out["scanned"] < out["summary"]["active_total"])
+    # 2026-09-25: the summary is the FIRST key, before `rows` — a bounded tool
+    # message (4,000 chars on the lens path) keeps a prefix, and with rows first
+    # every lens spoke the three rows it saw as the whole fleet.
+    keys = list(out)
+    assert keys[0] == "summary"
+    assert keys.index("summary") < keys.index("rows") < keys.index("non_active")
 
 
 # ---------------------------------------------------------------------------

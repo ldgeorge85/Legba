@@ -1743,6 +1743,12 @@ def _descriptor_with_options(options: dict[str, Any] | None):
     body["identity"]["version"] = "0" * 16
     if options is not None:
         body["method"]["options"] = options
+    if options is None:
+        # 2026-09-20: the shipped descriptor now CARRIES an options block
+        # (daily_page_budget 50 / budget_per_kind_cap 20, the operator's lift).
+        # "No options" in this test means exactly that — strip the block so the
+        # byte-identical-to-the-default proof still runs against production YAML.
+        body["method"].pop("options", None)
     return AnalystDescriptor.model_validate(body, strict=False)
 
 

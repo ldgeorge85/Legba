@@ -125,7 +125,7 @@ import json
 import logging
 import math
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 from uuid import UUID
 
@@ -139,11 +139,20 @@ from ...filters.fact_extractor import (
     _is_source_publication_subject,   # FU5b — surfacing junk gate (byline outlet)
 )
 from ...provenance.models import FindingPayload
+from ...provenance.origin import origin_class_clause
 from ...provenance.value_clustering import cluster_values
 from ...vocabulary import normalize_predicate
 from ....runtime.analyst_method import AnalystMethodResult
+from . import fact_contention_earned_weights_batch as _ewb
+from . import fact_contention_pass as _pass
 
 logger = logging.getLogger(__name__)
+
+#: P7/7g-1 — the origin-class leg on both open-fact scans (SEAMS #57 sweep).
+#: Contention is a disagreement between sources about what is TRUE NOW; a
+#: loaded 2016 figure is not a rival claim to a 2026 one, and letting one in
+#: would manufacture contested rows out of the passage of time.
+_LIVE_FACTS = origin_class_clause("")
 
 ARBITER_VERSION = "fact_contention_arbiter/1.1.0"
 
@@ -429,6 +438,7 @@ async def _open_triples(conn: Any) -> list[Mapping[str, Any]]:
               FROM facts
              WHERE valid_until IS NULL
                AND superseded_by IS NULL
+               AND {_LIVE_FACTS}
             LIMIT {MAX_SCAN_FACTS}
         ),
         grouped AS (
@@ -482,6 +492,7 @@ async def _open_functional_role_triples(conn: Any) -> list[Mapping[str, Any]]:
               FROM facts
              WHERE valid_until IS NULL
                AND superseded_by IS NULL
+               AND {_LIVE_FACTS}
                AND lower(btrim(predicate)) = '{_PERSON_SUBJECT_ROLE_PREDICATE}'
              LIMIT {MAX_SCAN_FACTS}
         ),
@@ -780,6 +791,7 @@ async def _attach_earned_weights(
     *,
     contention_id: UUID,
     now: datetime,
+    batch: _ewb.EarnedWeightsBatch | None = None,
 ) -> None:
     """A6 P3-3 — attach each side's damped EARNED signal (ON-seam only).
 
@@ -790,29 +802,44 @@ async def _attach_earned_weights(
     weights are recomputed live EXCLUDING ``contention_id`` (acyclicity) over
     contentions settled > lag ago (source_track_record.earned_weights_for_
     sources). Any failure DEGRADES to no bonus (earned_weight stays 0.0) — the
-    seam never breaks the deterministic tie-break."""
-    from . import source_track_record as _str  # lazy: OFF path never imports
+    seam never breaks the deterministic tie-break.
 
+    ``batch`` — an optional :class:`fact_contention_earned_weights_batch.
+    EarnedWeightsBatch` prefetched ONCE for the whole pass (h4 — one query
+    for every group needing this, not one per group). ``None`` (the default,
+    and what every direct caller/test below still uses) preserves the
+    original per-group query path byte-for-byte."""
     try:
         fact_ids: list[UUID] = []
         for agg in aggs:
             fact_ids.extend(agg.supporting_fact_ids)
         if not fact_ids:
             return
-        rows = await conn.fetch(_FACT_SOURCES_SQL, list(dict.fromkeys(fact_ids)))
-        by_fact: dict[UUID, set[str]] = {}
-        all_sources: set[str] = set()
-        for r in rows:
-            sid = r["source_id"]
-            if not sid:
-                continue
-            by_fact.setdefault(r["fact_id"], set()).add(str(sid))
-            all_sources.add(str(sid))
-        if not all_sources:
-            return
-        weights = await _str.earned_weights_for_sources(
-            conn, all_sources, now=now, exclude_contention=contention_id,
-        )
+        if batch is not None:
+            all_sources = batch.sources_for(fact_ids)
+            if not all_sources:
+                return
+            by_fact: dict[UUID, set[str]] = {
+                fid: set(batch.fact_sources.get(fid, ())) for fid in fact_ids
+            }
+            weights = batch.earned_weights(all_sources, exclude_contention=contention_id)
+        else:
+            from . import source_track_record as _str  # lazy: OFF path never imports
+
+            rows = await conn.fetch(_FACT_SOURCES_SQL, list(dict.fromkeys(fact_ids)))
+            by_fact = {}
+            all_sources = set()
+            for r in rows:
+                sid = r["source_id"]
+                if not sid:
+                    continue
+                by_fact.setdefault(r["fact_id"], set()).add(str(sid))
+                all_sources.add(str(sid))
+            if not all_sources:
+                return
+            weights = await _str.earned_weights_for_sources(
+                conn, all_sources, now=now, exclude_contention=contention_id,
+            )
         for agg in aggs:
             side_sources: set[str] = set()
             for fid in agg.supporting_fact_ids:
@@ -1318,6 +1345,8 @@ async def _finalize_group(
     *,
     prior: Mapping[str, Any] | None,
     now: datetime,
+    junk_count: int = 0,
+    fingerprint: str | None = None,
 ) -> bool:
     """Set the group's status/surfaced pointer + coexistence record + (re)stamp
     the ``facts`` markers. Returns ``True`` when a previously-surfaced group
@@ -1370,6 +1399,8 @@ async def _finalize_group(
             history_json = None
     reopened = prior_record is not None and winner is None
 
+    # ``junk_count`` folded in here: it was its own UPDATE of this same row,
+    # one extra round trip per group for a column the caller already holds.
     await conn.execute(
         f"""
         UPDATE fact_contention
@@ -1388,6 +1419,8 @@ async def _finalize_group(
                          || COALESCE(surface_history, '[]'::jsonb))
                         - {SURFACE_HISTORY_CAP}
                END,
+               junk_count = $11,
+               input_fingerprint = $12,
                updated_at = now()
          WHERE id = $1
         """,
@@ -1401,6 +1434,8 @@ async def _finalize_group(
         surfaced_at,
         rationale,
         history_json,
+        junk_count,
+        fingerprint,
     )
     # Clear stale markers from any fact previously tied to this group but no
     # longer a member (e.g. aged out), then stamp the current members.
@@ -1421,20 +1456,34 @@ async def _finalize_group(
     winner_ids = (
         list(winner.supporting_fact_ids) if winner is not None else []
     )
-    for agg in non_junk:
-        await conn.execute(
-            """
-            UPDATE facts
-               SET contested = true,
-                   contention_id = $1,
-                   surfaced_winner = (id = ANY($2::uuid[])),
-                   updated_at = now()
-             WHERE id = ANY($3::uuid[])
-            """,
-            contention_id,
-            winner_ids,
-            agg.supporting_fact_ids,
-        )
+    # ONE statement for the whole group. This was a per-cluster loop issuing the
+    # identical UPDATE with a different id array — ``contention_id`` and the
+    # winner set are group-wide, so the split bought nothing and cost a round
+    # trip per value cluster (103 107 of them across a live pass).
+    #
+    # The IS DISTINCT FROM guard is not an optimisation, it is a bug fix. Every
+    # pass restamped every member unconditionally, which meant `updated_at =
+    # now()` on ~103 k open facts every hour. `fact_decay` selects on
+    # `updated_at < now() - 30 days`: a contested fact could therefore NEVER
+    # look stale to it, and the decay sweep had been silently excluded from 78 %
+    # of the open corpus. Rows whose three markers already read correctly are
+    # now left alone, so their `updated_at` means what it says again.
+    await conn.execute(
+        """
+        UPDATE facts
+           SET contested = true,
+               contention_id = $1,
+               surfaced_winner = (id = ANY($2::uuid[])),
+               updated_at = now()
+         WHERE id = ANY($3::uuid[])
+           AND (contested IS DISTINCT FROM true
+                OR contention_id IS DISTINCT FROM $1
+                OR surfaced_winner IS DISTINCT FROM (id = ANY($2::uuid[])))
+        """,
+        contention_id,
+        winner_ids,
+        member_ids,
+    )
     return reopened
 
 
@@ -1476,6 +1525,10 @@ async def _process_group(
     llm_tiebreaks_left: int,
     counts: dict[str, int],
     live_keys: set[tuple[str, str]],
+    prior: Mapping[str, Any] | None = None,
+    fingerprint: str | None = None,
+    budget: "_pass.PassBudget | None" = None,
+    earned_batch: _ewb.EarnedWeightsBatch | None = None,
 ) -> int:
     """Cluster + score + surface ONE contention group, updating ``counts`` /
     ``live_keys`` and returning the (possibly-decremented) LLM tie-break budget.
@@ -1498,11 +1551,19 @@ async def _process_group(
             counts["groups_collapsed"] += 1
         return llm_tiebreaks_left
     live_keys.add((subject_key, predicate_key))
-    # Upsert FIRST so the soak clock (opened_at) + any prior surface record are
-    # in hand before the tie-break layers decide (they are recomputed from the
-    # open rows every pass — the reversibility guarantee).
-    contention_id = await _upsert_group(conn, subject_key, predicate_key)
-    prior = await _group_surface_state(conn, contention_id)
+    # The soak clock (opened_at) + any prior surface record must be in hand
+    # before the tie-break layers decide (they are recomputed from the open rows
+    # every pass — the reversibility guarantee). A group the pass-start prefetch
+    # already has, and that is not collapsed, needs neither the upsert nor the
+    # state read: two round trips per group saved, and the prefetch row carries
+    # exactly the columns ``_group_surface_state`` selected. A NEW group, or one
+    # re-emerging from ``collapsed`` (whose ``opened_at`` must reset), still
+    # takes the upsert path.
+    if prior is not None and prior.get("status") != "collapsed" and prior.get("id"):
+        contention_id = prior["id"]
+    else:
+        contention_id = await _upsert_group(conn, subject_key, predicate_key)
+        prior = await _group_surface_state(conn, contention_id)
     opened_at = prior.get("opened_at") if prior is not None else None
 
     scores = _score_group(non_junk, now)
@@ -1517,17 +1578,14 @@ async def _process_group(
         decision, llm_tiebreaks_left = await _resolve_tiebreak(
             conn, contention_id, subject_key, predicate_key, non_junk, scores,
             now=now, opened_at=opened_at, llm=llm,
-            llm_tiebreaks_left=llm_tiebreaks_left, counts=counts,
+            llm_tiebreaks_left=llm_tiebreaks_left, counts=counts, budget=budget,
+            earned_batch=earned_batch,
         )
 
     await _replace_group_values(conn, contention_id, non_junk, junk, scores, decision.winner)
-    await conn.execute(
-        "UPDATE fact_contention SET junk_count = $2 WHERE id = $1",
-        contention_id,
-        len(junk),
-    )
     reopened = await _finalize_group(
         conn, contention_id, non_junk, decision, prior=prior, now=now,
+        junk_count=len(junk), fingerprint=fingerprint,
     )
     counts["groups_open"] += 1
     counts["values_total"] += len(non_junk)
@@ -1575,6 +1633,8 @@ async def _resolve_tiebreak(
     llm: Any | None,
     llm_tiebreaks_left: int,
     counts: dict[str, int],
+    budget: "_pass.PassBudget | None" = None,
+    earned_batch: _ewb.EarnedWeightsBatch | None = None,
 ) -> tuple[_SurfaceDecision, int]:
     """The P3-2 abstain tail: soak gate → weighted tie-break → cached LLM
     tie-break. Returns ``(_SurfaceDecision, llm_tiebreaks_left)``.
@@ -1602,6 +1662,7 @@ async def _resolve_tiebreak(
     if _earned_weight_scale() > 0.0:
         await _attach_earned_weights(
             conn, non_junk, contention_id=contention_id, now=now,
+            batch=earned_batch,
         )
     weights = _tiebreak_weights(non_junk)
     weight_winner = _select_weight_winner(non_junk, weights)
@@ -1644,6 +1705,13 @@ async def _resolve_tiebreak(
     if llm_tiebreaks_left <= 0:
         # Cap reached — leave the near-tie abstained (next pass may resolve it).
         return _SurfaceDecision(None), llm_tiebreaks_left
+    if budget is not None and not budget.allows(LLM_TIEBREAK_TIMEOUT_SECONDS):
+        # The per-call cap bounds ONE call; MAX_LLM_TIEBREAKS x the 30 s timeout
+        # is 300 s, which on its own overruns the 180 s actor invoke timeout the
+        # pass budget exists to stay inside. Never START a call the budget
+        # cannot pay for in full — the near-tie stands and the next pass asks.
+        counts["llm_budget_deferred"] += 1
+        return _SurfaceDecision(None), llm_tiebreaks_left
 
     llm_tiebreaks_left -= 1
     counts["llm_tiebreak_calls"] += 1
@@ -1678,6 +1746,53 @@ async def _resolve_tiebreak(
     return _SurfaceDecision(None), llm_tiebreaks_left
 
 
+def _tunables_fingerprint() -> str:
+    """Hash every knob that can change WHICH value a group surfaces.
+
+    Read ONCE per pass (they are env vars — a mid-pass change would make the
+    pass internally inconsistent, not more current). Change any one of them and
+    no stored fingerprint matches any more, so the whole corpus is re-decided
+    under the new setting instead of coasting on answers reached under the old.
+    """
+    return _pass.tunables_fingerprint((
+        ("min_surface_score", MIN_SURFACE_SCORE),
+        ("dominance_ratio", DOMINANCE_RATIO),
+        ("halflife_days", HALFLIFE_DAYS),
+        ("weight_min_sources", WEIGHT_TIEBREAK_MIN_SOURCES),
+        ("soak_hours", _surface_soak_hours()),
+        ("weight_ratio", _weight_dominance_ratio()),
+        ("earned_weight", _earned_weight_scale()),
+        ("llm_tiebreak", _llm_tiebreak_enabled()),
+    ))
+
+
+def _count_unchanged(
+    prior: Mapping[str, Any] | None,
+    counts: dict[str, int],
+    live_keys: set[tuple[str, str]],
+    subject_key: str,
+    predicate_key: str,
+) -> None:
+    """Book a SKIPPED group into the pass receipt from its stored row.
+
+    A skipped group is a live, open dispute that simply did not need re-deciding
+    — so ``groups_open`` / ``values_total`` / ``junk_excluded`` / ``abstained``
+    must read exactly as they would have if it HAD been recomputed, or the
+    operator's hourly receipt would report the corpus shrinking every time the
+    arbiter got faster. The numbers come from the columns the last real
+    recompute wrote.
+    """
+    live_keys.add((subject_key, predicate_key))
+    counts["groups_open"] += 1
+    counts["groups_unchanged"] += 1
+    if prior is None:
+        return
+    counts["values_total"] += int(prior.get("value_count") or 0)
+    counts["junk_excluded"] += int(prior.get("junk_count") or 0)
+    if str(prior.get("status") or "") != "surfaced":
+        counts["abstained"] += 1
+
+
 def _new_counts() -> dict[str, int]:
     """The cadence-receipt counters (zeroed). Kept in one place so
     :func:`_run_arbiter` and :func:`handle` never drift."""
@@ -1694,6 +1809,10 @@ def _new_counts() -> dict[str, int]:
         "llm_cache_hits": 0,     # near-ties served from the tie-break verdict cache
         "soak_deferred": 0,      # near-ties left contested — still inside the soak window
         "reopened": 0,           # surfaced groups withdrawn back to contested this pass
+        # Pass-planning receipts (2026-09-20 starvation fix).
+        "groups_unchanged": 0,   # groups skipped whole — inputs identical to the stored answer
+        "groups_deferred": 0,    # groups the per-pass wall-clock budget left for the next pass
+        "llm_budget_deferred": 0,  # near-ties left abstained because the budget could not pay for a call
     }
 
 
@@ -1707,6 +1826,7 @@ async def _run_arbiter(pool: Any, llm: Any | None = None) -> dict[str, int]:
     (cause 1) NEVER calls the LLM."""
     counts = _new_counts()
     now = _now()
+    budget = _pass.PassBudget()
     llm_tiebreaks_left = MAX_LLM_TIEBREAKS if llm is not None else 0
     async with pool.acquire() as conn:
         rows = await _open_triples(conn)
@@ -1716,23 +1836,102 @@ async def _run_arbiter(pool: Any, llm: Any | None = None) -> dict[str, int]:
         # dispute the normal (subject, predicate) grouping cannot see.
         role_rows = [_rekey_role_row(r) for r in await _open_functional_role_triples(conn)]
         role_buckets = _bucket_rows(role_rows)
+        # h4 — one round trip for EVERY group this pass might need an earned-
+        # weight tie-break for, instead of one per group (see
+        # fact_contention_earned_weights_batch.EarnedWeightsBatch). Built
+        # eagerly, once, only when the A6 P3-3 seam is even on — the OFF path
+        # (today's default) never issues it, exactly as _attach_earned_weights
+        # itself is only ever called ON-flag.
+        earned_batch: _ewb.EarnedWeightsBatch | None = None
+        if _earned_weight_scale() > 0.0:
+            from . import source_track_record as _str  # lazy: OFF path never imports
+
+            earned_cutoff = now - timedelta(hours=_str.earned_lag_hours())
+            all_fact_ids = [r["id"] for r in rows] + [r["id"] for r in role_rows]
+            earned_batch = await _ewb.fetch_earned_weights_batch(
+                conn, all_fact_ids, cutoff=earned_cutoff,
+            )
+        # One round trip for every standing group's state — what makes the
+        # unchanged-skip below free, and what replaces the per-group state read.
+        prior_groups = await _pass.load_prior_groups(conn)
+        tunables = _tunables_fingerprint()
         live_keys: set[tuple[str, str]] = set()
-        for (subject_key, predicate_key), group_rows in {**buckets, **role_buckets}.items():
+        pending = list({**buckets, **role_buckets}.items())
+        complete = True
+        for index, ((subject_key, predicate_key), group_rows) in enumerate(pending):
+            if budget.exhausted():
+                # Stop cleanly rather than overrun the actor invoke timeout. The
+                # groups already done this pass carry fresh fingerprints, so the
+                # next pass skips them cheaply and the frontier advances without
+                # any stored cursor.
+                complete = False
+                counts["groups_deferred"] = len(pending) - index
+                logger.warning(
+                    "fact_contention_arbiter.pass_budget_hit processed=%d deferred=%d "
+                    "elapsed=%.1fs — stale-collapse sweep skipped this pass",
+                    index, counts["groups_deferred"], budget.elapsed,
+                )
+                break
+            prior = prior_groups.get((subject_key, predicate_key))
+            past_soak = _past_soak(
+                prior.get("opened_at") if prior is not None else None, now
+            )
+            fingerprint = _pass.group_fingerprint(
+                group_rows, tunables=tunables, arbiter_version=ARBITER_VERSION,
+                now=now, past_soak=past_soak,
+            )
+            if _pass.unchanged(prior, fingerprint, arbiter_version=ARBITER_VERSION):
+                # Nothing this group's answer depends on has moved. Skip the
+                # clustering, the tie-break layers and every write — but it is
+                # still LIVE, so the stale-collapse sweep must not see it as
+                # vanished, and the receipt must still count it.
+                _count_unchanged(prior, counts, live_keys,
+                                 subject_key, predicate_key)
+                continue
             llm_tiebreaks_left = await _process_group(
                 conn, subject_key, predicate_key, group_rows,
                 now=now, llm=llm, llm_tiebreaks_left=llm_tiebreaks_left,
-                counts=counts, live_keys=live_keys,
+                counts=counts, live_keys=live_keys, prior=prior,
+                fingerprint=fingerprint, budget=budget,
+                earned_batch=earned_batch,
             )
 
         # Collapse any standing group whose key no longer appears as a live
-        # >=2-cluster dispute (its values converged / aged out).
-        stale = await conn.fetch(
-            "SELECT id, subject_key, predicate_key FROM fact_contention WHERE status <> 'collapsed'"
-        )
-        for srow in stale:
-            if (srow["subject_key"], srow["predicate_key"]) not in live_keys:
-                await _collapse_group(conn, srow["id"])
-                counts["groups_collapsed"] += 1
+        # >=2-cluster dispute (its values converged / aged out). ONLY on a
+        # complete pass: a truncated pass has a partial ``live_keys``, and
+        # collapsing against it would tear down groups that are merely
+        # unvisited. The sweep is idempotent, so deferring it costs nothing.
+        if complete:
+            stale = await conn.fetch(
+                "SELECT id, subject_key, predicate_key FROM fact_contention WHERE status <> 'collapsed'"
+            )
+            for srow in stale:
+                if budget.exhausted():
+                    # The sweep is three statements per collapse and runs after
+                    # the loop, so it can overshoot the budget on a pass where
+                    # the corpus shifted hard. Stopping here keeps the WHOLE
+                    # pass inside the invoke timeout; the sweep is idempotent
+                    # and re-runs next pass, so a deferred collapse is a delay,
+                    # never a loss.
+                    logger.warning(
+                        "fact_contention_arbiter.collapse_sweep_budget_hit "
+                        "collapsed=%d elapsed=%.1fs",
+                        counts["groups_collapsed"], budget.elapsed,
+                    )
+                    break
+                if (srow["subject_key"], srow["predicate_key"]) not in live_keys:
+                    await _collapse_group(conn, srow["id"])
+                    counts["groups_collapsed"] += 1
+    # The pass's own shape, in one line: this actor's turn is held for exactly
+    # this long, and an operator watching for the starvation to come back needs
+    # to see the number rather than infer it from reminder errors.
+    logger.info(
+        "fact_contention_arbiter.pass_done elapsed=%.1fs groups=%d unchanged=%d "
+        "recomputed=%d deferred=%d collapsed=%d complete=%s",
+        budget.elapsed, counts["groups_open"], counts["groups_unchanged"],
+        counts["groups_open"] - counts["groups_unchanged"],
+        counts["groups_deferred"], counts["groups_collapsed"], complete,
+    )
     return counts
 
 
@@ -1754,7 +1953,10 @@ def _build_finding(counts: Mapping[str, int], target_id: str | None) -> FindingP
         f"reopened={counts.get('reopened', 0)}\n"
         f"llm_tiebreaks={counts.get('llm_tiebreaks', 0)}\n"
         f"llm_tiebreak_calls={counts.get('llm_tiebreak_calls', 0)}\n"
-        f"llm_cache_hits={counts.get('llm_cache_hits', 0)}"
+        f"llm_cache_hits={counts.get('llm_cache_hits', 0)}\n"
+        f"groups_unchanged={counts.get('groups_unchanged', 0)}\n"
+        f"groups_deferred={counts.get('groups_deferred', 0)}\n"
+        f"llm_budget_deferred={counts.get('llm_budget_deferred', 0)}"
     )
     tags = ["deterministic", "fact_contention_arbiter", "detect_only"]
     if counts["groups_open"]:

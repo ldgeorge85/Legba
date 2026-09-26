@@ -88,7 +88,18 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Mapping, Protocol, runtime_checkable
 from uuid import UUID
 
+from ..pinned_context import render_pinned_context_block
 from ..provenance.models import ConsultResponsePayload, FindingPayload
+from ..stack.llm import tool_round_compaction as _tc
+from ..stack.llm.stream_observer import TextDeltaSink, capture_text_deltas
+from . import consult_round_protocol as _cp
+from . import consult_transcript as _tx
+# V3/P3 — the SubstrateQueryPort protocol moved to a leaf when the temporal
+# params grew this module past its size ceiling; imported back and
+# re-exported so every call site is byte-identical.
+from .consult_provenance_census import build_provenance_census
+from .consult_substrate_port import SubstrateQueryPort
+from .consult_spend_guard import SpendGuard
 
 logger = logging.getLogger(__name__)
 
@@ -132,16 +143,33 @@ ROUNDS_CEILING = 30
 #: substrate calls in a single round.
 MAX_TOOLS_PER_BATCH = 5
 
+#: Below this much remaining total budget, the forced-final synthesis is not
+#: attempted at all — starting an Opus synthesis with 8 seconds left produces a
+#: timeout, not an answer. The loop emits its degraded FINAL instead.
+_MIN_FINAL_SECONDS = 15.0
+
+#: Characters of streamed synthesis to buffer before relaying one frame to the
+#: live stream. Per-delta relay would flood the SSE relay's 256-slot queue,
+#: which drops on full — the operator would watch an answer form with holes in
+#: it. 400 is roughly a sentence: fast enough to read as live typing.
+_ANSWER_DELTA_CHARS = 400
+
 #: F1 model picker — the sanctioned LLM planes a consult / deep_consult request
 #: may switch to per-request. The registry front door maps the operator's
-#: friendly choice ("opus"/"core") to one of THESE component ids and threads it
-#: as ``inputs[0]["llm_component_override"]``; the runtime's by-id resolver is
-#: bound to this set so ONLY these two planes ever resolve at run time (a raw
-#: component id that somehow reached the override field is refused). "opus" =
-#: the billed Anthropic Opus plane (the ACTIVATE-time default — no override
-#: needed); "core" = the free self-hosted core (openai_compat) plane.
+#: friendly choice ("opus"/"fable"/"core") to one of THESE component ids and
+#: threads it as ``inputs[0]["llm_component_override"]``; the runtime's by-id
+#: resolver is bound to this set so ONLY these planes ever resolve at run time
+#: (a raw component id that somehow reached the override field is refused).
+#: "opus" = the billed Anthropic Opus plane (the ACTIVATE-time default — no
+#: override needed); "fable" = the billed Anthropic Claude Fable 5.1 plane
+#: (selectable, never default); "core" = the free self-hosted core
+#: (openai_compat) plane.
 LLM_OVERRIDE_ALLOWLIST = frozenset(
-    {"llm.anthropic.opus_4_7", "llm.primary.openai_compat"}
+    {
+        "llm.anthropic.opus_4_7",
+        "llm.anthropic.fable_5_1",
+        "llm.primary.openai_compat",
+    }
 )
 
 
@@ -286,246 +314,6 @@ class LLMHandlerLike(Protocol):
     ) -> Any: ...
 
 
-# ---------------------------------------------------------------------------
-# Substrate tool ports
-# ---------------------------------------------------------------------------
-
-
-@runtime_checkable
-class SubstrateQueryPort(Protocol):
-    """The substrate-side tool surface the consult kind invokes.
-
-    The runtime constructs one of these per analyst-actor activation,
-    binding it to ``deps.pg_pool`` (+ optional vector store via
-    ``deps.extras``).  Tests pass a hand-rolled stub that returns fixed
-    rows for a known query — the LLM boundary is the test double, but the
-    substrate boundary stays real per the no-mocks rule.
-
-    Each tool returns a JSON-serializable mapping; the dispatcher folds
-    that into the next ROUND's tool-result message.  The mapping includes
-    a ``"refs"`` list of substrate UUIDs whenever rows were returned so
-    the kind can build :attr:`ConsultResponsePayload.cited_substrate_refs`.
-    """
-
-    async def search_signals(
-        self,
-        *,
-        query: str,
-        limit: int = 20,
-        scope_predicate: str | None = None,
-    ) -> dict[str, Any]: ...
-
-    async def query_facts(
-        self,
-        *,
-        subject: str | None = None,
-        predicate: str | None = None,
-        value: str | None = None,
-        limit: int = 30,
-    ) -> dict[str, Any]: ...
-
-    async def inspect_entity(
-        self,
-        *,
-        name: str,
-    ) -> dict[str, Any]: ...
-
-    async def vector_search(
-        self,
-        *,
-        query: str,
-        limit: int = 10,
-    ) -> dict[str, Any]: ...
-
-    async def search_context(
-        self,
-        *,
-        query: str,
-        corpus: str | None = None,
-        country: str | None = None,
-        k: int = 6,
-    ) -> dict[str, Any]: ...
-
-    # Stage 1 — the OpenSearch full-text corpus (index legba_signals_corpus):
-    # BM25 lexical search over the WHOLE raw body of every ingested signal +
-    # a by-id fetch of one signal's full indexed doc.
-    async def search_corpus(
-        self,
-        *,
-        query: str,
-        filters: dict[str, Any] | None = None,
-        size: int = 10,
-    ) -> dict[str, Any]: ...
-
-    async def read_document(
-        self,
-        *,
-        doc_id: str,
-    ) -> dict[str, Any]: ...
-
-    async def query_nexuses(
-        self,
-        *,
-        subject: str | None = None,
-        obj: str | None = None,
-        rel_type: str | None = None,
-        polarity: int | None = None,
-        limit: int = 30,
-    ) -> dict[str, Any]: ...
-
-    async def query_hypotheses(
-        self,
-        *,
-        target_id: str | None = None,
-        status: str | None = None,
-        situation_id: str | None = None,
-        limit: int = 30,
-    ) -> dict[str, Any]: ...
-
-    async def get_timeline(
-        self,
-        *,
-        subject: str,
-        limit: int = 40,
-    ) -> dict[str, Any]: ...
-
-    async def compare_targets(
-        self,
-        *,
-        target_ids: list[str],
-    ) -> dict[str, Any]: ...
-
-    async def query_paths(
-        self,
-        *,
-        subject: str,
-        obj: str,
-        max_hops: int = 3,
-        polarity_product: int | None = None,
-        limit: int = 30,
-    ) -> dict[str, Any]: ...
-
-    async def find_proxy_chains(
-        self,
-        *,
-        subject: str,
-        obj: str,
-        max_hops: int = 3,
-        polarity_product: int | None = None,
-        limit: int = 30,
-    ) -> dict[str, Any]: ...
-
-    async def query_brokers(
-        self,
-        *,
-        camp_a: list[str],
-        camp_b: list[str],
-        max_hops: int = 3,
-        limit: int = 50,
-    ) -> dict[str, Any]: ...
-
-    # Finished-intelligence + navigation readers (palette expansion).
-    async def list_findings(
-        self,
-        *,
-        target_id: str | None = None,
-        analyst_id: str | None = None,
-        severity: str | None = None,
-        since_hours: int | None = None,
-        include_superseded: bool = False,
-        limit: int = 20,
-    ) -> dict[str, Any]: ...
-
-    async def list_situations(
-        self,
-        *,
-        status: str | None = None,
-        target_id: str | None = None,
-        since_hours: int | None = None,
-        limit: int = 20,
-    ) -> dict[str, Any]: ...
-
-    async def query_predictions(
-        self,
-        *,
-        target_id: str | None = None,
-        status: str | None = None,
-        limit: int = 20,
-    ) -> dict[str, Any]: ...
-
-    async def list_targets(self, *, active_only: bool = True) -> dict[str, Any]: ...
-
-    async def list_sources(
-        self,
-        *,
-        active_only: bool = True,
-        silent_only: bool = False,
-        silent_hours: int = 48,
-    ) -> dict[str, Any]: ...
-
-    # Journal self-instrument readers (Journal Assessor Wave 1, plan §5). The
-    # journal narrates over the whole organism INCLUDING ITSELF: recent
-    # assessments, the graph's shape + tension, critic scores, calibration (incl.
-    # the segregated acute-forecast pilot), what fired vs went quiet, source
-    # health, governor pressure, and what changed since its last entry. These are
-    # on the Protocol so the journal_read pack's handlers type-check against it.
-    async def get_assessments(
-        self,
-        *,
-        analyst_id: str | None = None,
-        target_id: str | None = None,
-        since_hours: int | None = 48,
-        limit: int = 20,
-    ) -> dict[str, Any]: ...
-
-    async def get_graph_structure(self, *, limit: int = 20) -> dict[str, Any]: ...
-
-    async def get_structural_balance(self, *, limit: int = 20) -> dict[str, Any]: ...
-
-    async def get_critic_scores(
-        self,
-        *,
-        analyst_id: str | None = None,
-        since_hours: int | None = 168,
-        limit: int = 20,
-    ) -> dict[str, Any]: ...
-
-    async def get_calibration(self) -> dict[str, Any]: ...
-
-    # W2-T6 head coverage: the health readers default to whole-fleet limits
-    # (the port clamps at its _MAX_ROW_LIMIT=200) — a 40-row default silently
-    # dropped analysts/sources past the cap, world_assessor included.
-    async def get_run_health(
-        self,
-        *,
-        analyst_id: str | None = None,
-        quiet_hours: int = 24,
-        limit: int = 200,
-    ) -> dict[str, Any]: ...
-
-    async def get_source_health(
-        self,
-        *,
-        silent_only: bool = False,
-        silent_hours: int = 48,
-        limit: int = 200,
-    ) -> dict[str, Any]: ...
-
-    async def get_budget_status(
-        self,
-        *,
-        analyst_id: str | None = None,
-        demotion_lookback_hours: int = 168,
-        limit: int = 40,
-    ) -> dict[str, Any]: ...
-
-    async def get_journal_delta(
-        self,
-        *,
-        since: str | None = None,
-        limit: int = 30,
-    ) -> dict[str, Any]: ...
-
 
 # ---------------------------------------------------------------------------
 # Result envelope
@@ -562,25 +350,28 @@ _SYSTEM_PROMPT = with_preamble(
 
 Available tools:
   - search_signals(query, [limit], [scope_predicate]) — full-text search over indexed signals (title + summary).
-  - query_facts([subject], [predicate], [value], [limit]) — fact store; at least one of subject/predicate/value is required.
+  - query_facts([subject], [predicate], [value], [limit], [as_of]) — fact store; at least one of subject/predicate/value is required. as_of (ISO-8601) reads the facts that held on that date, including rows superseded since.
   - inspect_entity(name) — canonical entity profile + recent facts.
   - vector_search(query, [limit]) — semantic similarity over signal embeddings.
   - search_context(query, [corpus], [country], [k]) — semantic search over the CURATED reference corpora (world_context = country/topic priors + doctrine summaries; tradecraft = analytic standards / SAT handbooks). Returns cited chunks (corpus, doc_id, title, section, countries, source_url, effective_date). corpus narrows to one of world_context / tradecraft; country filters to chunks tagged for that country. This is BACKGROUND / method knowledge, NOT live substrate — use it to ground an assessment or recall a technique, not as current evidence. Its chunk refs are `ctx:`-prefixed and NON-CITABLE: never put a ctx: ref (or its bare UUID) in cited_refs — cite only substrate UUIDs other tools returned.
   - search_corpus(query, [filters], [size]) — LEXICAL BM25 keyword search over the FULL raw text of ALL ingested signals (the live news/report corpus, ~106k docs), returning scored rows. Optional keyword filters narrow by facet: geo, tags, source_id, language, modality, entity_classes, retention_class, license_class (a scalar or a list per key). Use it to FIND source documents by keyword across the whole corpus (broader recall than search_signals' title+summary FTS and complementary to vector_search's semantic match). A row's id is the signal id — pass it to read_document for the full body.
   - read_document(doc_id) — fetch ONE signal's full stored body + metadata by its doc_id (the signal id, e.g. from a search_corpus / search_signals hit) when you need the WHOLE article text, not a snippet. Returns status ('found' / 'not_found') and the full indexed document (title, raw_body, facets).
-  - query_nexuses([subject], [object], [rel_type], [polarity], [limit]) — open signed/typed relationships (A->[intermediary]->B; polarity +1 supportive / -1 antagonistic / 0 neutral/dual-use).
+  - query_nexuses([subject], [object], [rel_type], [polarity], [limit], [as_of]) — open signed/typed relationships (A->[intermediary]->B; polarity +1 supportive / -1 antagonistic / 0 neutral/dual-use). as_of reads the relationships that held on that date.
   - query_hypotheses([target_id], [status], [situation_id], [limit]) — competing-hypothesis (ACH) rows (thesis vs counter_thesis, evidence balance, status: active / confirmed / refuted).
-  - get_timeline(subject, [limit]) — time-ordered merge of current facts and recent signals about one subject.
+  - get_timeline(subject, [limit], [since], [until]) — time-ordered merge of current facts and recent signals about one subject; since/until (ISO-8601) bound the window on each item's anchor.
   - compare_targets(target_ids) — side-by-side substrate rollup for two or more target ids.
-  - query_paths(subject, object, [max_hops<=3], [polarity_product], [limit], [families]) — ranked SIGNED paths A->...->B over the open entity graph; each path carries its net polarity_product (the structural-balance sign of the chain: +1 net-supportive / -1 net-antagonistic). polarity_product filters to that net sign.
-  - find_proxy_chains(subject, object, [max_hops<=3], [polarity_product], [limit], [families]) — INDIRECT links only (multi-hop chains + reified A->via->B cut-outs); the proxy path from A to B.
-  - query_brokers(camp_a, camp_b, [max_hops<=3], [limit], [families]) — entities that SIT ON paths between two entity sets (the broker between two camps), ranked by how many A->B paths run through them.
+  - query_paths(subject, object, [max_hops<=3], [polarity_product], [limit], [families], [as_of]) — ranked SIGNED paths A->...->B over the open entity graph; each path carries its net polarity_product (the structural-balance sign of the chain: +1 net-supportive / -1 net-antagonistic). polarity_product filters to that net sign. as_of walks the graph as it stood on that date.
+  - find_proxy_chains(subject, object, [max_hops<=3], [polarity_product], [limit], [families], [as_of]) — INDIRECT links only (multi-hop chains + reified A->via->B cut-outs); the proxy path from A to B.
+  - query_brokers(camp_a, camp_b, [max_hops<=3], [limit], [families], [as_of]) — entities that SIT ON paths between two entity sets (the broker between two camps), ranked by how many A->B paths run through them.
 
   All three walks traverse ASSERTED relationships only (families relation/reference). A co-mention is not a relationship, so pass families=["cooccurrence"] to walk the co-mention cloud deliberately. An endpoint naming no entity (or an ambiguous one) comes back in `warnings` — an empty result with a warning is NOT "they are unconnected".
 
 Finished intelligence — the platform's OWN analysis (analysis-derived; consult these FIRST, they encode prior work — weigh per the provenance rules above):
-  - list_findings([target_id], [analyst_id], [severity], [since_hours], [include_superseded], [limit]) — recent LIVE findings the platform already produced (country/world situational assessments, meta-findings; superseded revisions are excluded unless include_superseded=true); effective_confidence folds in the critic's grade. Cite the finding id.
-  - list_situations([status], [target_id], [since_hours], [limit]) — ongoing clustered situation frames, each with intensity_score + event_count (rank severity by these); call with NO filters (limit 20-30) for a world-state survey. Pass a returned situation_id to query_hypotheses for its ACH rows.
+  - list_findings([target_id], [analyst_id], [severity], [since_hours], [include_superseded], [believed_as_of], [limit]) — recent LIVE findings the platform already produced (country/world situational assessments, meta-findings; superseded revisions are excluded unless include_superseded=true); effective_confidence folds in the critic's grade. believed_as_of (ISO-8601) reads what the platform had published and not yet superseded on that date, with the verdict it held then. Cite the finding id.
+  - list_situations([status], [target_id], [since_hours], [as_of], [limit]) — ongoing clustered situation frames, each with intensity_score + event_count (rank severity by these); call with NO filters (limit 20-30) for a world-state survey. as_of reads the frames that held on that date, including ones since closed. Pass a returned situation_id to query_hypotheses for its ACH rows.
+  - query_events([target_id], [geo], [category], [lifecycle_state], [entity], [situation_id], [since], [until], [as_of], [limit]) — bounded real-world occurrences the platform has clustered (a thing that HAPPENED, where a situation is a thing being watched). lifecycle_state is one of emerging/developing/active/evolving/resolved; geo is an ISO2 code or list; entity is an actor-name substring; situation_id returns the events a situation tracks; since/until (ISO-8601) bound the occurrence span by overlap; as_of reads the events that held on that date.
+  - inspect_event(event_id) — the one-event dossier: the event row, its ranked evidence signals, its actors with roles, its event edges, the situations tracking it, and its lifecycle ledger oldest→newest. The row ids it returns are citable refs.
+  - belief_as_of(as_of, [target_id], [fold_verdicts], [limit]) — the findings Legba had published and not yet superseded on date as_of (ISO-8601, required), each with its own effective_confidence under the verdict fold you name: 'as_of' (default — the verdict held on that date; ungraded-yet rows come back effective_confidence=null and count in verdict_pending_at_as_of) or 'latest' (today's verdict). There is no pooled score by design.
   - query_predictions([target_id], [status], [limit]) — event-volume forecasts (forecast_method 'naive_mean' ⇒ no trend could be fit, low-confidence; 'auto_arima' ⇒ fitted). The feed is FROZEN (writer retired 2026-07-01) — treat rows as historical, check latest_produced_at, never present one as a current forecast. Cite the id.
   - list_targets() — the monitored targets + their ids (e.g. country_g20_ir); call this to resolve a place/topic to a valid target_id before query_hypotheses / compare_targets / list_findings.
   - list_sources([active_only], [silent_only]) — ingest sources + freshness; use to tell "no coverage on X" apart from "a quiet feed".
@@ -612,470 +403,63 @@ Answer quality: the answer under the header block is plain GitHub-flavored MARKD
 )
 
 
-def _render_user_prompt(question: str, scope_predicate: str | None) -> str:
+def _render_user_prompt(
+    question: str,
+    scope_predicate: str | None,
+    pinned_block: str = "",
+) -> str:
+    """Render the consult's first user turn.
+
+    ``pinned_block`` is the rendered ``PINNED CONTEXT`` block (see
+    ``legba.data.pinned_context``) and leads the turn so the planner reads the
+    operator's pinned records BEFORE the question they qualify. Empty when the
+    request carried no pins — which is every pre-``pinned_context`` request,
+    and which makes this function byte-identical to its previous form there.
+    """
     body = f"Operator question:\n{question.strip()}"
     if scope_predicate:
         body += f"\n\nScope predicate (apply to substrate queries): {scope_predicate}"
+    if pinned_block:
+        body = f"{pinned_block}\n\n{body}"
     return body
 
 
 # ---------------------------------------------------------------------------
-# JSON parse helpers (shared shape with inline_target's _coerce_finding)
+# Reply parsing — EXTRACTED to ``consult_reply_parsing`` (D-7)
+#
+# The JSON-envelope reader and the whole §28.4 plain-markdown FINAL contract
+# moved out one-way when this module crossed its size ceiling; they are a
+# self-contained string-parsing subsystem with no dependency on anything else
+# here. Re-exported so every importer (tests included) is unchanged, and so
+# the loop below reads exactly as it did.
 # ---------------------------------------------------------------------------
 
-
-def _extract_json(raw: str) -> dict[str, Any] | None:
-    """Pull a strict-JSON object out of an LLM response.
-
-    Tolerates markdown fences and trailing prose past the closing brace.
-    Returns None on parse failure (caller decides how to recover).
-
-    STRING-AWARE brace matching: a ``{`` or ``}`` that appears INSIDE a quoted
-    JSON string value (e.g. ``{"answer": "the set is }"}``) is literal text, not
-    structural — so the close-brace scan skips characters inside strings and
-    honors backslash escapes (``\\"`` does NOT close the string). A naive
-    depth-counter that ignores strings closes early on the first in-string ``}``
-    and truncates the object into invalid JSON; this is the fix for that class.
-    """
-    candidate = (raw or "").strip()
-    if not candidate:
-        return None
-    if candidate.startswith("```"):
-        candidate = candidate.strip("`")
-        if candidate.lower().startswith("json"):
-            candidate = candidate[4:]
-        candidate = candidate.strip()
-    # Start at the first brace so leading prose ("Here is the JSON: {...}") or a
-    # thinking/preamble line doesn't defeat the parse, then brace-match the close.
-    start = candidate.find("{")
-    if start == -1:
-        return None
-    candidate = candidate[start:]
-    depth = 0
-    end = len(candidate)
-    in_string = False
-    escaped = False
-    for i, c in enumerate(candidate):
-        if in_string:
-            # Inside a quoted string: braces are literal. Track escapes so an
-            # escaped quote (\") does not close the string, and a literal brace
-            # in the value can never shift the structural depth.
-            if escaped:
-                escaped = False
-            elif c == "\\":
-                escaped = True
-            elif c == '"':
-                in_string = False
-            continue
-        if c == '"':
-            in_string = True
-        elif c == "{":
-            depth += 1
-        elif c == "}":
-            depth -= 1
-            if depth == 0:
-                end = i + 1
-                break
-    candidate = candidate[:end]
-    try:
-        parsed = json.loads(candidate)
-    except (json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    return parsed
-
-
-# ---------------------------------------------------------------------------
-# The plain-markdown FINAL contract (§28.4 — kills the unparseable class)
-# ---------------------------------------------------------------------------
-
-
-#: First line of a FINAL reply. Deliberately not JSON — see
-#: :func:`_parse_sentinel_final` for the shape and the reason.
-FINAL_SENTINEL = "<<<FINAL>>>"
-
-#: The metadata lines a sentinel final may carry between the sentinel and the
-#: markdown body. Short and FIRST, so a cap-truncated answer loses the tail of
-#: the prose and never the metadata.
-_FINAL_HEADER_RE = re.compile(
-    r"^\s*(uncertainty|cited_refs|unanswered_aspects)\s*:\s*(.*)$",
-    re.IGNORECASE,
+from .consult_reply_parsing import (  # noqa: E402
+    FINAL_SENTINEL,
+    SALVAGE_UNCERTAINTY,
+    _extract_json,
+    _parse_header_list,
+    _parse_round_reply,
+    _parse_sentinel_final,
+    _sentinel_lead,
+    _strip_leading_sentinel,
+    _unescape_json_str,
+    _unwrap_double_envelope,
+    final_payload_from_text,
 )
 
-
-def _sentinel_lead(line: str) -> str | None:
-    """If ``line`` opens with the FINAL sentinel, return whatever trails it on
-    that line (usually ``""``); otherwise None.
-
-    Tolerant of decoration a model may wrap around it — backticks, bold stars,
-    a heading marker — because the sentinel is a routing token, not content.
-    """
-    stripped = line.strip().lstrip("#>*_` \t")
-    if not stripped.upper().startswith(FINAL_SENTINEL):
-        return None
-    return stripped[len(FINAL_SENTINEL):].lstrip(" \t:*`")
-
-
-def _parse_header_list(raw: str) -> list[str]:
-    """Split a header list value into its items.
-
-    Accepts the documented ``a, b`` / ``a; b`` forms AND a JSON array — a model
-    that just spent the whole loop emitting JSON will sometimes reach for
-    brackets out of habit, and that is not worth burning a round over.
-    """
-    text = (raw or "").strip()
-    if not text:
-        return []
-    if text.startswith("["):
-        try:
-            parsed = json.loads(text)
-        except (json.JSONDecodeError, ValueError):
-            parsed = None
-        if isinstance(parsed, list):
-            return [str(x).strip() for x in parsed if str(x).strip()]
-    separator = ";" if ";" in text else ","
-    return [part.strip() for part in text.split(separator) if part.strip()]
-
-
-def _parse_sentinel_final(raw: str) -> dict[str, Any] | None:
-    r"""Parse the plain-markdown FINAL reply into the loop's final-payload shape.
-
-    THE CONTRACT (rendered verbatim in the system prompt's Loop protocol)::
-
-        <<<FINAL>>>
-        uncertainty: 0.35
-        cited_refs: <uuid>, <uuid>
-        unanswered_aspects: one gap; another gap
-
-        ## Bottom line
-        ...markdown...
-
-    WHY IT IS NOT JSON. The previous contract asked for one strict-JSON object
-    whose ``answer`` value was a multi-KB markdown document inside a JSON
-    string, under a 2048-token output cap. Real turn ``07a69948`` /
-    ``39b4d769`` is what that collides into: three consecutive rounds produced a
-    complete, well-cited answer that was cut mid-string, failed ``json.loads``,
-    and was thrown away — each recovery re-asking for the WHOLE answer under the
-    SAME cap, ratcheting the transcript (and the bill) 30k → 32k → 34k → 36k
-    tokens before the loop accepted a SHORTER, worse fourth answer. Every
-    quote, newline and backslash of ~3,000 chars of prose had to survive JSON
-    escaping AND the envelope had to close inside the cap.
-
-    With the wrapper gone there is no envelope to close. A cap-truncated final
-    now degrades to a complete-looking-but-cut markdown answer the operator can
-    read and the parser accepts, instead of a parse failure plus a retry
-    ratchet. The headers lead for the same reason: truncation eats the tail of
-    the prose, never the metadata.
-
-    Returns the SAME dict shape the JSON contract produced — so
-    :func:`_build_consult_response` and every downstream consumer are
-    unchanged — or None when this is not a sentinel final, in which case the
-    caller falls back to the legacy JSON shape.
-    """
-    text = (raw or "").strip()
-    if not text:
-        return None
-    # A fence around the WHOLE reply is decoration; strip it before looking.
-    if text.startswith("```"):
-        fenced = text.splitlines()[1:]
-        while fenced and fenced[-1].strip().startswith("```"):
-            fenced.pop()
-        text = "\n".join(fenced).strip()
-
-    lines = text.splitlines()
-    idx = 0
-    while idx < len(lines) and not lines[idx].strip():
-        idx += 1
-    if idx >= len(lines):
-        return None
-    # The sentinel must LEAD. One buried in prose is not a final — it is more
-    # likely the model quoting the contract back at us mid-explanation.
-    trailing = _sentinel_lead(lines[idx])
-    if trailing is None:
-        return None
-    idx += 1
-
-    payload: dict[str, Any] = {"final": True}
-    body_lines: list[str] = [trailing] if trailing else []
-    if not body_lines:
-        # Header block: consecutive `key: value` lines, any order, all
-        # optional. The first line that is not one begins the answer.
-        while idx < len(lines):
-            match = _FINAL_HEADER_RE.match(lines[idx])
-            if match is None:
-                break
-            key = match.group(1).lower()
-            value = match.group(2)
-            if key == "uncertainty":
-                try:
-                    payload["uncertainty"] = float(value.strip())
-                except (TypeError, ValueError):
-                    pass  # _build_consult_response applies its own default
-            else:
-                payload[key] = _parse_header_list(value)
-            idx += 1
-
-    body = "\n".join([*body_lines, *lines[idx:]]).strip()
-    if not body:
-        # Sentinel with nothing under it is not a usable answer. Return None so
-        # the loop asks for a correction instead of storing an empty answer.
-        return None
-    payload["answer"] = body
-    return payload
-
-
-def _parse_round_reply(raw: str) -> dict[str, Any] | None:
-    """Parse one planner round into the loop's internal shape.
-
-    Accepts BOTH final contracts. The plain-markdown sentinel is current; the
-    ``{"final": true, "answer": ...}`` JSON envelope is legacy and still parses
-    for the transition — persisted sessions replayed through the loop, a
-    descriptor still carrying an older system prompt, and the deep_consult
-    analyze stage, which re-enters this loop. Tool rounds are unchanged and
-    always strict JSON.
-
-    The shapes cannot be confused: a sentinel reply is never valid JSON, and a
-    JSON reply never leads with the sentinel.
-    """
-    sentinel = _parse_sentinel_final(raw)
-    if sentinel is not None:
-        return sentinel
-    return _extract_json(raw)
-
-
-def _strip_leading_sentinel(text: str) -> str:
-    """Prose with a bare leading FINAL sentinel line removed.
-
-    Only reached on the terminal forced-final salvage, where the model wrote an
-    answer with no parseable header block at all.
-    """
-    stripped = (text or "").strip()
-    if not stripped:
-        return ""
-    head, _, rest = stripped.partition("\n")
-    trailing = _sentinel_lead(head)
-    if trailing is None:
-        return stripped
-    return "\n".join([trailing, rest]).strip() if trailing else rest.strip()
-
-
-# Short JSON string escapes we honor when salvaging a malformed nested envelope.
-_JSON_STR_ESCAPES = {
-    '"': '"', "\\": "\\", "/": "/",
-    "n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f",
-}
-
-#: Matches either a ``\uXXXX`` unicode escape or any short ``\x`` escape.
-_JSON_ESCAPE_RE = re.compile(r"\\u[0-9a-fA-F]{4}|\\.", re.DOTALL)
-
-
-def _unescape_json_str(s: str) -> str:
-    r"""Decode JSON string escapes (``\n``, ``\t``, ``\"``, ``\\``, ``\uXXXX``).
-
-    Operates on the str directly (NOT via ``unicode_escape``, which mangles real
-    UTF-8 — em-dashes, smart quotes) so multibyte LITERALS survive untouched,
-    while ``\uXXXX`` escapes are decoded to their code point.
-    """
-    def _one(m: re.Match[str]) -> str:
-        esc = m.group(0)
-        if len(esc) == 6 and esc[1] == "u":  # \uXXXX
-            try:
-                return chr(int(esc[2:], 16))
-            except ValueError:  # pragma: no cover — regex already constrains hex
-                return esc
-        return _JSON_STR_ESCAPES.get(esc[1], esc)
-
-    return _JSON_ESCAPE_RE.sub(_one, s)
-
-
-# Keys that mark the END of a nested ``"answer"`` value when the inner envelope
-# is malformed and ``json.loads`` cannot parse it. ``final`` is deliberately NOT
-# here: in a final-envelope it precedes ``answer``, so it never marks the tail.
-_NESTED_TAIL_KEYS = ("uncertainty", "cited_refs", "unanswered_aspects")
-
-
-def _unwrap_double_envelope(answer: str) -> str:
-    """Recover a markdown answer the planner double-wrapped in a JSON envelope.
-
-    LEGACY / TRANSITION PATH. The current FINAL contract is plain markdown
-    behind a sentinel (:func:`_parse_sentinel_final`), which has no envelope to
-    double-wrap and no escaping to slip — so a sentinel final never needs this.
-    It stays for the JSON finals that still arrive: replayed sessions, an older
-    system prompt, and a model that reverts to the shape it spent the loop
-    emitting. It also still runs over a sentinel answer's body, harmlessly, in
-    case a model mixes the two.
-
-    Some planner turns emit ``{"final": true, "answer": "<a NESTED
-    {\"final\":...} JSON string>"}``. :func:`_extract_json` parses the OUTER
-    object, so ``answer`` ends up being the raw inner JSON TEXT rather than the
-    prose, and when the inner has unescaped quotes/newlines it is not even valid
-    JSON — so the UI renders a raw ``{...}`` block.
-
-    This lifts ONE level: when ``answer`` itself is a final-envelope, return its
-    inner ``answer`` prose; otherwise return the input unchanged. It NEVER raises
-    and NEVER eats content — on ANY doubt it returns the original, so we degrade
-    to "ugly but complete", never to a truncated/empty answer.
-    """
-    s = (answer or "").strip()
-    # Gate hard: only engage on an envelope-SHAPED object. A legitimate answer
-    # that merely mentions a brace or the word "final" is left untouched.
-    if not (s.startswith("{") and '"answer"' in s and '"final"' in s):
-        return answer
-    # Clean nested case: the inner WAS valid JSON, so it parses. Lift the inner
-    # answer (one level; guard against a non-string / empty inner).
-    inner = _extract_json(s)
-    if isinstance(inner, dict) and "answer" in inner:
-        lifted = inner.get("answer")
-        if isinstance(lifted, str) and lifted.strip():
-            return lifted
-    # Malformed nested case: unescaped quotes/newlines defeat json.loads, so we
-    # regex-lift the answer value. The body is UNTRUSTED prose that can itself
-    # contain a decoy `","uncertainty":` sequence (e.g. an answer that quotes a
-    # JSON example), so we anchor on the RIGHTMOST real tail boundary — the
-    # genuine envelope end — not the first in-prose match, and refuse to lift
-    # when doing so would discard most of the content (a false anchor).
-    open_m = re.search(r'"answer"\s*:\s*"', s)
-    if open_m is None:
-        return answer
-    body_region = s[open_m.end():]
-    tail_alt = "|".join(_NESTED_TAIL_KEYS)
-    tail_matches = list(re.finditer(
-        r'"\s*,\s*"(?:' + tail_alt + r')"\s*:', body_region,
-    ))
-    if tail_matches:
-        raw_body = body_region[: tail_matches[-1].start()]   # rightmost = real tail
-    else:
-        close_m = re.search(r'"\s*\}\s*$', body_region)
-        if close_m is not None:
-            raw_body = body_region[: close_m.start()]
-        else:
-            # No clean envelope tail — a legacy JSON final TRUNCATED by
-            # max_tokens mid-string (the class the sentinel contract removes;
-            # this arm covers the finals that still arrive JSON-wrapped). The
-            # `{"final":...,"answer":"` PREFIX is definitely not answer
-            # content, so lift the remainder (dropping a dangling partial
-            # escape) rather than render raw JSON.
-            raw_body = body_region.rstrip("\\")
-    body = _unescape_json_str(raw_body).strip()
-    # "Never eat content": if the lift would discard more than half of the body
-    # region, the anchor is almost certainly a false positive — degrade to the
-    # original (ugly-but-complete) rather than truncate a legitimate answer.
-    if not body or len(body) < 0.5 * len(body_region):
-        return answer
-    return body
-
-
-def _trim_args(args: Mapping[str, Any]) -> dict[str, Any]:
-    """Compact a tool's args for the lightweight trace (keeps the SSE step
-    stream and the persisted ``tool_calls`` small). Caps string/list sizes;
-    scalars pass through."""
-    out: dict[str, Any] = {}
-    for k, v in args.items():
-        if isinstance(v, str):
-            out[str(k)] = v[:200]
-        elif isinstance(v, bool) or v is None or isinstance(v, (int, float)):
-            out[str(k)] = v
-        elif isinstance(v, list):
-            out[str(k)] = [str(x)[:120] for x in v[:10]]
-        else:
-            out[str(k)] = str(v)[:200]
-    return out
-
-
-# The list-bearing result keys `_bounded_tool_json` may drop whole trailing
-# entries from (in probe order). Covers the port readers' shapes: most return
-# "rows", get_timeline returns "items", search_corpus returns "results".
-_BOUNDED_JSON_LIST_KEYS = ("rows", "items", "results")
-
-
-def _bounded_tool_json(tool_result: Any, limit: int) -> str:
-    """Serialize a tool result for a conversation message under a size budget,
-    JSON-SAFELY (R2 / W2-T3 — truncation honesty).
-
-    The old ``json.dumps(result)[:N]`` chop silently handed the model INVALID
-    mid-JSON — a row cut in half reads as corrupt data and the model cannot
-    even tell anything is missing. Instead: when the full dump exceeds
-    ``limit``, drop WHOLE trailing rows from the result's list-bearing key
-    (``rows`` / ``items`` / ``results``) and mark the payload with an explicit
-    ``"truncated": true`` + ``"<key>_total": <n>`` so the model KNOWS the view
-    is partial. When no whole-row cut can fit (one giant row, or a non-mapping
-    result), fall back to a valid-JSON envelope
-    ``{"truncated": true, "raw_prefix": "<chopped dump>"}``.
-
-    Always returns valid JSON of length <= ``limit`` (for any sane limit —
-    a degenerate limit smaller than the envelope itself still returns the
-    minimal envelope). Non-serializable input degrades to an honest error
-    envelope rather than raising.
-    """
-    try:
-        full = json.dumps(tool_result)
-    except (TypeError, ValueError):
-        # Review fix (B0 batch): json.dumps ESCAPING inflates the repr prefix
-        # (up to ~6x on non-ASCII/control chars), so a character-bounded slice
-        # alone can overshoot ``limit``. Shrink-until-fits on the FINAL
-        # serialized envelope — same monotone loop as the raw_prefix path.
-        raw = repr(tool_result)
-        cut = max(0, limit - 128)
-        while True:
-            envelope = json.dumps({
-                "truncated": True,
-                "error": "unserializable tool result",
-                "raw_prefix": raw[:cut],
-            })
-            if len(envelope) <= limit or cut == 0:
-                return envelope
-            cut = cut // 2
-    if len(full) <= limit:
-        return full
-
-    # Preferred cut: drop whole trailing rows so every surviving row stays
-    # intact + citable, then flag the drop explicitly.
-    if isinstance(tool_result, dict):
-        list_key = next(
-            (
-                k for k in _BOUNDED_JSON_LIST_KEYS
-                if isinstance(tool_result.get(k), list) and tool_result[k]
-            ),
-            None,
-        )
-        if list_key is not None:
-            seq = tool_result[list_key]
-            trimmed = dict(tool_result)
-            trimmed["truncated"] = True
-            trimmed[f"{list_key}_total"] = len(seq)
-            trimmed[list_key] = []
-            # Budget for the rows themselves = limit minus the empty envelope
-            # (all other keys + the marker), with slack for separators.
-            row_budget = limit - len(json.dumps(trimmed)) - 2
-            kept: list[Any] = []
-            used = 0
-            for row in seq:
-                try:
-                    row_len = len(json.dumps(row)) + 2  # + ", " separator
-                except (TypeError, ValueError):
-                    break
-                if used + row_len > row_budget:
-                    break
-                kept.append(row)
-                used += row_len
-            if kept:
-                trimmed[list_key] = kept
-                out = json.dumps(trimmed)
-                if len(out) <= limit:
-                    return out
-            # No whole row fits (or the estimate missed) — fall through.
-
-    # Fallback: chop the serialized dump but keep VALID JSON by carrying the
-    # chopped text as a string value inside an honest envelope. json escaping
-    # can inflate the re-encoded prefix, so shrink until it fits.
-    prefix = full
-    while True:
-        out = json.dumps({"truncated": True, "raw_prefix": prefix})
-        if len(out) <= limit or not prefix:
-            return out
-        overshoot = len(out) - limit
-        prefix = prefix[: max(0, len(prefix) - max(overshoot, 64))]
+# Tool-result rendering moved to ``consult_tool_rendering`` under the
+# module-size ratchet (2026-09-16). Re-exported HERE because that is where
+# ``inline_target``, ``journal_assessor`` and the existing tests import these
+# from, and an extraction must not become an import-path break for callers who
+# had no stake in it. One way: this module imports that one, never the reverse.
+from .consult_tool_rendering import (  # noqa: E402
+    _BOUNDED_JSON_LIST_KEYS,
+    _CITATION_ONLY_KEYS,
+    _bounded_tool_json,
+    _shed_citation_payload,
+    _trim_args,
+)
 
 
 def _coerce_uuid_list(raw: Any) -> list[UUID]:
@@ -1127,11 +511,30 @@ _KNOWN_TOOLS = {
     "query_predictions",
     "list_targets",
     "list_sources",
+    # V3/P3 — the decision-time register (spec §3.4).
+    "belief_as_of",
+    # V3/P6 — the event surface (spec §6.1).
+    "query_events",
+    "inspect_event",
+    # 7g-2 — the COLLECTION series reads. Consult is the first reader the
+    # collections firewall opts IN (`firewall.readers_opt_in`), and these are
+    # the tools that make "compare the last ten years" a question with
+    # citable numbers behind it instead of model knowledge.
+    "series_history",
+    "series_compare",
 }
 
 
-def _normalize_calls(parsed: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _normalize_calls(
+    parsed: Mapping[str, Any], *, cap: int = MAX_TOOLS_PER_BATCH,
+) -> list[dict[str, Any]]:
     """Normalize a planner round into a list of ``{tool, args}`` calls.
+
+    ``cap`` is the per-round width. It defaults to :data:`MAX_TOOLS_PER_BATCH`
+    so every existing caller is unchanged; the native route passes the tighter
+    :func:`consult_round_protocol.native_batch_cap` instead, because on that
+    route a round's results are replayed into every LATER prompt — width there
+    is not a one-round cost, it is a multiplier on the rest of the run.
 
     Accepts BOTH the single shape ``{"tool": name, "args": {...}}`` and the
     batch shape ``{"tools": [{"tool": ..., "args": {...}}, ...]}`` — so the
@@ -1165,7 +568,7 @@ def _normalize_calls(parsed: Mapping[str, Any]) -> list[dict[str, Any]]:
             continue
         seen.add(dedupe_key)
         out.append({"tool": name, "args": dict(args)})
-        if len(out) >= MAX_TOOLS_PER_BATCH:
+        if len(out) >= max(1, cap):
             break
     return out
 
@@ -1197,6 +600,7 @@ async def _dispatch_tool(
                 predicate=args.get("predicate"),
                 value=args.get("value"),
                 limit=int(args.get("limit", 30)),
+                as_of=args.get("as_of"),
             )
         if name == "inspect_entity":
             return await port.inspect_entity(name=str(args.get("name", "")))
@@ -1230,6 +634,7 @@ async def _dispatch_tool(
                 rel_type=args.get("rel_type"),
                 polarity=int(polarity) if polarity is not None else None,
                 limit=int(args.get("limit", 30)),
+                as_of=args.get("as_of"),
             )
         if name == "query_hypotheses":
             return await port.query_hypotheses(
@@ -1242,6 +647,8 @@ async def _dispatch_tool(
             return await port.get_timeline(
                 subject=str(args.get("subject", "")),
                 limit=int(args.get("limit", 40)),
+                since=args.get("since"),
+                until=args.get("until"),
             )
         if name == "compare_targets":
             raw_targets = args.get("target_ids") or []
@@ -1259,6 +666,11 @@ async def _dispatch_tool(
                 max_hops=int(args.get("max_hops", 3)),
                 polarity_product=int(pp) if pp is not None else None,
                 limit=int(args.get("limit", 30)),
+                families=(
+                    [str(x) for x in args["families"]]
+                    if isinstance(args.get("families"), list) else None
+                ),
+                as_of=args.get("as_of"),
             )
         if name == "find_proxy_chains":
             pp = args.get("polarity_product")
@@ -1268,6 +680,11 @@ async def _dispatch_tool(
                 max_hops=int(args.get("max_hops", 3)),
                 polarity_product=int(pp) if pp is not None else None,
                 limit=int(args.get("limit", 30)),
+                families=(
+                    [str(x) for x in args["families"]]
+                    if isinstance(args.get("families"), list) else None
+                ),
+                as_of=args.get("as_of"),
             )
         if name == "query_brokers":
             raw_a = args.get("camp_a") or []
@@ -1277,6 +694,11 @@ async def _dispatch_tool(
                 camp_b=[str(x) for x in raw_b] if isinstance(raw_b, list) else [],
                 max_hops=int(args.get("max_hops", 3)),
                 limit=int(args.get("limit", 50)),
+                families=(
+                    [str(x) for x in args["families"]]
+                    if isinstance(args.get("families"), list) else None
+                ),
+                as_of=args.get("as_of"),
             )
         if name == "list_findings":
             return await port.list_findings(
@@ -1291,6 +713,7 @@ async def _dispatch_tool(
                     args.get("include_superseded", False)
                 ).lower() in ("true", "1"),
                 limit=int(args.get("limit", 20)),
+                believed_as_of=args.get("believed_as_of"),
             )
         if name == "list_situations":
             return await port.list_situations(
@@ -1299,6 +722,40 @@ async def _dispatch_tool(
                 since_hours=int(args["since_hours"])
                     if args.get("since_hours") is not None else None,
                 limit=int(args.get("limit", 20)),
+                as_of=args.get("as_of"),
+            )
+        if name == "belief_as_of":
+            return await port.belief_as_of(
+                as_of=str(args.get("as_of", "")),
+                target_id=args.get("target_id"),
+                fold_verdicts=str(args.get("fold_verdicts", "as_of")),
+                limit=int(args.get("limit", 20)),
+            )
+        if name == "query_events":
+            raw_geo = args.get("geo")
+            return await port.query_events(
+                target_id=args.get("target_id"),
+                geo=(
+                    [str(g) for g in raw_geo]
+                    if isinstance(raw_geo, list)
+                    else (str(raw_geo) if raw_geo is not None else None)
+                ),
+                category=args.get("category"),
+                lifecycle_state=args.get("lifecycle_state"),
+                entity=args.get("entity"),
+                situation_id=args.get("situation_id"),
+                since=args.get("since"),
+                until=args.get("until"),
+                as_of=args.get("as_of"),
+                include_origin=(
+                    [str(c) for c in args["include_origin"]]
+                    if isinstance(args.get("include_origin"), list) else None
+                ),
+                limit=int(args.get("limit", 20)),
+            )
+        if name == "inspect_event":
+            return await port.inspect_event(
+                event_id=str(args.get("event_id", "")),
             )
         if name == "query_predictions":
             return await port.query_predictions(
@@ -1415,13 +872,20 @@ def _build_consult_response(
     rounds_used: int,
     forced_final: bool,
     subprovider: str | None,
+    extra_data: Mapping[str, Any] | None = None,
 ) -> ConsultResponsePayload:
     """Build the typed :class:`ConsultResponsePayload`.
 
     Defensive against the LLM returning malformed final-JSON: we fall
     back to a high-uncertainty empty answer with the original question
     in :attr:`ConsultResponsePayload.unanswered_aspects`.
+
+    ``extra_data`` merges into the payload's ``data`` bag. It carries the
+    run's SPEND and its SYNTHESIS STATUS — the two facts an operator needs
+    about a run that cost money and may not have finished, and the two the
+    front door reads to decide whether to offer "Synthesize from evidence".
     """
+    extra = dict(extra_data or {})
     if not final_payload:
         return ConsultResponsePayload(
             question=question,
@@ -1434,6 +898,7 @@ def _build_consult_response(
                 "forced_final": forced_final,
                 "subprovider": subprovider,
                 "error": "no_final_payload",
+                **extra,
             },
         )
 
@@ -1483,6 +948,7 @@ def _build_consult_response(
             "rounds_used": rounds_used,
             "forced_final": forced_final,
             "subprovider": subprovider,
+            **extra,
         },
     )
 
@@ -1532,12 +998,54 @@ async def _reason_via_llm(
     temperature: float,
     system_prompt: str,
 ) -> tuple[str, dict[str, int]]:
-    """One chat_complete turn.  Mirrors inline_target's helper."""
+    """One chat_complete turn.  Mirrors inline_target's helper.
+
+    UNCHANGED, deliberately: ``deep_consult``'s plan + extract stages import
+    this by name and unpack two values. The native route needs a third (the
+    raw response, for its ``tool_calls``), so it calls
+    :func:`_reason_with_response` instead and this stays a thin projection of
+    it — one request path, two return shapes, no duplicated call site.
+    """
+    content, usage, _response = await _reason_with_response(
+        llm,
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        system_prompt=system_prompt,
+    )
+    return content, usage
+
+
+async def _reason_with_response(
+    llm: LLMHandlerLike,
+    *,
+    messages: list[Mapping[str, Any]],
+    max_tokens: int,
+    temperature: float,
+    system_prompt: str,
+    tools: list[dict[str, Any]] | None = None,
+) -> tuple[str, dict[str, int], Any]:
+    """One chat_complete turn, returning ``(content, usage, response)``.
+
+    The raw response is surfaced because the native tool-call route needs its
+    ``tool_calls``, which by definition are NOT in ``content`` — that is the
+    whole point of the structured channel.
+
+    ``tools`` is threaded ONLY when non-empty, so every existing caller (and
+    the text-protocol route) produces a request byte-identical to the one it
+    produced before this parameter existed. No shared provider handler was
+    changed to support this: ``LLMProviderHandler.chat_complete`` has always
+    taken ``tools``, and both handlers we drive already translate it.
+    """
+    kwargs: dict[str, Any] = {}
+    if tools:
+        kwargs["tools"] = tools
     response = await llm.chat_complete(
         messages,
         max_tokens=max_tokens,
         temperature=temperature,
         system=system_prompt,
+        **kwargs,
     )
     content = getattr(response, "content", "") or ""
     usage_raw = getattr(response, "usage", None)
@@ -1550,7 +1058,7 @@ async def _reason_via_llm(
             getattr(usage_raw, "reasoning_tokens", 0) if usage_raw else 0
         ),
     }
-    return content, usage_dict
+    return content, usage_dict, response
 
 
 def _refs_from_tool_result(tool_result: Mapping[str, Any]) -> list[UUID]:
@@ -1598,6 +1106,19 @@ class ConsultOnDemandDeps:
     # _default_wall_budget_seconds(). Caps over-drilling so broad questions
     # return before the blocking endpoint's invoke timeout instead of 504-ing.
     wall_budget_seconds: float = field(default_factory=_default_wall_budget_seconds)
+    # HARD ceiling on the whole run, forced-final synthesis included. The
+    # drilling budget above only stops the loop asking for MORE tools; it never
+    # bounded the synthesis that follows, which is where run 3ae77c64 ran out
+    # of the front door's clock. Past this the loop emits a degraded-but-honest
+    # FINAL rather than dying. Env ``LEGBA_CONSULT_BUDGET_SECONDS``.
+    total_budget_seconds: float = field(
+        default_factory=_cp.default_total_budget_seconds
+    )
+    # Per-LLM-call deadline, so one stuck call can't consume the whole budget
+    # while every other round starves. Env ``LEGBA_CONSULT_ROUND_DEADLINE_SECONDS``.
+    round_deadline_seconds: float = field(
+        default_factory=_cp.default_round_deadline_seconds
+    )
     # DEAD KNOB on the deployed plane — comment truth, not aspiration. The
     # ACTIVATE-time primary is `llm.anthropic.opus_4_7`, whose live model_name
     # is claude-opus-4-8, and Anthropic deprecated `temperature` on that line:
@@ -1609,6 +1130,19 @@ class ConsultOnDemandDeps:
     temperature: float = 0.2
     system_prompt: str = _SYSTEM_PROMPT
     max_rounds: int = MAX_TOOL_ROUNDS
+    # Per-round native call width. None ⇒ ``_cp.native_batch_cap()`` (4, env
+    # ``LEGBA_CONSULT_NATIVE_BATCH_CAP``). A descriptor whose tool mix genuinely
+    # needs five wide reads in one round raises it here; everything else gets
+    # the tighter default, because on the native route a round's results ride
+    # in EVERY later prompt.
+    native_batch_cap: int | None = None
+    # Per-run spend ceilings — the budget denominated in money rather than
+    # seconds. See ``consult_spend_guard``: run c8a0105c honoured all three
+    # clocks and still cost ~$10, because what made it expensive was the
+    # transcript it replayed, which no clock can see. None ⇒ the env-tunable
+    # defaults (150k input tokens / $3.00 estimated).
+    max_input_tokens_per_run: int | None = None
+    max_cost_usd_per_run: float | None = None
     # A-3a (review G2): when the runtime wires an AgencyToolBinding for the
     # ``substrate_read`` pack, EVERY tool call routes through
     # ``Agency.run_pack_tool`` — resolve ∩ allow ∩ applicability, the pack
@@ -1695,12 +1229,37 @@ async def run_method(
             override_component, getattr(active_llm, "subprovider", None),
         )
 
+    # --- Round protocol selection (D-7) --------------------------------
+    # On a plane with a real tool-calling channel we drive it instead of
+    # parsing tool calls out of prose. The `unparseable` step kind — a burned
+    # round and a burned Opus call — cannot occur on that route, because a
+    # reply either carries tool_use blocks (a tool round) or does not (the
+    # answer). Everything else, including the §28.4 markdown FINAL, is
+    # unchanged. See ``consult_round_protocol``.
+    native_tools_route = _cp.supports_native_tools(active_llm)
+    native_wire = _cp.native_wire(active_llm)
+    native_tool_payload = (
+        _cp.render_tools_for(native_wire, _KNOWN_TOOLS)
+        if native_tools_route
+        else None
+    )
+    effective_system_prompt = deps.system_prompt + (
+        _cp.native_system_suffix(FINAL_SENTINEL) if native_tools_route else ""
+    )
+
     # --- Step trace + live telemetry (Piece 1, D5) --------------------
     # ``steps`` is the durable trace returned as ``intermediate_steps``.
     # ``_record`` appends to it AND pushes the same dict to ``deps.step_publish``
     # when wired, so the live SSE stream and the trace are one source of truth.
     steps: list[dict[str, Any]] = []
 
+    # STREAM-ONLY frames go through ``_emit_step``; everything else through
+    # ``_record``, which does both. There is exactly ONE stream-only kind —
+    # ``answer_delta``, the live synthesis text — and it is stream-only for a
+    # reason that does not generalise: its frames re-carry the whole answer in
+    # 400-character pieces, and persisting them would put a second, chunked
+    # copy of a 13,000-character answer into the turn's step trace beside the
+    # answer itself. Every other frame is cheap, bounded, and belongs in both.
     async def _emit_step(step: dict[str, Any]) -> None:
         if deps.step_publish is not None:
             try:
@@ -1714,6 +1273,81 @@ async def run_method(
         steps.append(step)
         await _emit_step(step)
 
+    # --- Recovery: finish a run that was cut, without drilling again -------
+    # ``synthesize_from`` carries a PERSISTED turn's evidence. The whole ReAct
+    # loop below is skipped: this path writes an answer over evidence that
+    # already exists and was already paid for. It lives in the analyst rather
+    # than the front door because the tools, the governed binding and the model
+    # planes are all here, and it arrives on the request row so the actor
+    # surface is unchanged.
+    recovery = first.get("synthesize_from")
+    if recovery:
+        from . import consult_resynthesis as _rs
+
+        return await _rs.run_synthesis_only(
+            recovery,
+            deps=deps,
+            active_llm=active_llm,
+            wire=native_wire,
+            system_prompt=effective_system_prompt,
+            record=_record,
+            analyst_id=analyst_id,
+        )
+
+    # --- Effective round count (Piece 1, D1; re-defaulted after c8a0105c) ---
+    # The per-run override may arrive on the question row or in ``options``;
+    # clamp it to [1, ROUNDS_CEILING] and use a LOCAL — never mutate ``deps``
+    # (shared across concurrent runs).
+    #
+    # WHERE 10 CAME FROM. ``MAX_TOOL_ROUNDS`` is 6 and always was, and
+    # ``deps.max_rounds`` defaults to it. What sent run c8a0105c to ten rounds
+    # on a Fable-priced route was the chat front door's REQUEST MODEL, which
+    # defaulted ``max_tool_rounds`` to 10 (``CHAT_DEFAULT_ROUNDS``) — so every
+    # chat request arrived carrying an explicit 10 and the kind's own default
+    # was unreachable from the panel. The front door now sends ``None`` when
+    # the operator did not choose a value, and "did not choose" lands here as
+    # ``deps.max_rounds``: 6, the descriptor's number.
+    #
+    # An explicit request still wins, up to ROUNDS_CEILING — a broad survey is
+    # a legitimate thing to ask for, as long as asking is deliberate.
+    requested = first.get("max_tool_rounds")
+    if requested is None:
+        requested = options.get("max_tool_rounds")
+    rounds_source = "request"
+    if requested is None:
+        rounds_source = "default"
+        effective_rounds = deps.max_rounds
+    else:
+        try:
+            effective_rounds = int(requested)
+        except (TypeError, ValueError):
+            rounds_source = "default_malformed_request"
+            effective_rounds = deps.max_rounds
+    effective_rounds = max(1, min(ROUNDS_CEILING, effective_rounds))
+
+    # --- Per-run spend ceiling ----------------------------------------
+    # Per RUN, never on ``deps`` (shared across concurrent runs).
+    spend = SpendGuard(
+        **{
+            k: v
+            for k, v in (
+                ("max_input_tokens", deps.max_input_tokens_per_run),
+                ("max_cost_usd", deps.max_cost_usd_per_run),
+            )
+            if v is not None
+        }
+    )
+    batch_cap = _cp.native_batch_cap(deps.native_batch_cap)
+
+    def _normalize_round_calls(parsed: Mapping[str, Any]) -> list[dict[str, Any]]:
+        """``_normalize_calls`` at THIS run's per-round width."""
+        return _normalize_calls(parsed, cap=batch_cap)
+
+    # The run's FIRST frame now carries the effective caps, not just the prompt
+    # shape: an operator watching a run start can see what it is allowed to
+    # spend BEFORE it spends it. ``rounds_source`` says whether the cap is the
+    # operator's own choice or the plane's default, which is the question
+    # c8a0105c could not answer from its trace.
     await _record(
         {
             "phase": "plan",
@@ -1721,21 +1355,16 @@ async def run_method(
             "question_chars": len(question),
             "scope_predicate": bool(scope_predicate),
             "prompt_module": PROMPT_MODULE_PATH,
+            "round_protocol": "native_tools" if native_tools_route else "json_text",
+            "max_rounds": effective_rounds,
+            "rounds_source": rounds_source,
+            "native_batch_cap": batch_cap,
+            "round_result_bytes": _tc.round_result_bound(),
+            "total_budget_s": deps.total_budget_seconds,
+            "final_floor_s": _cp.default_final_floor_seconds(),
+            **spend.snapshot(),
         }
     )
-
-    # --- Effective round count (Piece 1, D1) --------------------------
-    # The per-run override may arrive on the question row or in ``options``;
-    # clamp it to [1, ROUNDS_CEILING] and use a LOCAL — never mutate ``deps``
-    # (shared across concurrent runs).
-    requested = first.get("max_tool_rounds") or options.get("max_tool_rounds")
-    effective_rounds = deps.max_rounds
-    if requested is not None:
-        try:
-            effective_rounds = int(requested)
-        except (TypeError, ValueError):
-            effective_rounds = deps.max_rounds
-    effective_rounds = max(1, min(ROUNDS_CEILING, effective_rounds))
 
     # --- Initial conversation -----------------------------------------
     # Seed with prior turns (multi-turn, D6): the request row may carry a
@@ -1753,7 +1382,15 @@ async def run_method(
                     }
                 )
     seeded = seeded[-20:]
-    user_prompt = _render_user_prompt(question, scope_predicate)
+    # Records the operator pinned to the conversation (registry-validated, but
+    # this arrives as raw JSON off the actor queue so the renderer re-clamps).
+    pinned_block = render_pinned_context_block(first.get("pinned_context") or [])
+    if pinned_block:
+        logger.info(
+            "consult.pinned_context analyst_id=%s chars=%d",
+            analyst_id, len(pinned_block),
+        )
+    user_prompt = _render_user_prompt(question, scope_predicate, pinned_block)
     messages: list[Mapping[str, Any]] = [
         *seeded,
         {"role": "user", "content": user_prompt},
@@ -1765,49 +1402,180 @@ async def run_method(
     final_payload: dict[str, Any] | None = None
     forced_final = False
     last_raw: str = ""
+    #: Set when a round's tool results have been appended but not yet fed to an
+    #: LLM call. If the loop degrades while this is set, the honest FINAL says
+    #: the last tool result was never incorporated.
+    pending_tool_results = False
+    #: Why the loop stopped drilling, for the degraded FINAL's prose.
+    stop_reason = "the round budget was reached"
 
+    #: Whether the answer this run returns is a finished synthesis
+    #: ("complete"), the prefix of one that was cut ("partial"), or an honest
+    #: apology because none was produced ("none"). Set at each terminal branch
+    #: rather than re-derived downstream from an uncertainty value or a step
+    #: kind — this is a fact the loop knows and nobody else should have to
+    #: reconstruct.
+    synthesis_status = "complete"
+    #: The synthesis request as sent, recorded so a CUT run can be finished
+    #: later over the same prompt rather than a summary of it. Only set once
+    #: the forced-final block builds it, and only PERSISTED when the run turns
+    #: out to need recovery — a run that answered has nothing to replay.
+    replay_transcript: dict[str, Any] | None = None
     rounds_used = 0
     loop_started = time.monotonic()
+
+    def _elapsed() -> float:
+        return time.monotonic() - loop_started
+
+    def _remaining_total() -> float:
+        return deps.total_budget_seconds - _elapsed()
+
     for round_idx in range(effective_rounds):
         # Wall-clock guard: once we've spent the budget, stop drilling and fall
         # through to the forced-final synthesis so a broad question RETURNS a
         # real answer before the blocking endpoint's invoke timeout instead of
         # 504-ing. ``round_idx > 0`` so the first (survey) round always runs.
-        if (
-            round_idx > 0
-            and time.monotonic() - loop_started > deps.wall_budget_seconds
-        ):
+        if round_idx > 0 and _elapsed() > deps.wall_budget_seconds:
+            stop_reason = "the tool-drilling budget was spent"
             await _record({
                 "phase": "reflect",
                 "kind": "wall_budget_reached",
                 "round": round_idx,
-                "elapsed_s": round(time.monotonic() - loop_started, 1),
+                "elapsed_s": round(_elapsed(), 1),
+            })
+            break
+        # TOTAL-budget guard (D-7). The drilling budget above says "stop asking
+        # for more tools"; this one says "there is no longer room to SYNTHESISE
+        # what you have". Reserving the final's cost up front is what turns a
+        # timeout mid-answer into a shorter answer that actually arrives.
+        if round_idx > 0 and _remaining_total() <= _cp.FINAL_RESERVE_SECONDS:
+            stop_reason = "the total time budget was nearly spent"
+            await _record({
+                "phase": "reflect",
+                "kind": "total_budget_reserve_reached",
+                "round": round_idx,
+                "elapsed_s": round(_elapsed(), 1),
+                "remaining_s": round(_remaining_total(), 1),
+            })
+            break
+        # SPEND guard. Checked before the call, so the ceiling is never
+        # breached by the round that discovers it — the point is not to spend
+        # the money. This is the guard that would have ended c8a0105c around
+        # round 5 instead of round 10, with the same answer and a fifth of the
+        # bill; every clock in the loop passed that run.
+        spent_reason = spend.exhausted_reason()
+        if round_idx > 0 and spent_reason is not None:
+            stop_reason = spent_reason
+            await _record({
+                "phase": "reflect",
+                "kind": "spend_ceiling_reached",
+                "round": round_idx,
+                "reason": spent_reason,
+                **spend.snapshot(),
             })
             break
         rounds_used = round_idx + 1
+        round_budget = max(1.0, min(deps.round_deadline_seconds, _remaining_total()))
         try:
-            content, usage = await _reason_via_llm(
-                active_llm,
-                messages=messages,
-                max_tokens=deps.max_tokens,
-                temperature=deps.temperature,
-                system_prompt=deps.system_prompt,
+            content, usage, llm_response = await asyncio.wait_for(
+                _reason_with_response(
+                    active_llm,
+                    messages=messages,
+                    max_tokens=deps.max_tokens,
+                    temperature=deps.temperature,
+                    system_prompt=effective_system_prompt,
+                    tools=native_tool_payload,
+                ),
+                timeout=round_budget,
             )
+        except asyncio.TimeoutError:
+            # A single stuck call must not consume the run. Record it and fall
+            # through to the forced final with whatever the prior rounds got.
+            stop_reason = (
+                f"round {rounds_used} exceeded its {round_budget:.0f}s deadline"
+            )
+            await _record({
+                "phase": "reason",
+                "kind": "round_deadline_exceeded",
+                "round": rounds_used,
+                "deadline_s": round(round_budget, 1),
+            })
+            rounds_used = max(0, rounds_used - 1)
+            break
         except Exception:
             await _record({"phase": "reason", "kind": "llm_error", "round": rounds_used})
             raise
+        pending_tool_results = False
         last_raw = content
 
         for k in aggregate_usage:
             aggregate_usage[k] += usage.get(k, 0)
+        spend.record(active_llm, llm_response, usage)
+        # The running spend rides ON the existing per-round frame rather than
+        # in one of its own: the panel gets a live figure every round, the
+        # trace gains the per-round cost history the c8a0105c post-mortem could
+        # not reconstruct, and the ReAct phase accounting is untouched — a
+        # separate frame would have doubled every "reason" count in the trace.
         await _record({
             "phase": "reason",
             "kind": "llm_call",
             "round": rounds_used,
             "tokens": usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0),
+            "usage": spend.snapshot(),
         })
 
-        parsed = _parse_round_reply(content)
+        # --- Round protocol: native vs JSON-in-text (D-7) --------------
+        # On the native route the reply is unambiguous by construction: tool
+        # calls came back in their own field, or they didn't and this is the
+        # answer. There is no third outcome, so the `unparseable` branch below
+        # is unreachable there — which is the point.
+        native_round: _cp.NativeRound | None = None
+        if native_tools_route:
+            native_round = _cp.parse_native_reply(
+                llm_response,
+                provider=native_wire,
+                normalize_calls=_normalize_round_calls,
+            )
+            if native_round.is_final:
+                salvaged = _cp.text_tool_round_fallback(
+                    content, normalize_calls=_normalize_round_calls,
+                )
+                if salvaged:
+                    # The handler took `tools` and the model answered in the
+                    # old JSON anyway. Treat it as the tool round it is rather
+                    # than persisting JSON as an answer.
+                    await _record({
+                        "phase": "reflect",
+                        "kind": "native_text_tool_fallback",
+                        "round": rounds_used,
+                        "calls": len(salvaged),
+                    })
+                    native_round = _cp.synthetic_round(salvaged)
+                    parsed = {"tools": salvaged}
+                else:
+                    # No tool call ⇒ the text IS the answer. Read its metadata
+                    # if it carried the sentinel header block (or, for a
+                    # replayed session, the legacy JSON final), and otherwise
+                    # take the prose as-is rather than burning a round asking
+                    # for a re-format: the headers are metadata, the prose is
+                    # the product.
+                    #
+                    # Deliberately NOT ``_parse_round_reply`` here. That helper
+                    # also recognises a TOOL-call JSON object, and on this route
+                    # a bare tool object in the text is handled above — letting
+                    # it through would produce a "final" with no answer in it.
+                    #
+                    # ONE builder (review defect 4). This arm used to inline its
+                    # own ``uncertainty: 0.6`` fallback, and the forced-final arm
+                    # below inlined a second copy — so a reply the parser bounced
+                    # got a DEFAULT uncertainty in the header over an answer that
+                    # stated the model's own. ``final_payload_from_text`` owns the
+                    # ladder and the single default.
+                    parsed = final_payload_from_text(content)
+            else:
+                parsed = {"tools": list(native_round.batch)}
+        else:
+            parsed = _parse_round_reply(content)
         if not parsed:
             # Planner produced unparseable output — feed the parse-error
             # back so it can recover.  Cheaper than aborting.
@@ -1852,8 +1620,17 @@ async def run_method(
         # into one list of independent calls. A batch runs CONCURRENTLY and
         # counts as ONE round (the latency lever — an N-tool survey costs one
         # round-trip, not N), directly attacking the long-loop 504.
-        calls = _normalize_calls(parsed)
-        if not calls:
+        # Flatten the round's calls, and on the native route remember how many
+        # belong to each emitted block: every tool_use id MUST get exactly one
+        # result back, so the batch cap has to be applied with the block
+        # boundaries still visible.
+        if native_round is not None:
+            # ``_normalize_calls`` already applied the batch cap and the dedupe
+            # when the round was parsed, so this IS the executable list.
+            calls = list(native_round.batch)
+        else:
+            calls = _normalize_calls(parsed)
+        if not calls and native_round is None:
             # Neither a tool/tools call nor a final payload — prompt for a
             # corrected reply.
             await _record({
@@ -1904,12 +1681,22 @@ async def run_method(
             for call in calls
         ])
 
+        # Render this round's bodies under ONE shared bound instead of a
+        # per-tool one. The per-tool 8 KB bound multiplied by the batch width:
+        # five calls could put 40 KB into the transcript, and the transcript is
+        # replayed on every later round. The round bound (16 KB) is allocated
+        # max-min fair, so a small result is never truncated to make room for a
+        # large sibling — the cut lands on the payloads that hold the tokens.
+        round_bodies = _tc.allocate_round_bodies(
+            [r[0] for r in results], render=_bounded_tool_json,
+        )
+
         # Coalesce: record each call (with a compact result summary for the
         # trace), lift refs, and append one "tool"-role message per call before
         # the next round. The "tool" role follows OpenAI's tool-use convention;
         # vLLM passes it through as a system-of-record message.
         tool_messages: list[Mapping[str, Any]] = []
-        for (tool_result, meta), call in zip(results, calls):
+        for idx, ((tool_result, meta), call) in enumerate(zip(results, calls)):
             new_refs = _refs_from_tool_result(tool_result)
             if new_refs:
                 collected_refs = _merge_refs(collected_refs, new_refs)
@@ -1949,71 +1736,239 @@ async def run_method(
                 "role": "tool",
                 "name": call["tool"],
                 # R2 / W2-T3: JSON-safe cut with an explicit truncated marker —
-                # never a blind mid-JSON chop the model can't detect.
-                "content": _bounded_tool_json(tool_result, 8000),
+                # never a blind mid-JSON chop the model can't detect. The cut
+                # is the same one; only the budget it is given changed.
+                "content": round_bodies[idx],
             })
-        messages = messages + [
-            {"role": "assistant", "content": content},
-            *tool_messages,
-        ]
+        if native_round is not None:
+            # Native route: hand the results back through the SAME structured
+            # channel the calls came in on, in the shape this provider wants.
+            # Partition the flat results by block so each call id is answered.
+            # The bodies are already rendered under the round bound, so the
+            # builder is handed strings and an identity renderer rather than
+            # being asked to re-cut them at a per-tool limit.
+            messages = messages + [
+                _cp.native_assistant_message(native_round, wire=native_wire),
+                *_cp.native_tool_result_messages(
+                    native_round,
+                    round_bodies,
+                    wire=native_wire,
+                    bounded_json=lambda body, _limit: body,
+                ),
+            ]
+        else:
+            messages = messages + [
+                {"role": "assistant", "content": content},
+                *tool_messages,
+            ]
+        pending_tool_results = True
+
+        # COMPACTION. The round just appended keeps its full bodies — it is
+        # what the next call reasons over. Everything older collapses to refs
+        # (verbatim, because they are what the answer cites) plus a one-line
+        # digest. The raw payloads are already on ``steps`` and go to the
+        # persisted trace, so nothing is lost to the operator; what is lost is
+        # paying to re-read them on every remaining round.
+        messages, compaction = _tc.compact_prior_tool_messages(messages)
+        if compaction.bodies_compacted:
+            await _record({
+                "phase": "reflect",
+                "kind": "compaction",
+                "round": rounds_used,
+                **compaction.as_step(),
+            })
 
     # ---- Force a final turn if the cap was hit without final --------
     if final_payload is None:
         forced_final = True
-        force_system = (
-            deps.system_prompt
-            + "\n\nYou have reached the tool-round cap. You MUST now produce "
-            f"the FINAL reply — the {FINAL_SENTINEL} line, its header lines, "
-            "then your answer as markdown — using only what the tool calls "
-            "already returned. Do not request more tools, and do not wrap the "
-            "answer in JSON."
-        )
-        try:
-            content, usage = await _reason_via_llm(
-                active_llm,
-                messages=messages
-                + [
-                    {
-                        "role": "user",
-                        "content": (
-                            "Round cap reached. Emit the final answer now, in "
-                            f"the {FINAL_SENTINEL} form."
-                        ),
-                    },
-                ],
-                max_tokens=deps.max_tokens,
-                temperature=deps.temperature,
-                system_prompt=force_system,
-            )
-            for k in aggregate_usage:
-                aggregate_usage[k] += usage.get(k, 0)
-            last_raw = content
+        # D-7: the forced final gets its OWN slice of the total budget, and if
+        # there is none left it does not run at all. An unbounded synthesis
+        # here is what turned run 3ae77c64 from "a shorter answer" into "no
+        # answer": the loop passed its round check at 269s and was still
+        # generating when the front door's clock ran out.
+        # THE c8a0105c FIX. This was ``min(round_deadline, remaining)`` — the
+        # synthesis was handed a drilling round's 150s slice, ran long on a
+        # large transcript, and was cancelled with ~11k characters of finished
+        # answer in flight, all of it billed and all of it discarded.
+        #
+        # The synthesis is not a drilling round. It is the turn that makes the
+        # product, it is the longest generation of the run by construction, and
+        # it happens when the prompt is at its biggest. So it gets the
+        # REMAINDER of the budget, floored — ``max``, not ``min``. Overrunning
+        # the total by a minute to finish the answer is the correct trade; the
+        # detached run's invoke timeout (600s) is the real outer bound.
+        final_budget = _cp.final_synthesis_budget(_remaining_total())
+        if final_budget < _MIN_FINAL_SECONDS:
             await _record({
-                "phase": "reason",
-                "kind": "forced_final",
-                "tokens": usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0),
+                "phase": "reflect",
+                "kind": "degraded_final",
+                "reason": "no_budget_for_synthesis",
+                "elapsed_s": round(_elapsed(), 1),
             })
-            final_payload = _parse_round_reply(content)
-            if final_payload is None:
+            synthesis_status = "none"
+            final_payload = _cp.degraded_final_payload(
+                rounds_used=rounds_used,
+                rounds_available=effective_rounds,
+                elapsed_s=_elapsed(),
+                reason=stop_reason,
+                last_tool_incorporated=not pending_tool_results,
+            )
+        # ONE definition of this prompt, shared with the recovery path in
+        # ``consult_transcript``. A second copy of the wording here is exactly
+        # what would make "the replay sends the same prompt" quietly false.
+        force_system = _tx.synthesis_system(effective_system_prompt, FINAL_SENTINEL)
+        synthesis_messages = messages + [
+            {"role": "user", "content": _tx.synthesis_instruction(FINAL_SENTINEL)},
+        ]
+        # Record the request BEFORE sending it: a run that is cut mid-synthesis
+        # is precisely the run whose prompt we will want back, and recording it
+        # after the call would miss exactly that case.
+        replay_transcript = _tx.build_transcript(
+            system=force_system, messages=synthesis_messages,
+        )
+        if final_payload is not None:
+            pass  # already degraded above — no budget left to synthesise in
+        else:
+            # Watch the synthesis as it streams. The handler has always
+            # streamed this generation off the wire; what it lacked was a way
+            # to let the caller hold the prefix. With a sink installed, a
+            # timeout cancels the call but leaves every delivered token in
+            # ``sink`` — which is the difference between an apology and an
+            # answer. Deltas are relayed live so the panel shows the answer
+            # forming rather than a spinner.
+            #
+            # Relay is throttled by CHARACTERS, not per delta: Anthropic emits
+            # many small text_deltas and one frame each would flood the SSE
+            # relay's 256-slot queue, which drops on full — the live answer
+            # would arrive with holes in it.
+            relay_buf: list[str] = []
+            relay_len = 0
+            relay_tasks: set[Any] = set()
+
+            def _flush_delta() -> None:
+                nonlocal relay_len
+                if not relay_buf:
+                    return
+                chunk = "".join(relay_buf)
+                relay_buf.clear()
+                relay_len = 0
+                task = asyncio.ensure_future(
+                    _emit_step({
+                        "phase": "narrate",
+                        "kind": "answer_delta",
+                        "text": chunk,
+                    })
+                )
+                relay_tasks.add(task)
+                task.add_done_callback(relay_tasks.discard)
+
+            def _on_delta(chunk: str) -> None:
+                nonlocal relay_len
+                relay_buf.append(chunk)
+                relay_len += len(chunk)
+                if relay_len >= _ANSWER_DELTA_CHARS:
+                    _flush_delta()
+
+            sink = TextDeltaSink(on_delta=_on_delta)
+            try:
+                # Tools are WITHHELD here (no ``tools=``), on both routes. On
+                # the native route that is what leaves "reply with text" as the
+                # only available move — which is precisely the answer we want.
+                with capture_text_deltas(sink):
+                    content, usage, synth_response = await asyncio.wait_for(
+                        _reason_with_response(
+                            active_llm,
+                            messages=synthesis_messages,
+                            max_tokens=deps.max_tokens,
+                            temperature=deps.temperature,
+                            system_prompt=force_system,
+                        ),
+                        timeout=final_budget,
+                    )
+                _flush_delta()
+                for k in aggregate_usage:
+                    aggregate_usage[k] += usage.get(k, 0)
+                spend.record(active_llm, synth_response, usage)
+                last_raw = content
+                await _record({
+                    "phase": "reason",
+                    "kind": "forced_final",
+                    "tokens": usage.get("prompt_tokens", 0)
+                    + usage.get("completion_tokens", 0),
+                })
                 # Forced-final is the terminal turn (tools withheld). If the
-                # model wrote a bare prose answer — no sentinel header block and
-                # no JSON wrapper — use it rather than discarding a real answer
-                # as "(no answer produced)". Under the markdown contract that
-                # prose IS the answer minus its metadata, so accepting it costs
-                # only the metadata (a stray leading sentinel is dropped).
-                salvaged = _strip_leading_sentinel(content)
-                if salvaged:
-                    final_payload = {
-                        "final": True,
-                        "answer": salvaged,
-                        "uncertainty": 0.6,
-                    }
-        except Exception:
-            await _record({"phase": "reason", "kind": "forced_final_error"})
-            # Re-raise — let the runtime classify (transient vs hard).
-            raise
+                # model wrote a bare prose answer — no sentinel header block
+                # and no JSON wrapper — use it rather than discarding a real
+                # answer as "(no answer produced)". Under the markdown
+                # contract that prose IS the answer minus its metadata, so
+                # accepting it costs only the metadata. The SAME builder as
+                # the native arm above, so there is exactly one place that can
+                # decide this turn's uncertainty (review defect 4).
+                final_payload = final_payload_from_text(content)
+                if not final_payload.get("answer"):
+                    final_payload = None
+            except asyncio.TimeoutError:
+                # The synthesis ran past its slice. What happens next depends
+                # on whether it had produced anything: DELIVER the partial if
+                # it did (it is real, finished prose, and it is already paid
+                # for), and only fall back to the honest apology if the model
+                # never got a token out.
+                _flush_delta()
+                cut_reason = (
+                    f"the synthesis exceeded its {final_budget:.0f}s slice of "
+                    f"the time budget"
+                )
+                partial_text = sink.text
+                if partial_text.strip():
+                    last_raw = partial_text
+                    await _record({
+                        "phase": "reflect",
+                        "kind": "partial_final",
+                        "reason": "synthesis_deadline_exceeded",
+                        "deadline_s": round(final_budget, 1),
+                        "elapsed_s": round(_elapsed(), 1),
+                        "chars": len(partial_text),
+                        "approx_tokens": sink.approx_tokens,
+                    })
+                    synthesis_status = "partial"
+                    final_payload = _cp.partial_final_payload(
+                        partial_text=partial_text,
+                        rounds_used=rounds_used,
+                        rounds_available=effective_rounds,
+                        elapsed_s=_elapsed(),
+                        reason=cut_reason,
+                        last_tool_incorporated=not pending_tool_results,
+                    )
+                else:
+                    await _record({
+                        "phase": "reflect",
+                        "kind": "degraded_final",
+                        "reason": "synthesis_deadline_exceeded",
+                        "deadline_s": round(final_budget, 1),
+                        "elapsed_s": round(_elapsed(), 1),
+                    })
+                    synthesis_status = "none"
+                    final_payload = _cp.degraded_final_payload(
+                        rounds_used=rounds_used,
+                        rounds_available=effective_rounds,
+                        elapsed_s=_elapsed(),
+                        reason=cut_reason,
+                        last_tool_incorporated=not pending_tool_results,
+                    )
+            except Exception:
+                await _record({"phase": "reason", "kind": "forced_final_error"})
+                # Re-raise — let the runtime classify (transient vs hard).
+                raise
 
     # --- REFLECT / NARRATE --------------------------------------------
+    # SYNTHESIS STATUS is a first-class fact about the turn, not something to
+    # be re-derived by scanning the step trace for a kind name. "complete" =
+    # the model finished; "partial" = it was cut and we are delivering what it
+    # wrote; "none" = it never produced a token. Only the last two are worth
+    # offering "Synthesize from evidence" on, and the front door decides that
+    # from this field.
+    if final_payload is None:
+        synthesis_status = "none"
     consult = _build_consult_response(
         question=question,
         final_payload=final_payload,
@@ -2021,6 +1976,19 @@ async def run_method(
         rounds_used=rounds_used,
         forced_final=forced_final,
         subprovider=getattr(active_llm, "subprovider", None),
+        extra_data={
+            "synthesis_status": synthesis_status,
+            "resynthesizable": synthesis_status != "complete",
+            "usage": spend.snapshot(),
+            # Carried ONLY for a run that may need finishing. A run that
+            # answered has nothing to replay, and storing its prompt would put
+            # a copy of every transcript in the turns table for no reader.
+            **(
+                {"replay_transcript": replay_transcript}
+                if replay_transcript is not None and synthesis_status != "complete"
+                else {}
+            ),
+        },
     )
     # Project the per-round tool trace into the payload's data bag so the
     # consult front door (consult_api._project_consult_response reads
@@ -2045,6 +2013,26 @@ async def run_method(
     # (previously never populated). Rounds are hard-capped (ROUNDS_CEILING), so
     # the trace is bounded; the raw fields on unparseable steps are truncated.
     data_update: dict[str, Any] = {"tool_calls": tool_trace, "steps": list(steps)}
+    # 7g-2 — THE PROVENANCE CENSUS. "Mostly model knowledge" was a judgement a
+    # reader had to take on trust; this is the count behind it. Composed HERE,
+    # on the server, off the answer's own cited refs and its own prose: a
+    # share the client derived could disagree with the answer it is printed
+    # beside. Best-effort by contract — a census that cannot be measured
+    # reports None per class (never a fabricated zero) and never costs the
+    # caller an answer.
+    try:
+        _classification = None
+        _classify = getattr(deps.substrate, "classify_cited_refs", None)
+        _cited = [str(r) for r in consult.cited_substrate_refs]
+        if callable(_classify) and _cited:
+            _classification = await _classify(refs=_cited)
+        data_update["provenance_census"] = build_provenance_census(
+            answer=consult.answer,
+            cited_refs=_cited,
+            classification=_classification,
+        )
+    except Exception as exc:  # noqa: BLE001 — a census never fails an answer
+        logger.warning("consult.provenance_census.failed err=%s", exc)
     # Also stash the raw final reply so the operator can audit
     # malformed-but-recovered cases.
     if final_payload is None:

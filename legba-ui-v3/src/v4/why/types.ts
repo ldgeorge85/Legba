@@ -31,4 +31,6 @@ export const SELECTION_TO_ROW_KIND: Partial<Record<string, RowKind>> = {
   finding: 'finding',
   situation: 'situation',
   signal: 'signal',
+  // V3/P6 — `event` is a first-class root kind in the lineage walk.
+  event: 'event',
 }

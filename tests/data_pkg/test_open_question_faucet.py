@@ -324,3 +324,63 @@ def test_unit_descriptor_carries_open_question_block(name: str):
         f"{name}: missing the no-quota rule"
     )
     assert '"refs"' in prompt, f"{name}: missing the refs tie-in"
+
+
+# ---------------------------------------------------------------------------
+# THE FAUCET NEVER COMMANDS A RUN (2026-09-07)
+#
+# The live 03:37Z corpus_researcher run answered a FAUCET question — a 35-day-
+# old unit_payload row about a Sizewell B wildfire — while a same-week
+# DISPATCHED coverage_floor gap sat at [Q1] carrying its desk's scope. A faucet
+# question is a unit noticing its own uncertainty: no alert fired, nobody was
+# told, no desk is waiting on it. It belongs on the backlog and a self-selecting
+# run may still take it; it must never become a run's ASSIGNMENT. That line is
+# drawn by reading the faucet's OWN marker through the shared reader, so a
+# future change to the marker shape cannot silently promote the faucet into a
+# dispatcher.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_a_faucet_question_reads_as_unit_payload_and_commands_nothing(conn):
+    from legba.runtime.dispatched_question import (
+        DISPATCHED_HARVEST_CLASSES,
+        select_dispatched_assignment,
+    )
+    from legba.runtime.grounding import GroundingOpenQuestion, harvest_class_of
+
+    finding_id = uuid4()
+    tgt = f"country_oq_{uuid4().hex[:8]}"
+    written = await convert_open_questions(
+        conn,
+        finding_data={
+            "citations": [],
+            "open_questions": [
+                {"question": "Will the wildfire near Sizewell B force an outage?",
+                 "refs": []},
+            ],
+        },
+        finding_id=finding_id,
+        analyst_ctx=_ctx(tgt),
+    )
+    assert written == 1
+    rows = await _rows_for_finding(conn, finding_id)
+    assert len(rows) == 1
+
+    # The shared reader classes it unit_payload — NOT one of the two classes an
+    # alert fires on.
+    harvest_class = harvest_class_of(rows[0]["diagnostic_evidence"])
+    assert harvest_class == "unit_payload"
+    assert harvest_class not in DISPATCHED_HARVEST_CLASSES
+
+    # So even carrying the target_id the faucet stamps, and even with the
+    # forward reach and desk salience that used to win it tier 1, it cannot
+    # command a run.
+    question = GroundingOpenQuestion(
+        id=rows[0]["id"], thesis=rows[0]["thesis"], harvest_class=harvest_class,
+        target_id=rows[0]["target_id"], produced_at=rows[0]["produced_at"],
+        live_reach=3, desk_salience=0.9,
+    )
+    assert question.target_id == tgt
+    assert select_dispatched_assignment([question]) is None

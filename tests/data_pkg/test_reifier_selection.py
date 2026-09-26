@@ -33,6 +33,7 @@ from legba.data.analysts.edge_qualification import (
     RECOMMENDED_BAR,
 )
 from legba.data.analysts.reifier_selection import (
+    ALREADY_REIFIED_COUNT_SQL,
     CANDIDATE_FETCH_SQL,
     MIN_EDGE_CONFIDENCE,
     PENDING_STATUS,
@@ -171,10 +172,25 @@ async def test_the_scan_sql_binds_status_and_is_read_only():
     assert "pe.status = $1" in QUALIFICATION_SCAN_SQL
     assert "pe.status = $2" in CANDIDATE_FETCH_SQL
     assert PENDING_STATUS == "pending"
-    for sql in (QUALIFICATION_SCAN_SQL, CANDIDATE_FETCH_SQL):
+    for sql in (QUALIFICATION_SCAN_SQL, CANDIDATE_FETCH_SQL, ALREADY_REIFIED_COUNT_SQL):
         lowered = sql.lower()
         for verb in ("insert ", "update ", "delete ", "drop ", "truncate "):
             assert verb not in lowered
+
+
+async def test_the_already_reified_guard_now_lives_in_the_scan_sql():
+    """2026-09-23 — the guard that used to run AFTER the fact, in Python, moved
+    INTO the scan itself (:data:`_ALREADY_REIFIED_GUARD_SQL`, negated here).
+    Pin its presence + the marker so a future edit cannot quietly move it back
+    out without this test noticing."""
+    assert "reifier_selection.py:already_reified" in QUALIFICATION_SCAN_SQL
+    assert "NOT (" in QUALIFICATION_SCAN_SQL
+    assert "nexuses" in QUALIFICATION_SCAN_SQL
+    assert "entity_profiles" in QUALIFICATION_SCAN_SQL
+    # The companion count query asks the SAME question, un-negated.
+    assert "nexuses" in ALREADY_REIFIED_COUNT_SQL
+    assert "entity_profiles" in ALREADY_REIFIED_COUNT_SQL
+    assert "NOT (" not in ALREADY_REIFIED_COUNT_SQL
 
 
 async def test_the_window_is_ordered_by_qualification_not_confidence():
@@ -288,6 +304,41 @@ async def test_superseded_nexus_does_not_retire_a_candidate(pg_pool):
     assert (a, b) in {(r["source_entity"], r["target_entity"]) for r in rows}
 
 
+async def test_already_reified_counter_equals_the_sql_excluded_count(pg_pool):
+    """2026-09-23 — the guard now runs INSIDE the SQL scan, so an excluded row
+    is invisible to ``scan`` and can't be counted by ``len()``/loop arithmetic
+    any more. The receipt's ``already_reified`` counter must still be EXACT —
+    measured here as a DELTA (before vs. after seeding three known-reified
+    pairs) so ambient rows already sitting in the shared session DB can never
+    make an exact-count assertion flaky.
+    """
+    tag = uuid4().hex[:8]
+    async with pg_pool.acquire() as conn:
+        _, baseline = await select_candidates(conn, limit=1)
+        before = baseline.already_reified
+
+        reified_pairs = []
+        for i in range(3):
+            a, b = f"CountReified{tag}A{i}", f"CountReified{tag}B{i}"
+            await _seed_nexus(conn, subject=a, object_=b)
+            await _seed_edge(conn, src=a, tgt=b, status="pending", conf=0.70)
+            reified_pairs.append((a, b))
+        live_pairs = []
+        for i in range(2):
+            a, b = f"CountLive{tag}A{i}", f"CountLive{tag}B{i}"
+            await _seed_edge(conn, src=a, tgt=b, status="pending", conf=0.70)
+            live_pairs.append((a, b))
+
+        rows, counters = await select_candidates(conn, limit=500)
+
+    names = {(r["source_entity"], r["target_entity"]) for r in rows}
+    for pair in reified_pairs:
+        assert pair not in names, "an already-reified pair reached the window"
+    for pair in live_pairs:
+        assert pair in names, "a live pair was wrongly excluded"
+    assert counters.already_reified == before + 3
+
+
 async def test_already_reified_probe_returns_asked_orientation(pg_pool):
     tag = uuid4().hex[:8]
     a, b = f"eta{tag}".lower(), f"theta{tag}".lower()
@@ -354,10 +405,15 @@ async def test_counters_serialise_flat_for_the_run_receipt(pg_pool):
         _rows, counters = await select_candidates(conn, limit=1)
     d = counters.as_dict()
     assert set(d) == {
-        "examined", "qualified", "skipped_endpoints", "already_reified",
-        "keeper_self_loop", "eligible", "selected",
+        "examined", "qualified", "scan_limit_binding", "skipped_endpoints",
+        "already_reified", "keeper_self_loop", "eligible", "selected",
     }
-    assert all(isinstance(v, int) for v in d.values())
+    # V3/P5: scan_limit_binding is a bool (jsonb `true`, not the integer 1 an
+    # int()-map would make) — every other counter stays an int.
+    assert isinstance(d["scan_limit_binding"], bool)
+    assert all(
+        isinstance(v, int) for k, v in d.items() if k != "scan_limit_binding"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -483,3 +539,34 @@ async def test_below_bar_multi_source_candidate_is_held_back(pg_pool):
     wide_names = {(r["source_entity"], r["target_entity"]) for r in wide}
     assert (a, b) not in names
     assert (a, b) in wide_names
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_a_rejected_candidate_waits_out_the_cooldown(pg_pool, clean_tables):
+    """H9 — a pending row stamped ``reviewed_at`` inside the cooldown is not offered
+    again; past the cooldown (or with the cooldown at 0) it re-enters the window."""
+    await clean_tables("proposed_edges")
+    tag = uuid4().hex[:6]
+    async with pg_pool.acquire() as conn:
+        await _seed_edge(conn, src=f"Cool A {tag}", tgt=f"Cool B {tag}", status="pending", conf=0.7)
+        await _seed_edge(conn, src=f"Cool C {tag}", tgt=f"Cool D {tag}", status="pending", conf=0.7)
+        await conn.execute(
+            "UPDATE proposed_edges SET reviewed_at = now() WHERE source_entity = $1",
+            f"Cool A {tag}",
+        )
+        await conn.execute(
+            "UPDATE proposed_edges SET reviewed_at = now() - interval '8 days' WHERE source_entity = $1",
+            f"Cool C {tag}",
+        )
+        rows, _ = await select_candidates(conn, limit=500)
+        offered = {r["source_entity"] for r in rows}
+        assert f"Cool A {tag}" not in offered, "stamped 8 minutes ago: inside the 7-day cooldown"
+        assert f"Cool C {tag}" in offered, "stamped 8 days ago: past the cooldown"
+        rows, _ = await select_candidates(conn, limit=500, reject_cooldown_days=0)
+        assert f"Cool A {tag}" in {r["source_entity"] for r in rows}, "cooldown 0 re-admits it"
+        # the write-back helper stamps only pending rows and reports the count
+        from legba.data.analysts.reifier_selection import mark_rejected_candidates
+        ids = await conn.fetch("SELECT id FROM proposed_edges WHERE source_entity = $1", f"Cool C {tag}")
+        assert await mark_rejected_candidates(conn, [r["id"] for r in ids]) == 1
+        assert await mark_rejected_candidates(conn, []) == 0

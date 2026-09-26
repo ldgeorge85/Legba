@@ -133,7 +133,8 @@ export const LAYOUT_PRESETS: LayoutPreset[] = [
   {
     id: 'analysis',
     label: 'Analysis',
-    description: 'Optimizer, eval scorecard, and the consult workbench (chat + deep-analysis toggle).',
+    description:
+      'Optimizer, eval scorecard, the divergence map, and the consult workbench (chat + deep-analysis toggle).',
     panels: [
       { kind: 'system.optimizer' },
       {
@@ -145,6 +146,14 @@ export const LAYOUT_PRESETS: LayoutPreset[] = [
         // so the preset no longer opens a separate system.deep_consult tile.
         kind: 'system.consult',
         position: { referencePanel: 'system.optimizer', direction: 'right' },
+      },
+      {
+        // 7b-v — the divergence map tabs in beside Consult rather than taking
+        // a fourth quadrant: it is read against the scorecard and the optimizer
+        // queue on the same errand ("what moved, and does the instrument agree
+        // it moved"), and the preset already fills the canvas at three tiles.
+        kind: 'system.layer_divergence',
+        position: { referencePanel: 'system.consult', direction: 'within' },
       },
     ],
   },

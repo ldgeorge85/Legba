@@ -447,10 +447,10 @@ else
 fi
 
 # (b) nlp_client built (the enrichment-live signal in the boot log)
-if dc logs legba-runtime-dapr 2>/dev/null | grep -q 'nlp_client.built'; then
-  ok "runtime nlp_client.built (enrichment live)"
+if dc logs legba-runtime-dapr 2>/dev/null | grep -q 'nlp_client_factory.built'; then
+  ok "runtime nlp_client_factory.built (enrichment live)"
 else
-  warn "runtime boot log shows no nlp_client.built line — enrichment may be off"; VERIFY_FAIL=1
+  warn "runtime boot log shows no nlp_client_factory.built line — enrichment may be off"; VERIFY_FAIL=1
 fi
 if dc logs legba-runtime-dapr 2>/dev/null | grep -qi 'enrichment_build_failed'; then
   warn "runtime boot log shows enrichment_build_failed"; VERIFY_FAIL=1

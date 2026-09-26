@@ -140,6 +140,12 @@ class QdrantConfig:
     # future resolver maps `vector:<corpus>` → collection by name with no table.
     world_context_collection: str = "world_context"
     tradecraft_collection: str = "tradecraft"
+    # The `exemplar` corpus (EXEMPLAR_SHELF_DRAFT_2026-07-31.md §4 step 4): a
+    # THIRD Lane-4 RAG collection, template source class, holding the
+    # doctrine/baseline material behind the curated pattern-thread shelf
+    # (`legba.data.seed.exemplar_shelf`) — NEVER live evidence. Same
+    # dim/distance as the other two (one bge-m3 embedder serves all three).
+    exemplar_collection: str = "exemplar"
 
     @classmethod
     def from_env(cls) -> "QdrantConfig":
@@ -157,6 +163,9 @@ class QdrantConfig:
             ),
             tradecraft_collection=os.getenv(
                 "LEGBA_DATA_QDRANT_TRADECRAFT", "tradecraft"
+            ),
+            exemplar_collection=os.getenv(
+                "LEGBA_DATA_QDRANT_EXEMPLAR", "exemplar"
             ),
         )
 

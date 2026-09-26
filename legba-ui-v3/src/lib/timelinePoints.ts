@@ -9,9 +9,11 @@
  *   1 = signal           (source emissions)
  *   2 = finding          (analyst-output emission marks)
  *   3 = situation        (situation lifecycle — open → last_event)
+ *   4 = event            (V3/P6 bounded occurrences — time_start → time_end,
+ *                         lifecycle state as the badge)
  */
 
-import { SEVERITY_COLOR as SEVERITY_RAMP } from '@/v4/world/types'
+import { SEVERITY_COLOR as SEVERITY_RAMP, EVENT_LIFECYCLE_COLOR as EVENT_LC } from '@/v4/world/types'
 
 export interface TLSignal {
   id: string
@@ -45,25 +47,50 @@ export interface TLSituation {
   intensity_score: number
 }
 
-export type TimelineKind = 'signal' | 'finding' | 'situation'
+/** Substrate event row (V3/P6 — the `/v3/events` wire shape). */
+export interface TLEvent {
+  id: string
+  title: string
+  /** The five-state lifecycle vocabulary (emerging/developing/active/
+   *  evolving/resolved) — rendered as the span/point badge. */
+  lifecycle_state: string
+  severity?: string | null
+  category?: string | null
+  /** Occurrence bounds — either may be null (an ongoing event carries no
+   *  time_end; produced_at is the placement fallback when both are null). */
+  time_start?: string | null
+  time_end?: string | null
+  produced_at?: string | null
+}
+
+export type TimelineKind = 'signal' | 'finding' | 'situation' | 'event'
 
 export const BAND: Record<TimelineKind, number> = {
   signal: 1,
   finding: 2,
   situation: 3,
+  event: 4,
 }
 
 export const BAND_LABELS: Record<number, TimelineKind> = {
   1: 'signal',
   2: 'finding',
   3: 'situation',
+  4: 'event',
 }
 
 export const KIND_COLOR: Record<TimelineKind, string> = {
   signal: '#60a5fa', // blue-400
   finding: '#fbbf24', // amber-400
   situation: '#fb7185', // rose-400
+  event: '#a78bfa', // violet-400
 }
+
+/** V3/P6 — the event five-state lifecycle → badge color. Re-exported from
+ *  the ONE definition in `v4/world/types.ts` (same rule as the severity
+ *  ramp) so the timeline, the validity panel and the World map can never
+ *  drift onto different colors for the same state. */
+export const EVENT_LIFECYCLE_COLOR: Record<string, string> = EVENT_LC
 
 export interface TimelinePoint {
   id: string
@@ -179,6 +206,70 @@ export function situationPoints(rows: TLSituation[]): TimelinePoint[] {
     .filter((p) => Number.isFinite(p.ts))
 }
 
+/** An event occurrence span (V3/P6) — time_start → time_end, the lifecycle
+ *  state carried for the badge color; `open` marks a still-unfolding event
+ *  (no time_end — resolved to `now` for layout only, never a fabricated
+ *  close, same honesty rule as `timelineWindows`). */
+export interface EventSpan {
+  id: string
+  title: string
+  lifecycle: string
+  severity?: string | null
+  band: number
+  start: number // epoch ms — time_start (produced_at fallback)
+  end: number   // epoch ms — time_end (or `nowMs` when open)
+  open: boolean
+}
+
+/** Event emission marks — one point at the event's start anchor. */
+export function eventPoints(rows: TLEvent[]): TimelinePoint[] {
+  return rows
+    .map((e) => {
+      const anchor = ms(e.time_start ?? undefined)
+      const fallback = ms(e.produced_at ?? undefined)
+      return {
+        id: e.id,
+        title: e.title,
+        ts: Number.isFinite(anchor) ? anchor : fallback,
+        band: BAND.event,
+        kind: 'event' as const,
+        subtitle: e.lifecycle_state,
+        severity: e.severity,
+      }
+    })
+    .filter((p) => Number.isFinite(p.ts))
+}
+
+/** Event occurrence spans — time_start → time_end (V3/P6). A row with no
+ *  placeable start is dropped, never guessed; a NULL time_end resolves to
+ *  `nowMs` for layout and flags `open` (the panel draws it as the ongoing
+ *  bar). `lifecycle` is the badge — the panel colors by
+ *  `EVENT_LIFECYCLE_COLOR`. */
+export function eventSpans(rows: TLEvent[], nowMs: number): EventSpan[] {
+  const out: EventSpan[] = []
+  for (const e of rows) {
+    const start = Number.isFinite(ms(e.time_start ?? undefined))
+      ? ms(e.time_start ?? undefined)
+      : ms(e.produced_at ?? undefined)
+    if (!Number.isFinite(start)) continue
+    const rawEnd = ms(e.time_end ?? undefined)
+    const open = e.time_end == null || !Number.isFinite(rawEnd)
+    let end = open ? nowMs : rawEnd
+    if (end < start) end = start // clock-skew clamp — never draw backwards
+    out.push({
+      id: e.id,
+      title: e.title,
+      lifecycle: e.lifecycle_state,
+      severity: e.severity,
+      band: BAND.event,
+      start,
+      end,
+      open,
+    })
+  }
+  return out
+}
+
 /** Situation lifecycle spans — opened (produced_at) → last_event_at. */
 export function situationSpans(rows: TLSituation[]): SituationSpan[] {
   const out: SituationSpan[] = []
@@ -223,7 +314,7 @@ export function partitionByEvidence(
 /** Padded [min,max] X domain across all points + spans, or undefined. */
 export function timeDomain(
   points: TimelinePoint[],
-  spans: SituationSpan[] = [],
+  spans: readonly { start: number; end: number }[] = [],
 ): [number, number] | undefined {
   const ts: number[] = []
   for (const p of points) ts.push(p.ts)

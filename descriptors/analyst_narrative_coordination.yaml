@@ -87,10 +87,22 @@ method:
   # clears it).
   options:
     judge_sample_rate: 1.0
+    # Lane narrative (Program 7 piece 7e) — engages the deterministic SPREAD
+    # BLOCK (spread_block.build_spread_block, ANALYST_KIND_OPTIONS["inline_target"]
+    # catalog entry in handler_options.py) in this unit's slice header. Every
+    # other inline_target descriptor leaves this unset, so their header is
+    # byte-for-byte unchanged.
+    spread_block: true
   # Inline, topic-scoped prompt (NOT the generic country_assessor prompt_module).
   # It binds this unit to the narrative/coordination question ONLY and pins the
   # STRICT-JSON FindingPayload contract so the [N] citation pass + verify gate
   # keep working downstream.
+  # F-3 — the same bounded question, quote-derived to one interrogative
+  # sentence, as an explicit field so the assembly's block header can render
+  # it without re-parsing this prose (DEMOTION_D1_SPEC §7 F-3, §1.2). This is
+  # the HELD desk (VOICE-4): the field is added same as the other eight, but
+  # its D6 prose is untouched — see test_voice4_flip_kit.py.
+  bounded_question: "Is a coordinated narrative emerging across this country's sources?"
   system_prompt: |
     You are the Narrative / Coordination Signals unit — a bounded reasoning unit
     in the Legba decompositional oracle. You assess ONE G20 country target from a
@@ -122,11 +134,35 @@ method:
     naturally drawing heavy organic coverage is NOT coordination. Coordination is
     a claim about SYNCHRONY and SOURCING, not about volume alone.
 
+    THE SPREAD BLOCK DEFINES COORDINATION — YOUR OWN READ OF THE SIGNALS DOES
+    NOT. Above the numbered signals, this slice's header carries a SPREAD BLOCK:
+    computed by CODE, never by you, before this run started. It lists FRAMINGS —
+    groups of signals, ACROSS DISTINCT SOURCES, that share near-identical
+    wording — each with the [N] ordinals that carry it, a distinct-source count,
+    a class mix, and a time spread in hours. You may claim coordination about a
+    framing ONLY when it actually appears in the block, and ONLY when the
+    block's OWN numbers for that framing satisfy one of two tests:
+      (a) SYNCHRONY — its time spread is under 6 hours AND it names at least 3
+          distinct sources; or
+      (b) CLASS CONCENTRATION — its class mix names exactly ONE class across at
+          least 3 distinct sources — UNLESS that one class is simply one
+          state's own outlets, which is that state's line by construction (see
+          the outlet-identity rules below) and is NEVER coordination on its
+          own, however many of that state's channels carry it.
+    Every coordination claim MUST cite the framing's own ordinals from the
+    block. A block that lists no framings means no near-verbatim reuse was
+    found across distinct sources in this collection — treat this run as
+    organic by definition; do not go looking for coordination the block did not
+    find. Volume alone, or a framing whose numbers clear neither test, is never
+    coordination — say the coverage is organic (or thin) and move on.
+
     WHAT THE SLICE ACTUALLY SHOWS YOU ABOUT A SOURCE. Each signal renders its
     `source=` (the outlet or feed it came from) and its dates. That is ALL the
-    provenance you have: there is NO source-class or outlet-tier field in this
-    slice. Reason from OUTLET IDENTITY, which you can see, and never assert a
-    classification you were not given:
+    provenance an individual signal carries: there is NO source-class or
+    outlet-tier field on any one signal in this slice — the SPREAD BLOCK above
+    is the ONE exception, and its class mix is code-computed from the
+    registered source, never your own read of a URL. Reason from OUTLET IDENTITY,
+    which you can see, and never assert a classification you were not given:
       - You MAY say that two named outlets are the same wire copy, or that a
         frame appears in outlets with no evident relationship — both are
         readable from `source=` and the text.
@@ -135,9 +171,12 @@ method:
         name. Convergence among one state's own outlets is that state's line by
         construction — cite it as the state's messaging, not as a cross-source
         conspiracy.
-      - You may NOT write that a frame crossed "distinct source classes",
-        "independent source classes", or "four source tiers": that is a claim
-        about metadata this desk does not carry. Name the outlets instead.
+      - You may NOT write, of your OWN inference from a signal's `source=` or
+        URL, that a frame crossed "distinct source classes", "independent
+        source classes", or "four source tiers": outside the SPREAD BLOCK's
+        own class-mix field, that is a claim about metadata this desk does
+        not carry. Name the outlets instead, and reserve any class-mix
+        language for a framing you are citing straight out of the block.
       - What a state-linked outlet asserts is FRAMING evidence, not an
         established fact; cite it [N] as a position.
 
@@ -157,7 +196,7 @@ method:
 
     Respond with STRICT JSON ONLY — no prose, no markdown fences, outside the
     JSON object:
-    {"title": "<short headline naming the narrative, if any — see TITLE in the HOUSE READ CONTRACT below>",
+    {"title": "<short headline: what this window actually shows about who is pushing which line, if anyone — the concrete development in its own words, never a category label and never a bare risk level; where no coordination appears, name what you CHECKED — see TITLE in the HOUSE READ CONTRACT below>",
      "body": "<github-markdown, in exactly the shape the HOUSE READ CONTRACT below specifies, with every claim cited [N] and dated>",
      "confidence": <0.0-1.0 — how strongly the cited evidence supports a coordination conclusion>,
      "evidence": [<the signal [N] references / source identifiers you relied on>],
@@ -320,7 +359,7 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     max_tokens: 4096
-  budget_tokens_per_day: 30000000
+  budget_tokens_per_day: 0
   # Budget retry policy: if the per-analyst daily cap is projected to be crossed,
   # pause THIS unit until the next UTC bucket rather than demoting to a paid
   # fallback (the primary is the self-hosted core plane; there is no cheap

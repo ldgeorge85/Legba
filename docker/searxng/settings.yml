@@ -14,6 +14,22 @@
 # The instance is loopback-bound and profile-gated (`--profile search`), and it
 # is INERT with respect to analysis until an operator both points a search
 # component at it and grants the `web_access` pack to a specific analyst.
+#
+# UPGRADE 2026-09-16: image searxng/searxng:latest 2026.7.26 -> 2026.9.16
+# (curl_cffi 0.16.3 outgoing client; browser impersonation on by default —
+# see the `outgoing:` block below). Rollback tag if the new image regresses:
+# `searxng/searxng:rollback-2026-07-26` — `docker tag` it back and
+# `docker compose up -d --no-deps searxng`. `presearch` entries were dropped
+# from `engines:` the same day (the new image no longer registers that
+# engine name; leaving the entry in was a harmless startup warning, not a
+# failure, but dead config is still noise).
+#
+# S2 SEARCH HYGIENE 2026-09-16 (Program 2 track S2): every key added below
+# was confirmed against the image's own shipped template
+# (`/usr/local/searxng/searx/settings.yml` and `settings_defaults.py` inside
+# `searxng/searxng:latest`, read via `docker compose exec searxng cat ...`)
+# — nothing here is guessed. See docs/ for the write-up and
+# `scripts/searxng_engine_census.sh` for the daily answering-engine census.
 
 use_default_settings: true
 
@@ -34,6 +50,27 @@ search:
   # Keep the language unset so multilingual desks (fr/ar/ru/es sources) are
   # not implicitly narrowed to English.
   autocomplete: ""
+  # Suspension backoff after an engine errors (S2 hygiene). Schema confirmed
+  # in the image's shipped settings.yml (`search.suspended_times`, keyed on
+  # the same exception classes `SearxEngineAccessDenied` /
+  # `SearxEngineCaptcha` / `SearxEngineTooManyRequests` that
+  # src/legba/data/stack/search/searxng.py already documents as SearXNG's
+  # first-class answer to "an engine WILL get banned"). Stock defaults are
+  # tuned for a public instance serving live human traffic; this instance
+  # only serves the researcher/journal's own scheduled queries (~500/day),
+  # which tolerate a longer, self-imposed cool-down far better than they
+  # tolerate re-hitting an engine that JUST 429'd/CAPTCHA'd us on the next
+  # cycle a few minutes later — that repeat hit is exactly the "burned
+  # requests and log noise" this track exists to stop. Un-listed subkeys
+  # (`cf_SearxEngineCaptcha`, `cf_SearxEngineAccessDenied`,
+  # `recaptcha_SearxEngineCaptcha`) inherit the template default via the
+  # loader's key-wise dict merge (searx/settings_loader.py `update_dict`).
+  suspended_times:
+    SearxEngineAccessDenied: 900      # template default 180s
+    SearxEngineTooManyRequests: 900   # template default 180s (brave/google-cse territory)
+    SearxEngineCaptcha: 21600         # template default 3600s — a static
+    # datacenter IP does not un-CAPTCHA itself in an hour; 6h avoids
+    # re-probing a CAPTCHA wall every research cycle.
 
 server:
   # Overridden by SEARXNG_SECRET from the environment; never commit a real one.
@@ -45,11 +82,41 @@ server:
 # engines gets banned faster (R-3a risk 3 — bans surface as an HTTP 200 with an
 # empty results[] plus entries in `unresponsive_engines`, which the provider
 # handler MUST read to distinguish "engines refused us" from "nothing exists").
+#
+# S2 hygiene (2026-09-16): `retries` and `max_redirects` confirmed as real
+# `outgoing` schema keys in the image's `searx/settings_defaults.py` SCHEMA
+# dict (`'retries': SettingsValue(int, 0)`, `'max_redirects':
+# SettingsValue(int, 30)`) — NOT present in the commented settings.yml
+# template, so this file is the only place to set them.
+#   * `retries: 1` — one retry tolerates a transient network blip without
+#     materially adding to ban risk on an already-blocked engine (kept low
+#     on purpose; this file's own note above is why).
+#   * `max_redirects: 5` — bounded down from the stock default of 30
+#     (`searx/network/network.py` feeds `outgoing.max_redirects` straight
+#     into each httpx/curl_cffi client). No legitimate search-result or
+#     favicon fetch needs a 30-hop redirect chain; bounding it caps the
+#     worst case of a redirect-loop bot-check page.
+#   * Removed `pool_maxsize` — verified NOT a schema key anywhere in this
+#     image (`grep -r pool_maxsize searx/` inside the container: no hits;
+#     `outgoing.pool_connections` is the only pool-sizing key SearXNG reads,
+#     feeding `Network`'s `max_connections`). It was silently accepted and
+#     silently ignored by the loader's generic dict merge — dead config.
+#   * curl_cffi impersonation (the reason for the 2026.9.16 upgrade): no
+#     settings.yml key was needed or found — `searx/network/client.py`
+#     hardcodes `DEFAULT_IMPERSONATE = "chrome"` and
+#     `searx/network/network.py`'s `initialize()` does not override
+#     `impersonate` in the params it builds from `outgoing:`, so every
+#     request already impersonates a Chrome TLS/HTTP fingerprint by default.
+#     An override is only possible per named network
+#     (`outgoing.networks.<name>.impersonate` or a per-engine `network:`
+#     block, per `Network._CLIENT_KWARGS`) — not worth adding without a
+#     specific engine that needs a different fingerprint than Chrome.
 outgoing:
   request_timeout: 10.0
   max_request_timeout: 15.0
   pool_connections: 10
-  pool_maxsize: 10
+  retries: 1
+  max_redirects: 5
 
 # ── Engine diversity: the anti-single-point-of-failure measure ─────────────
 #
@@ -70,12 +137,49 @@ outgoing:
 # Search) are NOT configured here — those are an operator decision and, being
 # licensed rather than scraped, are the ToS-cleanest way to restore the banned
 # names. See planning/SEARCH_PROVIDER_REVIEW_2026-07-28.md.
+#
+# S2 UPDATE (2026-09-16): the plan above did not survive contact with this
+# host's IP reputation. Measured post-upgrade (searxng/searxng:latest
+# 2026.9.16, curl_cffi impersonation): mojeek and mojeek news return "access
+# denied" (403) on every query, and qwant / qwant news are CAPTCHA'd — both
+# are IP/fingerprint-bound blocks that neither the upgrade nor any
+# settings.yml key moves (see the `search.suspended_times` note above: those
+# fields only pace an engine we still query, they do not un-block one).
+# Disabling them (not deleting — the config stays as a record of what was
+# tried and why it is off) stops the wasted request + the log noise on every
+# search. The answering set today is bing, duckduckgo web, yahoo,
+# abcnyheter/tagesschau/ansa (the last two rarely relevant per the census).
+#
+# brave and google cse are added below, explicitly disabled, for the same
+# reason but a different mechanism: both engine modules in this SearXNG
+# build have `require_api_key: False` (checked in
+# `searx/engines/brave.py` / `searx/engines/google_cse.py` inside the
+# image) — brave scrapes brave.com/search directly, and google_cse calls a
+# hardcoded *public* partner CSE id (`CX = "partner-pub-8993703457585266..."`
+# in `google_cse.py`, not an operator-supplied key). Neither module reads an
+# `api_key:` field from this file, so there is no settings.yml fix — the 429
+# (brave) / quota (google cse) is either a shared public endpoint being
+# rate-limited worldwide (google cse) or a scrape being IP-limited (brave).
+# The real fix is an operator-provided Brave Search API subscription (a
+# licensed endpoint, different engine wiring than what ships here) — that is
+# the operator item this comment names; it is not a config change.
 engines:
+  # 2026-09-20 operator hygiene: three engines that fail on every query and only make noise
+  # (bing news: parser error on 2026.9.16; google news: CAPTCHA-suspended; wikidata: 429 too many requests).
+  - name: bing news
+    disabled: true
+  - name: google news
+    disabled: true
+  - name: wikidata
+    disabled: true
   # Independent indexes — the reliability backbone.
   - name: mojeek
-    disabled: false
+    disabled: true
+    # S2 2026-09-16: measured 403 "access denied" on every query from this
+    # host, post-upgrade. Structural IP/fingerprint block, not a settings fix.
   - name: mojeek news
-    disabled: false
+    disabled: true
+    # S2 2026-09-16: same engine module, same 403 block as `mojeek` above.
   - name: mwmbl
     disabled: false
   # DuckDuckGo's alternate implementation: the stock `duckduckgo` engine posts
@@ -98,22 +202,55 @@ engines:
     disabled: true
   # Broad-coverage keyless engines that generally answer datacenter traffic.
   - name: qwant
-    disabled: false
+    disabled: true
+    # S2 2026-09-16: CAPTCHA'd on every query from this host, post-upgrade
+    # (curl_cffi impersonation did not move it — this is a JS-challenge
+    # CAPTCHA wall, not a TLS/UA fingerprint block). Structural, not fixable
+    # by config; disabling stops the wasted request + log noise.
   - name: qwant news
-    disabled: false
+    disabled: true
+    # S2 2026-09-16: same qwant CAPTCHA wall as `qwant` above.
   - name: bing
     disabled: false
   - name: yahoo
     disabled: false
-  - name: presearch
-    disabled: false
-  - name: presearch news
-    disabled: false
   # Regional/native-language news — our desks are multilingual, and these are
-  # the outlets a Google-only view under-weights.
+  # the outlets a Google-only view under-weights. S2 2026-09-16: these three
+  # are single-source site scrapers (not meta-indexes like bing/yahoo), so
+  # they carry more per-query latency for less yield — the census (FACTS,
+  # 2026-09-16) already calls them "rarely relevant". Per-engine `timeout:`
+  # is a real schema key used throughout the image's own template (e.g.
+  # `360search: timeout: 20.0`, `apk mirror: timeout: 4.0`,
+  # `artic: timeout: 4.0` in `searx/settings.yml`); bounding these three
+  # below the blanket `outgoing.request_timeout: 10.0` caps their worst-case
+  # tax on every query's total latency without materially changing yield.
   - name: tagesschau
     disabled: false
+    timeout: 6.0
   - name: ansa
     disabled: false
+    timeout: 6.0
   - name: abcnyheter
     disabled: false
+    timeout: 6.0
+  # Configured-but-disabled — see the comment above `engines:` for why (no
+  # settings.yml key fixes either one; a licensed Brave Search API key is
+  # the operator item, and google_cse's block in this build is a shared
+  # public endpoint with no key input at all).
+  - name: brave
+    disabled: true
+    # S2 2026-09-16: measured 429 "too many requests" on every query from
+    # this host. OPERATOR ITEM: a Brave Search API subscription key would
+    # fix this, but requires different engine wiring than what ships here
+    # (this build's `brave` engine scrapes brave.com/search, `require_api_key:
+    # False` — it does not read an api_key field to switch to the paid API).
+  - name: google cse
+    disabled: true
+    # S2 2026-09-16: measured 429/quota on every query from this host. This
+    # build's `google cse` calls a hardcoded PUBLIC partner CSE id (see
+    # `searx/engines/google_cse.py`), not an operator-supplied Google
+    # Programmable Search key — there is no api_key field to set here. The
+    # quota is shared across every default SearXNG instance worldwide, not
+    # ours to raise by config. OPERATOR ITEM if this is ever worth fixing:
+    # swap in a real Google Programmable Search JSON API key, which needs a
+    # different engine (not present in this build), not a settings.yml key.

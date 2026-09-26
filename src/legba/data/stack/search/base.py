@@ -152,7 +152,20 @@ MAX_TITLE_CHARS = 512
 MAX_SNIPPET_CHARS = 1024
 
 #: Absolute ceiling on results returned to a caller, whatever it asks for.
-MAX_RESULTS_CAP = 10
+#:
+#: 30, not 10. The 10 this shipped with was set before anything measured what
+#: the deployed engine actually answers: a census of the local SearXNG returned
+#: 27-29 results per query, so a cap of 10 was silently discarding roughly two
+#: thirds of every search — for the auditor, the reference builder, the
+#: researcher and the consult alike, none of which could see that it had
+#: happened. The cap is a defensive bound on what enters an LLM conversation,
+#: not a relevance judgement, and at snippet size 30 hits is still a page.
+#:
+#: This is the CEILING, not the default. The per-provider operator knob stays
+#: ``SearchProviderConfig.max_results`` (1-50) and the caller's own ``limit``
+#: is still honoured below both; a provider whose own page size is smaller
+#: clamps to it in its ``_build_params`` (see ``brave.BRAVE_MAX_COUNT``).
+MAX_RESULTS_CAP = 30
 
 DEFAULT_TIMEOUT_SECONDS = 15.0
 
@@ -551,6 +564,38 @@ class SearchProviderHandler:
 
     default_port: ClassVar[int] = 443
 
+    #: How many EXTRA result pages this subprovider may request when one page
+    #: comes back short of the caller's limit. 0 — the default — means exactly
+    #: one request per search, which is byte-identical to the behaviour every
+    #: handler had before the cap moved to 30. Raise it only for a subprovider
+    #: whose wire protocol actually pages (see ``searxng``'s ``pageno``), and
+    #: keep it small: on a metasearch every extra page is another round of
+    #: upstream-engine requests, and upstream goodwill is what keeps the
+    #: instance unbanned.
+    max_extra_pages: ClassVar[int] = 0
+
+    #: Minimum page-1 yield before another page is worth ASKING for. 0 — the
+    #: default — means "any short page tops up", which is only correct for a
+    #: provider with a real page-size parameter. A metasearch has none: a query
+    #: that returned 3 hits did not return a short page, it EXHAUSTED its
+    #: engine set, and asking it again spends upstream goodwill to be told the
+    #: same thing. Set it to a measured page size.
+    page_topup_floor: ClassVar[int] = 0
+
+    #: HTTP verb this subprovider's search endpoint speaks. ``GET`` for every
+    #: handler that predates this field. A subprovider whose API is POST-only
+    #: (serper.dev) sets ``POST`` and implements :meth:`_build_body`; the
+    #: failure classification in :meth:`_get_json` — which IS the honesty
+    #: contract — is then shared rather than re-implemented per verb.
+    http_method: ClassVar[str] = "GET"
+
+    #: Hosts this handler may send its CREDENTIAL to. Empty (the default) means
+    #: unconstrained, which is correct for a keyless subprovider and for the
+    #: deliberately-generic ``json`` one — the operator picks the endpoint and
+    #: no secret rides along. A KEYED provider pins its own API host here; see
+    #: :meth:`_assert_endpoint_host_allowed`.
+    allowed_endpoint_hosts: ClassVar[frozenset[str]] = frozenset()
+
     def __init__(self) -> None:
         self._cfg: SearchProviderConfig | None = None
         self._instance_id: str = ""
@@ -566,6 +611,28 @@ class SearchProviderHandler:
 
     def telemetry(self) -> Any:
         return self._tel if self._tel is not None else _NoopTelemetry()
+
+    @property
+    def cost_usd_per_query(self) -> float:
+        """LIST PRICE of one query against this component, from CONFIG.
+
+        ``0.0`` for every self-hosted subprovider and for an unconfigured
+        handler. A value ``> 0`` marks the handler METERED, which is what the
+        provider ladder reads to decide whether a rung needs a governor budget
+        check before it may issue a query. Never a per-handler constant — see
+        :attr:`legba.data.schemas.stack.SearchProviderConfig.cost_usd_per_query`.
+        """
+        if self._cfg is None:
+            return 0.0
+        try:
+            return max(0.0, float(self._cfg.cost_usd_per_query.raw or 0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    @property
+    def is_metered(self) -> bool:
+        """True when a query against this component costs real money."""
+        return self.cost_usd_per_query > 0.0
 
     # ---- lifecycle --------------------------------------------------------
 
@@ -664,21 +731,97 @@ class SearchProviderHandler:
         query = str(query or "").strip()
         if not query:
             raise HardSearchFailure("search requires a non-empty query")
-        endpoint = str(cfg.endpoint.raw or "").strip()
+        # The CONFIGURED endpoint, then the subclass's per-call selection hook.
+        # The base implementation returns it unchanged, so every existing
+        # handler's wire behaviour is untouched; a provider that serves more
+        # than one corpus off one component (Brave's /web/search vs
+        # /news/search) picks its endpoint here rather than needing a second
+        # registered component per corpus.
+        endpoint = self._endpoint_for(str(cfg.endpoint.raw or "").strip(), **opts)
         if not (endpoint.startswith("http://") or endpoint.startswith("https://")):
             raise HardSearchFailure(
                 f"{self.subprovider} endpoint must be http(s), got {endpoint!r}"
             )
+        self._assert_endpoint_host_allowed(endpoint)
         capped = max(1, min(int(cfg.max_results.raw or MAX_RESULTS_CAP),
                             MAX_RESULTS_CAP, int(limit)))
         timeout = float(cfg.timeout_seconds.raw or DEFAULT_TIMEOUT_SECONDS)
         params = self._build_params(query, limit=capped, **opts)
+        body = self._build_body(query, limit=capped, **opts)
 
-        payload = await self._get_json(endpoint, params=params, timeout=timeout)
+        # ``body=`` is passed ONLY when there is one, so a GET subprovider's
+        # call — and every test double that stands in for ``_get_json`` on that
+        # path — sees the exact signature it always did.
+        payload = await self._get_json(
+            endpoint, params=params, timeout=timeout,
+            **({"body": body} if body is not None else {}),
+        )
         response = self._parse_payload(payload, query=query, limit=capped)
+        # ONE page is the norm. A second is asked for ONLY when the first came
+        # back short of what the caller asked for and the provider did not
+        # admit degradation — i.e. the only case where another request can add
+        # anything. See :meth:`_extend_with_pages`.
+        if (
+            self.max_extra_pages > 0
+            and not response.degraded
+            and len(response.results) >= max(1, self.page_topup_floor)
+            and len(response.results) < capped
+        ):
+            await self._extend_with_pages(
+                response, endpoint=endpoint, params=params,
+                query=query, limit=capped, timeout=timeout,
+            )
         response.provider = self._instance_id or self.subprovider
         response.subprovider = self.subprovider
         return response
+
+    async def _extend_with_pages(
+        self, response: SearchResponse, *, endpoint: str,
+        params: Mapping[str, str], query: str, limit: int, timeout: float,
+    ) -> None:
+        """Top ``response`` up from later result pages, in place.
+
+        Deduplicated on URL (pages overlap — a live probe of the deployed
+        SearXNG returned 27 on page 1 and 35 on page 2 with 10 in common) and
+        re-ranked so ``rank`` stays a dense 1..n over the merged list.
+
+        A failure on a LATER page is not allowed to destroy a first page that
+        already succeeded: it is logged and the already-real results are kept.
+        Raising here would convert a good partial answer into "the web has
+        nothing", which is the exact failure this package exists to prevent.
+        Stops early the moment a page adds no new URL, so a provider that
+        ignores the page parameter costs one wasted request, never a loop.
+        """
+        seen = {r.url for r in response.results}
+        for page in range(2, 2 + self.max_extra_pages):
+            if len(response.results) >= limit:
+                return
+            page_params = self._page_params(params, page=page)
+            if page_params is None:
+                return
+            try:
+                payload = await self._get_json(
+                    endpoint, params=page_params, timeout=timeout,
+                )
+                extra = self._parse_payload(payload, query=query, limit=limit)
+            except (TransientSearchFailure, HardSearchFailure) as exc:
+                logger.warning(
+                    "search.page_%d_failed provider=%s err=%s",
+                    page, self.subprovider, exc,
+                )
+                return
+            added = 0
+            for result in extra.results:
+                if len(response.results) >= limit:
+                    break
+                if result.url in seen:
+                    continue
+                seen.add(result.url)
+                result.rank = len(response.results) + 1
+                response.results.append(result)
+                added += 1
+            if not added:
+                return
 
     # ---- the OPTIONAL fetch capability ------------------------------------
 
@@ -702,24 +845,118 @@ class SearchProviderHandler:
     ) -> SearchResponse:
         raise NotImplementedError
 
+    def _endpoint_for(self, endpoint: str, **opts: Any) -> str:
+        """Which URL THIS call goes to. Default: the configured one, verbatim."""
+        return endpoint
+
+    def _build_body(
+        self, query: str, *, limit: int, **opts: Any,
+    ) -> dict[str, Any] | None:
+        """The JSON request body, or ``None`` for a query-string API.
+
+        ``None`` — the default — keeps :meth:`_get_json` on the GET path every
+        shipped handler has always used. Only meaningful alongside
+        ``http_method = "POST"``.
+        """
+        return None
+
+    def _page_params(
+        self, params: Mapping[str, str], *, page: int,
+    ) -> dict[str, str] | None:
+        """Request params for result page ``page`` (1-based), or ``None``.
+
+        ``None`` — the default — means THIS subprovider is not paginated by
+        this layer, and :meth:`search` issues exactly one request. Overriding
+        it is what opts a subprovider into the top-up in
+        :meth:`_extend_with_pages`, and it only ever runs when
+        :attr:`max_extra_pages` is also raised above 0.
+        """
+        return None
+
+    def _auth_headers(self) -> dict[str, str]:
+        """Credential headers for one request.
+
+        The default is the historical ``Authorization: Bearer <key>``, which is
+        what the ``json`` subprovider's generic endpoints expect. A provider
+        with a different scheme (Brave's ``X-Subscription-Token``) overrides
+        this rather than having the base grow a header-name config field — a
+        config knob would let a typo silently send the WRONG header and get a
+        401 that reads like a bad key, and it would ship the credential under a
+        caller-chosen name to a caller-chosen host.
+
+        Returns an EMPTY dict when no key is bound. A handler that REQUIRES a
+        key must refuse in :meth:`on_configure` (see
+        :class:`~.brave.BraveSearchHandler`); it must never fall through to an
+        unauthenticated query, because a keyless 401/422 is indistinguishable
+        downstream from "the web has nothing".
+        """
+        return {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
+
+    def _assert_endpoint_host_allowed(self, endpoint: str) -> None:
+        """Refuse to send this handler's CREDENTIAL to an unexpected host.
+
+        A no-op for every keyless handler (:attr:`allowed_endpoint_hosts` empty).
+        For a KEYED provider it is a credential fence that the SSRF egress guard
+        structurally cannot provide: that guard refuses NON-PUBLIC targets, and
+        an attacker-or-typo-supplied ``endpoint`` pointing at some other PUBLIC
+        host passes it cleanly — while this handler would have attached the
+        paid subscription token to the request. Pinning the host set keeps the
+        key reachable only by the API it belongs to.
+
+        ONE additional host set is honoured: whatever the operator has named on
+        ``LEGBA_EGRESS_ALLOW_HOSTS``. That is not a loophole — it is the SAME
+        explicit, exact-hostname, no-wildcards opt-in the SSRF guard already
+        treats as "the operator vouches for this name", and it is what makes an
+        operator-run egress proxy (and this package's own HTTP test fixture)
+        possible without softening the default. A host that is on neither list
+        is refused.
+        """
+        if not self.allowed_endpoint_hosts:
+            return
+        host, _, _ = _split_endpoint(endpoint, default_port=self.default_port)
+        name = (host or "").lower()
+        if name in self.allowed_endpoint_hosts:
+            return
+        # Deferred import: `sources._egress` is already a dependency of this
+        # module for the guarded client; read the allowlist through its own
+        # accessor so there is ONE parse of the env var, not two.
+        from ...sources._egress import _allowed_internal_hosts
+
+        if name and name in _allowed_internal_hosts():
+            return
+        raise HardSearchFailure(
+            f"{self.subprovider} endpoint host {host!r} is not one of "
+            f"{sorted(self.allowed_endpoint_hosts)} and is not on "
+            "LEGBA_EGRESS_ALLOW_HOSTS — refusing to send the provider "
+            "credential to an unexpected host. NO query was issued."
+        )
+
     # ---- shared egress ----------------------------------------------------
 
     async def _get_json(
         self, endpoint: str, *, params: Mapping[str, str], timeout: float,
+        body: Mapping[str, Any] | None = None,
     ) -> Any:
-        """GET + JSON-decode through the SSRF-guarded transport.
+        """GET (or POST, per :attr:`http_method`) + JSON-decode, SSRF-guarded.
 
         Failure classification is the point: 429/5xx/network → transient (a
-        fallback may be tried ONCE); 4xx/non-JSON/egress-blocked → hard.
+        fallback may be tried ONCE); 4xx/non-JSON/egress-blocked → hard. It is
+        shared across verbs on purpose — a second transport with its own
+        classification is how one provider quietly starts reporting a 429 as an
+        empty web.
         """
         headers = {"User-Agent": USER_AGENT}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
+        headers.update(self._auth_headers())
         try:
             async with guarded_async_client(
                 follow_redirects=True, timeout=timeout, headers=headers,
             ) as client:
-                response = await client.get(endpoint, params=dict(params))
+                if self.http_method.upper() == "POST":
+                    response = await client.post(
+                        endpoint, params=dict(params), json=dict(body or {}),
+                    )
+                else:
+                    response = await client.get(endpoint, params=dict(params))
         except EgressBlockedError as exc:
             raise HardSearchFailure(f"egress_blocked: {exc!s}") from exc
         except (httpx.TimeoutException, httpx.ConnectError,

@@ -1,0 +1,64 @@
+# inquiry_yield — H12 weekly instrument over the inquiry_ledger (Program 5
+# lane 1, planning/PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §4).
+#
+# A `deterministic`-kind META analyst (sub_handler=inquiry_yield). Once
+# weekly it walks the whole inquiry_ledger (migration 0215) and, per
+# descriptor, counts hypotheses opened/confirmed/refuted/expired, questions
+# dispatched/answered, observations a desk later carried forward
+# ("anticipated" — a close-time cited_refs overlap with a LATER finding's
+# derived_from), and blind spots (a dispatched, still-open question whose
+# target had no read this cycle). Pure SQL + arithmetic; no LLM.
+#
+# HONESTY: an inquiry is scored by YIELD, never by correctness (§4). This
+# number is published on the journal panel beside each inquiry's own entry
+# (lane 2) and is NEVER a gate — nothing here blocks, demotes, or actuates
+# anything downstream. "An inquiry that opens hypotheses it never tests
+# scores as an inquiry that opens nothing" IS the arithmetic; there is no
+# separate penalty path.
+#
+# META analyst: no subscription.targets → a SINGLE global run per cadence
+# tick; reads inquiry_ledger + analyst_outputs directly via deps.pg_pool and
+# ignores the materialized input slice. The returned FindingPayload is a
+# genuine FINDING (never TRACE_ONLY — the receipt IS the product, there is
+# no side table it summarizes) with data.by_descriptor carrying every scored
+# inquiry's counters.
+#
+# State: draft in-tree — registration + the operator's activate flip are
+# deploy steps (migration 0215 must be applied first; lane 2's inquiry kind
+# is what actually populates inquiry_ledger, so this stays inert until an
+# inquiry descriptor exists to score).
+
+identity:
+  id: inquiry_yield
+  name: Inquiry Yield (weekly ledger instrument)
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: program5_inquiry
+
+subscription:
+  # META analyst: one global sweep per tick over the whole inquiry_ledger.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: inquiry_yield
+  budget_tokens_per_day: 0      # no LLM — pure SQL + arithmetic
+
+cadence:
+  fallback_schedule: "0 6 * * 1"    # weekly, Monday 06:00Z
+  cooldown_seconds: 561600          # 6.5 days (strictly below the 7-day interval)
+
+outputs: []

@@ -1,0 +1,88 @@
+{
+ "_provenance": "ASSESSMENT channel (assessment.v1). body is the LIVE 2026-09-03 world_assessor prose, verbatim from the DB. The two unsupported[] entries are the specimens D-1 2.4 names by class: 'defines the top risk in this cycle' (rank, deterministic) and 'a reactor shutdown' (fact, judge); their char offsets were computed against that body, not written by hand. fidelity is null because D-3 has not landed - 2.3 says the badge reads null until the arm exists. NOTE: the prose is a PRE-assembly run and its spine here is a POST-assembly one, so ordinals resolve but subjects differ; that is exactly the shape the D-6 A/B has on day one.",
+ "id": "a5f0c1d2-0000-4000-8000-assessment01",
+ "kind": "finding",
+ "analyst_id": "world_assessment",
+ "target_id": null,
+ "title": "German‑Russia diplomatic rupture and European energy strain intersect with Myanmar’s kinetic escalation",
+ "body": "*As of 3 September 2026; composed from 14 region reads, latest 3 September 11:45 UTC.*\n\n**BLUF:** Germany’s deepening diplomatic rupture with Russia, combined with acute energy‑security pressure across Europe, defines the top risk in this cycle, while Myanmar’s sustained air‑strike campaign keeps global escalation risk elevated.\n\n## The picture\nThe German diplomatic rupture with Russia—closing the Bonn consulate, tightening visa rules, and coordinating a narrative blaming Moscow—marks a pronounced escalation in bilateral relations and adds to Europe’s broader energy‑security strain, as France reports rising gas prices and a reactor shutdown, the United Kingdom records Brent crude above $94 bbl, and Italy notes fuel prices above €2.02 €/L [[ref:1]].\n\nMyanmar’s escalation desk notes that a civilian‑casualty airstrike on 30 August and continued air‑strike activity keep the country’s conflict a primary driver of today’s high global escalation risk, reinforcing a broader pattern of kinetic violence worldwide (hedged attribution to the below‑floor Myanmar read) [[ref:5]].\n\nIn Africa, Sudan’s high‑severity war persists, with roughly 200 RSF defectors bolstering the army and ongoing power‑cut attacks on electricity infrastructure, while South Africa’s xenophobic unrest and disputed fuel‑price spike add to internal‑stability pressures (both reported in the Sudan‑South Africa composite) [[ref:6]].",
+ "severity": null,
+ "confidence": 0.6,
+ "produced_at": "2026-09-03 12:00:38.413004+00",
+ "derived_from": [
+  "7c8170f9-3464-4f65-b5b8-979dd9d82b6d"
+ ],
+ "data": {
+  "data": {
+   "meta": true,
+   "assessment": {
+    "schema": "assessment.v1",
+    "spine_id": "7c8170f9-3464-4f65-b5b8-979dd9d82b6d",
+    "spine_schema": "assembly.v1",
+    "lead_test": {
+     "key": "cited_mass.v1",
+     "top_share": 0.1536,
+     "ratio_12": 1.7907,
+     "bar_share": 0.15,
+     "bar_ratio": 1.5,
+     "earned": true,
+     "n_candidates": 32
+    },
+    "markers": [
+     {
+      "ordinal": 1,
+      "sentence_index": 3
+     },
+     {
+      "ordinal": 5,
+      "sentence_index": 4
+     },
+     {
+      "ordinal": 6,
+      "sentence_index": 5
+     }
+    ],
+    "unsupported": [
+     {
+      "sentence_index": 1,
+      "char_start": 210,
+      "char_end": 244,
+      "text": "defines the top risk in this cycle",
+      "class": "rank",
+      "detector": "deterministic",
+      "note": "Cross-block ranking claim; no spine block makes one — every block is bounded to one target and one question. The spine's own order puts this subject at rank 24 of 32."
+     },
+     {
+      "sentence_index": 2,
+      "char_start": 630,
+      "char_end": 648,
+      "text": "a reactor shutdown",
+      "class": "fact",
+      "detector": "judge",
+      "note": "No spine span states it. The France energy desk head reports gas prices rising and stamps “Grid blackout or shortfall: not_observed”; the phrase first appears one hop up, in a region read this assembly no longer carries."
+     }
+    ],
+    "fidelity": null,
+    "badge": {
+     "fidelity_to_spine": null,
+     "fidelity_n": 0,
+     "external_accuracy": {
+      "value": 0.4805,
+      "n": 77,
+      "round": "R3",
+      "as_of": "2026-08-29",
+      "population": "composition_prose",
+      "lineage": "C-A"
+     },
+     "external_accuracy_note": "graded against the world by human raters on the PRE-assembly prose tier"
+    }
+   }
+  }
+ },
+ "verification": {
+  "overall_score": 0.6,
+  "score_state": "scored",
+  "judge_status": "llm",
+  "unsupported_spans": []
+ }
+}

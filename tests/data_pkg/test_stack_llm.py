@@ -1789,3 +1789,60 @@ def test_vllm_max_tokens_env_opt_in(monkeypatch):
     assert h._build_chat_payload(**common)["max_tokens"] == 2048  # noqa: SLF001
     monkeypatch.setenv("LEGBA_LLM_SEND_MAX_TOKENS", "false")
     assert "max_tokens" not in h._build_chat_payload(**common)  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
+# Router provider routing — the ``provider_ignore`` knob (2026-09-25)
+# ---------------------------------------------------------------------------
+
+
+def _cfg_with_ignore(ignore: str | None) -> LLMProviderConfig:
+    kwargs = dict(
+        api_endpoint=Property.Text.of("https://openrouter.ai/api/v1"),
+        api_key=Property.Secret.of("llm.judge.test"),
+        model_name=Property.Text.of("nvidia/nemotron-3-super-120b-a12b"),
+        max_tokens=Property.Number.of(4096, minimum=1, maximum=200000),
+    )
+    if ignore is not None:
+        kwargs["provider_ignore"] = Property.Text.of(ignore)
+    return LLMProviderConfig(**kwargs)
+
+
+def test_provider_ignore_knob_becomes_the_router_ignore_list():
+    """Over 7 days one OpenRouter subprovider served 45% of the judge's calls
+    at 3x the latency of the others (avg 108 s, max 3.6 h). The component
+    names the providers it must never be served by; the handler puts them
+    on the wire as ``provider.ignore``, order kept, duplicates dropped."""
+    h = VLLMProviderHandler()
+    h._cfg = _cfg_with_ignore("dekallm, deepinfra/turbo dekallm")  # noqa: SLF001
+    payload = h._build_chat_payload(  # noqa: SLF001
+        messages=[{"role": "user", "content": "x"}], system=None, tools=None,
+        model="nvidia/nemotron-3-super-120b-a12b", max_tokens=16,
+        temperature=1.0, reasoning_effort=None,
+    )
+    assert payload["provider"] == {"ignore": ["dekallm", "deepinfra/turbo"]}
+
+
+def test_provider_ignore_merges_under_a_caller_provider_object():
+    h = VLLMProviderHandler()
+    h._cfg = _cfg_with_ignore("dekallm")  # noqa: SLF001
+    payload = h._build_chat_payload(  # noqa: SLF001
+        messages=[{"role": "user", "content": "x"}], system=None, tools=None,
+        model="m", max_tokens=16, temperature=1.0, reasoning_effort=None,
+        provider={"sort": "throughput", "ignore": ["novita"]},
+    )
+    assert payload["provider"] == {"sort": "throughput", "ignore": ["novita", "dekallm"]}
+
+
+def test_no_provider_ignore_knob_means_no_provider_key():
+    """Unset (every self-hosted vLLM component) and empty both leave the body
+    byte-identical to before the knob existed."""
+    for ignore in (None, "", "  ,  "):
+        h = VLLMProviderHandler()
+        h._cfg = _cfg_with_ignore(ignore)  # noqa: SLF001
+        payload = h._build_chat_payload(  # noqa: SLF001
+            messages=[{"role": "user", "content": "x"}], system=None, tools=None,
+            model="m", max_tokens=16, temperature=1.0, reasoning_effort=None,
+        )
+        assert "provider" not in payload, ignore
+

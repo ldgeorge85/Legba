@@ -107,6 +107,12 @@ async def _fetch_heads(conn: Any) -> list[dict[str, Any]]:
     WHERE f.kind='finding'
       AND f.superseded_by IS NULL
       AND f.analyst_id = ANY($1::text[])
+      -- D-5: a deterministic region rollup has no prose to re-grade. Re-running
+      -- the faithfulness judge over one would mint a faithfulness verdict for a
+      -- row that never had one and is not entitled to one — which is exactly
+      -- the fabricated-critique move DEMOTION_D1_SPEC §4.2 refuses. IS DISTINCT
+      -- FROM, not <>: the path is NULL on every pre-D-2 row.
+      AND (f.data -> 'data' -> 'assembly' ->> 'regime') IS DISTINCT FROM 'rollup'
     ORDER BY f.analyst_id, COALESCE(f.target_id,'~world'), f.produced_at DESC
     """
     rows = await conn.fetch(sql, list(_COMPOSITION_ANALYSTS))

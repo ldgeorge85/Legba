@@ -180,10 +180,16 @@ _SUBSTRATE_TABLES: tuple[_SubstrateTable, ...] = (
         # Signals are source-ingested, not analyst-run output — no run_id.
         run_id_expr="NULL::uuid",
     ),
-    # events table dropped in the source-first pivot (migration 0030 —
-    # target-agnostic signals replaced the events concept; nothing has
-    # written `events` since 0024). Removed from the lineage catalog so the
-    # cross-table derived_from walk doesn't query a non-existent relation.
+    # events was dropped in the source-first pivot (migration 0030) and the
+    # catalog entry was removed with it; DATA MODEL V3 / P0 re-created the
+    # table (migration 0202) and P2 restores the node so the walk resolves
+    # the event ids a finding's derived_from now carries (§2.5 rule 4).
+    _SubstrateTable(
+        table="events",
+        kind_expr="'event'",
+        title_expr="title",
+        body_expr="data",
+    ),
     _SubstrateTable(
         table="situations",
         kind_expr="'situation'",
@@ -224,6 +230,8 @@ _SUBSTRATE_TABLES: tuple[_SubstrateTable, ...] = (
 _TABLES_BY_KIND: dict[str, tuple[str, str | None]] = {
     # Dedicated tables.
     "signal":      ("signals",        None),
+    # V3/P2 — an event id in derived_from resolves as a lineage node.
+    "event":       ("events",         None),
     "situation":   ("situations",     None),
     "hypothesis":  ("hypotheses",     None),
     # Polymorphic — analyst_outputs.kind discriminates.

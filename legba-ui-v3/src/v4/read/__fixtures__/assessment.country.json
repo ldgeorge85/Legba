@@ -1,0 +1,106 @@
+{
+  "_provenance": "COUNTRY ASSESSMENT channel (assessment.v1) for the Taiwan watch desk, written from assembly.country.json (`derived_from == [spine_id]`, the D-6 fence at country grain). The body is hand-written for the fixture, not live prose; the two unsupported[] spans are the same two classes the world specimen carries (rank/deterministic, fact/judge) and their char offsets are computed against this body, never written by hand. fidelity is null because the analyst ships in draft and the grading arm has not run on it.",
+  "id": "c0ffee01-0000-4000-8000-assessment02",
+  "kind": "finding",
+  "analyst_id": "country_assessment",
+  "target_id": "country_watch_tw",
+  "tags": [
+    "meta",
+    "assessment",
+    "spine:country_composition"
+  ],
+  "title": "Taiwan holds at elevated: patrol cadence, not posture, is what moved",
+  "body": "*As of 3 September 2026; written from the Taiwan desk read of 11:40 UTC.*\n\n**BLUF:** Continued Chinese Coast Guard law‑enforcement patrols east of Taiwan hold this desk at an elevated but unchanged escalation risk, and the patrol cadence defines the top risk on this desk this cycle [[ref:1]].\n\n## Reading the desk\nThe lead block earns its position on cited mass alone, and the seven blocks beneath it neither raise nor lower that reading: none reports a change in posture, and one notes a second coast‑guard cutter on the eastern approach, which the desk itself never observed [[ref:1]].",
+  "severity": null,
+  "confidence": 0.6,
+  "produced_at": "2026-09-03 11:52:10.118400+00",
+  "derived_from": [
+    "bf9409e6-80cd-4098-8ed3-d6263fa993fe"
+  ],
+  "data": {
+    "data": {
+      "meta": true,
+      "assessment": {
+        "schema": "assessment.v1",
+        "spine_id": "bf9409e6-80cd-4098-8ed3-d6263fa993fe",
+        "spine_schema": "assembly.v1",
+        "lead_test": {
+          "key": "cited_mass.v1",
+          "top_share": 0.5385,
+          "ratio_12": 2.3333,
+          "bar_share": 0.15,
+          "bar_ratio": 1.5,
+          "earned": true,
+          "n_candidates": 8
+        },
+        "markers": [
+          {
+            "ordinal": 1,
+            "sentence_index": 1
+          },
+          {
+            "ordinal": 2,
+            "sentence_index": 3
+          }
+        ],
+        "unsupported": [
+          {
+            "sentence_index": 1,
+            "char_start": 238,
+            "char_end": 271,
+            "text": "defines the top risk on this desk",
+            "class": "rank",
+            "detector": "deterministic",
+            "note": "Cross-block ranking claim; no spine block makes one — every block on this desk is bounded to one question. The record's own lead test says block 1 earned the lead on cited mass, which is not the same claim as being the desk's top risk."
+          },
+          {
+            "sentence_index": 3,
+            "char_start": 488,
+            "char_end": 515,
+            "text": "a second coast‑guard cutter",
+            "class": "fact",
+            "detector": "judge",
+            "note": "No spine span states it. Block 1 quotes continued patrols east of Taiwan and stamps no vessel count; the second cutter appears one hop up, in a signal this assembly does not carry."
+          }
+        ],
+        "fidelity": null,
+        "badge": {
+          "fidelity_to_spine": null,
+          "fidelity_n": 0,
+          "external_accuracy": {
+            "value": 0.4805,
+            "n": 77,
+            "round": "R3",
+            "as_of": "2026-08-29",
+            "population": "composition_prose",
+            "lineage": "C-A"
+          },
+          "external_accuracy_note": "graded against the world by human raters on the PRE-assembly prose tier"
+        }
+      },
+      "citations": [
+        {
+          "marker": "[[ref:1]]",
+          "ordinal": 1,
+          "ref_id": "bf9409e6-80cd-4098-8ed3-d6263fa993fe",
+          "ref_kind": "finding",
+          "source": "country_composition",
+          "title": "Watch — Taiwan, Province of China read · 3 Sep — “Continued Chinese Coast Guard law‑enforcement patrols east of Taiwan sustain an elevated escalation risk, with no…”",
+          "spine_block": {
+            "finding_id": "ca7f3025-ee75-4607-8201-ac90395e370b",
+            "desk": "escalation",
+            "target_id": "country_watch_tw"
+          },
+          "tier": "basis",
+          "effective_confidence": 0.62
+        }
+      ]
+    }
+  },
+  "verification": {
+    "overall_score": 0.6,
+    "score_state": "scored",
+    "judge_status": "llm",
+    "unsupported_spans": []
+  }
+}

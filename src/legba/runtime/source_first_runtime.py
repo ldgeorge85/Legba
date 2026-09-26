@@ -352,6 +352,8 @@ def build_trigger_work(action_executor_proxy_for: Any):
     from dapr.actor import ActorId, ActorProxy
 
     from ..runtime.dapr_actors import AnalystActorInterface
+    from .actor_turn_witness import actor_turn_witness
+    from .triggers.dispatch import DispatchCoalesced
 
     # One factory (one DaprActorHttpClient) for every fire this runner
     # dispatches — carries the larger invoke budget so a busy-target analyst
@@ -398,12 +400,36 @@ def build_trigger_work(action_executor_proxy_for: Any):
             "AnalystActor", ActorId(actor_id), AnalystActorInterface,
             actor_proxy_factory=proxy_factory,
         )
-        result = await proxy.run({
-            "trigger_kind": "coalesced_fire",
-            "target_filter": fire.target_id,
-            "reason": fire.reason.value if hasattr(fire.reason, "value") else str(fire.reason),
-            "pending_count": fire.pending_count,
-        })
+        try:
+            result = await proxy.run({
+                "trigger_kind": "coalesced_fire",
+                "target_filter": fire.target_id,
+                "reason": fire.reason.value if hasattr(fire.reason, "value") else str(fire.reason),
+                "pending_count": fire.pending_count,
+            })
+        except Exception as exc:
+            # The invoke did not complete, so we did not learn the run's
+            # outcome — which is NOT the same as learning that it failed.
+            # ``AnalystActor.run`` reports its own failures by RETURNING an
+            # outcome (``hard_fail``/``noop``); an exception here is the
+            # transport, the invoke line, or the turn queue. Ask the actor turn
+            # witness whether that actor id was occupied across this fire: if it
+            # was, the batch belongs to that turn and this is a coalesce, not a
+            # loss. If it was not, the exception stands and the caller logs
+            # ``trigger.run.failed`` exactly as before.
+            #
+            # Deliberately ``Exception``, not ``BaseException``: a
+            # ``CancelledError`` is the engine being torn down and must keep
+            # propagating as cancellation, never be reinterpreted as a coalesce.
+            witness = actor_turn_witness().covers(actor_id, since=fire.fired_at)
+            if witness is None:
+                raise
+            raise DispatchCoalesced(
+                analyst_id=fire.analyst_id,
+                target_id=fire.target_id,
+                witness=witness,
+                transport=f"{type(exc).__name__}: {exc}",
+            ) from exc
         return {"actor_run": result, "target_id": fire.target_id}
 
     return _work
@@ -606,8 +632,22 @@ async def bring_up_source_first_planes(
     await nats_store.ensure_stream(
         "legba_governor_events", ["governor.events.>"], max_age_seconds=7 * 24 * 3600,
     )
+    # 2026-09-06 fix: the `nats_stream` output kind (legba/data/outputs/
+    # nats_stream.py:164) publishes analyst findings on `analyst.<id>.<channel>`
+    # (and dapr_actors.py's L-191 "output produced" notification publishes the
+    # SAME subject family) — but nothing ever bound a JetStream stream to
+    # `analyst.>`, so every publish there awaited an ack that could never come
+    # ("nats: timeout" — live-confirmed on corpus_researcher /
+    # cross_doc_corroborator: `docker exec <nats> wget -qO-
+    # localhost:8222/jsz?streams=1` showed legba_channels / legba_governor_events
+    # / legba_signals / legba_inbound and nothing else). Idempotent, same shape
+    # as its siblings above.
+    await nats_store.ensure_stream(
+        "legba_analyst_outputs", ["analyst.>"], max_age_seconds=7 * 24 * 3600,
+    )
     logger.info(
-        "source_first.agency_streams.ready subjects=channels.>,governor.events.>"
+        "source_first.agency_streams.ready "
+        "subjects=channels.>,governor.events.>,analyst.>"
     )
 
     # ---- S1 inbound accept-and-enqueue front (signals ingestion track) ----

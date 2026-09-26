@@ -40,6 +40,7 @@ scope:
   languages: [en]
   tags: [supply_chain, freight, logistics, maritime]
   source_class: reporting
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

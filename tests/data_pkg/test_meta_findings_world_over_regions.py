@@ -373,7 +373,8 @@ async def test_world_read_slice_dispatches_to_region_assembly():
     # The region-head read is over region_composition, meta-inclusive, verify-floored.
     sq, sp = conn.slice_calls[0]
     assert sp[0] == ["region_composition"]
-    assert "JOIN LATERAL" in sq and "Faithfulness verify%" in sq
+    # H17 — the verify leg is the set-based fold CTE, INNER-joined (the gate).
+    assert "JOIN v ON v.fid = f.id::text" in sq and "Faithfulness verify%" in sq
     assert "'meta'" not in sq
     assert len(rows) == 3
 
@@ -394,6 +395,179 @@ async def test_world_branch_only_fires_for_target_none(monkeypatch):
     await synth.READ_SLICE(conn_r, descriptor=desc, target_filter="region_mena")
     assert conn_r.roster_calls == []
     assert conn_r.member_calls, "region frame → members query"
+
+
+# ---------------------------------------------------------------------------
+# W-2 (2026-09-06) — post-D-5 a REGION is not a world candidate, so it can never
+# appear in the world's drop ledger as one that failed the floor
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_world_periphery_never_gathers_region_composition(monkeypatch):
+    """THE D-5 LEAK, closed at the gather.
+
+    §4.2 took ``region_composition`` out of the world's BASIS set and the world
+    assembler has read country assemblies ever since. The C-TIER PERIPHERY
+    gather beside it kept using the descriptor's raw ``other_analysts`` roster,
+    which still names ``region_composition`` — so the five region ROLLUPS came
+    back as periphery rows and the assembler filed them under
+    ``drops.below_floor``. Live on 2026-09-06 12:00Z the world read published
+    "5 below the verification floor" naming Indo-Pacific, Europe, the Americas,
+    MENA and Africa, and the Assessment wrote that the record "lacks any
+    region-level reads that passed verification" for all five — while the same
+    export shipped those five rollups as findings.
+
+    They were never candidates and they did not fail: a rollup is a
+    byte-identical carry of the member country reads the world DID carry. The
+    periphery is the complement of the basis over the SAME analyst set, and this
+    asserts that structurally rather than by counting what came back.
+    """
+    monkeypatch.setenv("LEGBA_COMPOSITION_ASSEMBLY", "1")
+    monkeypatch.setenv("LEGBA_COMPOSITION_TIERED_EVIDENCE", "1")
+
+    conn = _WorldConn(roster=_ROSTER)
+    await synth.READ_SLICE(
+        conn, descriptor=_world_descriptor(declares_verify=True), target_filter=None
+    )
+
+    assert conn.slice_calls, "the world branch must issue its gathers"
+    for query, params in conn.slice_calls:
+        ids = params[0] if params else []
+        assert "region_composition" not in ids, (
+            f"a world-tier gather still reads region heads: {ids} :: {query[:120]}"
+        )
+    # ...and the periphery gather is the one that used to. It is present (the
+    # C-TIER flag is on) and it reads the country frame producer.
+    periphery = [
+        (q, p_) for q, p_ in conn.slice_calls if "v.faithfulness_score IS NULL" in q
+    ]
+    assert periphery, "the C-TIER periphery gather must still run"
+    assert periphery[0][1][0] == ["country_composition"]
+
+
+def test_the_world_admissible_set_is_one_list_for_both_gathers():
+    """The pure half. The basis set and the periphery set are the SAME function
+    now, so they cannot drift apart the way they silently had — and the region
+    frame producer is absent from it by construction, not by a rule two call
+    sites have to keep obeying."""
+    from legba.data.analysts import composition_slice as cs
+
+    ids = cs.world_admissible_analyst_ids(
+        ["region_composition", "escalation_composition"]
+    )
+    assert ids == ["country_composition", "escalation_composition"]
+    assert "region_composition" not in ids
+    # Deterministic + deduped, whatever order the descriptor declares.
+    assert cs.world_admissible_analyst_ids(
+        ["escalation_composition", "region_composition", "escalation_composition"]
+    ) == ids
+
+
+# ---------------------------------------------------------------------------
+# W-2b (2026-09-06) — the WORLD tier owes a roster, so its aperture arm has a
+# denominator instead of the drop ledger alone
+# ---------------------------------------------------------------------------
+
+
+def test_the_world_ledger_counts_countries_as_units_not_analysts():
+    """Why the world tier had an empty ledger, in one assertion.
+
+    Post-D-5 the world reads ~32 ``country_composition`` reads that all share ONE
+    ``analyst_id`` and are told apart only by ``target_id``. The desk-grain
+    ledger keys on the analyst, so it would collapse all 32 into a single unit —
+    which is why the world was given no roster at all and published
+    ``coverage: []`` beside ``coverage_roster: []`` while every country read
+    published 32 of 32. The world grain keys a targeted row on its target and a
+    target-less one on its analyst, which is the same discriminator the world
+    slice already uses to split country rows from thematic ones.
+    """
+    from legba.data.analysts.composition_window import (
+        build_coverage_ledger,
+        build_world_coverage_ledger,
+    )
+
+    basis = [
+        {"analyst_id": "country_composition", "target_id": "country_g20_us",
+         "produced_at": "2026-09-06T10:00:00+00:00", "effective_confidence": 0.7},
+        {"analyst_id": "country_composition", "target_id": "country_g20_cn",
+         "produced_at": "2026-09-06T10:00:00+00:00", "effective_confidence": 0.6},
+        {"analyst_id": "escalation_composition", "target_id": None,
+         "produced_at": "2026-09-06T10:00:00+00:00", "effective_confidence": 0.6},
+    ]
+    periphery = [
+        {"analyst_id": "country_composition", "target_id": "country_g20_de",
+         "produced_at": "2026-09-06T09:00:00+00:00", "faithfulness_score": 0.3},
+    ]
+    roster = [
+        "country_g20_cn", "country_g20_de", "country_g20_us",
+        "country_watch_pk", "escalation_composition",
+    ]
+
+    world = build_world_coverage_ledger(roster, basis, periphery)
+    assert {e["unit"]: e["status"] for e in world} == {
+        "country_g20_cn": "in_basis",
+        "country_g20_de": "below_floor",
+        "country_g20_us": "in_basis",
+        "country_watch_pk": "no_head_in_horizon",   # named, not invisible
+        "escalation_composition": "in_basis",
+    }
+    # Order follows the roster, so the persisted accounting is stable and ARM
+    # 4(a) diffs two arrays rather than two orderings.
+    assert [e["unit"] for e in world] == roster
+
+    # The DESK grain over the same rows sees one unit, and the four country
+    # entries would all read `no_head_in_horizon` — the collapse this fixes.
+    desk = build_coverage_ledger(roster, basis, periphery)
+    assert [e["status"] for e in desk] == [
+        "no_head_in_horizon", "no_head_in_horizon", "no_head_in_horizon",
+        "no_head_in_horizon", "in_basis",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_the_world_slice_stamps_its_declared_unit_roster(monkeypatch):
+    """The roster rides the rows (the ``_region_coverage`` idiom), because a
+    DB-less ``_run`` must be able to name a unit that produced NOTHING — a fact
+    about the roster that cannot be recovered from the rows that arrived."""
+    monkeypatch.setenv("LEGBA_COMPOSITION_ASSEMBLY", "1")
+    from legba.data.analysts import composition_slice as cs
+
+    conn = _WorldConn(
+        roster=_ROSTER,
+        members_by_region={
+            "region_americas": ["country_g20_us", "country_g20_br"],
+            "region_europe": ["country_g20_de"],
+            "region_mena": ["country_watch_ir"],
+        },
+        country_rows_by_target={
+            "country_g20_us": _country_head_row(
+                uid=uuid4(), target_id="country_g20_us", title="US",
+            ),
+        },
+    )
+
+    async def _basis(_conn, **kw):
+        return [conn._country_rows_by_target["country_g20_us"]]
+
+    rows = await cs._assemble_world_country_slice(
+        conn,
+        region_analyst_ids=["region_composition", "escalation_composition"],
+        time_window_hours=336,
+        limit=100,
+        verify_floor=0.5,
+        basis_reader=_basis,
+    )
+    roster = cs.world_roster_of(rows)
+    # Every frame's member country desk, plus the declared thematic lane. The
+    # two members that produced nothing are ON the roster — that is the point.
+    assert roster == [
+        "country_g20_br", "country_g20_de", "country_g20_us",
+        "country_watch_ir", "escalation_composition",
+    ]
+    # An absent stamp stays absent rather than being reconstructed from the rows
+    # that arrived, which is the original defect.
+    assert cs.world_roster_of([{"analyst_id": "country_composition"}]) == []
 
 
 # ---------------------------------------------------------------------------

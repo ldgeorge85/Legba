@@ -70,8 +70,9 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
+from .. import critic_fold
 from ..provenance.models import severity_delta_from_tags
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,24 @@ PERIPHERY_TIER: str = "periphery"
 periphery rows AND the ``tier`` value the cite phase stamps on a citation that
 resolves into the periphery section (the verify pass keys its hedge-required
 rule on it)."""
+
+#: G2 — the CORRECTNESS gate's per-row quarantine stamp
+#: (``composition_correctness_gate`` writes it; this module RENDERS it, which
+#: is why the key is declared here rather than there — the gate imports this
+#: module, so the reverse would be a cycle).
+#:
+#: A unit the correctness gate quoted is in the periphery for a DIFFERENT
+#: reason from a below-floor one: it may have cleared the faithfulness floor
+#: perfectly and still be quoted because an independent reference contradicted
+#: it, or never bore on it, or nobody has graded it. Without this stamp the
+#: section header would tell the model those reads "did NOT clear the
+#: verification floor", which is simply false — and a false sentence in the
+#: prompt is the failure class this whole track exists to remove.
+#:
+#: Value: the gate's own per-unit verdict dict (``gate``, ``reason``,
+#: ``correctness_share``, ``coverage_share``, …). Absent ⇒ every render below
+#: is byte-identical to the pre-G2 one.
+CORRECTNESS_QUARANTINE_KEY: str = "_correctness_quarantine"
 
 PERIPHERY_CAP: int = 8
 """Max periphery items rendered per composition — worst-first (severity rank,
@@ -271,6 +290,33 @@ def _periphery_ids(rows: Sequence[Mapping[str, Any]]) -> list[str]:
     return out
 
 
+def _correctness_score_part(quarantine: Mapping[str, Any]) -> str:
+    """The two shares (or the honest absence) for a correctness-gated row.
+
+    The pair travels together for the reason migration 0196 stores it that way:
+    a correctness of 1.00 at a coverage of 0.05 is one claim confirmed and
+    nineteen the reference never touched, and a prompt shown only the first
+    number would read that as a strong unit that merely missed a bar.
+    """
+    def _share(key: str) -> str:
+        value = quarantine.get(key)
+        if value is None:
+            return "unmeasured"
+        try:
+            return f"{float(value):.2f}"
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            return "unmeasured"
+
+    if quarantine.get("correctness_share") is None and (
+        quarantine.get("coverage_share") is None
+    ):
+        return " correctness=ungraded"
+    return (
+        f" correctness={_share('correctness_share')}"
+        f" coverage={_share('coverage_share')}"
+    )
+
+
 def _render_periphery_block(
     rows: Sequence[Mapping[str, Any]],
     *,
@@ -298,12 +344,34 @@ def _render_periphery_block(
     floor_txt = (
         f"{float(floor):.2f}" if isinstance(floor, (int, float)) else "(unset)"
     )
+    # G2 — a correctness-gated row is quarantined for a reason the pre-G2
+    # header cannot state. When one is present the opening two lines say WHY
+    # the set is mixed; with none present (every legacy call) the header is
+    # byte-identical to the pre-G2 render.
+    n_gated = sum(1 for r in rows if r.get(CORRECTNESS_QUARANTINE_KEY))
+    if n_gated:
+        opening = (
+            "=== WEAKLY-SUPPORTED / UNVERIFIED / UNPROVEN SIGNALS ===\n"
+            f"The {len(rows)} item(s) below are QUARANTINED, for one of two "
+            f"reasons. {len(rows) - n_gated} did not clear the verification "
+            f"floor {floor_txt} (status=below_floor / status=unverified): they "
+            "may not be faithful to their own evidence. The other "
+            f"{n_gated} DID clear it and were withheld by the CORRECTNESS "
+            "GATE (status=quoted / status=no_number): measured against an "
+            "independent reference, they were either wrong, unmeasurable, or "
+            "never graded. Both kinds are "
+        )
+    else:
+        opening = (
+            "=== WEAKLY-SUPPORTED / UNVERIFIED SIGNALS "
+            f"(below the verification floor {floor_txt}) ===\n"
+            f"The {len(rows)} item(s) below did NOT clear the verification "
+            "floor: each either scored below it on its faithfulness verify "
+            "(status=below_floor) or never passed one (status=unverified). "
+            "They are "
+        )
     header = (
-        "=== WEAKLY-SUPPORTED / UNVERIFIED SIGNALS "
-        f"(below the verification floor {floor_txt}) ===\n"
-        f"The {len(rows)} item(s) below did NOT clear the verification floor: "
-        "each either scored below it on its faithfulness verify "
-        "(status=below_floor) or never passed one (status=unverified). They are "
+        opening +
         "NOT established facts and MUST NOT be cited as established fact. Rules "
         "for this section:\n"
         "  - These items may inform HEDGED context only. Any claim resting "
@@ -324,12 +392,26 @@ def _render_periphery_block(
         title = str(row.get("title") or "(untitled)")[:MAX_TITLE_CHARS]
         analyst_id = str(row.get("analyst_id") or "(unknown)")
         produced_at = row.get("produced_at")
-        status = "unverified" if row.get("faithfulness_score") is None else "below_floor"
-        eff = row.get("effective_confidence")
-        try:
-            score_part = f" effective_confidence={float(eff):.2f}" if eff is not None else ""
-        except (TypeError, ValueError):
-            score_part = ""
+        # G2 — a correctness-gated row reports the measurement that actually
+        # quarantined it. Reporting `below_floor` with a 0.90 faithfulness
+        # score beside it would be a contradiction the model has to resolve.
+        quarantine = row.get(CORRECTNESS_QUARANTINE_KEY)
+        if isinstance(quarantine, Mapping):
+            status = str(quarantine.get("gate") or "correctness_gate")
+            score_part = _correctness_score_part(quarantine)
+        else:
+            status = (
+                "unverified" if row.get("faithfulness_score") is None
+                else "below_floor"
+            )
+            eff = row.get("effective_confidence")
+            try:
+                score_part = (
+                    f" effective_confidence={float(eff):.2f}"
+                    if eff is not None else ""
+                )
+            except (TypeError, ValueError):
+                score_part = ""
         # FRAME-3: the STANDING level and, beside it, the source's own movement
         # call. Both are suffix-style and omitted when unstamped, so a block
         # from a desk that has not been flipped renders byte-identically.
@@ -801,14 +883,72 @@ def build_coverage_ledger(
 
     Order follows ``roster`` so the rendered accounting is stable across runs.
     """
+    return _coverage_ledger(
+        roster, basis_rows, periphery_rows, key=_unit_key_analyst, now=now,
+    )
+
+
+def _unit_key_analyst(row: Mapping[str, Any]) -> str:
+    """The DESK grain: one unit = one source analyst. The country tier's key."""
+    return str(row.get("analyst_id") or "")
+
+
+def _unit_key_world(row: Mapping[str, Any]) -> str:
+    """The WORLD grain: one unit = one COUNTRY DESK, or one thematic LANE.
+
+    W-2b — the world's roster is not a set of analysts. Post-D-5 it reads ~32
+    ``country_composition`` reads (all ONE analyst, distinguished only by
+    ``target_id``) plus the declared target-less thematic lanes. Keying those on
+    ``analyst_id`` collapses 32 units into 1, which is why the world tier has
+    been carrying an EMPTY roster and an EMPTY ledger while every country read
+    carries 32 of 32 — and why its aperture arm had no denominator to check the
+    Assessment's blind-spot sentence against.
+
+    So: a targeted row keys on its target, a target-less row on its analyst.
+    Exactly the discriminator ``_assemble_world_country_slice`` already uses to
+    split country rows from thematic ones, spelled once more here so the ledger
+    and the slice cannot disagree about what a unit is.
+    """
+    tid = str(row.get("target_id") or "")
+    return tid or str(row.get("analyst_id") or "")
+
+
+def build_world_coverage_ledger(
+    roster: Sequence[str],
+    basis_rows: Sequence[Mapping[str, Any]],
+    periphery_rows: Sequence[Mapping[str, Any]],
+    *,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """:func:`build_coverage_ledger` at the WORLD grain (see :func:`_unit_key_world`).
+
+    Same closed status set, same entry shape, same roster-is-the-denominator
+    rule — only the unit key differs, so every downstream reader (the render,
+    ``assembly.coverage``, ARM 4(a), ``drops.no_head``) works unedited.
+    """
+    return _coverage_ledger(
+        roster, basis_rows, periphery_rows, key=_unit_key_world, now=now,
+    )
+
+
+def _coverage_ledger(
+    roster: Sequence[str],
+    basis_rows: Sequence[Mapping[str, Any]],
+    periphery_rows: Sequence[Mapping[str, Any]],
+    *,
+    key: Callable[[Mapping[str, Any]], str],
+    now: datetime | None,
+) -> list[dict[str, Any]]:
+    """The shared body. ONE implementation, so the two grains can only ever
+    differ in what counts as a unit."""
     basis_by_unit: dict[str, Mapping[str, Any]] = {}
     for row in basis_rows:
-        aid = str(row.get("analyst_id") or "")
+        aid = key(row)
         if aid and aid not in basis_by_unit:
             basis_by_unit[aid] = row
     peri_by_unit: dict[str, Mapping[str, Any]] = {}
     for row in periphery_rows:
-        aid = str(row.get("analyst_id") or "")
+        aid = key(row)
         if aid and aid not in peri_by_unit:
             peri_by_unit[aid] = row
 
@@ -989,16 +1129,30 @@ async def read_periphery_findings(
     elif target_ids is not None:
         params.append([str(t) for t in target_ids])
         where.append(f"f.target_id = ANY(${len(params)}::TEXT[])")
-    params.append(float(floor))
-    where.append(
-        "(v.faithfulness_score IS NULL"
-        f" OR LEAST(f.confidence, v.faithfulness_score) < ${len(params)})"
-    )
     where.append(
         "(f.data -> 'tags' ?| array['unstructured','coerce_failed']) IS NOT TRUE"
     )
+    params.append(float(floor))
+    # The periphery admissibility, applied AFTER the fold join (it is the only
+    # predicate that reads `v`): unverified, or verify-scored below the bar.
+    periphery = (
+        "(v.faithfulness_score IS NULL"
+        f" OR LEAST(f.confidence, v.faithfulness_score) < ${len(params)})"
+    )
 
+    # H17 — SET-BASED. The unit set + window + target scope bound the outer CTE;
+    # ONE `DISTINCT ON` pass reads those ids' critiques through the expression
+    # index. The LEFT join is what makes an UNVERIFIED head visible (the tier's
+    # whole point), and the head-fold DISTINCT ON stays outside the CTE because
+    # the head this gather wants is the newest row that is PERIPHERY-admissible.
     sql = f"""
+    WITH f AS MATERIALIZED (
+        SELECT f.id, f.kind, f.title, f.body, f.confidence, f.severity, f.data,
+               f.target_id, f.target_version, f.analyst_id, f.analyst_version,
+               f.produced_at, f.derived_from, f.schema_uri, f.run_id
+          FROM analyst_outputs f
+         WHERE {' AND '.join(where)}
+    ), {critic_fold.faithfulness_score_cte()}
     SELECT * FROM (
         SELECT DISTINCT ON (f.analyst_id, f.target_id)
                f.id, f.kind, f.title, f.body, f.confidence, f.severity, f.data,
@@ -1008,18 +1162,9 @@ async def read_periphery_findings(
                     ELSE LEAST(f.confidence, v.faithfulness_score)
                END AS effective_confidence,
                v.faithfulness_score AS faithfulness_score
-        FROM analyst_outputs f
-        LEFT JOIN LATERAL (
-            SELECT (cr.data->>'overall_score')::real AS faithfulness_score
-              FROM analyst_outputs cr
-             WHERE cr.kind = 'critique'
-               AND cr.data->>'analyzed_output_id' = f.id::text
-               AND cr.data->>'overall_score' IS NOT NULL
-               AND cr.title LIKE 'Faithfulness verify%'
-             ORDER BY cr.produced_at DESC, cr.id DESC
-             LIMIT 1
-        ) v ON TRUE
-        WHERE {' AND '.join(where)}
+        FROM f
+        LEFT JOIN v ON v.fid = f.id::text
+        WHERE {periphery}
         ORDER BY f.analyst_id, f.target_id, f.produced_at DESC, f.id DESC
     ) dedup
     ORDER BY dedup.produced_at DESC
@@ -1133,6 +1278,7 @@ __all__ = [
     "MAX_TITLE_CHARS",
     "PERIPHERY_BODY_CHARS",
     "PERIPHERY_CAP",
+    "CORRECTNESS_QUARANTINE_KEY",
     "PERIPHERY_TIER",
     "STALE_HEAD_DISCLOSE_HOURS",
     "_CHILD_REF_MARKER_RE",
@@ -1153,6 +1299,7 @@ __all__ = [
     "_select_periphery",
     "age_suffix",
     "build_coverage_ledger",
+    "build_world_coverage_ledger",
     "evidence_window_span",
     "floor_fallback_suffix",
     "format_age_hours",

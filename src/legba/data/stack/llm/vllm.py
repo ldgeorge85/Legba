@@ -221,7 +221,35 @@ class VLLMProviderHandler(LLMProviderHandler):
         # message content. The caller injects that, not the handler.)
         for k, v in kwargs.items():
             payload.setdefault(k, v)
+        # Router provider routing (2026-09-25): the component's
+        # ``provider_ignore`` knob becomes OpenRouter's ``provider.ignore``
+        # list on every request. Merged UNDER any caller-supplied
+        # ``provider`` object rather than replacing it; unset or empty knob
+        # ⇒ no ``provider`` key at all, so every other component's body is
+        # byte-identical to before the knob existed.
+        ignore = self._provider_ignore()
+        if ignore:
+            provider = dict(payload.get("provider") or {})
+            merged = list(provider.get("ignore") or [])
+            merged.extend(slug for slug in ignore if slug not in merged)
+            provider["ignore"] = merged
+            payload["provider"] = provider
         return payload
+
+    def _provider_ignore(self) -> list[str]:
+        """The component's ``provider_ignore`` slugs, comma/whitespace-split,
+        in order, de-duplicated; ``[]`` when unset, empty, or unparsable."""
+        cfg = self._cfg
+        knob = getattr(cfg, "provider_ignore", None) if cfg is not None else None
+        raw = getattr(knob, "raw", None) if knob is not None else None
+        if not isinstance(raw, str):
+            return []
+        out: list[str] = []
+        for part in raw.replace(",", " ").split():
+            slug = part.strip()
+            if slug and slug not in out:
+                out.append(slug)
+        return out
 
     # ---- Response parsing ------------------------------------------------
 

@@ -56,7 +56,7 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     max_tokens: 12288
-  budget_tokens_per_day: 600000
+  budget_tokens_per_day: 0
   gather:
     max_rounds: 6
   retry:

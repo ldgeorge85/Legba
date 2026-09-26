@@ -38,6 +38,7 @@ scope:
   languages: [en]
   tags: [gis, geospatial, structured, hazard, seismic, global]
   source_class: official           # S1-T8 — USGS (US government scientific agency)
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

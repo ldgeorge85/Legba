@@ -1,0 +1,107 @@
+# lens_pragmatist — the Executor: one of the SIX stance-typed LEAN lenses (VOICES). The
+# lean priors are planning/VOICES_LEAN_PRIORS_2026-09-21.md, accepted as DRAFTS by
+# operator decision D-4 on 2026-09-21.
+#
+# Rides the SAME journal_assessor kind as the four function-typed faculties
+# (lens_trend / lens_baserate / lens_capability / lens_intent): the kind module
+# maps this id -> entry_kind='lens' in journal_entries — append-only, OFF the
+# fact/finding/nexus chain, V1 faithfulness verify fires on every read (the same
+# gate the chronicle rides; keyed on identity.kind, not id). It reads the VERIFIED
+# tower top through ONE declared falsifiable prior and writes an interpretive
+# read; it never asserts a new fact. NO publish edge.
+#
+# THE STANCE: what is executable and what has already worked — budgets,
+# logistics, timelines, staffing, second-order costs and the instrument's
+# track record in these hands. Funded, staffed, shipped, enforced.
+#
+# The declared prior LIVES in the persona module (legba.prompts.lens_pragmatist) — the
+# descriptor content hash IS the prior version (DL-2). Re-authoring the prior is a
+# descriptor PUT with a visible hash change; these six are DRAFTS and expected to
+# be re-authored.
+#
+# Cadence: DAILY at 10:30 UTC. The six leans take the 09:00–11:30 band every day
+# — clear of the 00:00/12:00 cadence burst window, of Monday's four faculties
+# (06:30–08:00) and of the chorus diff (08:30). lens_diff's roster is UNCHANGED:
+# it still reads the four function-typed faculties only. Model plane: $0 core for
+# gather/voice/verify (the 2026-07-14 hard rule — Anthropic is consult/deep_consult
+# only), and NO max_tokens: the core plane never caps model output.
+#
+# identity.state: draft — the orchestrator promotes. Registration and promotion
+# are not an agent's act.
+
+identity:
+  id: lens_pragmatist
+  name: "Voices — Executor Lean"
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: journal_assessor             # SAME kind module; OUTPUT_KIND = OutputKind.JOURNAL
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Journal
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: voices_leans
+
+subscription:
+  # No `targets` block → META analyst: ONE global run per cadence tick.
+  other_analysts: []
+  substrate:
+    direct_queries: false            # reads via the granted pack only, governed
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: llm_planner
+  # COLON form ('module:ATTR') — a dotted path silently falls back to the kind
+  # default and loses the entire lens stance + declared prior.
+  prompt_module: "legba.prompts.lens_pragmatist:LENS_SYSTEM"
+  llm:
+    # Model-card sampling (gpt-oss ships generation_config temperature=1.0; the vLLM
+    # client always sends temperature, so the card default can never apply on its own).
+    # Fleet-wide per the 2026-07-24 sampling audit + A/B (+0.055 faith at 1.0).
+    temperature: 1.0
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat  # core plane — the GATHER investigation
+      expected_family: llm_provider
+    verify:
+      # The lens gate: cited FACT claims graded post-persist by the V1
+      # faithfulness pass (perspective exempt, read never mutated; critique row
+      # lands with analyzed_output_id = the read id). $0 core plane.
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    narrate:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat  # core plane — the lens VOICE
+      expected_family: llm_provider
+  budget_tokens_per_day: 0            # the $0 core plane carries no per-day cap
+  gather:
+    max_rounds: 6                     # the in-actor GATHER ReAct cap (HARD ceiling)
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  fallback_schedule: "30 10 * * *"         # daily — 10:30 UTC (the staggered lean band)
+  cooldown_seconds: 79200             # 22h — below the 24h interval (below-interval guard)
+
+grounding:
+  enabled: false                      # OFF by default (§4.3) — a lens cites tower
+                                      # conclusions (already grounding-corrected
+                                      # upstream) or weighs them; revisit if live
+                                      # reads show stale-fact creep into fact claims
+
+# Grant invariant (§7.6 / §4.2): journal_read ONLY — the tower-top read surface
+# (assessments, findings, situations, contentions, journal delta). substrate_read
+# is DELIBERATELY OMITTED: a lean interprets the tower's verified conclusions, it
+# does not reach past them into the raw corpus (widening the grant is the inquiry
+# kind's job — Program 5 step 2, after v3 P3/P6 land the as-of and event tools).
+# NO journal_propose (a lens proposes nothing) and NO publish sink.
+action_packs:
+  - pack_id: journal_read
+
+outputs: []                           # JournalPayload → journal_entries
+                                      # (entry_kind='lens'); no sinks

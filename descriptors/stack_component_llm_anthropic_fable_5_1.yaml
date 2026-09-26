@@ -1,0 +1,102 @@
+# F1 model picker — Claude Fable 5.1, the SELECTABLE, non-default Anthropic
+# plane (kind: llm_provider). The operator wants BOTH available: Opus 5 stays
+# the default consult plane (`llm.anthropic.opus_4_7`, unchanged), and Fable
+# 5.1 becomes a per-request choice via the consult panel's model picker.
+#
+# Probed 2026-09-16 (see the Anthropic handler's claude-fable-5 line commit,
+# 8d750063): model id `claude-fable-5-1`, same Anthropic key as every other
+# Anthropic component, `temperature` rejected on the wire (the handler already
+# drops it by id prefix — a dead knob, not a bug), 128k output ceiling, native
+# tool_use OK.
+#
+# ⚠ THIS FILE IS THE REVIEWABLE HOME OF THE COMPONENT BODY, and it is the ONLY
+# one: scripts/bringup_register_stack.py LOADS this YAML (via
+# `_STACK_DESCRIPTOR_FILES`) rather than carrying a second copy of the config,
+# so the tree and the registrar cannot drift. Same convention as
+# `stack_component_llm_judge_openrouter_mistral_large.yaml`.
+#
+# NAMING IS LOAD-BEARING. The id starts with `llm.anthropic` so
+# `infer_llm_subprovider` (src/legba/runtime/analyst_deps_builder.py) routes
+# it to the Anthropic handler on rule 1 of its ladder — no explicit
+# `subprovider` field exists on `LLMProviderConfig` (that field is a
+# `search_provider`-only convention); the id/endpoint ladder is how the LLM
+# family always dispatches. Do not rename it off the `llm.anthropic.` prefix.
+#
+# CONFIG SHAPE mirrors the live `llm.anthropic.opus_4_7` component byte for
+# byte apart from `name` and `model_name` (read via
+# `GET /api/v1/registry/stack/llm.anthropic.opus_4_7` on 2026-09-16, after
+# today's PUT moved that component onto `claude-opus-5`): same endpoint, same
+# api_key vault ref, same max_tokens (8192), same timeout_seconds (300),
+# same tier (fallback — Anthropic is a consult-only plane, never the
+# scheduled primary, per the standing rule). No price_* fields, matching the
+# opus component — Anthropic spend is watched elsewhere, not through this
+# family's per-component burn gauge.
+#
+# KEYED — activation gating (the S-2 convention):
+#   * state is ACTIVE. Unlike a brand-new provider, this reuses an existing,
+#     already-funded key and an already-live handler family (Anthropic), so
+#     there is no draft→active flip needed: the operator wants it selectable
+#     the moment it registers.
+#   * config.api_key is a VAULT REF (a vault id, never the plaintext) and it
+#     is the SAME ref every Anthropic component already uses:
+#     `llm.anthropic.api_key`, loaded by scripts/bringup_vault_load.py. No
+#     new secret, no new account.
+#
+# OPERATOR FLIP (to go live) — the key already exists, so only one step:
+#   1. Register the component:
+#        python3 scripts/bringup_register_stack.py
+#      (idempotent — a re-run reports `already_registered`, never re-PUTs.)
+#
+# Once registered, `CONSULT_MODEL_ALLOWLIST["fable"]` in
+# src/legba/data/registry/consult_api.py resolves to this id and the consult
+# panel's "Fable 5.1" choice threads it as `llm_component_override`. Until
+# registration, a request for "fable" fails CLOSED (503/409 naming the
+# missing component) rather than silently falling back to Opus — see
+# `resolve_consult_model_override` / the allowlist docstring in that module.
+
+id: llm.anthropic.fable_5_1
+name: Anthropic Claude Fable 5.1 (consult, selectable)
+schema_uri: legba/stack/llm_provider/1.0.0
+# Placeholder — the registry stamps the content hash at register time.
+version: "0000000000000000"
+state: active
+owner: lewis@local
+
+config:
+  # Base host only — `_chat_endpoint_path()` prepends `/v1/...`. Identical to
+  # every other Anthropic component.
+  api_endpoint:
+    factory_kind: text
+    raw: https://api.anthropic.com
+
+  # VAULT REF, never the plaintext. The SAME ref every Anthropic component
+  # uses — one key, one account.
+  api_key:
+    factory_kind: secret
+    raw: llm.anthropic.api_key
+
+  # Claude Fable 5.1 — Anthropic's most capable widely released model.
+  # Probed 2026-09-16: same key, 128k output ceiling, `temperature` rejected
+  # (dead-knobbed by the handler already).
+  model_name:
+    factory_kind: text
+    raw: claude-fable-5-1
+
+  # Matches the live `llm.anthropic.opus_4_7` component (read 2026-09-16).
+  max_tokens:
+    factory_kind: number
+    raw: 8192
+
+  # Matches the live `llm.anthropic.opus_4_7` component (read 2026-09-16) —
+  # sized for the worst prefill gap on a long cached transcript, not a
+  # generation wall-time cap; the handler streams every generation.
+  timeout_seconds:
+    factory_kind: number
+    raw: 300
+
+  # Consult-only, never the scheduled primary — matches every other
+  # Anthropic component's tier.
+  tier:
+    factory_kind: dropdown_static
+    raw: fallback
+    options: [primary, fallback, cheap]

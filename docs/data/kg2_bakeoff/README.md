@@ -1,6 +1,6 @@
 # K-G2 bake-off artefacts
 
-Measurement output for `docs/TYPING_BAKEOFF_2026-08-03.md`. Read that first —
+Measurement output for `docs/history/TYPING_BAKEOFF_2026-08-03.md`. Read that first —
 these are its raw numbers, not a standalone result.
 
 Everything here was produced read-only against the live substrate on

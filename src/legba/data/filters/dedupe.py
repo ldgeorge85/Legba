@@ -105,7 +105,8 @@ from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .._url_canon import canonical_url as _canonical_url
-from .._url_canon import normalize_wire_title, strip_www as _strip_www
+from .._url_canon import normalize_wire_title, normalized_levenshtein
+from .._url_canon import strip_www as _strip_www
 from ..sources._contract import Signal
 from ._contract import FilterContext, FilterHealth
 
@@ -1030,37 +1031,13 @@ def _to_str(value: Any) -> str:
     return str(value)
 
 
-def _normalized_levenshtein(a: str, b: str) -> float:
-    """Return Levenshtein distance / max(len(a), len(b)).
-
-    Pure Python implementation. ``rapidfuzz`` / ``python-Levenshtein``
-    aren't pinned in pyproject; for the ~100-char titles this filter
-    sees, the naive O(n*m) DP is < 50us in CPython 3.11+. If profiling
-    shows it as a hotspot at scale, swap for ``rapidfuzz`` behind a
-    feature flag.
-    """
-    if a == b:
-        return 0.0
-    if not a or not b:
-        return 1.0
-    n, m = len(a), len(b)
-    if n < m:
-        a, b = b, a
-        n, m = m, n
-    previous = list(range(m + 1))
-    for i in range(1, n + 1):
-        current = [i] + [0] * m
-        ca = a[i - 1]
-        for j in range(1, m + 1):
-            cost = 0 if ca == b[j - 1] else 1
-            current[j] = min(
-                current[j - 1] + 1,      # insertion
-                previous[j] + 1,         # deletion
-                previous[j - 1] + cost,  # substitution
-            )
-        previous = current
-    distance = previous[m]
-    return distance / float(n)
+#: The near-verbatim distance, now owned by ``data._url_canon`` (2026-09-23) so
+#: the composition floor's independence count can ask the SAME question without
+#: ``data.analysts`` growing an import edge into ``data.filters``. Re-bound
+#: under the original private name: the two call sites above and
+#: ``tests/data_pkg/test_filter_dedupe.py`` / ``test_value_clustering.py``
+#: resolve unchanged, and there is still exactly one implementation.
+_normalized_levenshtein = normalized_levenshtein
 
 
 __all__ = [

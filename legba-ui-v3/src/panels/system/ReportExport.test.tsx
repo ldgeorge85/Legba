@@ -6,7 +6,9 @@
  * JSON document. Asserts: basket rows render + are removable; export POSTs the
  * basket and previews the returned document (markdown rendered, JSON raw);
  * export triggers a download (Blob object-URL + anchor click); the empty-basket
- * state disables export.
+ * state disables export; and "print / save as PDF" (7b-iii) is disabled until a
+ * markdown document has actually been composed, then prints THAT document in
+ * its own frame rather than print-styling the workstation.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -14,6 +16,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import type { PanelRegistration } from '@/types'
 import ReportExportPanel from './ReportExport'
+import { PRINT_FRAME_ATTR } from '@/lib/printDocument'
 import { useExportBasket } from '@/state/exportBasket'
 
 function reg(): PanelRegistration {
@@ -111,5 +114,33 @@ describe('ReportExportPanel', () => {
   it('disables export on an empty basket', () => {
     render(wrap(<ReportExportPanel registration={reg()} scope={{}} mode="personal" />))
     expect(screen.getByTestId('report-export')).toBeDisabled()
+  })
+
+  it('disables print until a markdown document has been composed', () => {
+    render(wrap(<ReportExportPanel registration={reg()} scope={{}} mode="personal" />))
+    expect(screen.getByTestId('report-print')).toBeDisabled()
+  })
+
+  it('prints the composed document in its own frame, not the workstation', async () => {
+    stubFetch('markdown')
+    useExportBasket.getState().add({ kind: 'finding', id: 'f1', label: 'Coup risk' })
+    vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(() => 'blob:mock'), revokeObjectURL: vi.fn() })
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    // The workstation's own print is never the mechanism — the document goes
+    // into a frame and THAT frame prints.
+    const shellPrint = vi.fn()
+    vi.stubGlobal('print', shellPrint)
+
+    render(wrap(<ReportExportPanel registration={reg()} scope={{}} mode="personal" />))
+    fireEvent.click(screen.getByTestId('report-export'))
+    await waitFor(() => expect(screen.getByTestId('report-print')).toBeEnabled())
+
+    fireEvent.click(screen.getByTestId('report-print'))
+    const frame = document.querySelector<HTMLIFrameElement>(`iframe[${PRINT_FRAME_ATTR}]`)
+    expect(frame).not.toBeNull()
+    expect(frame!.contentDocument?.title).toBe('Legba export')
+    expect(frame!.contentDocument?.body.innerHTML).toContain('Coup risk')
+    expect(shellPrint).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('report-error')).not.toBeInTheDocument()
   })
 })

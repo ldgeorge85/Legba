@@ -99,7 +99,8 @@ class _SubstrateStub:
         return {"rows": [{"id": str(r), "title": "row"} for r in self.signal_refs],
                 "refs": [str(r) for r in self.signal_refs]}
 
-    async def query_facts(self, *, subject=None, predicate=None, value=None, limit=30) -> dict[str, Any]:
+    async def query_facts(self, *, subject=None, predicate=None, value=None,
+                          limit=30, as_of=None) -> dict[str, Any]:
         self.calls.append(("query_facts", {"subject": subject}))
         return {"rows": [], "refs": [str(r) for r in self.fact_refs]}
 

@@ -135,9 +135,18 @@ if git grep -nI -E -- "['\"][A-Za-z0-9+/]{40,}={0,2}['\"]|['\"][0-9a-fA-F]{48,}[
   # the exact dict-entry / bare-hex-literal shape those two constants use —
   # nothing else in the file, or anywhere else, is exempted by it.
   FLIP_DIGEST_RE='^scripts/voice4_flip/_flip_common\.py:[0-9]+: *("[a-z_]+": *)?"[0-9a-f]{64}",?$'
+  # Second narrow PATH+CONTEXT carve-out (release-gate prepush audit, 2026-09):
+  # scripts/load_unit_reference.py's V4_PACKET_SHA is the sha256 of the PROGRAM
+  # 1 v4 graded packet and half the uniqueness key the calibration row is
+  # written under (see that constant's own "WHY THIS DIGEST IS PINNED HERE"
+  # comment) — a provenance record of a measurement, not a credential. Scoped to
+  # that exact file AND that exact variable's assignment line; no other literal
+  # in the file, or anywhere else, is exempted by it.
+  UNITREF_PACKET_RE='^scripts/load_unit_reference\.py:[0-9]+:V4_PACKET_SHA = "[0-9a-f]{64}"$'
   while IFS= read -r line; do report high-entropy "${line}"; done < <(
     grep -vE 'sha256-|sha512-|integrity|test|fixture|mock|example|sample|hash|digest|did:key:|base64|encode|decode|ALPHABET|alphabet|charset|/[a-z]+/[a-z]+/' /tmp/_ps_ent \
-      | grep -vE "${FLIP_DIGEST_RE}"
+      | grep -vE "${FLIP_DIGEST_RE}" \
+      | grep -vE "${UNITREF_PACKET_RE}"
   )
 fi
 

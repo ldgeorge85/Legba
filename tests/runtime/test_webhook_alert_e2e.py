@@ -55,6 +55,7 @@ from legba.data.outputs.webhook import (
 )
 from legba.data.provenance.models import AlertPayload
 from legba.data.registry.signing import load_default_identity
+from tests._isolated_nats_gate import requires_isolated_nats
 
 
 pytestmark = [pytest.mark.integration]
@@ -294,10 +295,7 @@ async def test_webhook_guarded_client_refuses_real_internal_server():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="needs an isolated NATS; DLQ subject overlaps the live runtime's "
-    "legba.dlq.> stream on --network host"
-)
+@requires_isolated_nats("the live runtime's legba.dlq.> stream")
 async def test_webhook_4xx_no_retry_no_dlq(
     nats_store: NatsStore, session_prefix: str
 ):
@@ -353,10 +351,7 @@ async def test_webhook_4xx_no_retry_no_dlq(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="needs an isolated NATS; DLQ subject overlaps the live runtime's "
-    "legba.dlq.> stream on --network host"
-)
+@requires_isolated_nats("the live runtime's legba.dlq.> stream")
 async def test_webhook_5xx_retries_then_dlqs(
     nats_store: NatsStore, session_prefix: str
 ):

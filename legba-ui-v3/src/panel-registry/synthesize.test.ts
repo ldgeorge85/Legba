@@ -62,7 +62,10 @@ describe('bound-kind sets', () => {
     // The shipped sets (T1–T10 / A1–A5): drift here means the registry changed.
     expect(TARGET_BOUND_KINDS).toContain('target.map')
     expect(TARGET_BOUND_KINDS).toContain('target.timeline')
-    expect(TARGET_BOUND_KINDS.length).toBe(9)
+    // P-A added the desk brief page to the per-target set, so the sidebar and
+    // the palette reach it on every desk without a second opener.
+    expect(TARGET_BOUND_KINDS).toContain('target.desk_brief_page')
+    expect(TARGET_BOUND_KINDS.length).toBe(10)
     expect(ANALYST_BOUND_KINDS).toContain('analyst.outputs')
     expect(ANALYST_BOUND_KINDS.length).toBe(4)
   })

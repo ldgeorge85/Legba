@@ -1,0 +1,121 @@
+# Fixture for tests/data_pkg/test_collection_manifest_pilot.py — a THREE-series
+# collection manifest in the shape of
+# descriptors/collection_series_pilot_2016_2026.yaml, small enough to assert
+# on field by field. Nothing here is loaded and nothing here is fetched: the
+# test drives the verifier's PARSING half against this file with no network.
+#
+# Deliberately covers all three shapes the parser has to handle:
+#   * a json_api series with a {subject} template,
+#   * a bulk_jsonl series with an {iso3} template,
+#   * a keyed series that must be SKIPPED with a reason, not fetched.
+
+identity:
+  id: collection.fixture_mini
+  name: "Fixture — a three-series collection"
+  schema_uri: legba/collection/1.0.0
+  version: "0000000000000000"
+  abstraction_level: L0
+  state: draft
+  owner: tests
+  created: "2026-09-24T00:00:00Z"
+
+origin_shape: archive_only
+origin_class: archive
+licence_class: public
+
+licence:
+  providers:
+    fixture_provider:
+      holder: "Fixture Provider"
+      licence: "CC BY 4.0"
+      licence_url: "https://creativecommons.org/licenses/by/4.0/"
+      terms_url: "https://example.invalid/terms"
+      text: "A fixture licence."
+      attribution: "Source: Fixture Provider."
+
+firewall:
+  readers_opt_in: [consult, research, claim_watch, program6_baselines, replay]
+  excluded_from:
+    - cadence_analysts
+    - freshness
+    - source_health
+    - calibration
+    - salience
+    - alerts
+    - reactive_triggers
+    - surge_detection
+
+loader:
+  kind: series_api
+  priority: low
+  batch: 10
+  resume_key: "series_id:subject"
+  budget_tokens_per_day: 0
+
+subject_kind: country
+subjects:
+  - {desk: country_g20_us, subject: US, iso3: USA, name: "United States"}
+  - {desk: country_watch_ir, subject: IR, iso3: IRN, name: "Iran, Islamic Rep."}
+
+window:
+  valid_from: "2016-01-01"
+  valid_to: "2025-12-31"
+
+manifest:
+  series:
+    - series_id: fx.json_api_series
+      provider: fixture_provider
+      dataset: FX
+      indicator: FX.TEST.IND
+      unit: pct_per_year
+      cadence: annual
+      subject_kind: country
+      subjects: [US, IR]
+      valid_from: "2016-01-01"
+      valid_to: "2025-12-31"
+      fetch:
+        mode: json_api
+        requires_key: false
+      source_url_template: "https://example.invalid/v2/country/{subject}/indicator/FX.TEST.IND"
+      coverage:
+        fetched_at: "2026-09-24"
+        US: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+        IR: {first_valid_year: 2016, last_valid_year: 2024, values: 9, nulls: 1}
+
+    - series_id: fx.bulk_series
+      provider: fixture_provider
+      dataset: BULK
+      indicator: "BULK.9-9-{iso3}-UNIT.A"
+      unit: thousand_barrels_per_day
+      cadence: annual
+      subject_kind: country
+      subjects: [US, IR]
+      valid_from: "2016-01-01"
+      valid_to: "2025-12-31"
+      fetch:
+        mode: bulk_jsonl
+        requires_key: false
+        bulk_url: "https://example.invalid/bulk/BULK.zip"
+        bulk_member: BULK.txt
+        record_key: series_id
+      source_url_template: "https://example.invalid/bulk/BULK.zip#BULK.9-9-{iso3}-UNIT.A"
+      coverage:
+        fetched_at: "2026-09-24"
+        US: {first_valid_year: 2016, last_valid_year: 2025, values: 10, nulls: 0}
+        IR: {first_valid_year: 2016, last_valid_year: 2018, values: 3, nulls: 7}
+
+    - series_id: fx.keyed_series
+      provider: fixture_provider
+      dataset: KEYED
+      indicator: KEYED.TEST.IND
+      unit: pct_of_gdp
+      cadence: annual
+      subject_kind: country
+      subjects: [US, IR]
+      valid_from: "2016-01-01"
+      valid_to: "2025-12-31"
+      fetch:
+        mode: json_api
+        requires_key: true
+        key_env: LEGBA_FIXTURE_PROVIDER_API_KEY
+      source_url_template: "https://example.invalid/keyed/{subject}"

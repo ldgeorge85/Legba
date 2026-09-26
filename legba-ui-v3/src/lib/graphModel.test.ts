@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
+  ROW_KINDS,
   buildLineageElements,
+  isLineageRootKind,
   presentRowKinds,
   projectGraph,
   relationshipTypes,
@@ -108,6 +110,48 @@ describe('helpers', () => {
     expect(toRowKind('situation')).toBe('situation')
     expect(toRowKind('mystery')).toBe('finding')
     expect(toRowKind(null)).toBe('finding')
+  })
+})
+
+describe('isLineageRootKind', () => {
+  it('accepts exactly the kinds lineage_api._TABLES_BY_KIND can root', () => {
+    for (const k of [
+      'signal',
+      'situation',
+      'hypothesis',
+      'finding',
+      'meta_finding',
+      'alert',
+      'critique',
+      'prompt_module_candidate',
+    ]) {
+      expect(isLineageRootKind(k), k).toBe(true)
+    }
+  })
+
+  it('rejects the selection-store kinds that have no lineage table', () => {
+    // These are ROOM kinds, not substrate row kinds. `toRowKind` coerces each
+    // to 'finding', which is how a desk click became `GET
+    // /lineage/finding/<target-uuid>` — a walk that cannot resolve.
+    for (const k of ['target', 'entity', 'source', 'analyst']) {
+      expect(isLineageRootKind(k), k).toBe(false)
+      expect(toRowKind(k)).toBe('finding') // the coercion that caused it
+    }
+  })
+
+  it('rejects prediction — a node kind the walk surfaces but cannot root at', () => {
+    // `prediction` IS in ROW_KINDS (it colours nodes and earns a filter chip)
+    // but has no `_TABLES_BY_KIND` entry, so rooting there 404s. This is why
+    // the root guard is its own list rather than a reuse of ROW_KINDS.
+    expect(ROW_KINDS).toContain('prediction')
+    expect(isLineageRootKind('prediction')).toBe(false)
+  })
+
+  it('rejects junk', () => {
+    expect(isLineageRootKind(null)).toBe(false)
+    expect(isLineageRootKind(undefined)).toBe(false)
+    expect(isLineageRootKind('')).toBe(false)
+    expect(isLineageRootKind('mystery')).toBe(false)
   })
 })
 

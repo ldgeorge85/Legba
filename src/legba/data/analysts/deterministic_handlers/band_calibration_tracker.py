@@ -239,6 +239,27 @@ CALIBRATED_METRIC_FAMILY = METRIC_FAITHFULNESS_SCORE
 DEFAULT_LOOKBACK_DAYS = 365
 _MAX_AGG_ROWS = 20000
 
+#: H12 — the METHOD/SCALE version this harness's published numbers were computed
+#: under, stamped ``data.method_version`` on the run receipt and on every
+#: ``band_calibration_claims`` row it logs. Covers ``RESOLUTION_SPEC``,
+#: ``HORIZON_DAYS``, ``CLAIMABLE_DIRECTIONS``, the outcome vocabulary and
+#: ``DEFAULT_LOOKBACK_DAYS`` — bump it when any of them moves, so a persistence
+#: rate diff across the change reads as an instrument revision, not a regression.
+METHOD_VERSION = "band_calibration_tracker/2026-09.1"
+
+#: K3 — the SCALE every claim and persistence rate here is read ON (see
+#: docs/ANALYSIS.md §10.9), stamped ``data.scale_version`` on the receipt and
+#: ``band_calibration_claims.scale_version`` on every logged claim. The quantity
+#: is a transition on the SCORECARD BAND LADDER, so the ladder and what a rung
+#: means ARE the scale. ``2026-08`` is the era the damper retirement opened
+#: (migration 0187, 2026-08-27): ``damping_semantics`` flipped ``demote`` →
+#: ``off``, which moved what a band means and therefore what a band-to-band
+#: transition claims. A persistence rate measured over pre-0187 claims and one
+#: measured after are rates over two different ladders. The per-claim
+#: ``semantics_migration`` flag marks the individual rows that STRADDLE the
+#: boundary; this names the frame they land in.
+SCALE_VERSION = "band_ladder/2026-08"
+
 _SCAN_STATE_KEY = "scorecard_scan"
 
 #: The epoch floor used when no watermark exists yet (first-ever scan).
@@ -566,6 +587,8 @@ def build_finding(
         body_lines.append(f"warnings={warnings}")
     data: dict[str, Any] = {
         "sub_handler": SUB_HANDLER_NAME,
+        "method_version": METHOD_VERSION,
+        "scale_version": SCALE_VERSION,
         "band_calibration": {
             **dict(summary),
             "logged_this_run": int(logged),
@@ -664,10 +687,10 @@ _INSERT_CLAIM_SQL = """
         (desk, dimension, from_band, to_band, direction, transition_at,
          scorecard_row_id, prev_scorecard_row_id, resolution_spec,
          horizon_14_at, horizon_28_at, judge_pipeline_version,
-         semantics_migration)
+         semantics_migration, method_version, scale_version)
     VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7::uuid, $8::uuid, $9,
             $6::timestamptz + interval '14 days',
-            $6::timestamptz + interval '28 days', $10, $11)
+            $6::timestamptz + interval '28 days', $10, $11, $12, $13)
     ON CONFLICT (desk, dimension, scorecard_row_id) DO NOTHING
 """
 
@@ -752,6 +775,14 @@ async def _scan_and_log_claims(
                             # lets the aggregate refuse to pool across a swap.
                             JUDGE_PIPELINE_VERSION,
                             is_migration,
+                            # H12 — the instrument revision the claim was logged
+                            # under (horizons + outcome vocabulary + spec).
+                            METHOD_VERSION,
+                            # K3 — the band LADDER the claim is a transition on.
+                            # Separate from the revision above: the method can
+                            # be re-cut without moving the ladder, and a rate
+                            # may only be pooled across claims that share this.
+                            SCALE_VERSION,
                         )
                         if isinstance(res, str) and res.endswith("1"):
                             logged += 1
@@ -1120,8 +1151,10 @@ __all__ = [
     "CONFIRMED_OUTCOMES",
     "HONESTY_NOTE",
     "HORIZON_DAYS",
+    "METHOD_VERSION",
     "RESOLUTION_SPEC",
     "RESOLVED_BY",
+    "SCALE_VERSION",
     "SUB_HANDLER_NAME",
     "build_finding",
     "classify_horizon_outcome",

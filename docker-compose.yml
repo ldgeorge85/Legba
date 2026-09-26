@@ -892,9 +892,9 @@ services:
   # legba-caddy — TLS edge for the configured public domain
   # (${LEGBA_PUBLIC_DOMAIN}). Default-on (no profile)
   # so it stays up across compose lifecycle. Direct host-port binding
-  # (:80 + :443); auto-HTTPS via Let's Encrypt. App-layer auth (bearer
-  # token in the registry + localStorage in the SPA); caddy adds NO
-  # basic_auth. Reverse-proxies /api/* + /ws/* to legba-registry when
+  # (:80 + :443); auto-HTTPS via Let's Encrypt. Caddy adds a basic_auth
+  # perimeter on every vhost (docker/Caddyfile `basic_auth_perimeter`) and
+  # injects the registry bearer upstream; the SPA keeps its own bearer. Reverse-proxies /api/* + /ws/* to legba-registry when
   # the registry is in the activation set; 502s otherwise. SPA from
   # /srv/legba-ui (populated by the one-shot legba-ui-build job).
   legba-caddy:

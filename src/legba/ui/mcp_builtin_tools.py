@@ -563,9 +563,13 @@ def builtin_tools() -> list[BuiltinTool]:
                 "One composed diff of everything product-relevant that changed "
                 "since a cursor (GET /api/v1/v3/since). Returns new verified "
                 "findings, superseded findings, risk-band changes, situation "
-                "lifecycle edges, and alerts. The server is stateless: pass the "
-                "server_now from your last call back as the next cursor "
-                "(at-least-once). High-value for an agent polling for changes."
+                "lifecycle edges, and alerts, plus one cursor-INDEPENDENT "
+                "section, forecasts_due: every pre-registered acute forecast "
+                "whose window has closed with no outcome, carrying the "
+                "resolution test frozen on the row. The server is stateless: "
+                "pass the server_now from your last call back as the next "
+                "cursor (at-least-once). High-value for an agent polling for "
+                "changes."
             ),
             scope="read",
             method="GET",
@@ -660,7 +664,7 @@ def builtin_tools() -> list[BuiltinTool]:
                     },
                     "model": {
                         "type": "string",
-                        "enum": ["opus", "core"],
+                        "enum": ["opus", "fable", "core"],
                         "description": "Which LLM plane answers (default opus).",
                     },
                 },

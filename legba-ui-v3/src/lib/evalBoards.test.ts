@@ -82,6 +82,8 @@ function baselineRow(over: Partial<DeskBaselineRow> = {}): DeskBaselineRow {
     spillover_current: 2,
     features: { holiday: false },
     computed_at: '2026-08-20T00:00:00Z',
+    method_version: 'desk_baseline/2026-09.1',
+    scale_version: 'desk_deviation/2026-07',
     ...over,
   }
 }

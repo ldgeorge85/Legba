@@ -1,0 +1,191 @@
+# GENERATED DRAFT — scripts/gen_layer_map_draft.py --country AR
+# A first-draft LAYER TABLE derived from descriptors/source_*.yaml's own
+# scope.geo / scope.source_class / identity.kind, plus
+# descriptors/wire_map.yaml's same_publisher['ap'] wire/agency set. Every
+# entry reason starts "derived:" and every aperture is stamped
+# declared: unmeasured — the generator NEVER infers present/absent. This
+# is a PROPOSAL for the operator to curate, never loaded automatically.
+
+identity:
+  id: layer_map_ar
+  name: AR layer map (reviewed — the Program 6 control)
+  schema_uri: legba/layer_map/1.0.0
+  kind: layer_map
+  owner: layer_map_generator
+  created: '2026-01-01T00:00:00Z'
+  state: reviewed
+country: AR
+map_version: layer_map_ar.v1
+entries:
+- source_id: source.acled.conflict
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary)'
+- source_id: source.aljazeera.world
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.armscontrol.news
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary)'
+- source_id: source.batimes.news
+  layer: domestic_press
+  reason: 'derived: reporting source_class scoped to AR — a domestic masthead'
+- source_id: source.bbc.world
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.breakingdefense.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.common_crawl.news
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary)'
+- source_id: source.defensenews.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.dfrlab.reports
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary)'
+- source_id: source.discord.default
+  layer: social_digest
+  reason: 'derived: kind=discord_webhook — always relevant regardless of country'
+- source_id: source.dw.world
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.euronews.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.euvsdisinfo.cases
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary)'
+- source_id: source.firecrawl.default
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary)'
+- source_id: source.france24.afrique
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.gdelt.bigquery
+  layer: public_data
+  reason: 'curated: structured CAMEO event rows, model-free ingest — a public-data feed, not press; the reconciled rule across every map'
+- source_id: source.gdelt.files
+  layer: public_data
+  reason: 'curated: structured CAMEO event rows, model-free ingest — a public-data feed, not press; the reconciled rule across every map'
+- source_id: source.generic_webhook.default
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary)'
+- source_id: source.guardian.world
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.intelmq.cisa_kev
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO
+    feed'
+- source_id: source.isw.assessments
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary)'
+- source_id: source.malijet.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.maritimeexecutive.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.mediacloud.world
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.middleeasteye.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.navalnews.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.northernminer.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.oilprice.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.opensanctions.api
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO
+    feed'
+- source_id: source.opensanctions.bulk
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO
+    feed'
+- source_id: source.reliefweb.reports
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO
+    feed'
+- source_id: source.rferl.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.rigzone.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.rsshub.apnews.world
+  layer: foreign_press
+  reason: 'derived: wire/agency feed — descriptors/wire_map.yaml same_publisher[''ap'']'
+- source_id: source.rsshub.rfa.korea
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.rsshub.rfi.afrique
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.rsshub.rfi.ameriques
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.sahelintelligence.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.splash247.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.telegram.org_channels
+  layer: social_digest
+  reason: 'derived: kind=telegram_channel — always relevant regardless of country'
+- source_id: source.theloadstar.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.un.press
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO
+    feed'
+- source_id: source.un_news.africa
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO
+    feed'
+- source_id: source.un_news.middle_east
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO
+    feed'
+- source_id: source.un_news.peace_security
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO
+    feed'
+- source_id: source.usgs.earthquakes
+  layer: physical
+  reason: 'derived: kind=geojson — always relevant regardless of country'
+- source_id: source.who.disease_outbreak_news
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO
+    feed'
+- source_id: source.worldnuclearnews.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press'
+- source_id: source.wto.news
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO
+    feed'
+apertures:
+- {layer: official, declared: absent, reason: 'curated: absent from our sources — no Argentine government or state-media feed is registered; Argentina has an official layer in the world, we do not ingest it'}
+- {layer: domestic_press, declared: present, reason: 'curated: Buenos Aires Times (source.batimes.*) is a Buenos Aires masthead in our sources — present, thin (one masthead)'}
+- {layer: foreign_press, declared: present, reason: 'curated: the international press and wire feeds cover Argentina (AP wire, Guardian, BBC, Al Jazeera, France24 Amériques via RFI); dense enough for a baseline'}
+- {layer: social_digest, declared: absent, reason: 'curated: absent from our sources — the Telegram list carries no Argentine channels and Discord is unconfigured; a regime–public gap cannot be measured here, which is one reason AR is the control'}
+- {layer: public_data, declared: present, reason: 'curated: ACLED, OpenSanctions, UN, WHO, WTO, ReliefWeb, GDELT — global structured feeds that carry Argentine rows'}
+- {layer: physical, declared: present, reason: 'curated: USGS significant earthquakes is global; the Andean margin makes it substantive for AR'}

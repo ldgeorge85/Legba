@@ -22,9 +22,16 @@ import logging
 from typing import Any, Mapping
 
 from ...provenance.models import FindingPayload
+from ...provenance.origin import origin_class_clause
 from ....runtime.analyst_method import AnalystMethodResult
 
 logger = logging.getLogger(__name__)
+
+#: P7/7g-1 — the origin-class leg on both decay passes (SEAMS #57 sweep).
+#: Decay models a LIVE claim going stale as the world moves on. A loaded
+#: historical figure is not going stale — it is finished, and decaying its
+#: confidence would quietly erode a holding the platform cites as fetched.
+_LIVE_FACTS = origin_class_clause("")
 
 _STALE_DAYS = 30
 _DECAY_AMOUNT = 0.05
@@ -34,17 +41,18 @@ _CONFIDENCE_FLOOR = 0.1
 async def _expire_past_valid_until(pool: Any) -> int:
     async with pool.acquire() as conn:
         result = await conn.execute(
-            """
+            f"""
             UPDATE facts SET
                 data = jsonb_set(
-                    COALESCE(data, '{}'::jsonb),
-                    '{expired}',
+                    COALESCE(data, '{{}}'::jsonb),
+                    '{{expired}}',
                     '"true"'
                 ),
                 updated_at = NOW()
             WHERE valid_until IS NOT NULL
               AND valid_until < NOW()
               AND superseded_by IS NULL
+              AND {_LIVE_FACTS}
               AND COALESCE(data->>'expired', 'false') != 'true'
             """
         )
@@ -71,6 +79,7 @@ async def _decay_stale_confidence(pool: Any) -> int:
                 ),
                 updated_at = NOW()
             WHERE superseded_by IS NULL
+              AND {_LIVE_FACTS}
               AND confidence > {_CONFIDENCE_FLOOR}
               AND updated_at < NOW() - INTERVAL '{_STALE_DAYS} days'
               AND COALESCE(data->>'expired', 'false') != 'true'

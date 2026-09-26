@@ -137,7 +137,7 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     max_tokens: 768            # the kind's DEFAULT_MAX_TOKENS (narrower context)
-  budget_tokens_per_day: 1000000
+  budget_tokens_per_day: 0
   retry:
     budget:
       strategy: pause_until_next_window

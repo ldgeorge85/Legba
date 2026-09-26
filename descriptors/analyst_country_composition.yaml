@@ -104,6 +104,13 @@ method:
   # chat_complete shape the kind uses (same as analyst_meta_synthesizer.yaml).
   kind: llm_planner
   prompt_module: "legba.prompts.meta_findings_synthesizer.v1"
+  # F-3 (DEMOTION_D1_SPEC §7) — no method.bounded_question here, deliberately.
+  # This tier synthesizes across the eight bounded units (each with its OWN
+  # bounded_question) into one composite country read; it does not answer a
+  # single bounded question itself. When THIS composition's head is cited as a
+  # block in a world assembly, the fallback per the spec's ruling is the desk
+  # display name (identity.name above), stamping question_source
+  # "fallback_desk_name" — an honest absence, not an oversight.
   llm:
     # Model-card sampling (fleet-wide 1.0 per the 2026-07-24 audit + A/B). Honored by
     # the meta kind since the W-3 deps-builder fix (descriptor-else-kind-default).
@@ -133,7 +140,7 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     max_tokens: 768            # the kind's DEFAULT_MAX_TOKENS (narrower context)
-  budget_tokens_per_day: 1000000
+  budget_tokens_per_day: 0
   retry:
     budget:
       strategy: pause_until_next_window

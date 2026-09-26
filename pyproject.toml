@@ -15,7 +15,16 @@ classifiers = [
 ]
 dependencies = [
     "pydantic>=2.0",
-    "httpx>=0.27",
+    # The `http2` extra pulls `h2`. Wave O lane o1 measured Akamai-fronted
+    # syndication (usnews.com, the Reuters wire) TARPITTING HTTP/1.1 — the
+    # request is accepted and never answered, so the fetcher burns its whole
+    # timeout twice and reports an empty-message ReadTimeout — while answering
+    # over HTTP/2. `_egress.guarded_async_client` offers h2 in ALPN by default
+    # (LEGBA_FETCH_HTTP2=off is the kill switch) and degrades loudly to
+    # HTTP/1.1 if this extra is ever dropped. `h2` was already resident in both
+    # images; it was nobody's declared dependency, which is what made the
+    # default a hope rather than a fact.
+    "httpx[http2]>=0.27",
     "redis[hiredis]>=5.0",
     "asyncpg>=0.29",
     "croniter>=2.0",
@@ -44,6 +53,17 @@ dependencies = [
     # Scraper-kind body extraction AND (P2-1/S-10) the evidence_archiver's
     # main-text extraction over archived original bytes (Apache-2.0).
     "trafilatura>=1.8",
+    # FETCH_REVIEW (a), 2026-09-16 — browser TLS/JA3 + HTTP/2 + header-order
+    # FINGERPRINT impersonation for the page fetcher, behind
+    # LEGBA_FETCH_IMPERSONATE (default OFF). Only
+    # `legba.data.sources._egress_impersonate` imports it, and only when the
+    # flag is on, so an image without it behaves exactly as before and fails
+    # LOUD (never silently plain) if the flag is turned on without it. The
+    # identifying User-Agent is NOT changed by this dep — fingerprint only;
+    # sending a Chrome UA string would divorce the robots.txt decision from
+    # the agent in the publisher's log (review §3(a)/§3(e)). MIT; ships a
+    # libcurl-impersonate wheel (single-digit MB), no new container/port.
+    "curl_cffi>=0.16",
     "pycountry>=24.6",
     "geopy>=2.4",
     # L-150 language-detect filter handler. langdetect is the post-reshape

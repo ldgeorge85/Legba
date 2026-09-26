@@ -49,13 +49,31 @@ import json
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from .api import RegistryAPIDeps, require_bearer
 
 DEFAULT_LIMIT = 200
 MAX_LIMIT = 1000
+
+#: Hard ceiling on the ego graph's hop count. Two is what v2 drew and what the
+#: workstation's scope-seeded graph asks for; three is a different product (a
+#: neighbourhood, not an ego net) and, on a hub entity, a different cost class.
+MAX_EGO_DEPTH = 2
+
+#: How many finding ids ``GET /entities`` will resolve provenance for in one
+#: call. A report scope carries ~14 desk heads, so 20 covers the real caller
+#: with headroom; beyond that the caller is asking for the whole corpus and
+#: should page the graph instead.
+MAX_FINDING_IDS = 20
+
+#: How far ``finding_id`` walks ``derived_from`` looking for cited SIGNALS.
+#: Two hops is exactly what the product shape needs: a country desk cites
+#: signals directly (1 hop), and a world read cites desk findings which cite
+#: signals (2 hops). It is a constant rather than a parameter because a third
+#: hop buys nothing that is still "this report's evidence".
+PROVENANCE_DEPTH = 2
 
 
 class EntityNode(BaseModel):
@@ -185,6 +203,23 @@ SELECT {_EDGE_COLS}, {_EDGE_NODE_COLS}, {_MENTIONS}
  LIMIT $2
 """
 
+#: Hop 2+ of the ego walk. Given the node ids reached so far, return the OPEN
+#: edges incident to any of them. Deliberately a second round trip rather than a
+#: recursive CTE: a recursive term over ``entity_edges`` cannot be bounded per
+#: level, so one hub entity at hop 1 would fan the whole graph in before any
+#: LIMIT applied. Two bounded queries cost one extra round trip and cannot
+#: surprise the database.
+_EGO_EXPAND_SQL = f"""
+SELECT {_EDGE_COLS}, {_EDGE_NODE_COLS}, {_MENTIONS}
+  FROM entity_edges e
+  JOIN entity_profiles s ON s.id = e.src_id
+  JOIN entity_profiles d ON d.id = e.dst_id
+ WHERE {_OPEN}
+   AND (e.src_id = ANY($1::uuid[]) OR e.dst_id = ANY($1::uuid[]))
+ ORDER BY e.confidence DESC, e.observed_count DESC
+ LIMIT $2
+"""
+
 _TOP_GRAPH_SQL = f"""
 SELECT {_EDGE_COLS}, {_EDGE_NODE_COLS}, {_MENTIONS}
   FROM entity_edges e
@@ -226,6 +261,32 @@ def _validate_limit(limit: int) -> int:
     if limit <= 0:
         return DEFAULT_LIMIT
     return min(limit, MAX_LIMIT)
+
+
+def _validate_finding_ids(raw: list[str] | None) -> list[UUID]:
+    """Parse + bound the repeatable ``finding_id`` filter.
+
+    A malformed id is a 422 rather than a silent drop: a caller who mistypes one
+    of fourteen desk heads would otherwise get a roster quietly missing a desk
+    and no way to tell. Over the cap is a 422 for the same reason -- a truncated
+    scope that reports itself as the scope is worse than a refusal.
+    """
+    if not raw:
+        return []
+    if len(raw) > MAX_FINDING_IDS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"at most {MAX_FINDING_IDS} finding_id values (got {len(raw)})",
+        )
+    out: list[UUID] = []
+    for value in raw:
+        try:
+            out.append(UUID(value))
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise HTTPException(
+                status_code=422, detail=f"finding_id is not a UUID: {value!r}"
+            ) from exc
+    return out
 
 
 def _node_row(row: Any, side: str) -> dict[str, Any]:
@@ -297,14 +358,79 @@ def build_entities_router(deps: RegistryAPIDeps) -> APIRouter:
     async def list_entities(
         q: str | None = Query(default=None),
         entity_class: str | None = Query(default=None),
+        finding_id: list[str] | None = Query(
+            default=None,
+            description=(
+                "Repeatable. Restrict to the entities mentioned by the SIGNALS "
+                f"these findings cite (at most {MAX_FINDING_IDS} ids, "
+                f"{PROVENANCE_DEPTH} provenance hops)."
+            ),
+        ),
         limit: int = Query(default=DEFAULT_LIMIT),
         principal: str = Depends(require_bearer),
     ) -> EntitiesPage:
+        """List/search entity nodes.
+
+        ``finding_id`` answers the one question the entity surface could not
+        ask: *which entities is THIS report about?* There was no way to get it —
+        this route took only ``q``/``entity_class``/``limit``, and ``entity`` is
+        not a lineage ``row_kind``, so a caller holding a report's findings could
+        only fall back to listing the report's desk TARGETS and calling them
+        entities. The join it needs already exists in the substrate:
+        ``analyst_outputs`` (findings are ``kind='finding'`` rows there, not a
+        table of their own) -> ``derived_from`` -> ``signals`` ->
+        ``signal_entity_links`` -> ``entity_profiles``.
+
+        Bounded three ways: at most ``MAX_FINDING_IDS`` roots, exactly
+        ``PROVENANCE_DEPTH`` hops of ``derived_from`` (a country desk cites
+        signals directly; a world read cites desk findings which cite signals),
+        and the caller's own ``limit``.
+
+        The shape is unchanged for callers who pass no ``finding_id``, and the
+        query they run is byte-identical to the one they ran before. WITH the
+        filter, ``mentions`` counts mentions INSIDE the scope rather than
+        corpus-wide -- a corpus-wide count beside a scoped roster would order the
+        list by prominence somewhere else, which is the opposite of what the
+        caller asked for. ``total`` stays the corpus count, so a client can
+        always see how much of the world it is looking at.
+        """
         limit = _validate_limit(limit)
+        finding_uuids = _validate_finding_ids(finding_id)
         # E5: exclude merged-loser tombstones (merged_into set) so a folded
         # fragment never surfaces as a separate entity or inflates the count.
         where: list[str] = ["ep.merged_into IS NULL"]
         args: list[Any] = []
+        cte_sql = ""
+        join_sql = "LEFT JOIN signal_entity_links sel ON sel.entity_id = ep.id"
+        if finding_uuids:
+            args.append(finding_uuids)
+            # A recursive walk of `derived_from` is safe here in a way it is not
+            # on `entity_edges`: the fan-out is provenance (a finding cites tens
+            # of rows, not thousands), the roots are capped, and the depth is a
+            # constant rather than a caller-supplied parameter.
+            cte_sql = f"""
+            WITH RECURSIVE prov(id, derived_from, hop) AS (
+                SELECT ao.id, ao.derived_from, 0
+                  FROM analyst_outputs ao
+                 WHERE ao.id = ANY(${len(args)}::uuid[])
+                UNION ALL
+                SELECT c.id, c.derived_from, prov.hop + 1
+                  FROM prov
+                  JOIN analyst_outputs c ON c.id = ANY(prov.derived_from)
+                 WHERE prov.hop < {PROVENANCE_DEPTH}
+            ),
+            cited AS (
+                SELECT DISTINCT sg.id AS signal_id
+                  FROM prov
+                  JOIN signals sg ON sg.id = ANY(prov.derived_from)
+            )"""
+            # An INNER join through `cited` is what makes this a FILTER rather
+            # than a re-ranking: an entity no cited signal mentions is absent,
+            # not present with a zero.
+            join_sql = (
+                "JOIN signal_entity_links sel ON sel.entity_id = ep.id\n"
+                "              JOIN cited ON cited.signal_id = sel.signal_id"
+            )
         if q:
             args.append(f"%{q}%")
             where.append(f"ep.canonical_name ILIKE ${len(args)}")
@@ -313,12 +439,12 @@ def build_entities_router(deps: RegistryAPIDeps) -> APIRouter:
             where.append(f"ep.entity_class = ${len(args)}")
         where_sql = f"WHERE {' AND '.join(where)}" if where else ""
         args.append(limit)
-        sql = f"""
+        sql = f"""{cte_sql}
             SELECT ep.id, ep.canonical_name, ep.entity_class, ep.entity_type,
                    ep.geo_lat, ep.geo_lon, ep.geo_country, ep.completeness_score,
                    count(sel.signal_id) AS mentions
               FROM entity_profiles ep
-              LEFT JOIN signal_entity_links sel ON sel.entity_id = ep.id
+              {join_sql}
               {where_sql}
              GROUP BY ep.id
              ORDER BY mentions DESC, ep.canonical_name ASC
@@ -334,15 +460,51 @@ def build_entities_router(deps: RegistryAPIDeps) -> APIRouter:
     async def entity_graph(
         center: str | None = Query(default=None, description="canonical_name to ego-center on"),
         limit: int = Query(default=60),
+        depth: int = Query(
+            default=1,
+            ge=1,
+            le=MAX_EGO_DEPTH,
+            description="ego hops from `center` (1 or 2). Ignored without a center.",
+        ),
         principal: str = Depends(require_bearer),
     ) -> EntityGraph:
+        """Nodes + edges for the graph viz — ego-centred, or the global top-N.
+
+        ``depth`` (decision 5) is the one backend change the scope-seeded graph
+        needs. The query was single-hop, so a depth-2 ego net — what v2 drew,
+        and what "show me this report's world" means — could not be faked
+        client-side at any cost: the second ring's edges were never fetched.
+
+        Bounded by construction. Each hop is its own LIMIT-ed query, so the
+        total edge count can never exceed ``depth * limit`` (≤ 600), and the
+        frontier the second hop expands from is itself capped by the first
+        hop's LIMIT. ``depth=1`` runs exactly the query it always ran.
+        """
         limit = min(max(limit, 1), 300)
         async with deps.descriptor_registry.pg.acquire() as conn:
             if center:
-                edge_rows = await conn.fetch(
-                    _EGO_GRAPH_SQL, center, limit)
+                edge_rows = list(await conn.fetch(_EGO_GRAPH_SQL, center, limit))
+                # Hop 2+: expand from every node the previous hop reached.
+                # `seen_edges` dedupes the ring-1 edges the expansion re-reads.
+                seen_edges = {(str(r["src_id"]), str(r["dst_id"])) for r in edge_rows}
+                frontier = {str(r["src_id"]) for r in edge_rows}
+                frontier |= {str(r["dst_id"]) for r in edge_rows}
+                for _hop in range(1, depth):
+                    if not frontier:
+                        break
+                    more = await conn.fetch(_EGO_EXPAND_SQL, list(frontier), limit)
+                    next_frontier: set[str] = set()
+                    for r in more:
+                        key = (str(r["src_id"]), str(r["dst_id"]))
+                        if key in seen_edges:
+                            continue
+                        seen_edges.add(key)
+                        edge_rows.append(r)
+                        next_frontier.add(str(r["src_id"]))
+                        next_frontier.add(str(r["dst_id"]))
+                    frontier = next_frontier - frontier
             else:
-                edge_rows = await conn.fetch(_TOP_GRAPH_SQL, limit)
+                edge_rows = list(await conn.fetch(_TOP_GRAPH_SQL, limit))
             edges = [_graph_edge(r) for r in edge_rows]
             # Nodes come back with the edge rows now (the endpoints are FKs, so
             # one join replaces the second name-keyed round trip), but the

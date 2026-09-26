@@ -19,10 +19,13 @@ import {
   splitProse,
   tokenizeProse,
   citationAnchorId,
+  citationDate,
   citationDrill,
   citationKindLabel,
+  citationMasthead,
   isGroundingCitation,
   MARKER_CLASS_GROUNDING,
+  type Citation,
 } from './citationsModel'
 
 // A trimmed-down replica of a real `country_g20_us` unit finding's merged body.
@@ -396,6 +399,83 @@ describe('extractCitations — desk grounding blocks', () => {
     expect(anchors[0]).toBe(`evidence-${PRIOR_READ_ID}`)
   })
 
+  it('an OBSERVATION resolves IN the citation — row, unit and period', () => {
+    // 7g-2. A cited historical number has no signal behind it and no panel to
+    // drill into; what makes it checkable is that the ROW rides the citation.
+    // The chip must therefore carry the value, the unit, the provider file's
+    // digest and — always — the stale-tense marker, verbatim from the
+    // producer, so a past figure reads as past without a round trip.
+    const [c] = extractCitations({
+      body: 'US GDP growth was 2.8% in 2025 [12].',
+      data: {
+        citations: [{
+          marker: '[12]',
+          ordinal: 12,
+          ref_kind: 'observation',
+          ref_id: '11111111-1111-4111-8111-111111111111',
+          grounding: 'history_series',
+          marker_class: 'desk_grounding',
+          resolves_against: 'data.citations',
+          title: 'GDP growth (annual %) — world_bank',
+          evidence_text: '[12] HISTORICAL OBSERVATION — GDP growth …',
+          source: 'https://api.worldbank.org/v2/country/US/indicator/X',
+          observation: {
+            collection_id: 'collection.series_pilot_2016_2026',
+            series_id: 'wb.gdp_growth_annual_pct',
+            provider: 'world_bank',
+            indicator_name: 'GDP growth (annual %)',
+            subject: 'US',
+            value: '2.8',
+            unit: 'pct_per_year',
+            valid_from: '2025-01-01',
+            valid_to: '2025-12-31',
+            record_time: '2026-07-13T00:00:00+00:00',
+            source_url: 'https://api.worldbank.org/v2/country/US/indicator/X',
+            sha256: 'abc123',
+            licence_class: 'public',
+            stale_tense: '(historical: valid 2025..2025, recorded 2026-07)',
+          },
+        }],
+      },
+    })
+    expect(isGroundingCitation(c)).toBe(true)
+    expect(c.refKind).toBe('observation')
+    expect(citationKindLabel(c)).toBe('historical observation')
+    // A real uuid, kept — an observations row has one, so this is not a
+    // fabricated anchor. But NO drill: there is no observations panel, and a
+    // link to one would be a click that 404s.
+    expect(c.refId).toBe('11111111-1111-4111-8111-111111111111')
+    expect(citationDrill(c)).toBeNull()
+    expect(c.observation?.value).toBe('2.8')
+    expect(c.observation?.unit).toBe('pct_per_year')
+    expect(c.observation?.staleTense).toBe(
+      '(historical: valid 2025..2025, recorded 2026-07)',
+    )
+    expect(c.observation?.sha256).toBe('abc123')
+    // The provider file is the chip's source, exactly as a signal's canonical
+    // URL is — so the masthead a reader sees is the provider's own host.
+    expect(citationMasthead(c)).toBe('api.worldbank.org')
+  })
+
+  it('an observation with no row block still renders as its own kind', () => {
+    // Absence renders as absence: a citation the producer wrote before the
+    // row was carried is labelled `historical observation` and simply has no
+    // fields — never a fabricated period.
+    const [c] = extractCitations({
+      body: 'A claim [3].',
+      data: {
+        citations: [{
+          marker: '[3]',
+          ref_kind: 'observation',
+          ref_id: '22222222-2222-4222-8222-222222222222',
+          evidence_text: 'a rendered line',
+        }],
+      },
+    })
+    expect(citationKindLabel(c)).toBe('historical observation')
+    expect(c.observation).toBeUndefined()
+  })
+
   it('a SIXTH kind this bundle predates is carried verbatim, never guessed', () => {
     // Marked as grounding, `ref_kind` not in the registry, and carrying an id.
     // Defaulting it to `prior_read` would render a drill link to that id —
@@ -433,5 +513,322 @@ describe('extractCitations — desk grounding blocks', () => {
       expect(citationKindLabel(c)).toBe('sub-claim')
       expect(citationDrill(c)).toEqual({ kind: 'finding', id: c.refId })
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// region_rollup.v1 — the historical citation-order re-map (read side)
+// ---------------------------------------------------------------------------
+
+/**
+ * The 2026-09-06T23:45Z `region_americas` shape, trimmed to the ordering.
+ *
+ * `citations[]` are in the SLICE order the producer wrote them —
+ * [us, ca, br, ht, ar, mx] at ordinals 1..6 — while `members[]` is the ROSTER
+ * order the body actually renders its member sections in: [ar, br, ca, mx, us,
+ * ht]. Two orderings sharing one ordinal space, so every marker resolved to a
+ * neighbour: the Argentina section's own `[[ref:1]]` carried the UNITED STATES'
+ * head. `export_api._rollup_aligned_citations` repairs this on the export path;
+ * these lock the same permutation where the workstation and the mobile surface
+ * read, so the two paths agree.
+ */
+const SLICE_ORDER = ['us', 'ca', 'br', 'ht', 'ar', 'mx']
+const ROSTER_ORDER = ['ar', 'br', 'ca', 'mx', 'us', 'ht']
+
+function head(code: string): string {
+  return `${code}aaaaa-1111-4111-8111-aaaaaaaaaaaa`
+}
+
+function americasRollup(
+  opts: { members?: unknown[]; citations?: unknown[]; schema?: string } = {},
+) {
+  return {
+    body: 'Argentina [[ref:1]] · Brazil [[ref:2]] · Canada [[ref:3]]',
+    title: 'Americas rollup',
+    data: {
+      citations:
+        opts.citations ??
+        SLICE_ORDER.map((code, i) => ({
+          marker: `[[ref:${i + 1}]]`,
+          ordinal: i + 1,
+          ref_id: head(code),
+          ref_kind: 'finding',
+          title: `${code.toUpperCase()} desk head`,
+          evidence_text: `${code} evidence`,
+        })),
+      rollup: {
+        schema: opts.schema ?? 'region_rollup.v1',
+        members:
+          opts.members ??
+          ROSTER_ORDER.map((code) => ({
+            assembly_id: head(code),
+            lead_source: 'carried',
+            target_id: code,
+          })),
+      },
+    },
+  }
+}
+
+describe('extractCitations — region_rollup.v1 citation-order re-map', () => {
+  it('section N resolves to member N — the whole point of the fix', () => {
+    const byMarker = citationsByMarker(extractCitations(americasRollup()))
+    ROSTER_ORDER.forEach((code, i) => {
+      const c = byMarker.get(`[[ref:${i + 1}]]`)
+      expect(c, `[[ref:${i + 1}]] should resolve`).toBeDefined()
+      expect(c!.refId, `section ${i + 1} names member ${i + 1}`).toBe(head(code))
+      expect(c!.title).toBe(`${code.toUpperCase()} desk head`)
+      expect(c!.evidenceText).toBe(`${code} evidence`)
+    })
+  })
+
+  it('the pre-fix mispairing is gone: [[ref:1]] is Argentina, not the United States', () => {
+    // The exact regression the 2026-09-06 americas row shipped.
+    const byMarker = citationsByMarker(extractCitations(americasRollup()))
+    expect(byMarker.get('[[ref:1]]')!.refId).toBe(head('ar'))
+    expect(byMarker.get('[[ref:1]]')!.refId).not.toBe(head('us'))
+    // …and the US head is still present, at ITS section (5th in the roster).
+    expect(byMarker.get('[[ref:5]]')!.refId).toBe(head('us'))
+  })
+
+  it('re-maps without inventing, dropping or duplicating a citation', () => {
+    const noRollup = americasRollup()
+    delete (noRollup.data as Record<string, unknown>).rollup
+    const before = extractCitations(noRollup)
+    const after = extractCitations(americasRollup())
+    expect(after).toHaveLength(before.length)
+    expect(new Set(after.map((c) => c.refId))).toEqual(
+      new Set(before.map((c) => c.refId)),
+    )
+    expect(new Set(after.map((c) => c.marker)).size).toBe(after.length)
+  })
+
+  it('is the IDENTITY on a row already written in roster order (post-fix rows)', () => {
+    const aligned = americasRollup({
+      citations: ROSTER_ORDER.map((code, i) => ({
+        marker: `[[ref:${i + 1}]]`,
+        ordinal: i + 1,
+        ref_id: head(code),
+        ref_kind: 'finding',
+        title: `${code.toUpperCase()} desk head`,
+      })),
+    })
+    const cites = extractCitations(aligned)
+    cites.forEach((c, i) => {
+      expect(c.marker).toBe(`[[ref:${i + 1}]]`)
+      expect(c.refId).toBe(head(ROSTER_ORDER[i]))
+    })
+  })
+
+  it('leaves a NON-rollup composition row completely alone', () => {
+    // The guard that keeps this off the 141 aligned assembly-regime rows.
+    expect(extractCitations(COMPOSITION_BODY)[0].marker).toBe('[[ref:1]]')
+    const notARollup = americasRollup({ schema: 'assembly.v1' })
+    extractCitations(notARollup).forEach((c, i) =>
+      expect(c.refId).toBe(head(SLICE_ORDER[i])),
+    )
+  })
+
+  describe('total or nothing — a partial re-map would BE the defect', () => {
+    const stored = (b: ReturnType<typeof americasRollup>) =>
+      extractCitations(b).map((c) => c.refId)
+    const untouched = SLICE_ORDER.map(head)
+
+    it('returns the stored list when a member is not carried (count mismatch)', () => {
+      const members = ROSTER_ORDER.map((code, i) => ({
+        assembly_id: head(code),
+        lead_source: i === 0 ? 'suppressed' : 'carried',
+      }))
+      expect(stored(americasRollup({ members }))).toEqual(untouched)
+    })
+
+    it('returns the stored list when a carried member has no citation', () => {
+      const members = ROSTER_ORDER.map((code, i) => ({
+        assembly_id: i === 3 ? head('zz') : head(code),
+        lead_source: 'carried',
+      }))
+      expect(stored(americasRollup({ members }))).toEqual(untouched)
+    })
+
+    it('returns the stored list when two members name the same head', () => {
+      const members = ROSTER_ORDER.map((code, i) => ({
+        assembly_id: head(i === 5 ? ROSTER_ORDER[0] : code),
+        lead_source: 'carried',
+      }))
+      expect(stored(americasRollup({ members }))).toEqual(untouched)
+    })
+
+    it('returns the stored list when two citations share a ref_id', () => {
+      const citations = SLICE_ORDER.map((code, i) => ({
+        marker: `[[ref:${i + 1}]]`,
+        ref_id: head(i === 5 ? SLICE_ORDER[0] : code),
+        ref_kind: 'finding',
+      }))
+      const cites = extractCitations(americasRollup({ citations }))
+      expect(cites.map((c) => c.marker)).toEqual(
+        citations.map((_, i) => `[[ref:${i + 1}]]`),
+      )
+    })
+
+    it('returns the stored list when the roster is empty or absent', () => {
+      expect(stored(americasRollup({ members: [] }))).toEqual(untouched)
+      const noMembers = americasRollup()
+      ;(noMembers.data as Record<string, unknown>).rollup = {
+        schema: 'region_rollup.v1',
+      }
+      expect(extractCitations(noMembers).map((c) => c.refId)).toEqual(untouched)
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 7b-i — the cited SOURCE beside the claim, and the fold stamps behind it.
+// ---------------------------------------------------------------------------
+
+/** A minimal citation, so each test states only the fields it is about. */
+function cite(over: Partial<Citation> = {}): Citation {
+  return {
+    marker: '[[ref:1]]',
+    refId: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa',
+    refKind: 'finding',
+    signalId: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa',
+    ...over,
+  }
+}
+
+describe('extractCitations — the 7b-i source + fold fields', () => {
+  it('reads source_id, produced_at and both fold stamps off a composition citation', () => {
+    const cites = extractCitations({
+      data: {
+        citations: [
+          {
+            marker: '[[ref:1]]',
+            ordinal: 1,
+            ref_id: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa',
+            ref_kind: 'finding',
+            source: 'escalation',
+            source_id: 'source.reuters.world',
+            produced_at: '2026-09-18T06:30:00+00:00',
+            single_source: true,
+            wire_folded: true,
+            derived_from: ['cccccccc-3333-4333-8333-cccccccccccc'],
+          },
+        ],
+      },
+    })
+    expect(cites).toHaveLength(1)
+    expect(cites[0].sourceId).toBe('source.reuters.world')
+    expect(cites[0].producedAt).toBe('2026-09-18T06:30:00+00:00')
+    expect(cites[0].singleSource).toBe(true)
+    expect(cites[0].wireFolded).toBe(true)
+    expect(cites[0].emptyBasis).toBeUndefined()
+  })
+
+  it('leaves every 7b-i field ABSENT when the row does not carry it', () => {
+    // The live unit body: no source_id, no produced_at, no fold keys. The
+    // no-fold read must extract byte-for-byte what it always did.
+    for (const c of extractCitations(LIVE_BODY)) {
+      expect(c.sourceId).toBeUndefined()
+      expect(c.producedAt).toBeUndefined()
+      expect(c.singleSource).toBeUndefined()
+      expect(c.wireFolded).toBeUndefined()
+      expect(c.emptyBasis).toBeUndefined()
+    }
+  })
+
+  it('never reads a fold stamp as FALSE — a false/zero key leaves it unset', () => {
+    const [c] = extractCitations({
+      data: {
+        citations: [
+          {
+            marker: '[[ref:1]]',
+            ref_id: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa',
+            ref_kind: 'finding',
+            single_source: false,
+            wire_folded: 0,
+          },
+        ],
+      },
+    })
+    expect(c.singleSource).toBeUndefined()
+    expect(c.wireFolded).toBeUndefined()
+  })
+
+  it('accepts a COUNT in the citation-level wire_folded key as the same statement', () => {
+    const [c] = extractCitations({
+      data: {
+        citations: [
+          {
+            marker: '[[ref:1]]',
+            ref_id: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa',
+            ref_kind: 'finding',
+            wire_folded: 2,
+          },
+        ],
+      },
+    })
+    expect(c.wireFolded).toBe(true)
+  })
+
+  it('distinguishes an EMPTY recorded basis from an absent one', () => {
+    const [empty] = extractCitations({
+      data: {
+        citations: [
+          {
+            marker: '[[ref:1]]',
+            ref_id: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa',
+            ref_kind: 'finding',
+            derived_from: [],
+          },
+        ],
+      },
+    })
+    expect(empty.emptyBasis).toBe(true)
+    expect(empty.derivedFrom).toBeUndefined()
+    // No key at all says NOTHING about basis — and must not chip.
+    const absent = extractCitations(COMPOSITION_BODY)[1]
+    expect(absent.emptyBasis).toBeUndefined()
+  })
+})
+
+describe('citationMasthead', () => {
+  it('prefers the outlet ref, with the `source.` plumbing prefix stripped', () => {
+    expect(citationMasthead(cite({ sourceId: 'source.bbc.world' }))).toBe('Bbc world')
+    expect(citationMasthead(cite({ sourceId: 'source_al_jazeera' }))).toBe('Al jazeera')
+    // The outlet ref WINS over a URL — it is the platform's canonical identity.
+    expect(
+      citationMasthead(
+        cite({ sourceId: 'source.reuters.world', source: 'https://www.aljazeera.com/x' }),
+      ),
+    ).toBe('Reuters world')
+  })
+
+  it('falls back to a URL host, `www.` stripped', () => {
+    expect(
+      citationMasthead(cite({ source: 'https://www.aljazeera.com/news/2026/6/30/us-heatwave' })),
+    ).toBe('aljazeera.com')
+  })
+
+  it("reads a composition citation's non-URL `source` as the cited desk", () => {
+    expect(citationMasthead(cite({ source: 'economic_coercion' }))).toBe('Economic coercion')
+  })
+
+  it('returns null rather than inventing a masthead', () => {
+    expect(citationMasthead(cite())).toBeNull()
+    expect(citationMasthead(cite({ sourceId: '  ', source: '' }))).toBeNull()
+    // A malformed URL is not silently turned into prose.
+    expect(citationMasthead(cite({ source: 'https://' }))).toBeNull()
+  })
+})
+
+describe('citationDate', () => {
+  it('reads the ISO date part of produced_at verbatim', () => {
+    expect(citationDate(cite({ producedAt: '2026-09-18T06:30:00+00:00' }))).toBe('2026-09-18')
+    expect(citationDate(cite({ producedAt: '2026-09-18' }))).toBe('2026-09-18')
+  })
+
+  it('returns null for an absent or unparseable stamp', () => {
+    expect(citationDate(cite())).toBeNull()
+    expect(citationDate(cite({ producedAt: 'last Tuesday' }))).toBeNull()
   })
 })

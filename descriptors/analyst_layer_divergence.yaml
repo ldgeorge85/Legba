@@ -1,0 +1,141 @@
+# Program 6 L2 — Layer Divergence analyst descriptor (the divergence-baseline
+# unit; docs/LAYERS.md, docs/DIRECTION.md "The layered source fan-out").
+#
+# THE THESIS. Per target country the platform ingests the same stack of source
+# LAYERS, and the finding is the CHANGE in that country's own layer-to-layer
+# divergence — never the raw gap, which every country has. A country whose
+# official layer has always been quieter than its social digest is not news; a
+# country whose official layer goes quiet RELATIVE TO ITS OWN fourteen-day
+# baseline, and stays there a second day, is.
+#
+# WHAT IT READS. The L0 tables (migration 0214): `source_layers` for the
+# country's curated PLATFORM x COUNTRY -> LAYER map, `desk_apertures` for that
+# desk's declared reach. Then one bounded scan of `signals` per desk. Nothing
+# is inferred: a desk with no loaded map measures nothing at all, which is the
+# honest behaviour for an instrument whose input is hand-curated.
+#
+# WHAT IT COMPUTES, in five steps (the handler module docstring is the full
+# account — src/legba/data/analysts/deterministic_handlers/layer_divergence.py):
+#   1. COUNTS      — signals per layer per UTC day over 28 days, wire copies
+#                    folded to one WITHIN a (layer, day) bucket.
+#   2. BASELINE    — per layer pair of interest, log2((a+0.5)/(b+0.5)) and the
+#                    rolling 14-day median + MAD of the days before it.
+#   3. DIVERGENCE  — |z| >= 2.0 on TWO consecutive days with the same sign,
+#                    named `widening` or `narrowing`, severity from the z,
+#                    confidence from the counts.
+#   4. THE APERTURE— `absent` layers contribute NO count and the finding says
+#                    so; `unmeasured` and `undeclared` are excluded and named.
+#   5. THE RECEIPT — per-layer daily counts, every baseline, every pair, and on
+#                    a quiet run WHY no finding fired, per pair, by name.
+#
+# THE PROOF ROUND. Two weeks over Russia and Israel plus ONE CONTROL with no
+# reference: ARGENTINA (`country_watch_ar`). Argentina is the control because
+# (a) it has no live armed conflict and no state control of its press, so its
+# layer-to-layer gap should be structurally STABLE — the measure firing there
+# is a false positive, and that is exactly the verdict a control has to be able
+# to deliver; and (b) `source.batimes.*` appears in NEITHER `SYNDICATION` nor
+# `SAME_PUBLISHER` in descriptors/wire_map.yaml, so the control isolates the
+# divergence rule from the fold's behaviour. South Africa was the alternative
+# and was rejected for exactly that second reason: `source.dailymaverick.news`
+# IS a declared Reuters re-carrier, so a ZA control would vary the fold and the
+# divergence at once and a flat fortnight would not tell us which held.
+#
+# If the gap-change findings say nothing the desks did not, the program stops
+# at zero cost. That is the point of running it this way.
+#
+# Target-agnostic + META: no `targets` selector, so the cadence heartbeat is a
+# SINGLE global run (not a per-target fan-out) — see
+# dapr_actors.AnalystActor._cadence_targets. The handler resolves which desks
+# to measure from `method.options.divergence_targets`, falling back to every
+# desk whose loaded aperture shares a map_version with a loaded layer table,
+# and reads directly via deps.pg_pool (it ignores the materialized input
+# slice).
+#
+# Honesty / idempotency (the findings-feed dedup lesson): the summary finding
+# is a per-run RECEIPT. The handler sets AnalystMethodResult.force_trace_only
+# when NO pair fired (or when the divergence set is byte-identical to the last
+# EMITTED summary), so an idempotent re-run does NOT repeat a feed row. The
+# receipt still lands in analyst_traces.output_payload on a suppressed run —
+# which is where the proof round reads the quiet days' series from.
+#
+# Method:
+#   * kind = deterministic — pure SQL + arithmetic, NO LLM, token usage always
+#     zero. No llm block and no per-day token budget, by construction.
+#   * impl = the deterministic kind dispatcher module:run_method, which routes
+#     by `options.sub_handler`. Set explicitly AND id == sub-handler name so
+#     either resolution path works.
+#
+# Cadence:
+#   * fallback_schedule = "40 5 * * *" — once daily at 05:40 UTC. Daily because
+#     the measure's unit IS a UTC day: firing more often would re-read the same
+#     bucket and could only produce the same answer or a half-formed one.
+#     05:40 sits after the overnight ingest has landed the prior day and clear
+#     of the on-the-hour sweeps.
+#   * cooldown_seconds = 43200 — a 12-hour floor, half the cadence, so a manual
+#     force during the proof round is possible without a second organic tick
+#     landing on top of it.
+#
+# State: DRAFT. Nothing activates from this file — registration is
+# scripts/bringup_register_analysts.py or the registry REST API, and the
+# operator's activate flip is a separate, deliberate act. The curated layer
+# maps for RU / IL / AR are loaded by scripts/load_layer_map.py first; this
+# analyst measures nothing until they are.
+
+identity:
+  id: layer_divergence
+  name: Layer Divergence
+  schema_uri: legba/analyst/1.0.0
+  version: "<content-hash stamped at register time>"
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: p6_layer_divergence
+
+subscription:
+  # No `targets` block → META analyst: one global sweep per cadence tick. The
+  # handler resolves its desks from method.options.divergence_targets (or from
+  # the loaded maps) and reads directly via deps.pg_pool.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: layer_divergence
+  options:
+    # EMPTY = every desk whose loaded aperture shares a map_version with a
+    # loaded layer table (the shipped default). The sweep widens as maps land
+    # and never carries a desk id that can drift from the map's own: the first
+    # forced run (2026-09-24 20:49Z) named "country_watch_ru"/"country_watch_ar"
+    # while those maps had loaded under country_g20_ru / country_g20_ar, so
+    # three pairs reported aperture_excluded/undeclared for a naming slip, not
+    # a declaration. The proof round (RU + IL targets, AR control — see THE
+    # PROOF ROUND above) reads its desks from the receipt by name.
+    divergence_targets: []
+    # The statistic, at its shipped defaults — stated rather than omitted so
+    # the proof round's parameters are in the descriptor's own content hash
+    # and a later argument about what was run has an answer.
+    window_days: 28
+    baseline_days: 14
+    z_threshold: 2.0
+    mad_floor: 0.2
+    thin_min_per_day: 5
+
+cadence:
+  fallback_schedule: "40 5 * * *"
+  cooldown_seconds: 43200
+
+# No extra output sinks: the deterministic kind's default OUTPUT_KIND
+# (FindingPayload -> analyst_outputs) writes the per-run summary finding and
+# its series; a run with no fired pair is suppressed via force_trace_only
+# (never a feed row). No new table this round — the series rides
+# analyst_outputs.data, the indicator_tracker read.
+outputs: []

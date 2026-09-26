@@ -136,6 +136,7 @@ from uuid import UUID
 
 from ....runtime.analyst_method import AnalystMethodResult
 from ...provenance.models import FindingPayload
+from ...provenance.origin import origin_class_clause
 
 if TYPE_CHECKING:  # pragma: no cover — annotation-only, never imported at
     # runtime: alert_trigger_scan imports THIS module at its own top level
@@ -147,6 +148,12 @@ if TYPE_CHECKING:  # pragma: no cover — annotation-only, never imported at
     from . import alert_trigger_scan as ats
 
 logger = logging.getLogger(__name__)
+
+#: P7/7g-1 — the origin-class leg on both signal reads (SEAMS #57 sweep;
+#: `surge_detection` in the collection firewall). Convergence is a
+#: CLUSTERING of what arrived in a recent window; imported history landing
+#: inside that window would read as a place suddenly converging.
+_LIVE_SIGNALS = origin_class_clause("s")
 
 SUB_HANDLER_NAME = "geo_convergence_scan"
 
@@ -389,7 +396,7 @@ def _parse_jsonish(raw: Any) -> Any:
 # or the geometry-first branch's exact authoritative source point). Dedup'd
 # children (canonical_signal_id → another row) are excluded so a syndication
 # burst can't pad the volume bonus.
-_POINT_SIGNALS_SQL = """
+_POINT_SIGNALS_SQL = f"""
     SELECT s.id::text                          AS id,
            s.source_id                         AS source_id,
            s.payload->'geo'->>'lat'            AS lat,
@@ -397,6 +404,7 @@ _POINT_SIGNALS_SQL = """
            s.payload->'geo'->>'country_iso2'   AS iso2
       FROM signals s
      WHERE s.fetched_at > now() - make_interval(hours => $1)
+       AND {_LIVE_SIGNALS}
        AND (s.canonical_signal_id IS NULL OR s.canonical_signal_id = s.id)
        AND s.payload->'geo'->>'lat' IS NOT NULL
        AND s.payload->'geo'->>'lon' IS NOT NULL
@@ -410,13 +418,14 @@ _POINT_SIGNALS_SQL = """
 """
 
 # Country tier: every country-tagged signal, one row per signal×ISO2 tag.
-_COUNTRY_SIGNALS_SQL = """
+_COUNTRY_SIGNALS_SQL = f"""
     SELECT s.id::text  AS id,
            s.source_id AS source_id,
            g.country   AS country
       FROM signals s
       CROSS JOIN LATERAL unnest(s.geo) AS g(country)
      WHERE s.fetched_at > now() - make_interval(hours => $1)
+       AND {_LIVE_SIGNALS}
        AND (s.canonical_signal_id IS NULL OR s.canonical_signal_id = s.id)
        AND cardinality(s.geo) > 0
      ORDER BY s.fetched_at DESC

@@ -50,7 +50,7 @@ method:
       raw: llm.anthropic.opus_4_7
       expected_family: llm_provider
     max_tokens: 32768
-  budget_tokens_per_day: 2000000
+  budget_tokens_per_day: 0
 
 cadence:
   # On-demand only — no fallback_schedule. Operator/UI invoked; the daily token

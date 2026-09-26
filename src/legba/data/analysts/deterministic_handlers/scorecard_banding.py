@@ -203,6 +203,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping, Optional, Sequence
 from uuid import UUID
 
+from ... import critic_fold
 from ...provenance.models import severity_delta_from_tags
 
 # ---------------------------------------------------------------------------
@@ -273,6 +274,17 @@ SEVERITY_TO_BAND: dict[str, str] = {
 
 #: Sentinel band for a dimension with no qualifying verified claim.
 INSUFFICIENT: str = "insufficient-evidence"
+
+#: H12 — the METHOD/SCALE version this module's published numbers were computed
+#: under, stamped ``data.method_version`` on every scorecard row the producer
+#: writes. Covers the whole banding surface above: :data:`CONF_FLOOR`,
+#: :data:`CONF_CONFIDENT`, :data:`FAITH_FLOOR`, :data:`BAND_LADDER`,
+#: :data:`SEVERITY_TO_BAND`, :data:`INSUFFICIENT` and the two semantics stamps
+#: (:data:`BANDING_SEMANTICS` / :data:`DAMPING_SEMANTICS` answer WHICH contract;
+#: this answers WHICH instrument revision — bump it when any banding constant,
+#: rule or ladder changes, so a band diff across the change is a machine
+#: comparison, the same reason the semantics stamps exist).
+METHOD_VERSION: str = "scorecard_banding/2026-09.1"
 
 #: FRAME-3 — WHICH severity contract a verdict was computed under, stamped on
 #: every banded card. The engine's rules did not change; the MEANING of the tag
@@ -930,31 +942,33 @@ DEFAULT_LOOKBACK_HOURS: int = 24 * 14
 # The fold itself is done in Python (``Claim.effective_confidence``) so the
 # ``None`` (verify absent) case is explicit rather than SQL-``LEAST`` swallowing
 # it.
-_GATHER_SQL = """
-    SELECT DISTINCT ON (f.analyst_id)
-           f.id::text        AS finding_id,
+#
+# H17 — SET-BASED, and the head-fold moved INSIDE the bounded CTE. Under the
+# lateral the DISTINCT ON ran AFTER the join, so the critique probe fired once
+# per in-window row (225 of 234 of them thrown away by the very next operator);
+# now it fires once per HEAD, one per dimension.
+_GATHER_SQL = f"""
+    WITH f AS MATERIALIZED (
+        SELECT DISTINCT ON (f.analyst_id)
+               f.id, f.analyst_id, f.confidence, f.produced_at,
+               f.data -> 'tags' AS tags, f.derived_from
+          FROM analyst_outputs f
+         WHERE f.kind = 'finding'
+           AND f.target_id = $1
+           AND f.analyst_id = ANY($2::TEXT[])
+           AND f.superseded_by IS NULL
+           AND f.produced_at > NOW() - make_interval(hours => $3)
+         ORDER BY f.analyst_id, f.produced_at DESC, f.id DESC
+    ), {critic_fold.faithfulness_score_cte()}
+    SELECT f.id::text        AS finding_id,
            f.analyst_id      AS analyst_id,
            f.confidence      AS confidence,
            f.produced_at     AS produced_at,
-           f.data -> 'tags'  AS tags,
+           f.tags            AS tags,
            f.derived_from    AS derived_from,
            v.faithfulness_score AS faithfulness_score
-      FROM analyst_outputs f
-      LEFT JOIN LATERAL (
-          SELECT (cr.data->>'overall_score')::real AS faithfulness_score
-            FROM analyst_outputs cr
-           WHERE cr.kind = 'critique'
-             AND cr.data->>'analyzed_output_id' = f.id::text
-             AND cr.data->>'overall_score' IS NOT NULL
-             AND cr.title LIKE 'Faithfulness verify%'
-           ORDER BY cr.produced_at DESC, cr.id DESC
-           LIMIT 1
-      ) v ON TRUE
-     WHERE f.kind = 'finding'
-       AND f.target_id = $1
-       AND f.analyst_id = ANY($2::TEXT[])
-       AND f.superseded_by IS NULL
-       AND f.produced_at > NOW() - make_interval(hours => $3)
+      FROM f
+      LEFT JOIN v ON v.fid = f.id::text
      ORDER BY f.analyst_id, f.produced_at DESC, f.id DESC
 """
 
@@ -973,33 +987,29 @@ _GATHER_SQL = """
 # Kept as a SEPARATE constant rather than an interpolated ``NOW()``/``$4`` switch
 # so that the production string is provably untouched — a test asserts
 # ``as_of=None`` executes :data:`_GATHER_SQL` verbatim.
-_GATHER_SQL_AS_OF = """
-    SELECT DISTINCT ON (f.analyst_id)
-           f.id::text        AS finding_id,
+_GATHER_SQL_AS_OF = f"""
+    WITH f AS MATERIALIZED (
+        SELECT DISTINCT ON (f.analyst_id)
+               f.id, f.analyst_id, f.confidence, f.produced_at,
+               f.data -> 'tags' AS tags, f.derived_from
+          FROM analyst_outputs f
+         WHERE f.kind = 'finding'
+           AND f.target_id = $1
+           AND f.analyst_id = ANY($2::TEXT[])
+           AND (f.superseded_by IS NULL OR f.superseded_at > $4)
+           AND f.produced_at <= $4
+           AND f.produced_at > $4 - make_interval(hours => $3)
+         ORDER BY f.analyst_id, f.produced_at DESC, f.id DESC
+    ), {critic_fold.faithfulness_score_cte(extra_where="cr.produced_at <= $4")}
+    SELECT f.id::text        AS finding_id,
            f.analyst_id      AS analyst_id,
            f.confidence      AS confidence,
            f.produced_at     AS produced_at,
-           f.data -> 'tags'  AS tags,
+           f.tags            AS tags,
            f.derived_from    AS derived_from,
            v.faithfulness_score AS faithfulness_score
-      FROM analyst_outputs f
-      LEFT JOIN LATERAL (
-          SELECT (cr.data->>'overall_score')::real AS faithfulness_score
-            FROM analyst_outputs cr
-           WHERE cr.kind = 'critique'
-             AND cr.data->>'analyzed_output_id' = f.id::text
-             AND cr.data->>'overall_score' IS NOT NULL
-             AND cr.title LIKE 'Faithfulness verify%'
-             AND cr.produced_at <= $4
-           ORDER BY cr.produced_at DESC, cr.id DESC
-           LIMIT 1
-      ) v ON TRUE
-     WHERE f.kind = 'finding'
-       AND f.target_id = $1
-       AND f.analyst_id = ANY($2::TEXT[])
-       AND (f.superseded_by IS NULL OR f.superseded_at > $4)
-       AND f.produced_at <= $4
-       AND f.produced_at > $4 - make_interval(hours => $3)
+      FROM f
+      LEFT JOIN v ON v.fid = f.id::text
      ORDER BY f.analyst_id, f.produced_at DESC, f.id DESC
 """
 
@@ -1020,29 +1030,26 @@ _GATHER_SQL_AS_OF = """
 # consumed head is scored by the critique that existed at the pin, not by one
 # written since. The rows themselves need no ``produced_at`` bound — they are
 # named by id from a composition that was itself gathered as-of.
-_CONSUMED_SQL = """
+_CONSUMED_SQL = f"""
+    WITH f AS MATERIALIZED (
+        SELECT f.id, f.analyst_id, f.confidence, f.produced_at,
+               f.data -> 'tags' AS tags
+          FROM analyst_outputs f
+         WHERE f.id = ANY($1::UUID[])
+           AND f.kind = 'finding'
+           AND f.target_id = $2
+           AND f.analyst_id = ANY($3::TEXT[])
+    ), {critic_fold.faithfulness_score_cte(
+        extra_where="($4::timestamptz IS NULL OR cr.produced_at <= $4)",
+    )}
     SELECT f.id::text        AS finding_id,
            f.analyst_id      AS analyst_id,
            f.confidence      AS confidence,
            f.produced_at     AS produced_at,
-           f.data -> 'tags'  AS tags,
+           f.tags            AS tags,
            v.faithfulness_score AS faithfulness_score
-      FROM analyst_outputs f
-      LEFT JOIN LATERAL (
-          SELECT (cr.data->>'overall_score')::real AS faithfulness_score
-            FROM analyst_outputs cr
-           WHERE cr.kind = 'critique'
-             AND cr.data->>'analyzed_output_id' = f.id::text
-             AND cr.data->>'overall_score' IS NOT NULL
-             AND cr.title LIKE 'Faithfulness verify%'
-             AND ($4::timestamptz IS NULL OR cr.produced_at <= $4)
-           ORDER BY cr.produced_at DESC, cr.id DESC
-           LIMIT 1
-      ) v ON TRUE
-     WHERE f.id = ANY($1::UUID[])
-       AND f.kind = 'finding'
-       AND f.target_id = $2
-       AND f.analyst_id = ANY($3::TEXT[])
+      FROM f
+      LEFT JOIN v ON v.fid = f.id::text
      ORDER BY f.analyst_id, f.produced_at DESC, f.id DESC
 """
 

@@ -1,0 +1,117 @@
+# Sahel coverage pass — Mali desk (country_watch_ml) — 2026-09-07. Ships DRAFT.
+#
+# See source_aib_burkina.yaml's header for the full WHY-THIS-BATCH-EXISTS note
+# (the measured 09-07 gap, and the sibling files). This descriptor is AMAP's —
+# Mali's equivalent of AIB.
+#
+# AMAP — Agence Malienne de Presse et de Publicité (amap.ml) — Mali's official
+# national press and publicity agency, a public establishment under the
+# Malian government. Whole-site WordPress feed (no per-rubrique RSS found).
+#
+# VERIFIED LIVE 2026-09-07 by direct fetch + feedparser: `https://amap.ml/feed/`
+# -> HTTP 200, `application/rss+xml; charset=UTF-8`, feedparser bozo=False,
+# 10 items, newest item 2026-09-07T00:49:45Z (same-day at fetch time), all 10
+# within the 7-day window. Sample Mali-domestic headlines: agricultural
+# ministry visit to Dioila; rainfall deficit in the San region; UEMOA session
+# opening in Bamako; death of a Ségou griot elder. `https://www.amap.ml/`
+# 301-redirects to the bare `amap.ml` host (no `www`); the working feed URL
+# uses the bare host, confirmed via the site's own `<link rel="alternate"
+# type="application/rss+xml">` tag.
+#
+# NOT PURE DOMESTIC — RECORDED SO IT IS NOT REDISCOVERED AS A SURPRISE: AMAP
+# carries genuine wire filler alongside its own Mali dispatches — the same
+# 10-item sample included Nigeria (school closures over a diphtheria outbreak),
+# China/Nepal (a landslide) and Malaysia (Anwar Ibrahim on early elections).
+# This is why `scope.geo` is left EMPTY rather than set to [ML] — see the geo
+# note below.
+#
+# NOT A DUPLICATE: no head row in source_descriptors points at amap.ml.
+#
+# geo: [] — DELIBERATE, and unlike source_studiotamani.yaml (which IS pure
+# Mali-domestic). `scope.geo` is publisher ORIGIN (data/sources/baseline.py
+# C2), promoted into the indexed `geo` column ONLY as a post-enrichment
+# fallback when nothing in the body geocoded. Declaring [ML] here would
+# fallback-tag a Nigeria/China/Malaysia wire item as Malian on any geocode
+# miss — the exact hazard source_sahel_intelligence.yaml and
+# source_france24_afrique.yaml document for their own mixed-content feeds.
+# The genuinely Mali-domestic items in this feed name Malian places
+# (Dioila, San, Bamako, Ségou) and geocode to ML on their own merits; the
+# desk reaches this feed through the standard auto-wire (kind `rss` + tag
+# `news` + owner_tenant `shared`) and narrows per signal on its own geo
+# predicate, same as the regional wires.
+#
+# source_class: state_media — AMAP is Mali's national state press and
+# publicity agency (public establishment, government-owned), read as FRAMING
+# evidence per the source_class taxonomy — the same treatment as
+# source_aib_burkina.yaml (Burkina Faso's AIB) and
+# source_ukrinform_english.yaml. Mali has been under a military transitional
+# government (Assimi Goïta) since 2021, which sharpens rather than weakens the
+# case for treating the state agency's output as framing rather than fact.
+#
+# LICENCE/ROBOTS POSTURE: `robots.txt` present (Yoast SEO default block),
+# `User-agent: * / Disallow:` (nothing disallowed) — no restriction observed.
+# No machine-readable licence declaration found on-site. `scope.license_class`
+# left UNSET (honest absence, the LIC-2 default), which lands ingested signals
+# at teaser depth until an operator reviews it.
+#
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after the route is
+# re-verified live on the instance.
+
+identity:
+  id: source.amap.news
+  name: AMAP — Agence Malienne de Presse et de Publicité
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: source_batch_2026_09
+  created: "2026-09-07T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  # EMPTY on purpose — the feed mixes in non-Mali wire filler. See the geo note.
+  geo: []
+  languages: [fr]
+  tags: [news, world, africa, sahel, mali, francophone, source_batch_2026_09]
+  source_class: state_media
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "27 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 60
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://amap.ml/feed/"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

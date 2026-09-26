@@ -43,6 +43,7 @@ scope:
   languages: [en]
   tags: [backfill, news, historical, global]
   source_class: analysis
+  access_class: restricted          # Wave-E — never-bound draft adapter; no concrete source to review terms for — fail-closed until classified at activation
 
 acquisition: poll
 

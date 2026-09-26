@@ -17,13 +17,20 @@
  *
  * The semantics are now split, and this store owns one half:
  *
- *   * **Sidebar desk click → SEEDS this store** (`seedDeskFilter`). It writes a
- *     normal, visible, removable `target:` chip — identical to one the operator
- *     sets from the filter bar's desk dropdown. Nothing about it is special or
- *     hidden, so it can be cleared and re-set by hand ("which I can't do
- *     myself" — now they can).
  *   * **Feed row click → global selection ONLY.** It drives the Inspector and
  *     never touches anything in here. The feed just highlights the row.
+ *
+ * ## What replaced `seedDeskFilter` (WORKSTATION_V2_FLOW_DESIGN §3)
+ *
+ * A desk click used to reach in here and write a `target:` chip
+ * (`seedDeskFilter`). That was a workaround for a missing channel: there was
+ * nowhere to say "the wall is about this desk" except the feed's own filter
+ * store, so a desk had to be smuggled in as a filter. `state/scope.ts` is that
+ * channel, and the feed now MERGES the scope into its server params and renders
+ * it as a pinned, removable chip ahead of the filter bar — visible and
+ * reversible for the same reason the seeded chip was, but owned by the store
+ * that means it. This store keeps exactly what it was always for: the feed's
+ * OWN posture (stream, sort, hand-typed chips, scroll).
  *
  * ## Why a store rather than component state
  *
@@ -76,7 +83,6 @@ export interface FeedViewStore extends PersistedFeedView {
    * A plain `target:` chip write — the operator can remove it, or replace it
    * from the filter bar, exactly as if they had set it themselves.
    */
-  seedDeskFilter: (targetId: string) => void
   setHideSuperseded: (v: boolean) => void
   setLive: (v: boolean) => void
   setScrollTop: (v: number) => void
@@ -201,11 +207,6 @@ export const useFeedView = create<FeedViewStore>((set, get) => {
     setFacet: (key, value) => {
       const filter = { ...get().filter, chips: setChip(get().filter.chips, key, value) }
       commit({ filter, query: serializeFilter(filter) })
-    },
-    seedDeskFilter: (targetId) => {
-      const id = targetId.trim()
-      if (!id) return
-      get().setFacet('target', id)
     },
     setHideSuperseded: (hideSuperseded) => commit({ hideSuperseded }),
     setLive: (live) => commit({ live }),

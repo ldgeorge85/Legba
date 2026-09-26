@@ -200,6 +200,236 @@ body {
   line-height: 1.7;
 }
 
+/* ---------------------------------------------------------------------------
+   THE MORNING READ (D-4, the reader train of the composition demotion).
+
+   The surface the operator reads every morning. Under the demotion the page is
+   no longer composed prose — it is QUOTED desk prose with its origin attached
+   (DEMOTION_D1_SPEC_2026-09-04.md §1.8). That makes the typography the whole
+   design problem: verbatim spans arranged as database rows read as an audit
+   dump, and the hand-built mock was rejected for exactly that. So:
+
+     * ONE reading column. `.read-col` inherits `.report-prose`'s measure — the
+       same 72ch the World Assessment, the Journal and the Inspector already
+       read at — because a second measure would say this page is a different
+       kind of object, and it is not.
+     * The FURNITURE RECEDES. Desk attribution, verify score, severity and the
+       head id are `--ink-3` at label size in a margin rail, never chips in the
+       reader's path. The sentence is the loudest thing on the page; everything
+       that qualifies it is quieter than it.
+     * The ASSESSMENT SHIFTS REGISTER, in type. The record is set in the app's
+       sans; the interpretive channel is set in a serif at a narrower measure on
+       a raised surface with an accent rule. Ruling 1 requires the channel be
+       "clearly labelled"; a label the eye can skip is not clearly anything, and
+       a typeface change is the one signal that survives skimming.
+
+   Every colour here is a token. Nothing in this block hardcodes a hex.
+   --------------------------------------------------------------------------- */
+.read-col {
+  max-width: 72ch;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* The four bands, ordered by ONE attribute (ruling 3: the flip stays cheap).
+   B — evidence map, record, ledger, Assessment LAST — is the default. */
+.read-page {
+  display: flex;
+  flex-direction: column;
+}
+.read-page[data-read-layout='B'] [data-band='evidence'] { order: 1; }
+.read-page[data-read-layout='B'] [data-band='record'] { order: 2; }
+.read-page[data-read-layout='B'] [data-band='ledger'] { order: 3; }
+.read-page[data-read-layout='B'] [data-band='assessment'] { order: 4; }
+.read-page[data-read-layout='A'] [data-band='assessment'] { order: 1; }
+.read-page[data-read-layout='A'] [data-band='record'] { order: 2; }
+.read-page[data-read-layout='A'] [data-band='evidence'] { order: 3; }
+.read-page[data-read-layout='A'] [data-band='ledger'] { order: 4; }
+
+/* A band's own quiet heading: a word, a hairline, and a caption saying what
+   grain this is. Ruling 5 — the three grains are each contexted. */
+.read-band-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-bottom: 0.9rem;
+}
+.read-band-head h2 {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.read-band-head .read-rule {
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--line-1);
+}
+.read-band-head .read-band-note {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+/* ── A RECORD BLOCK ────────────────────────────────────────────────────────
+   Grid: a narrow furniture rail, then the reading column. Below `md` the rail
+   folds to a single inline caption line so the prose keeps the full width. */
+.read-block {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.5rem;
+  padding: 1.4rem 0;
+  border-top: 1px solid var(--line-1);
+}
+@media (min-width: 52rem) {
+  .read-block {
+    grid-template-columns: 3.25rem minmax(0, 1fr);
+    column-gap: 1.25rem;
+  }
+}
+.read-rail {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.6875rem;
+  color: var(--ink-3);
+}
+@media (min-width: 52rem) {
+  .read-rail {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.35rem;
+    padding-top: 0.35rem;
+  }
+}
+.read-ordinal {
+  font-variant-numeric: tabular-nums;
+  font-size: 1.05rem;
+  line-height: 1;
+  color: var(--ink-3);
+}
+
+/* The block header IS the desk's bounded question (§B.4 Correction 3) — the
+   surface that carries the register once the composed prose is gone. It is set
+   as a question, in the reading face, not as a chip or a column label. */
+.read-question {
+  font-size: 0.9375rem;
+  line-height: 1.45;
+  font-weight: 500;
+  color: var(--ink-2);
+  margin-bottom: 0.55rem;
+}
+
+/* The quoted spans. The lead span is the lede; the rest flow as one paragraph.
+   Both are verbatim — concatenation adds no words, and every span in a block
+   shares one origin head, so there is no attribution to lose. */
+.read-lede :where(p) {
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  color: var(--ink-1);
+}
+.read-rest :where(p) {
+  font-size: 0.9375rem;
+  line-height: 1.7;
+  color: var(--ink-2);
+}
+.read-rest { margin-top: 0.5rem; }
+
+/* Attribution, AFTER the sentence. You read the claim, then who made it. */
+.read-attrib {
+  margin-top: 0.65rem;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: var(--ink-3);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+/* ── TENSION, INLINE ───────────────────────────────────────────────────────
+   Declared where it belongs: immediately after the LATER of the two blocks it
+   names, so the reader has met both halves. Not a section at the end. */
+.read-tension {
+  margin: 0.2rem 0 0.2rem 0;
+  padding: 0.6rem 0 0.6rem 0.85rem;
+  border-left: 2px solid var(--sev-medium);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+.read-tension .read-tension-kicker {
+  display: block;
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sev-medium);
+  margin-bottom: 0.2rem;
+}
+.read-tension .read-tension-note {
+  margin-top: 0.3rem;
+  font-size: 0.75rem;
+  color: var(--ink-3);
+}
+
+/* ── THE ASSESSMENT BAND — the register shift ──────────────────────────────
+   A different voice gets a different typeface. The measure narrows, the surface
+   raises, and an accent rule runs the height of the channel. The badge is ONE
+   quiet line: it is present, sourced and never shouting (§2.3). */
+.read-assessment {
+  font-family: ui-serif, Georgia, Cambria, 'Times New Roman', Times, serif;
+  max-width: 62ch;
+  background: var(--surf-1);
+  border-left: 2px solid var(--accent);
+  border-radius: 0 4px 4px 0;
+  padding: 1.15rem 1.35rem 1.25rem;
+}
+.read-assessment :where(p) {
+  font-size: 1.0625rem;
+  line-height: 1.72;
+  color: var(--ink-1);
+}
+.read-assessment :where(h1, h2, h3, h4) {
+  font-family: inherit;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.read-assessment-label {
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 0.6875rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.read-assessment-badge {
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+
+/* An unsupported-by-spine span (§2.4). Marked in the flow, dotted rather than
+   filled, so the sentence stays readable and the mark stays undeniable. The
+   Assessment publishes WITH its markers — the journal's off-chain privilege,
+   granted to the one channel that cannot write a fact into the record. */
+.read-unsup {
+  background: transparent;
+  color: inherit;
+  border-bottom: 1px dotted var(--sev-medium);
+  text-decoration: none;
+  cursor: pointer;
+  padding: 0;
+}
+.read-unsup sup {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.625rem;
+  color: var(--sev-medium);
+  padding-left: 0.1rem;
+}
+
 /* Dockview dark theme tweaks to match Personal-mode palette. */
 .dockview-theme-abyss {
   --dv-paneview-active-outline-color: #3b82f6;

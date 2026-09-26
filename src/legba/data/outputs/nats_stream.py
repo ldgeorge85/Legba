@@ -32,18 +32,31 @@ Behaviour
 
 Wiring
 ------
-The output kind reads NATS access from `deps`. Two access patterns are
+The output kind reads NATS access from `deps`. Three access patterns are
 supported, in order:
 
 1. `deps.nats_publish` — `Callable[[subject, bytes], Awaitable[None]]`.
    This is the `legba.runtime.deps.StandardDeps.nats_publish` slot. It's
-   the recommended path because the runtime can swap it for an
-   instrumented wrapper (tracing, budget, etc.).
-2. `deps.nats_store` — a `legba.data.nats.NatsStore` instance with `.js`
+   the recommended path for a direct/legacy caller because the runtime can
+   swap it for an instrumented wrapper (tracing, budget, etc.).
+2. `deps.nats` — a `legba.data.outputs._contract.NatsPublisher`
+   (`.publish_json`), i.e. `legba.data.outputs._contract.OutputDeps.nats`.
+   THIS is what the production dispatcher actually passes:
+   `legba.runtime.actor_output_emit._emit_output_bindings` builds one
+   `OutputDeps` for every emit-capable output-kind handler it calls
+   (`alert` / `stix_bundle` / `webhook` / this module), and those siblings
+   all read `deps.nats.publish_json(...)` (see `alert_sinks/nats.py`,
+   `stix_bundle.py`) — `nats_stream` was the one holdout still looking for
+   the raw `StandardDeps` shape, so every `nats_stream` output binding
+   raised `OutputDepsError` on its very first live publish attempt (found
+   2026-09-06: `corpus_researcher` / `cross_doc_corroborator`, the only two
+   descriptors that had actually exercised this path — zero
+   `output_emit.ok kind=nats_stream` had ever been logged).
+3. `deps.nats_store` — a `legba.data.nats.NatsStore` instance with `.js`
    ready (`await store.connect()`). Used by tests and as a fallback when
-   the runtime has not constructed a `StandardDeps`.
+   the runtime has not constructed a `StandardDeps`/`OutputDeps`.
 
-If neither is present we raise `OutputDepsError`.
+If none are present we raise `OutputDepsError`.
 """
 
 from __future__ import annotations
@@ -202,18 +215,33 @@ class _ResolvedPublisher:
     is_js: bool
 
 
-def _resolve_publisher(deps: Any) -> _ResolvedPublisher:
+def _resolve_publisher(
+    deps: Any, *, analyst_id_hint: str | None = None,
+) -> _ResolvedPublisher:
     """Pick a publish callable from the deps bundle. Errors are explicit."""
-    analyst_id = getattr(deps, "analyst_id", None)
+    analyst_id = getattr(deps, "analyst_id", None) or analyst_id_hint
 
-    # Path 1: deps.nats_publish closure (StandardDeps).
+    # Path 1: deps.nats_publish closure (StandardDeps, or a direct/legacy
+    # caller's hand-rolled deps).
     nats_publish = getattr(deps, "nats_publish", None)
     if nats_publish is not None:
         return _ResolvedPublisher(
             publish=nats_publish, analyst_id=analyst_id, is_js=False,
         )
 
-    # Path 2: deps.nats_store — use the JetStream context's publish.
+    # Path 2: deps.nats — the OutputDeps.NatsPublisher the generic dispatcher
+    # (actor_output_emit._emit_output_bindings) actually constructs for every
+    # emit-capable output kind. Mirrors how the alert/stix_bundle sinks read
+    # this exact field (`deps.nats.publish_json(...)`). Not a raw JetStream
+    # `.js.publish` — `is_js=False`, same as the closure path, since
+    # `NatsPublisher.publish_json` already wraps the runtime's publish.
+    nats_adapter = getattr(deps, "nats", None)
+    if nats_adapter is not None:
+        return _ResolvedPublisher(
+            publish=nats_adapter.publish_json, analyst_id=analyst_id, is_js=False,
+        )
+
+    # Path 3: deps.nats_store — use the JetStream context's publish.
     nats_store = getattr(deps, "nats_store", None)
     if nats_store is not None:
         # We don't enforce the Protocol at runtime because some test deps
@@ -474,7 +502,13 @@ async def emit(
     # 1) Validate up-front. Programmer errors surface immediately.
     _validate_subject(subject)
     body = _encode_payload(payload)
-    publisher = _resolve_publisher(deps)
+    # OutputDeps (the production dispatcher's deps shape) carries no
+    # `analyst_id` of its own — that lives on `ctx` (OutputContext). Thread it
+    # through as a fallback so the Path-2 (`deps.nats`) resolution still
+    # names the right analyst in a DLQ subject on a later transient failure.
+    publisher = _resolve_publisher(
+        deps, analyst_id_hint=getattr(ctx, "analyst_id", None) or None,
+    )
 
     # 2) Attempt with bounded retry.
     try:

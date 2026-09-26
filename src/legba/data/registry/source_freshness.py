@@ -111,6 +111,43 @@ def cadence_interval_minutes(cron_expr: Optional[str]) -> Optional[float]:
         return None
 
 
+def next_fire_after(
+    cron_expr: Optional[str], after: datetime
+) -> Optional[datetime]:
+    """The first scheduled fire of ``cron_expr`` strictly after ``after``, or
+    ``None`` when no honest answer exists (missing/blank/invalid expression, or
+    croniter unavailable).
+
+    Sibling of :func:`cadence_interval_minutes`: same croniter dependency, same
+    refuse-rather-than-guess posture. Lives here because this module is the
+    tree's one reader of a declared cron cadence, and a second implementation
+    of "when does this next run" is exactly the drift the A7 grade was
+    consolidated to avoid. Added for the typed-absence route
+    (``absence_api``), which stamps every absence with when it stops being
+    current — the next scheduled run of whatever measured it.
+
+    A naive ``after`` is read as UTC, matching every cadence declaration in
+    the tree; the result carries ``after``'s own tzinfo.
+    """
+    if not cron_expr or not str(cron_expr).strip():
+        return None
+    expr = str(cron_expr).strip()
+    try:
+        from croniter import croniter
+    except ImportError:  # pragma: no cover — croniter is a hard dep in-tree
+        return None
+    try:
+        if not croniter.is_valid(expr):
+            return None
+        base = after if after.tzinfo is not None else after.replace(
+            tzinfo=timezone.utc
+        )
+        return croniter(expr, start_time=base).get_next(datetime)
+    except Exception as exc:  # noqa: BLE001 — a junk expression has no answer
+        logger.info("source_freshness.next_fire_unavailable expr=%r err=%s", expr, exc)
+        return None
+
+
 def derive_budget_minutes(cron_expr: Optional[str]) -> Optional[int]:
     """The freshness budget (minutes) for one declared cadence, or ``None``
     when the source is ungradable (no/invalid cadence declaration)."""
@@ -164,4 +201,5 @@ __all__ = [
     "cadence_interval_minutes",
     "derive_budget_minutes",
     "grade_freshness",
+    "next_fire_after",
 ]

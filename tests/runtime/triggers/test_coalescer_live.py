@@ -335,3 +335,67 @@ async def test_actor_runner_dispatches_coalesced_llm_fire():
 
     with pytest.raises(ValueError):
         await DeterministicTriggerRunner(_work).run(fire)
+
+
+# ===========================================================================
+# coalesced-into-turn — a busy actor is not a failed run (live lifecycle)
+# ===========================================================================
+
+
+async def test_fire_absorbed_by_a_running_turn_is_coalesced_not_failed(
+    trig_pg, trig_state, caplog
+):
+    """The whole lifecycle, on durable state: dirty -> claim -> busy actor.
+
+    A re-fire dispatched onto a worker that is inside a turn cannot complete its
+    invoke, and the trigger plane used to call that ``trigger.run.failed`` — an
+    ERROR asserting the analyst failed, while the run's own trace said success.
+    Here the work callable raises :class:`DispatchCoalesced` (what
+    ``build_trigger_work`` raises once the actor turn witness confirms the
+    target was occupied across the fire), and the coalescer must carry that
+    through as a distinct outcome.
+
+    The durable half matters as much as the log: the accumulator was already
+    reset by the CAS fire-claim, so a coalesced fire must NOT leave the pair
+    looking un-fired — the next window starts fresh either way, exactly as it
+    does for a completed run.
+    """
+    import logging
+
+    from legba.runtime.triggers.dispatch import DispatchCoalesced
+
+    async def _busy(fire: TriggerFire) -> dict:
+        raise DispatchCoalesced(
+            analyst_id=fire.analyst_id,
+            target_id=fire.target_id,
+            witness="in_flight",
+            transport="TimeoutError: invoke line expired waiting for the turn",
+        )
+
+    runner = ActorTriggerRunner(_busy)
+    policy = TriggerPolicy(accumulation_threshold=2)
+    co = _coalescer(trig_state, runner, policy)
+    a, t = "analyst.det", f"target.{uuid4().hex[:8]}"
+
+    with caplog.at_level(logging.INFO, logger="legba.runtime.triggers.dispatch"):
+        for _ in range(2):
+            row = await _insert_signal(trig_pg)
+            res = await co.on_signal(
+                analyst_id=a, target_id=t, tenant="default", signal_row=row, now=T0,
+            )
+
+    assert res is not None
+    assert res.status == "coalesced"
+    assert res.error is None
+    assert res.pending_count == 2
+    assert res.detail == {"witness": "in_flight"}
+    assert runner.coalesced == 1
+
+    assert "trigger.coalesced_into_turn" in caplog.text
+    assert "trigger.run.failed" not in caplog.text
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+    # Durable state moved exactly as a completed fire would move it.
+    acc = await trig_state.get(a, t)
+    assert acc.pending_count == 0
+    assert await trig_state.fire_count(a, t) == 1

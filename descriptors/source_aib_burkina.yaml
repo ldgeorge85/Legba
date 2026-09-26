@@ -1,0 +1,134 @@
+# Sahel coverage pass — Burkina Faso desk (country_watch_bf) — 2026-09-07.
+# Ships DRAFT.
+#
+# WHY THIS BATCH EXISTS. `country_watch_bf` (target geo ["BF"]) has had NO desk
+# runs since 09-05 13:06Z because no signal has been tagged BF since 09-02 (two
+# pineapple-farming pieces); in the 7-day window the whole corpus holds 5
+# mentions of Burkina/Ouagadougou/Traoré. Compare `country_watch_ml`: 6
+# geo-tagged signals in 4 days. Neither desk had a domestic-press source
+# registered at all before this batch — the existing Sahel-relevant roster
+# (rsshub.rfi.afrique, france24.afrique, africanews.all, allafrica.headlines,
+# sahelintelligence.news) is regional/continental wire copy, none of it
+# BF-headquartered. This descriptor and its siblings
+# (source_lefaso_net.yaml, source_studioyafa.yaml for Burkina Faso;
+# source_amap_mali.yaml, source_malijet.yaml, source_studiotamani.yaml for
+# Mali) are the domestic-press answer, mirroring the 2026-08-03 Niger batch
+# (source_actuniger_politique.yaml / source_studiokalangou.yaml) shape:
+# one state agency + one high-volume independent + one Fondation Hirondelle
+# up-country station, per country.
+#
+# AIB — Agence d'Information du Burkina (aib.media) — Burkina Faso's official
+# national press agency, under the Ministry in charge of Communication. Not a
+# section feed (the site does not expose per-rubrique RSS the way ActuNiger's
+# Joomla install does); this is the whole-site output, which in practice reads
+# as a rolling feed of provincial/community dispatches (each dateline a BF
+# province — Tuy, Balé, Kénédougou, Banwa, Yatenga, Houet, Bazèga, ...) plus
+# occasional national-government items. This is exactly the kind of up-country,
+# state-apparatus-adjacent coverage the starved BF desk currently has zero of.
+#
+# VERIFIED LIVE 2026-09-07 by direct fetch + feedparser (feedparser 6.0.12,
+# the handler's own parser, `parser: auto` reads either RSS or Atom):
+# `https://www.aib.media/feed/` -> HTTP 200, `application/rss+xml`, feedparser
+# bozo=False, 20 items, newest item 2026-09-06T18:34:23Z (same-day at fetch
+# time), all 20 items within the 7-day window. 19/20 items are BF-provincial
+# dispatches; ONE item ("Niger: le gouvernement affirme avoir constitué une
+# documentation...") is AES-bloc regional coverage naming Niger explicitly in
+# its own text, so it geocodes to NE on its own merits rather than needing the
+# BF fallback — see the geo note below. `https://aib.media/feed/` (no `www`)
+# 302-redirects to the bare homepage, NOT the feed; the working URL requires
+# the `www.` host, confirmed via the site's own `<link rel="alternate"
+# type="application/rss+xml">` tag.
+#
+# NOT A DUPLICATE: no head row in source_descriptors points at aib.media.
+#
+# geo: [BF] — publisher origin (data/sources/baseline.py C2), promoted into
+# the indexed `geo` column ONLY as a post-enrichment fallback when nothing in
+# the body geocoded. AIB is Burkina Faso's own state agency writing
+# provincial BF dispatches (Tuy/Balé/Kénédougou/... rarely name "Burkina Faso"
+# explicitly, only the province), so the fallback correctly rescues those. The
+# one observed Niger item names Niger explicitly and geocodes on its own; the
+# fallback never fires for it.
+#
+# source_class: state_media — AIB is Burkina Faso's national state press
+# agency (government-owned, Ministry of Communication), read as FRAMING
+# evidence per the source_class taxonomy, not as an independent editorial
+# voice. Same treatment as source_ukrinform_english.yaml (Ukraine's own
+# national state news agency) and source_irna_english.yaml — a state-run wire
+# presenting general news, not a government press office's own statements
+# (which would be `official`, per source_kremlin.yaml). Burkina Faso has been
+# under a military transitional government (Capitaine Ibrahim Traoré) since
+# 2022, which sharpens rather than weakens the case for treating the state
+# agency's output as framing.
+#
+# LICENCE/ROBOTS POSTURE: no `robots.txt` found at aib.media or www.aib.media
+# (the request 302-redirects straight to the homepage HTML) — no restriction
+# observed. No machine-readable licence declaration found on-site.
+# `scope.license_class` left UNSET (honest absence, not "unknown" — the
+# LIC-2 default), which lands ingested signals at teaser depth until an
+# operator reviews it.
+#
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after the route is
+# re-verified live on the instance.
+
+identity:
+  id: source.aib.news
+  name: AIB — Agence d'Information du Burkina
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: source_batch_2026_09
+  created: "2026-09-07T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [BF]
+  languages: [fr]
+  tags: [news, world, africa, sahel, burkina_faso, francophone, source_batch_2026_09]
+  source_class: state_media
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  # Hourly, staggered minute offset — courteous to a small state agency's own
+  # servers; the handler's conditional GET makes an unchanged poll near-free.
+  schedule:
+    factory_kind: cron
+    raw: "12 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 60
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.aib.media/feed/"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual can use the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming on
+    # the instance that the feed carries article bodies rather than teasers.
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

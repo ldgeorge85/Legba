@@ -119,6 +119,41 @@ _BARE_UNITS_RE = re.compile(
     re.IGNORECASE,
 )
 
+#: The typed-absence vocabulary TOTAL: "a closed eight-kind vocabulary" and
+#: "Eight kinds, one closed vocabulary". Four files state it (README, STATUS,
+#: UI, GLOSSARY) and none of them reads it from anywhere.
+#:
+#: Anchored on the word ``vocabular`` for the reason _SUBSET_MARKERS exists:
+#: a bare "N kinds" matcher fires on "nine kinds" of analyst, "Twelve kinds"
+#: of output row and "three kinds" of Inspector selection — all correct prose
+#: about entirely different closed sets. Only the phrasings that name THIS
+#: vocabulary are a claim about it.
+_ABSENCE_KINDS_RE = re.compile(
+    rf"(?<![#\-])\b({_COUNT_TOKEN})\b[ -]\**kinds?\**"
+    r"(?:,\s+one\s+closed)?\s+\**(?:closed\s+)?\**vocabular",
+    re.IGNORECASE,
+)
+
+#: The source-layer vocabulary TOTAL, pinned to ``LAYER_VOCAB``: "the six
+#: source layers" and "a closed six-layer vocabulary".
+#:
+#: Same discipline. The corpus says "two layers" about an evidence split,
+#: "three layer-to-layer pairs" about the divergence rows and "four layers"
+#: about a manifest's tiers; none is a claim about how many SOURCE layers the
+#: closed vocabulary holds, so the noun must be qualified.
+_SOURCE_LAYERS_RE = re.compile(
+    rf"(?<![#\-])\b({_COUNT_TOKEN})\b[ -]\**"
+    r"(?:source\**[ -]\**layers?\b|layer\**[ -]\**vocabular)",
+    re.IGNORECASE,
+)
+
+#: "A loaded map always declares all six layers" — the universal form, which
+#: is a claim about the same total and reads naturally without "source".
+_ALL_LAYERS_RE = re.compile(
+    rf"\ball\s+\**({_COUNT_TOKEN})\**\s+\**layers\b",
+    re.IGNORECASE,
+)
+
 #: Substrings that make a matched span a SUBSET or COMPARATIVE claim rather
 #: than a total. Each one is a real, correct phrasing in the tree:
 #:
@@ -237,6 +272,81 @@ def test_country_desk_counts_agree_across_docs() -> None:
     assert not bad, (
         f"docs disagree with docs/RELEASE_STATE.md on the country-desk roster "
         f"({total} total = {g20} G20 + {watch} watch):\n  " + "\n  ".join(bad)
+    )
+
+
+def _closed_vocabulary(rel_path: str, symbol: str) -> list[str]:
+    """The quoted members of a closed vocabulary literal in ``src``, read from
+    the source text rather than imported.
+
+    Reading the file keeps this module what its docstring promises — pure, no
+    DB, no runtime import — while still pinning against the one definition the
+    platform actually enforces. A rename or a reshaping of the literal fails
+    loud here rather than silently disarming the assertion.
+    """
+    text = (REPO_ROOT / rel_path).read_text(encoding="utf-8")
+    m = re.search(rf"^{re.escape(symbol)}[^=]*=\s*[\(\{{]", text, re.MULTILINE)
+    assert m is not None, (
+        f"could not find the {symbol} literal in {rel_path} — this guard has "
+        f"nothing to pin the doc prose against until that is fixed"
+    )
+    depth, i = 0, m.end() - 1
+    open_ch, close_ch = text[i], {"(": ")", "{": "}"}[text[i]]
+    while i < len(text):
+        if text[i] == open_ch:
+            depth += 1
+        elif text[i] == close_ch:
+            depth -= 1
+            if depth == 0:
+                break
+        i += 1
+    body = text[m.end() - 1 : i]
+    # top-level members only: a dict's VALUES are multi-line prose in quotes,
+    # so take the first quoted token on each line that starts a member.
+    members: list[str] = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        member = re.match(r'^"([a-z_]+)"\s*[:,]', stripped)
+        if member:
+            members.append(member.group(1))
+    assert members, f"parsed no members out of {symbol} in {rel_path}"
+    return members
+
+
+def test_absence_kind_counts_agree_across_docs() -> None:
+    """Every doc that states how many typed-absence kinds there are must state
+    the number the closed vocabulary actually holds.
+
+    The vocabulary is closed and every item on the wire carries exactly one
+    kind, so the count is a real invariant rather than a stylistic choice — and
+    it is asserted, unsourced, in four separate files.
+    """
+    expected = len(
+        _closed_vocabulary("src/legba/data/registry/absence_api.py", "ABSENCE_KINDS")
+    )
+    bad = _violations(_ABSENCE_KINDS_RE, expected)
+    assert not bad, (
+        f"docs disagree with ABSENCE_KINDS on the typed-absence kind count "
+        f"({expected}):\n  " + "\n  ".join(bad)
+    )
+
+
+def test_source_layer_counts_agree_across_docs() -> None:
+    """The source-layer vocabulary total must read the same in every doc as in
+    ``LAYER_VOCAB``.
+
+    A loaded layer map declares every layer — that is the whole point of the
+    aperture declaration, so that a missing layer reads as declared-absent
+    rather than as agreement — which makes the vocabulary size load-bearing
+    prose rather than decoration.
+    """
+    expected = len(_closed_vocabulary("src/legba/data/layers/_vocab.py", "LAYER_VOCAB"))
+    bad = _violations(_SOURCE_LAYERS_RE, expected) + _violations(_ALL_LAYERS_RE, expected)
+    assert not bad, (
+        f"docs disagree with LAYER_VOCAB on the source-layer count "
+        f"({expected}):\n  " + "\n  ".join(bad)
     )
 
 

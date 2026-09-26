@@ -187,7 +187,9 @@ export default function TimelinePanel() {
     (p.category && CATEGORY_COLOR[p.category]) || KIND_COLOR.signal
   const onPick = (d: unknown) => {
     const p = d as LanePoint
-    selectRow(p.kind, p.id, p.title, { origin: 'timeline' })
+    // `ts` — the record's own instant (design §3 enabler 1), so every other
+    // timeline can center on this selection without refetching the record.
+    selectRow(p.kind, p.id, p.title, { origin: 'timeline', preview: { ts: p.ts } })
   }
 
   const isLoading = signals.isLoading || findings.isLoading || situations.isLoading

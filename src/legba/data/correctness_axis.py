@@ -252,16 +252,41 @@ def assert_not_pooled(payload: Mapping[str, Any], *, what: str) -> None:
 #: its raw verdict counts; the WEIGHTING is applied in Python by :func:`score` so
 #: there is exactly one implementation of it (the review found the weights
 #: hand-rolled in SQL in one place and in prose in another).
-UNIT_LABELS_SQL = """
+#: F-2 — the MACHINE-authored `labeled_by` prefixes this axis excludes. The A-3
+#: attention-instrument sampler writes its SAMPLING FRAME into this same table
+#: (one row per graded desk head, placeholder label `unresolvable`, the item and
+#: the instrument's own verdict under `finding_snapshot`), because
+#: `correctness_labels` is the one labelling surface and a second table would be
+#: a second definition of "graded". An UNGRADED sample is not an operator
+#: verdict and must never be pooled into this axis; a row becomes a real verdict
+#: only when a human — or an operator-invoked frontier model — overwrites both
+#: `label` and `labeled_by`, at which point it stops matching this prefix and
+#: joins the population exactly as any other operator row does.
+MACHINE_LABELED_BY_PREFIXES: tuple[str, ...] = (
+    "desk_reference/",
+    "desk_reference_sample/",
+)
+
+#: The SQL LIKE patterns for the above. `COALESCE` because `labeled_by` is
+#: nullable and `NULL NOT LIKE ...` is NULL rather than TRUE — an operator row
+#: with no labeler recorded must stay IN the population.
+_MACHINE_LIKE = " AND ".join(
+    f"COALESCE(labeled_by, '') NOT LIKE '{p}%'"
+    for p in MACHINE_LABELED_BY_PREFIXES
+)
+
+UNIT_LABELS_SQL = f"""
     SELECT unit_analyst_id, label
       FROM correctness_labels
+     WHERE {_MACHINE_LIKE}
 """
 
 #: The same, scoped to one unit (GEPA's per-analyst gate).
-ONE_UNIT_LABELS_SQL = """
+ONE_UNIT_LABELS_SQL = f"""
     SELECT label
       FROM correctness_labels
      WHERE unit_analyst_id = $1
+       AND {_MACHINE_LIKE}
 """
 
 
@@ -296,6 +321,7 @@ def score_by_unit(
 
 __all__ = [
     "AXIS_KEYS",
+    "MACHINE_LABELED_BY_PREFIXES",
     "AXIS_NAME",
     "LABEL_CORRECT",
     "LABEL_INCORRECT",

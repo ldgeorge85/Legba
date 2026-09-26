@@ -95,6 +95,12 @@ const KIND_GROUP: Partial<Record<PanelKind, NavGroupId>> = {
   // (U-3 — Watches/Triggers/Deliveries tabs) likewise.
   'system.timeline': 'awareness',
   'system.alerts_watches': 'awareness',
+  // The Morning Read is the LANDING surface — the first thing the operator
+  // reads, the daily "what happened" — so it belongs in the top group with
+  // the rest of the live picture. It had no row here at all, which meant it
+  // fell through to `PREFIX_GROUP['v4'] = 'investigation'` and the landing
+  // headline product filed itself under Investigation. Nothing chose that;
+  // it was the prefix fallback answering a question nobody had asked.
 
   // --- Investigation: dig into the why ---
   'system.entities': 'investigation',
@@ -106,14 +112,37 @@ const KIND_GROUP: Partial<Record<PanelKind, NavGroupId>> = {
   // The merged Provenance surface (U-3 — Why/Lineage/Flow tabs).
   'system.provenance': 'investigation',
 
+  // Consult is an AWARENESS surface, not an Analysis tool (decision 3). It is
+  // the landing's docked-right centre — the operator's standing conversation
+  // with the substrate, open beside the read, not a thing they go and find.
+  'system.consult': 'awareness',
+
   // --- Analysis: reason over the substrate ---
-  'system.consult': 'analysis',
   'system.optimizer': 'analysis',
   'system.optimizer.diff': 'analysis',
   'system.eval_scorecard': 'analysis',
+  // 7b-v — the divergence map. Pinned here against the `system.*` → Engine Room
+  // prefix fallback, which would have filed it with the plumbing: a country's
+  // layer-to-layer gap moving is a reading ABOUT THE WORLD that an analyst
+  // reasons over, not an instrument-health check.
+  'system.layer_divergence': 'analysis',
+  // Wave P lane B — cross-framing. It ships HIDDEN (a drill opened from the
+  // claim it is about), so it costs no sidebar row today and this line changes
+  // nothing that renders. It is here because the moment the `hidden` flag comes
+  // off, the placement must already be right: putting one claim against the
+  // units that touch it is reasoning over the substrate, not plumbing, and the
+  // `analysis.*` prefix below says the same thing a second way.
+  'analysis.cross_framing': 'analysis',
 
   // --- Products: the finished intelligence ---
+  // The Navigator IS the products index — it lists the day's reads by tier and
+  // scopes the wall to whichever one the operator picks.
+  'system.navigator': 'products',
   'v4.assessment': 'products',
+  // `v4.morning_read` had NO row here, so the landing's headline product landed
+  // in Investigation through the `v4 →` prefix fallback (design §1). The read is
+  // a product; it belongs beside the surface it retires.
+  'v4.morning_read': 'products',
   'system.journal': 'products',
   'system.report_export': 'products',
 
@@ -160,6 +189,13 @@ const TASK_ORDER: Partial<Record<PanelKind, number>> = {
   'system.timeline': 3,
   'system.alerts_watches': 4,
   'system.inspector': 5,
+  // Decision 3 — Consult joins Awareness at the end of the workflow order: the
+  // standing conversation you turn to after reading, not before.
+  'system.consult': 6,
+  // Products reads Navigator → the read → the Assessment it retires → Journal.
+  'system.navigator': 0,
+  'v4.morning_read': 1,
+  'v4.assessment': 2,
 }
 
 /**
@@ -167,6 +203,10 @@ const TASK_ORDER: Partial<Record<PanelKind, number>> = {
  * the registry without a `KIND_GROUP` override auto-slots here.
  */
 const PREFIX_GROUP: Record<string, NavGroupId> = {
+  // Wave P lane B opened a SIXTH kind family. The fallback is declared rather
+  // than left to the Engine Room catch-all so a future `analysis.*` kind slots
+  // where its name says it belongs instead of silently landing in the plumbing.
+  analysis: 'analysis',
   registry: 'operations',
   source: 'operations',
   system: 'operations',

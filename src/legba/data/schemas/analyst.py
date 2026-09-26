@@ -532,6 +532,19 @@ class MethodBlock(BaseModel):
     # when it resolves, else falls back to this inline string; unset on both →
     # the kind default _SYSTEM_PROMPT. Inert for kinds that ignore it.
     system_prompt: str | None = None
+    # F-3 (DEMOTION_D1_SPEC §7) — the desk's BOUNDED QUESTION, one interrogative
+    # sentence, quote-derived from this unit's own ``system_prompt`` (its
+    # "BOUNDED QUESTION —" section) and authored here so the assembly's block
+    # header (``data.data.assembly.blocks[].question``, §1.2) can render it
+    # without re-parsing prose. Optional and None on every descriptor that does
+    # not set it — a composition tier (``country_composition``, ``world_assessor``,
+    # ``escalation_composition``) answers many bounded questions at once, not
+    # one, so it deliberately carries no value here; per the spec, the D-2
+    # assembler falls back to the desk display name (``identity.name``) and
+    # stamps ``question_source: "fallback_desk_name"`` when this is absent.
+    # This field is descriptor metadata only — D-2 (the renderer) is a separate,
+    # later train and is not built by this one.
+    bounded_question: str | None = None
     impl: str | None = None
     # Deterministic kind only: which sub-handler the dispatcher routes to (one of
     # `legba.data.analysts.deterministic.SUB_HANDLERS`). The runtime injects this

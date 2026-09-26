@@ -52,6 +52,7 @@ scope:
   languages: [en]
   tags: [news, events, geopolitical, structured, global]
   source_class: reporting          # S1-T8 — news-derived event aggregator
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

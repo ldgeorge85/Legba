@@ -63,6 +63,21 @@ LicenseClass = Literal[
     "unknown",
 ]
 
+# Wave-E (2026-09-24) — WHO may read what this source produces, once it is in
+# our own substrate. Orthogonal to LicenseClass (what we may KEEP of a fetched
+# page) — see legba.data.provenance.access for the full axis writeup and the
+# closed ACCESS_CLASSES vocabulary this Literal mirrors. Defaults FAIL CLOSED
+# to "restricted" (never "public"): every committed source_*.yaml sets this
+# explicitly per the taxonomy in tests/data_pkg/test_access_class_taxonomy.py,
+# and a descriptor that omits it is presumed NOT reviewed rather than open.
+AccessClass = Literal[
+    "public",
+    "licensed_commercial",
+    "licensed_noncommercial",
+    "restricted",
+    "internal",
+]
+
 
 # ---------------------------------------------------------------------------
 # Identity + scope
@@ -107,6 +122,13 @@ class SourceScope(BaseModel):
     # (source_actor), where the corpus facet + the P2-2 evidence-archiver
     # retention gate read it.
     license_class: LicenseClass | None = None
+    # Wave-E access-class stamp (see :data:`AccessClass`). Defaults to
+    # "restricted" — FAIL CLOSED, never "public" — so a descriptor nobody has
+    # classified yet reads as unreviewed rather than open. The ingest path
+    # (source_actor.write_canonical_signal) copies it onto every signal's
+    # ``access_class`` column (migration 0216); the read routes' opt-in
+    # ``access_class_in`` filter reads that column. Enforcement is SEAMS #59.
+    access_class: AccessClass = "restricted"
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +387,7 @@ class SourceRef(BaseModel):
 
 
 __all__ = [
+    "AccessClass",
     "LicenseClass",
     "SourceClass",
     "SourceIdentity",

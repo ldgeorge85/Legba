@@ -72,6 +72,7 @@ from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 from uuid import UUID, uuid4
 
 from ..provenance.models import FindingPayload, HypothesisPayload
+from ..provenance.origin import origin_class_clause
 from ..provenance.writes import write_hypothesis
 from ...runtime.analyst_method import AnalystMethodResult, LLMHandlerLike
 
@@ -99,6 +100,11 @@ from ..provenance.kinds import TRACE_ONLY as _TRACE_ONLY  # noqa: E402
 from ..provenance.kinds import OutputKind as _OutputKind  # noqa: E402,F401
 
 OUTPUT_KIND: object = _TRACE_ONLY
+
+#: P7/7g-1 — the origin-class leg of the open-fact read (SEAMS #57 sweep).
+#: An imported 2016 fact is not evidence for what competes NOW; the gate is
+#: rendered from the one place the vocabulary lives, never spelled inline.
+_LIVE_FACTS = origin_class_clause("")
 
 
 # ---------------------------------------------------------------------------
@@ -444,10 +450,11 @@ async def _read_evidence_for_topic(
     remaining = max(0, limit - len(evidence))
     if remaining and entity_names:
         fact_rows = await conn.fetch(
-            """
+            f"""
             SELECT id, subject, predicate, value, confidence, produced_at
               FROM facts
              WHERE superseded_by IS NULL AND valid_until IS NULL
+               AND {_LIVE_FACTS}
                AND lower(subject) = ANY($1::text[])
              ORDER BY confidence DESC, produced_at DESC
              LIMIT $2
@@ -1190,10 +1197,11 @@ async def _resolve_hypotheses_against_subsequent_facts(
 
         try:
             fact_rows = await conn.fetch(
-                """
+                f"""
                 SELECT subject, predicate, value
                   FROM facts
                  WHERE superseded_by IS NULL AND valid_until IS NULL
+                   AND {_LIVE_FACTS}
                    AND produced_at > $1
                    AND lower(subject) = ANY($2::text[])
                  ORDER BY produced_at DESC

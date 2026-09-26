@@ -160,6 +160,27 @@ class SearxngSearchHandler(SearchProviderHandler):
     #: the existing, working web_fetch → archive → Trafilatura path.
     capabilities: ClassVar[frozenset[str]] = frozenset({"search"})
     default_port: ClassVar[int] = 8080
+    #: ONE extra page, and only when page 1 came back short of the ask.
+    #:
+    #: SearXNG has no ``count``/``limit`` parameter at all — it returns whatever
+    #: its merged engine set produced for ``pageno``, and a live probe of the
+    #: deployed instance measured 27 results on page 1 and 35 on page 2 with 10
+    #: URLs in common. So with the package cap at 30 a single page is usually
+    #: just short, and the honest way to serve the ask is to take page 2 and
+    #: dedupe — which is what :meth:`~..base.SearchProviderHandler.search` does
+    #: when this is non-zero.
+    #:
+    #: It stays at ONE. Every page is another round of requests to the upstream
+    #: engines through an instance they already classify as a bot, and the cost
+    #: of paging deeper is measured in bans (see the module docstring), not in
+    #: latency.
+    max_extra_pages: ClassVar[int] = 1
+    #: ...and only when page 1 came back FULL. SearXNG has no page-size
+    #: parameter: a query that returned 4 hits exhausted its engine set, and
+    #: page 2 for it is a second round of upstream requests that returns
+    #: nothing. 20 sits below the measured page size (27 on page 1, 35 on page
+    #: 2 in a live probe) and well above the yield of a query that has run out.
+    page_topup_floor: ClassVar[int] = 20
 
     def _build_params(self, query: str, *, limit: int, **opts: Any) -> dict[str, str]:
         cfg = self._require_configured()
@@ -178,6 +199,17 @@ class SearxngSearchHandler(SearchProviderHandler):
         if isinstance(extra, Mapping):
             params.update({str(k): str(v) for k, v in extra.items()})
         return params
+
+    def _page_params(
+        self, params: Mapping[str, str], *, page: int,
+    ) -> dict[str, str]:
+        """Page 1's params with ``pageno`` set — SearXNG's own paging key.
+
+        Everything else (``q``, ``engines``, ``categories``, ``language``, the
+        operator's ``params`` escape hatch) is carried forward verbatim, so
+        page 2 is the same query against the same engine set.
+        """
+        return dict(params, pageno=str(page))
 
     def _parse_payload(
         self, payload: Any, *, query: str, limit: int,

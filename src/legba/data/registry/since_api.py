@@ -17,6 +17,14 @@ gate, per the ``v3_api`` / ``substrate_reads_api`` wiring convention):
     alerts section is severity-ranked under ``SECTION_CAP``, so a low-volume
     channel (e.g. the map's medium/info ``geo_convergence`` rows) would
     otherwise be crowded out of a busy window by high-severity traffic.
+
+    The envelope carries ONE cursor-independent section: ``forecasts_due``
+    (7b-iv, the Morning Read's DUE band) — every ``acute_forecasts`` row
+    whose forward window has closed with no outcome, with the resolution
+    test frozen on it at mint. It answers "what is owed", not "what
+    changed", so it deliberately ignores the cursor. Its SQL, model and
+    reducer live in the ``forecasts_due`` leaf (the table's marks belong to
+    ``forecast_acute``, which the registry image may not import).
   * ``GET /eval/band_trajectory?target_id=<desk>&days=30`` — per desk ×
     dimension, the time-ordered band sequence projected from the persisted
     ``kind='scorecard'`` rows (superseded rows INCLUDED — old heads ARE the
@@ -61,8 +69,15 @@ from typing import Any, Mapping
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from .. import critic_fold
 from ..provenance.kinds import STRUCTURAL_VERIFY_EXEMPT_ANALYSTS
 from .api import RegistryAPIDeps, require_bearer
+from .forecasts_due import (
+    DUE_FORECAST_CAP,
+    DUE_FORECASTS_SQL,
+    ForecastsDueSection,
+    due_forecasts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -326,6 +341,15 @@ class SinceResponse(BaseModel):
     each section's FULL matching total — identical to the section's own
     ``total``, surfaced flat so a tile can render badges without walking
     sections.
+
+    ``forecasts_due`` (7b-iv, the Morning Read's DUE band) is the one section
+    that is NOT a diff: it answers "what is outstanding right now", so it
+    ignores the cursor entirely and reports every closed-window forecast with
+    no outcome. It rides this envelope rather than a route of its own because
+    a reader asking "what changed and what is owed" must not have to compose
+    two round trips to find out, and because the section contract — items /
+    total / truncated, honest cap — is already this envelope's. Additive: a
+    client that does not read the key is unaffected.
     """
     cursor: datetime
     server_now: datetime
@@ -335,6 +359,7 @@ class SinceResponse(BaseModel):
     band_changes: BandChangesSection
     situations: SituationsSection
     alerts: AlertsSection
+    forecasts_due: ForecastsDueSection = Field(default_factory=ForecastsDueSection)
 
 
 class TrajectoryPoint(BaseModel):
@@ -379,7 +404,18 @@ class BandTrajectoryResponse(BaseModel):
 # verify%') exactly like /findings + the P1-3 trigger — a later generic
 # critique must not win the produced_at race. NULL analyst_id rows are kept
 # (they are not structural-exempt; plain <> ALL would silently drop them).
+# H17 — SET-BASED: the cursor window + the exempt-analyst filter bound the outer
+# CTE, then ONE `DISTINCT ON` pass reads those ids' critiques.
 _NEW_FINDINGS_SQL = f"""
+    WITH f AS MATERIALIZED (
+        SELECT f.id, f.analyst_id, f.target_id, f.title, f.severity,
+               f.confidence, f.produced_at
+          FROM analyst_outputs f
+         WHERE f.kind = 'finding'
+           AND f.superseded_by IS NULL
+           AND f.produced_at > $1
+           AND (f.analyst_id IS NULL OR f.analyst_id <> ALL($2::text[]))
+    ), {critic_fold.faithfulness_score_cte()}
     SELECT f.id::text           AS id,
            f.analyst_id         AS analyst_id,
            f.target_id          AS target_id,
@@ -390,22 +426,9 @@ _NEW_FINDINGS_SQL = f"""
            LEAST(f.confidence, v.faithfulness_score) AS effective_confidence,
            f.produced_at        AS produced_at,
            count(*) OVER ()     AS total
-      FROM analyst_outputs f
-      JOIN LATERAL (
-          SELECT (cr.data->>'overall_score')::real AS faithfulness_score
-            FROM analyst_outputs cr
-           WHERE cr.kind = 'critique'
-             AND cr.data->>'analyzed_output_id' = f.id::text
-             AND cr.data->>'overall_score' IS NOT NULL
-             AND cr.title LIKE 'Faithfulness verify%'
-           ORDER BY cr.produced_at DESC, cr.id DESC
-           LIMIT 1
-      ) v ON TRUE
-     WHERE f.kind = 'finding'
-       AND f.superseded_by IS NULL
-       AND f.produced_at > $1
-       AND (f.analyst_id IS NULL OR f.analyst_id <> ALL($2::text[]))
-       AND LEAST(f.confidence, v.faithfulness_score) >= $3
+      FROM f
+      JOIN v ON v.fid = f.id::text
+     WHERE LEAST(f.confidence, v.faithfulness_score) >= $3
      ORDER BY {_SEVERITY_RANK_SQL.format(col='f.severity')} DESC,
               f.produced_at DESC, f.id DESC
      LIMIT $4
@@ -722,6 +745,13 @@ def build_since_router(deps: RegistryAPIDeps) -> APIRouter:
                 cap,
             )
             alert_rows = await conn.fetch(_ALERTS_SQL, cur, chan, cap)
+            # The DUE band (7b-iv) — cursor-INDEPENDENT by design: an
+            # outstanding obligation does not stop being owed because the
+            # reader looked yesterday. Bounded by the partial open-window
+            # index and its own cap.
+            due_rows = await conn.fetch(
+                DUE_FORECASTS_SQL, server_now, int(DUE_FORECAST_CAP),
+            )
 
         def _total(rows: list[Any]) -> int:
             return int(rows[0]["total"]) if rows else 0
@@ -827,6 +857,13 @@ def build_since_router(deps: RegistryAPIDeps) -> APIRouter:
             truncated=_total(alert_rows) > len(alert_rows),
         )
 
+        due_items = due_forecasts([dict(r) for r in due_rows], now=server_now)
+        forecasts = ForecastsDueSection(
+            items=due_items,
+            total=_total(due_rows),
+            truncated=_total(due_rows) > len(due_rows),
+        )
+
         return SinceResponse(
             cursor=cur,
             server_now=server_now,
@@ -836,12 +873,14 @@ def build_since_router(deps: RegistryAPIDeps) -> APIRouter:
                 "band_changes": band_changes.total,
                 "situations": situations.total,
                 "alerts": alerts.total,
+                "forecasts_due": forecasts.total,
             },
             new_findings=new_findings,
             superseded=superseded,
             band_changes=band_changes,
             situations=situations,
             alerts=alerts,
+            forecasts_due=forecasts,
         )
 
     @router.get("/eval/band_trajectory", response_model=BandTrajectoryResponse)

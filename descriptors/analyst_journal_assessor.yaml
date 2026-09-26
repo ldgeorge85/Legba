@@ -93,7 +93,7 @@ method:
     # max_tokens now governs ONLY the Opus narrate output (the gpt-oss / vLLM
     # gather plane serves its own vLLM budget — max_tokens is never sent to it).
     max_tokens: 16384                 # the entry body, on the Opus voice plane
-  budget_tokens_per_day: 2000000     # §11 — a twice-daily deep meta agent is costly
+  budget_tokens_per_day: 0     # §11 — a twice-daily deep meta agent is costly
   gather:
     max_rounds: 6                     # the in-actor GATHER ReAct cap (HARD ceiling = 6;
                                       # a higher request is silently clamped — §11)

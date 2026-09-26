@@ -657,6 +657,15 @@ HARVEST_MARKER_KEY = "open_question_origin"
 #: ``fact_contention`` is deliberately ABSENT: "which value of 'border with'
 #: for 'madrid' is correct?" is a question about the WORLD and new reporting
 #: genuinely can bear on it.
+#:
+#: ``coverage_floor`` (R-B, 2026-09-05) is deliberately ABSENT for the SAME
+#: reason and it is the strongest case in the table: "the target's evidence
+#: keeps naming Palestine and no open frame does — does Palestine bear on this
+#: target?" is a question about the world, and a new signal naming that polity
+#: is EXACTLY the evidence that bears on it. Excluding it would silence the
+#: matcher on the one class whose whole premise is that the world is saying
+#: something our register is not. It is a class the harvest script does not
+#: produce, so the ``<= set(HARVEST_CLASSES)`` drift guard is unaffected.
 META_QUESTION_CLASSES: frozenset[str] = frozenset(
     {
         "collection_gap",

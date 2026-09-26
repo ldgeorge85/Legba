@@ -67,8 +67,8 @@ method:
     # edges for nothing. See SINGLE_TYPER_RATIONALE in the kind module.
     max_tokens: 384            # the single-candidate RETRY path's budget; the
                                # batch path computes its own (280/verdict, measured)
-    temperature: 0.1
-  budget_tokens_per_day: 1000000
+    temperature: 1.0
+  budget_tokens_per_day: 0
 
   # ── K-G2 throughput + quality dials ──────────────────────────────────────
   # Validated against handler_options.ANALYST_KIND_OPTIONS['relationship_reifier'];

@@ -13,6 +13,12 @@ from uuid import UUID
 import asyncpg
 
 from ..data.provenance.kinds import OutputKind
+from ..data.run_accounting import (
+    current_llm_calls as _current_llm_calls,
+    current_prompt_rendered as _current_prompt_rendered,
+    current_steps as _current_steps,
+    current_tool_calls as _current_tool_calls,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -247,10 +253,30 @@ async def _write_failure_trace(
     attempt count — enough to tell "the model 500'd three times" from "the
     descriptor is malformed" without reaching for container logs.
 
+    AND THE EVIDENCE (2026-09-09). It used to carry ONLY that: ``prompt_rendered``
+    NULL, ``intermediate_steps`` ``[]``, ``llm_calls`` ``[]``, ``tool_calls``
+    ``[]`` — the four fields the success path always writes, empty on the one
+    path where they are hardest to reconstruct. Three consecutive
+    ``corpus_researcher`` hard fails (09-08 15:37Z, 09-09 03:37Z, 09-09 15:37Z)
+    carried the identical ``OutputContractError`` string and nothing else, while
+    the runtime LOG showed each run had rendered a 110k-char prompt, made five
+    completions, searched the corpus, queried searxng and landed five signal
+    rows. The class was undiagnosable from the substrate: the error said the
+    model returned no readable body and no column said what it DID return.
+
+    All four come off the run account (``legba.data.run_accounting``), which
+    already held them — the success path reads the same three, and
+    :func:`~legba.data.run_accounting.bind_run_steps` adds the fourth by
+    holding the kind's live step list. So the failure row is now the SAME
+    receipt as the success row minus the output: same prompt, same calls (each
+    with its ``completion_text``), same phases reached.
+
     Chain semantics: a failed run is still a run, so the receipt chain extends
     over it. ``output_row_refs`` is empty (nothing landed) and
     ``output_payload`` restates the error, so the hash is still computed over
-    real run content and the chain stays linear.
+    real run content and the chain stays linear. Only ``prompt_rendered`` of
+    the four feeds ``compute_receipt_hash``; steps/calls are supplementary
+    provenance exactly as they are on the success path.
 
     Returns ``True`` when a row landed. NEVER raises: the caller is already
     handling an exception and a failing trace write must not mask it (this is
@@ -263,6 +289,14 @@ async def _write_failure_trace(
     if receipt_chain is None:
         return False
     try:
+        # Read the account BEFORE anything below can raise: these are the only
+        # copy of what the dead run did, and a formatting slip must not cost
+        # them. Each accessor returns [] / (None, None) when nothing is bound
+        # (the spike path, most tests), which is byte-identically the old row.
+        acct_prompt, acct_prompt_sha = _current_prompt_rendered()
+        acct_steps = _current_steps()
+        acct_llm_calls = _current_llm_calls()
+        acct_tool_calls = _current_tool_calls()
         outcome = _BUCKET_OUTCOME.get(bucket_kind, "hard_fail")
         error_payload = {
             "error_class": type(exc).__name__,
@@ -284,13 +318,17 @@ async def _write_failure_trace(
             input_row_refs=[],
             input_payload=None,
             prompt_module_hash=None,
-            prompt_rendered=None,
+            prompt_rendered=acct_prompt,
+            prompt_sha256=acct_prompt_sha,
             output_row_refs=[],
             output_payload=error_payload,
             run_started_at=run_started_at,
             run_ended_at=datetime.now(timezone.utc),
             status=TRACE_STATUS_FAILED,
             error_payload=error_payload,
+            intermediate_steps=acct_steps or None,
+            llm_calls=acct_llm_calls or None,
+            tool_calls=acct_tool_calls or None,
         )
         return True
     except BaseException as trace_exc:   # noqa: BLE001 - must not mask ``exc``

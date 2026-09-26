@@ -221,6 +221,26 @@ async def _insert_journal_critique(
     return row_id
 
 
+async def _insert_signal(
+    pg_store: PostgresStore,
+    *,
+    source_id: str = "source.gdelt.files",
+    title: str = "a raw signal",
+    owner_tenant: str = "default",
+) -> UUID:
+    """A minimal `signals` row — the fixture for T1.3's ref-resolution tests
+    (a journal claim citing a raw signal directly, with no analyst in
+    between). Mirrors the minimal insert `test_predicate_ctx_parity.py` uses."""
+    row_id = uuid4()
+    async with pg_store.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO signals (id, source_id, owner_tenant, payload) "
+            "VALUES ($1, $2, $3, $4::jsonb)",
+            row_id, source_id, owner_tenant, json.dumps({"title": title}),
+        )
+    return row_id
+
+
 # ---------------------------------------------------------------------------
 # §3.1 — `kind` filter.
 # ---------------------------------------------------------------------------
@@ -492,6 +512,114 @@ async def test_verify_generic_critique_does_not_overwrite_faithfulness_pin(
     r = await client.get("/api/v1/journal", params={"limit": 200})
     row = next(x for x in r.json()["entries"] if x["id"] == str(e_id))
     assert row["verify_score"] == pytest.approx(0.3, abs=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# T1.3 (planning/JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09.md §6) — a raw
+# signal ref resolves to `kind='signal'` PLUS its `source_id`, so the reader
+# can label it "signal · <source> · <title>" instead of a bare "unknown" chip.
+# A ref that matches no substrate row at all stays `kind='unknown'`,
+# `source_id=None` — never fabricated, never silently promoted to a fake
+# resolution.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_signal_ref_resolves_with_source_id(journal_app, client: AsyncClient):
+    _, _, pg_store = journal_app
+    tag = _tag("sigref")
+    sig_id = await _insert_signal(
+        pg_store, source_id="source.gdelt.files", title="PRISON: coerce in Kansas, United States",
+    )
+    e_id = await _insert_entry(
+        pg_store, title=tag,
+        claims=[
+            {
+                "text_span": "a claim citing a raw signal.",
+                "kind": "fact",
+                "refs": [str(sig_id)],
+            },
+        ],
+    )
+
+    r = await client.get(f"/api/v1/journal/{e_id}")
+    assert r.status_code == 200, r.text
+    refs = r.json()["claims"][0]["refs"]
+    assert len(refs) == 1
+    ref = refs[0]
+    assert ref["id"] == str(sig_id)
+    assert ref["kind"] == "signal"
+    assert ref["title"] == "PRISON: coerce in Kansas, United States"
+    assert ref["source_id"] == "source.gdelt.files"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_dangling_ref_resolves_unknown_with_no_source_id(
+    journal_app, client: AsyncClient,
+):
+    """A ref that matches no substrate row at all (a typo'd/superseded/
+    cross-environment id) — the exact defect T1.3 traced: the journal cited
+    `233bd806-…-4c3c-…`, but the only matching GDELT row in the substrate is
+    `233bd806-…-4e3c-…`, one hex digit off. The API must never fabricate a
+    resolution for it: `kind='unknown'`, `title=None`, `source_id=None`."""
+    _, _, pg_store = journal_app
+    tag = _tag("dangling")
+    dangling_id = uuid4()
+    e_id = await _insert_entry(
+        pg_store, title=tag,
+        claims=[
+            {
+                "text_span": "a claim citing a ref nothing matches.",
+                "kind": "fact",
+                "refs": [str(dangling_id)],
+            },
+        ],
+    )
+
+    r = await client.get(f"/api/v1/journal/{e_id}")
+    assert r.status_code == 200, r.text
+    refs = r.json()["claims"][0]["refs"]
+    assert len(refs) == 1
+    ref = refs[0]
+    assert ref["id"] == str(dangling_id)
+    assert ref["kind"] == "unknown"
+    assert ref["title"] is None
+    assert ref["source_id"] is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_non_signal_ref_resolves_with_no_source_id(
+    journal_app, client: AsyncClient,
+):
+    """A ref resolving to a NON-signal table (here, `analyst_outputs` via the
+    faithfulness critique row itself standing in for any analyst-output kind)
+    carries `source_id=None` — the field is additive and signal-only, never
+    populated for a kind it does not apply to."""
+    _, _, pg_store = journal_app
+    tag = _tag("nonsig")
+    other_id = await _insert_journal_critique(
+        pg_store, analyzed_output_id=uuid4(), overall_score=0.5, title="critique",
+    )
+    e_id = await _insert_entry(
+        pg_store, title=tag,
+        claims=[
+            {
+                "text_span": "a claim citing an analyst_outputs row.",
+                "kind": "fact",
+                "refs": [str(other_id)],
+            },
+        ],
+    )
+
+    r = await client.get(f"/api/v1/journal/{e_id}")
+    assert r.status_code == 200, r.text
+    ref = r.json()["claims"][0]["refs"][0]
+    assert ref["id"] == str(other_id)
+    assert ref["kind"] == "critique"
+    assert ref["source_id"] is None
 
 
 # ---------------------------------------------------------------------------

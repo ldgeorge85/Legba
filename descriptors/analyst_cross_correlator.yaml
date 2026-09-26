@@ -25,7 +25,10 @@ identity:
     input_type: legba.runtime.SignalList
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
-  state: active
+  # RETIRED live — tree reconciled 2026-09-06 (was active in-tree;
+  # production_gauge.descriptor_state_drift) so a re-register from this file
+  # cannot resurrect it.
+  state: retired
   owner: release_meta_activation
 
 subscription:
@@ -105,7 +108,7 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     max_tokens: 1024
-  budget_tokens_per_day: 1000000
+  budget_tokens_per_day: 0
   retry:
     budget:
       strategy: pause_until_next_window

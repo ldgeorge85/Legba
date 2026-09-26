@@ -8,14 +8,34 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 import asyncpg
 
+from ..data._geo_routing import (
+    admitted_rows as _geo_v2_admitted_rows,
+    config_from_options as _geo_v2_config,
+    polity_names_for_iso2s as _geo_v2_polities,
+    slice_geo_v2_enabled,
+    surface_index as _geo_v2_index,
+    title_probes as _geo_v2_probes,
+)
 from ..data.nats import SIGNALS_EXCLUDE_BACKFILL_SQL
+from ..data.provenance.origin import origin_class_clause
+from ..data.research_flag import (
+    RESEARCH_SLICE_EXCLUSION_SQL,
+    research_reaches_desks,
+)
 from ..data.schemas.analyst import AnalystDescriptor
+from .journal_slice_v2 import journal_v2_sql_for
 
 logger = logging.getLogger(__name__)
+
+#: P7/7g-1 — the origin-class leg every UNIT slice carries (SEAMS #57 sweep).
+#: Rendered once from the closed vocabulary in
+#: :mod:`legba.data.provenance.origin`, never spelled inline.
+_LIVE_SIGNALS = origin_class_clause("")
 
 
 def _global_slice_per_source_cap() -> int:
@@ -45,6 +65,156 @@ def _slice_row_cap() -> int:
         except (TypeError, ValueError):
             pass
     return 120
+
+
+#: The typed columns every substrate-slice leg selects. Named once so the
+#: GEO-ROUTING-v2 recovery leg cannot select a different shape from the geo
+#: leg it merges into — a row from either leg has to survive the same
+#: back-compat mapping at the bottom of the reader.
+#:
+#: The line breaks and their indentation are the ORIGINAL literal's, verbatim,
+#: so that interpolating this into the geo leg's f-string reproduces that
+#: statement's text byte for byte. Postgres would not care; the flag-off
+#: contract is easier to audit if the SQL a reviewer diffs is unchanged rather
+#: than merely equivalent.
+_SLICE_COLUMNS = (
+    "id, source_id, source_version, canonical_url,\n"
+    "               payload, language, geo, tags, fetched_at, derived_from,\n"
+    "               entity_classes, source_credibility, modality, salience"
+)
+
+
+async def _apply_geo_routing_v2(
+    conn: Any,
+    *,
+    rows: list[Any],
+    target_geo: list[str],
+    base_clauses: list[str],
+    base_params: list[Any],
+    fetch_limit: int,
+    row_cap: int,
+    target_filter: str | None,
+) -> list[Any]:
+    """Merge the title-names-the-desk's-polity recovery rows into ``rows``.
+
+    Runs ONLY at ``LEGBA_SLICE_GEO_V2=1`` and only for a geo-scoped target.
+
+    Two-stage by necessity: Postgres cannot run the canon's fold + alias +
+    demonym + word-boundary matcher, so the SQL narrows with a generous
+    ``ILIKE`` prefilter over the same window/backfill/canonical/research
+    clauses the geo leg used (``base_clauses``, copied rather than re-spelled),
+    with the geo test INVERTED so this leg can only ever return rows the geo
+    leg did not — the union needs no de-duplication and cannot double-count a
+    source against the diversity cap. The exact admission decision is then
+    :class:`~legba.data._frame_anchor.PolitySurfaceIndex`, the same matcher the
+    coverage floor and the register anchor ask.
+
+    THE CAP IS SHARED, NOT EXTENDED. Admissions are capped at
+    ``admit_share`` of ``row_cap`` (the ubiquity ceiling — without it the US
+    desk, whose polity half the wire names, would have its geo-routed core
+    displaced wholesale), merged into the candidate pool, and re-sorted by
+    ``fetched_at DESC``. The caller's existing per-source diversity cap then
+    cuts the merged pool to ``row_cap`` exactly as before. So the slice never
+    grows past the row cap the prompt budget was sized for: an admitted row
+    DISPLACES one the geo leg would have carried.
+
+    Degrade-not-drop: any failure here logs and returns the geo leg's rows
+    unchanged, because a desk that cannot read its window publishes nothing.
+    """
+    try:
+        names = _geo_v2_polities(target_geo)
+        if not names:
+            return rows
+        cfg = _geo_v2_config(None)
+        probes = _geo_v2_probes(names, min_len=cfg.min_probe_len)
+        if not probes:
+            return rows
+        clauses = list(base_clauses)
+        params = list(base_params)
+        params.append(target_geo)
+        clauses.append(f"NOT (geo && ${len(params)}::text[])")
+        params.append([f"%{p}%" for p in probes])
+        # The prose the prefilter reads has to be the SAME prose the exact
+        # matcher reads below, or the two disagree about what was even a
+        # candidate. `match_summary` moves both together.
+        probe_col = "(payload->>'title')"
+        if int(cfg.match_summary):
+            probe_col = (
+                "(coalesce(payload->>'title','') || ' ' || "
+                "coalesce(payload->>'summary', payload->>'distilled_body', ''))"
+            )
+        clauses.append(f"{probe_col} ILIKE ANY(${len(params)}::text[])")
+        limit = max(fetch_limit, row_cap * max(1, cfg.fetch_multiplier))
+        candidates = await conn.fetch(
+            f"""
+            SELECT {_SLICE_COLUMNS}
+            FROM signals
+            WHERE {" AND ".join(clauses)}
+            ORDER BY fetched_at DESC
+            LIMIT {limit}
+            """,
+            *params,
+        )
+    except Exception:                                       # pragma: no cover
+        logger.exception(
+            "substrate_slice.geo_v2.query_failed target=%s — geo leg kept",
+            target_filter,
+        )
+        return rows
+    index = _geo_v2_index(names)
+
+    def _title(row: Any) -> str:
+        payload = row["payload"]
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                return ""
+        return str(payload.get("title") or "") if isinstance(payload, dict) else ""
+
+    def _summary(row: Any) -> str:
+        payload = row["payload"]
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                return ""
+        if not isinstance(payload, dict):
+            return ""
+        return str(
+            payload.get("summary") or payload.get("distilled_body") or ""
+        )
+
+    def _magnitude(row: Any) -> Any:
+        salience = row["salience"]
+        if isinstance(salience, str):
+            try:
+                salience = json.loads(salience)
+            except Exception:
+                return None
+        return salience.get("magnitude") if isinstance(salience, dict) else None
+
+    admitted = _geo_v2_admitted_rows(
+        list(candidates), index,
+        config=cfg, row_cap=row_cap,
+        title_of=_title, magnitude_of=_magnitude, summary_of=_summary,
+    )
+    if not admitted:
+        return rows
+    logger.info(
+        "substrate_slice.geo_v2 target=%s geo=%s polities=%s candidates=%d "
+        "admitted=%d geo_rows=%d",
+        target_filter, target_geo, list(names), len(candidates),
+        len(admitted), len(rows),
+    )
+    merged = list(rows) + list(admitted)
+    # Recency order, exactly as the geo leg's own ORDER BY produced it, so the
+    # caller's diversity walk sees one ordering rule and not two. `fetched_at`
+    # is NOT NULL on `signals`, but a None sorts LAST rather than raising —
+    # a slice reader must not be the thing that breaks on a surprising row.
+    _floor = datetime.min.replace(tzinfo=timezone.utc)
+    merged.sort(key=lambda r: r["fetched_at"] or _floor, reverse=True)
+    return merged
 
 
 def _diversify_by_source(
@@ -363,11 +533,55 @@ async def _read_substrate_slice(
         # context). Mirrors the subscription path (runtime/subscription/filter.py
         # canonical_only) and the reads API (registry/substrate_reads_api.py).
         "(canonical_signal_id IS NULL OR canonical_signal_id = id)",
+        # P7/7g-1 — THE ORIGIN-CLASS LEG (SEAMS #57 sweep, `cadence_analysts`
+        # in the collection firewall's `excluded_from`). The backfill clause
+        # above tests a PAYLOAD key a manual batch happens to set; this tests
+        # the row's own provenance class, which no writer can forget to
+        # stamp. Both stay: they answer different questions, and a desk's
+        # reactive window must contain nothing a collection loaded.
+        _LIVE_SIGNALS,
     ]
+    # R-A — THE RESEARCH EXCLUSION. One clause, one place. Outbound-research
+    # signals (`retrieval_origin LIKE 'web_search:%'`) are written to the
+    # substrate, archived, tagged and measured from the moment the write path
+    # is on, but they reach a DESK's reactive slice only at
+    # LEGBA_RESEARCH_EVIDENCE=desks. The middle rung (`substrate`) is the
+    # poisoning ROLLBACK: one env var pulls research out of every desk's eyes
+    # without losing the evidence, the archive, the counters or the audit
+    # trail.
+    #
+    # This is the ONE reader that assembles a desk's reactive slice, so it is
+    # the only place the clause is needed: research rows are LANDED directly by
+    # the tool and are never published onto `legba_signals`, so the
+    # subscription fan-out path cannot deliver one either (deliberate — the
+    # coalescer's severity/accumulation gates must not be woken by research).
+    #
+    # A NULL retrieval_origin — every one of the 229,893 rows that existed
+    # before this program, and every curated row written since — passes the
+    # clause untouched, so the ROWS a desk reads at flag-off are identical to
+    # the pre-R-A rows (G2), and it costs nothing: the clause rides an
+    # already-indexed `geo &&` + `fetched_at` query.
+    #
+    # IT IS APPLIED AT `off` TOO, and that is deliberate. Omitting it at `off`
+    # would make the flag-off SQL STRING byte-identical, but it would also mean
+    # that an operator rolling all the way back from `desks` to `off` after
+    # rows had landed would SILENTLY RE-ADMIT every research row already in the
+    # window — a leak on the strongest rollback setting, which is exactly
+    # backwards. `off` means the program is dark on both legs: nothing is
+    # written AND nothing already written is read.
+    if not research_reaches_desks():
+        clauses.append(RESEARCH_SLICE_EXCLUSION_SQL)
     params: list[Any] = []
     if source_ids:
         params.append(source_ids)
         clauses.append(f"source_id = ANY(${len(params)})")
+    # Snapshot the window/backfill/canonical/research (+ source_id) clauses and
+    # their params BEFORE the geo predicate goes on. The GEO-ROUTING-v2 recovery
+    # leg below needs exactly this prefix with the geo test INVERTED, and
+    # copying the strings a second time would let the two legs drift the moment
+    # anyone adds a clause here. Behaviour-neutral: a list copy.
+    base_clauses = list(clauses)
+    base_params: list[Any] = list(params)
     if target_geo:
         params.append(target_geo)
         # geo overlap — the signal mentions at least one of the target's
@@ -393,11 +607,34 @@ async def _read_substrate_slice(
     # Over-fetch on the predicate/diversity paths so the post-pass (per-source
     # diversity / residual predicate filter) isn't starved before it fills row_cap.
     fetch_limit = max(200, row_cap * 3) if (scope_predicate or apply_diversity_cap) else row_cap
+    # ---------------------------------------------------------------------
+    # JOURNAL SLICE v2 — the SALIENCE-AWARE second leg. LEGBA_JOURNAL_SLICE_V2,
+    # default OFF, and only for ``identity.kind == 'journal_assessor'``.
+    #
+    # The recency leg below gives the journal ~3 h of its 24 h window (360 of
+    # ~3,570 rows), which is the dominant aperture bound measured in
+    # JOURNAL_CLUSTER_FIRST_SLICE_REPORT §0. ``journal_v2_sql_for`` returns a
+    # STRATIFIED statement over the SAME ``where`` and the SAME ``$n`` params —
+    # so it rides this one ``conn.fetch`` call, with the same row budget, and
+    # there is no second round trip.
+    #
+    # Flag OFF (and every non-journal analyst at flag-on): the helper returns
+    # None, ``_v2_sql or …`` falls through, and the statement that reaches
+    # Postgres is the literal below — character for character, indentation
+    # included. That is the byte-identity contract, and it is structural: the
+    # f-string was not re-indented, re-wrapped or moved to write this.
+    # ---------------------------------------------------------------------
+    _v2_sql = journal_v2_sql_for(
+        descriptor,
+        columns=_SLICE_COLUMNS,
+        where=where,
+        total=fetch_limit,
+        row_cap=row_cap,
+        per_source_cap=_global_slice_per_source_cap(),
+    )
     rows = await conn.fetch(
-        f"""
-        SELECT id, source_id, source_version, canonical_url,
-               payload, language, geo, tags, fetched_at, derived_from,
-               entity_classes, source_credibility, modality, salience
+        _v2_sql or f"""
+        SELECT {_SLICE_COLUMNS}
         FROM signals
         {where}
         ORDER BY fetched_at DESC
@@ -405,6 +642,32 @@ async def _read_substrate_slice(
         """,
         *params,
     )
+    # ---------------------------------------------------------------------
+    # GEO ROUTING v2 — the recovery leg. LEGBA_SLICE_GEO_V2, default OFF.
+    #
+    # `geo` holds ONE country because the ingest ladder stops at the first one
+    # it resolves, and inside the lead zone "first" means first BY POSITION —
+    # so "Russian drone strikes Ukraine security service headquarters" files
+    # under RU and never reaches Ukraine's desk. This leg re-admits the rows
+    # whose TITLE names the desk's own polity but whose single geo tag went
+    # somewhere else. See legba.data._geo_routing for the full argument.
+    #
+    # Flag OFF: this block does not run, no second statement is issued, and
+    # `rows` is the same object the pre-program reader produced. That is the
+    # byte-identity contract, and it is structural rather than asserted — the
+    # first leg's SQL, params and ordering are untouched above.
+    # ---------------------------------------------------------------------
+    if target_geo and slice_geo_v2_enabled():
+        rows = await _apply_geo_routing_v2(
+            conn,
+            rows=rows,
+            target_geo=target_geo,
+            base_clauses=base_clauses,
+            base_params=base_params,
+            fetch_limit=fetch_limit,
+            row_cap=row_cap,
+            target_filter=target_filter,
+        )
     if scope_predicate:
         # Apply the target's scope.predicate to focus the slice (off the event
         # loop — the predicate engine's SIGALRM budget must not run under the
@@ -572,11 +835,12 @@ async def _read_substrate_slice(
 
     # QW1-B — DESK GROUNDING leg. The composition floor got a memory in Phase 1
     # (``meta_findings_synthesizer``, grep CONTINUITY); this is the SAME idiom one
-    # floor down, widened from two blocks to five: the unit's own PRIOR READ of
+    # floor down, widened from two blocks to six: the unit's own PRIOR READ of
     # this target, its WINDOW LEDGER (FRAME-2 — this unit's own dated, verified,
     # severity-tagged reads of the trailing fortnight, the carry that stops a
     # 72-hour read forgetting its own window), the desk's OPEN SITUATION
-    # REGISTER, its DESK BASELINE (what is normal here), and its STANDING OPEN
+    # REGISTER, its OPEN EVENTS (V3/P2 — GRANT-gated, see below), its DESK
+    # BASELINE (what is normal here), and its STANDING OPEN
     # QUESTIONS. Each arrives as a MARKED row
     # (``UNIT_GROUNDING_ROW_KEY``) that ``inline_target.run_method`` lifts out of
     # the evidence slice before ORIENT and renders as its own citable ``[N]``
@@ -601,13 +865,45 @@ async def _read_substrate_slice(
     _kind = str(getattr(_kind_raw, "value", _kind_raw) or "")
     if out and target_filter and _kind == "inline_target":
         try:
-            from ..data.analysts.unit_grounding import gather_unit_grounding_rows
+            from ..data.analysts.handler_options import resolve_kind_options
+            from ..data.analysts.history_grounding import HISTORY_SERIES_CAP
+            from ..data.analysts.unit_grounding import (
+                OPEN_EVENTS_CAP,
+                gather_unit_grounding_rows,
+            )
 
+            # V3/P2 — THE OPEN EVENTS GRANT, resolved here rather than read off
+            # the merged run options, because the grounding gather fires in the
+            # SLICE READER and the runtime's options merge happens later, at
+            # fire time. Resolution goes through the X-1 KIND catalog — never a
+            # raw ``method.options`` dict read — so an out-of-range or
+            # wrong-typed value degrades LOUDLY to the in-source default
+            # instead of taking effect, exactly as it would at the fire-time
+            # merge. A descriptor with no options block resolves to ``{}`` and
+            # the defaults below are what the five-block path always used.
+            _method = getattr(descriptor, "method", None)
+            _opts = resolve_kind_options(
+                _kind,
+                dict(getattr(_method, "options", None) or {}),
+                log_context=f"{getattr(_identity, 'id', '?')}@slice",
+            ).accepted
             out.extend(
                 await gather_unit_grounding_rows(
                     conn,
                     analyst_id=getattr(_identity, "id", None),
                     target_filter=target_filter,
+                    offer_events=bool(_opts.get("offer_events", False)),
+                    open_events_limit=int(
+                        _opts.get("open_events_limit", OPEN_EVENTS_CAP)
+                    ),
+                    # 7g-2 — the HISTORICAL SERIES grant, resolved here on
+                    # exactly the terms of the events grant above and through
+                    # the same X-1 KIND catalog, so an out-of-range value
+                    # degrades LOUDLY to the in-source default.
+                    offer_history=bool(_opts.get("offer_history", False)),
+                    history_series_limit=int(
+                        _opts.get("history_series_limit", HISTORY_SERIES_CAP)
+                    ),
                 )
             )
         except Exception as exc:  # degrade-not-drop — grounding leg is enrichment

@@ -30,6 +30,7 @@ import { apiGet } from '@/lib/api'
 import { resolveCountry } from '@/lib/countryGeo'
 import type { PanelProps } from '@/types'
 import { selectRow, useSelection } from '@/state/selection'
+import { useScope } from '@/state/scope'
 import EntityGraphPanel from './EntityGraph'
 import NotableStructurePanel from './NotableStructure'
 
@@ -118,15 +119,36 @@ export default function EntitiesPanel({ registration, scope, mode, initialTab: t
   const [cls, setCls] = useState<string | null>(null)
   const [open, setOpen] = useState<string | null>(null)
 
+  // SCOPE → the entities THIS REPORT is about (design §3.1).
+  //
+  // Entities-per-report was not servable: this route took only
+  // `q`/`entity_class`/`limit`, and `entity` is not a lineage `row_kind`, so the
+  // best a scoped caller could do was list the report's desk TARGETS and call
+  // them entities. `finding_id` (repeatable, capped, two provenance hops) walks
+  // the join that always existed in the substrate — finding → derived_from →
+  // signals → signal_entity_links → entity_profiles — and returns the roster.
+  //
+  // Capped at MAX_FINDING_IDS server-side, so the client sends at most that
+  // many block heads; a scope with more desks than that filters on the first N
+  // and the rest of the report still reads correctly, because a roster is an
+  // ordering aid, not the record.
+  const wallScope = useScope((s) => s.scope)
+  const scopeFindingIds = useMemo(
+    () => (wallScope?.kind === 'report' ? wallScope.members.findingIds.slice(0, 20) : []),
+    [wallScope],
+  )
+
   // The class facet filters client-side (not via `&entity_class=`): country
   // entities are re-classed `location` in the browser, so a server-side filter
   // would miss the promoted rows. We still pass `q` to the server.
   const listQ = useQuery<EntitiesPage>({
-    queryKey: ['entities', q],
-    queryFn: () =>
-      apiGet<EntitiesPage>(
-        `/entities?limit=200${q ? `&q=${encodeURIComponent(q)}` : ''}`,
-      ),
+    queryKey: ['entities', q, scopeFindingIds.join(',')],
+    queryFn: () => {
+      const p = new URLSearchParams({ limit: '200' })
+      if (q) p.set('q', q)
+      for (const id of scopeFindingIds) p.append('finding_id', id)
+      return apiGet<EntitiesPage>(`/entities?${p.toString()}`)
+    },
     refetchInterval: 60_000,
   })
 

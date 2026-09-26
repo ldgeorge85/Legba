@@ -45,6 +45,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from .. import critic_fold
 from .api import RegistryAPIDeps, require_bearer
 from .goldset_sampling import (
     DEFAULT_SAMPLE_SIZE,
@@ -143,31 +144,32 @@ class LabelIn(BaseModel):
 # product and judging it teaches nothing about the verified plane), head
 # findings (superseded_by IS NULL) from the bounded units, recent window.
 # The critique join shape mirrors scorecard_banding._GATHER_SQL.
-_CANDIDATES_SQL = """
+_CANDIDATES_SQL = f"""
+    WITH f AS MATERIALIZED (
+        SELECT f.id, f.analyst_id, f.target_id
+          FROM analyst_outputs f
+         WHERE f.kind = 'finding'
+           AND f.analyst_id = ANY($1::text[])
+           AND f.superseded_by IS NULL
+           AND f.produced_at > NOW() - make_interval(days => $2)
+    ), {critic_fold.faithfulness_score_cte()}
     SELECT f.id::text        AS finding_id,
            f.analyst_id      AS unit,
            f.target_id       AS target_id,
            v.faithfulness_score AS faithfulness
-      FROM analyst_outputs f
-      JOIN LATERAL (
-          SELECT (cr.data->>'overall_score')::real AS faithfulness_score
-            FROM analyst_outputs cr
-           WHERE cr.kind = 'critique'
-             AND cr.data->>'analyzed_output_id' = f.id::text
-             AND cr.data->>'overall_score' IS NOT NULL
-             AND cr.title LIKE 'Faithfulness verify%'
-           ORDER BY cr.produced_at DESC, cr.id DESC
-           LIMIT 1
-      ) v ON TRUE
-     WHERE f.kind = 'finding'
-       AND f.analyst_id = ANY($1::text[])
-       AND f.superseded_by IS NULL
-       AND f.produced_at > NOW() - make_interval(days => $2)
+      FROM f
+      JOIN v ON v.fid = f.id::text
 """
 
 # Hydration of the pinned sample (LEFT critique join here: a pinned item whose
 # critique vanished must still render — the pin is the membership truth).
-_HYDRATE_SQL = """
+_HYDRATE_SQL = f"""
+    WITH f AS MATERIALIZED (
+        SELECT f.id, f.analyst_id, f.target_id, f.title, f.body, f.data,
+               f.produced_at, f.superseded_by
+          FROM analyst_outputs f
+         WHERE f.id = ANY($1::uuid[])
+    ), {critic_fold.faithfulness_score_cte()}
     SELECT f.id::text    AS finding_id,
            f.analyst_id  AS unit,
            f.target_id   AS target_id,
@@ -177,18 +179,8 @@ _HYDRATE_SQL = """
            f.produced_at AS produced_at,
            (f.superseded_by IS NOT NULL) AS superseded,
            v.faithfulness_score AS faithfulness
-      FROM analyst_outputs f
-      LEFT JOIN LATERAL (
-          SELECT (cr.data->>'overall_score')::real AS faithfulness_score
-            FROM analyst_outputs cr
-           WHERE cr.kind = 'critique'
-             AND cr.data->>'analyzed_output_id' = f.id::text
-             AND cr.data->>'overall_score' IS NOT NULL
-             AND cr.title LIKE 'Faithfulness verify%'
-           ORDER BY cr.produced_at DESC, cr.id DESC
-           LIMIT 1
-      ) v ON TRUE
-     WHERE f.id = ANY($1::uuid[])
+      FROM f
+      LEFT JOIN v ON v.fid = f.id::text
 """
 
 _LABEL_COLS = (

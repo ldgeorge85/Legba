@@ -28,6 +28,7 @@ Pricing (USD per 1M tokens, mid-2026 list price; override via subclass or
 env if Anthropic publishes a change before the registry's pricing-update
 task lands):
 
+  * claude-opus-5        : input 15 / output 75 / cache_read 1.50 / cache_write 18.75 (Opus tier assumed; verify list price)
   * claude-opus-4-8      : input 15 / output 75 / cache_read 1.50 / cache_write 18.75
   * claude-opus-4-7      : input 15 / output 75 / cache_read 1.50 / cache_write 18.75
   * claude-sonnet-4-6    : input 3  / output 15  / cache_read 0.30 / cache_write 3.75
@@ -55,6 +56,7 @@ from .base import (
     TransientLLMFailure,
     estimate_cost,
 )
+from .stream_observer import publish_text_delta
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +157,10 @@ class AnthropicProviderHandler(LLMProviderHandler):
     #: claude-opus-4-8 for as long as it has been pointed there, tuning nothing.
     TEMPERATURE_DEPRECATED_PREFIXES: ClassVar[tuple[str, ...]] = (
         "claude-opus-4-8",
+        # Probed 2026-09-16: claude-opus-5 400s with the same "deprecated" message.
+        "claude-opus-5",
+        # Probed 2026-09-16: claude-fable-5-1 likewise ("`temperature` is deprecated for this model").
+        "claude-fable-5",
     )
 
     #: Anthropic's DOCUMENTED per-request output ceilings (`max_tokens` upper
@@ -168,6 +174,8 @@ class AnthropicProviderHandler(LLMProviderHandler):
     #: sits well under the Opus ceiling, so the clamp is a guard rail, not an
     #: expected path.
     MAX_OUTPUT_TOKENS_BY_PREFIX: ClassVar[Mapping[str, int]] = {
+        "claude-opus-5": 128_000,  # probed 2026-09-16: "130000 > 128000 … maximum … for claude-opus-5"
+        "claude-fable-5": 128_000,  # probed 2026-09-16: same ceiling message for claude-fable-5-1
         "claude-opus-4-8": 128_000,
         "claude-opus-4-7": 128_000,
         "claude-sonnet-4-6": 128_000,
@@ -229,6 +237,20 @@ class AnthropicProviderHandler(LLMProviderHandler):
     PRICE_TABLE: ClassVar[Mapping[str, ModelPrice]] = {
         # Use family-prefix keys so any minor revision rolls up under the same
         # price tier (e.g. claude-opus-4-7-20260301).
+        "claude-fable-5": ModelPrice(
+            # Fable 5.x sits ABOVE Opus in the Claude 5 family; list price NOT known
+            # here (2026-09-16) — Opus tier used as a floor so the estimate is not $0.
+            # Verify and revise.
+            input_per_m=15.0, output_per_m=75.0,
+            cache_read_per_m=1.50, cache_write_per_m=18.75,
+        ),
+        "claude-opus-5": ModelPrice(
+            # Opus tier ASSUMED for accounting (2026-09-16); verify against the
+            # published list price and revise — an unknown model would otherwise
+            # estimate $0 (estimate_cost returns 0.0 on a table miss).
+            input_per_m=15.0, output_per_m=75.0,
+            cache_read_per_m=1.50, cache_write_per_m=18.75,
+        ),
         "claude-opus-4-8": ModelPrice(
             # Opus pricing tier (same as 4-7); update if Anthropic revises it.
             input_per_m=15.0, output_per_m=75.0,
@@ -717,9 +739,14 @@ class AnthropicProviderHandler(LLMProviderHandler):
                     dtype = delta.get("type")
                     if dtype == "text_delta":
                         blocks.setdefault(idx, {"type": "text"})
-                        text_parts.setdefault(idx, []).append(
-                            str(delta.get("text") or ""),
-                        )
+                        chunk = str(delta.get("text") or "")
+                        text_parts.setdefault(idx, []).append(chunk)
+                        # Publish to a context-local observer, if one is
+                        # installed. This is what lets a caller that gets
+                        # CANCELLED mid-generation still hold the prefix the
+                        # provider already generated and billed — see
+                        # ``stream_observer``. A no-op when nobody is watching.
+                        publish_text_delta(chunk)
                     elif dtype == "input_json_delta":
                         blocks.setdefault(idx, {"type": "tool_use"})
                         tool_json_parts.setdefault(idx, []).append(

@@ -31,6 +31,7 @@ import { PanelTabStrip, type PanelTabDef } from '@/components/PanelTabs'
 import { InfoTip } from '@/components/InfoTip'
 import { cn } from '@/lib/cn'
 import { humanizeId } from '@/lib/deskNames'
+import { ScaleStamp } from '@/components/ScaleStamp'
 import {
   fetchAnalystRuntime,
   fetchBandTrajectory,
@@ -450,7 +451,21 @@ function BaselineRow({
       </button>
 
       {expanded && (
-        <div className="border-t border-line px-2 py-2">
+        <div className="space-y-2 border-t border-line px-2 py-2">
+          {/* H12/K3 — WHICH scale this desk's counts and sigma-distance are on,
+              and when the row was computed. A sigma-distance is comparable
+              across desks only within one scale era, so the chip is what makes
+              the board's cross-desk comparison legitimate rather than assumed.
+              A row written before migration 0219 says "unstamped". */}
+          <div className="flex flex-wrap items-center gap-2">
+            <ScaleStamp row={row} testId={`eval-boards-baseline-scale-${id}`} />
+            <span
+              className="text-label text-ink-3"
+              data-testid={`eval-boards-baseline-computed-${id}`}
+            >
+              computed {row.computed_at ?? 'not recorded'}
+            </span>
+          </div>
           <Section label="Wire fields">
             <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5 text-body">
               {baselineRowFacts(row).map((f) => (

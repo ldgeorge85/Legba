@@ -37,9 +37,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Sequence
+from typing import Any, Iterator, Sequence
 from uuid import UUID
 
 logger = logging.getLogger(__name__)
@@ -110,16 +113,28 @@ class EdgeWriteCounters:
     The DURABLE record is `entity_edges_unresolved` (parked rows survive the
     process and are countable in SQL); this is the convenience surface for a
     receipt or a log line, not the source of truth.
+
+    V3/P5: ``written`` is now split — ``inserted`` minted a new row while
+    ``folded`` re-observed an existing open one (the ON CONFLICT DO UPDATE
+    branch), which is the ~15-20 % fold the spec's §5.2.5 measured but the
+    receipt threw away. ``inserted + folded == written`` always.
     """
 
     written: int = 0
+    inserted: int = 0
+    folded: int = 0
     parked: int = 0
     self_edges: int = 0
     by_reason: dict[str, int] = field(default_factory=dict)
 
-    def record(self, outcome: str) -> None:
+    def record(self, outcome: str, *, inserted: bool | None = None) -> None:
+        """Tally one outcome; ``inserted`` splits a ``written`` write."""
         if outcome == WRITTEN:
             self.written += 1
+            if inserted is True:
+                self.inserted += 1
+            elif inserted is False:
+                self.folded += 1
         elif outcome == SELF_EDGE:
             self.self_edges += 1
         else:
@@ -129,6 +144,8 @@ class EdgeWriteCounters:
     def to_data(self) -> dict[str, Any]:
         return {
             "entity_edges_written": self.written,
+            "entity_edges_inserted": self.inserted,
+            "entity_edges_folded": self.folded,
             "endpoint_unresolved": self.parked,
             "entity_edges_self_skipped": self.self_edges,
             "endpoint_unresolved_by_reason": dict(self.by_reason),
@@ -136,14 +153,71 @@ class EdgeWriteCounters:
 
     def reset(self) -> None:
         self.written = 0
+        self.inserted = 0
+        self.folded = 0
         self.parked = 0
         self.self_edges = 0
         self.by_reason.clear()
 
 
+#: V3/P5 — a task-local outcome sink. ``COUNTERS`` is process-wide, so a run
+#: receipt cannot subtract a clean delta out of it without inheriting every
+#: OTHER nexus producer interleaved in this process (the reifier, governance,
+#: seed adapters and the importer all share the runtime). A ContextVar is the
+#: same mechanism ``run_accounting`` binds its per-run account with: it is
+#: visible to this task and any task it spawns, and invisible to everything
+#: else — exactly "this run's writes".
+_EDGE_WRITE_SINK: ContextVar[list[dict[str, Any]] | None] = ContextVar(
+    "legba_entity_edge_write_sink", default=None
+)
+
+
+@contextmanager
+def bind_edge_write_sink() -> Iterator[list[dict[str, Any]]]:
+    """Collect every edge-write outcome attempted under this context.
+
+    Yields a list each entry is ``{"outcome": <tag>, "inserted": bool|None}``
+    appended to — ``inserted`` is set only on ``written`` outcomes (True = new
+    row, False = folded into an open one). Callers that do not bind see no
+    sink and no overhead.
+    """
+    sink: list[dict[str, Any]] = []
+    token = _EDGE_WRITE_SINK.set(sink)
+    try:
+        yield sink
+    finally:
+        _EDGE_WRITE_SINK.reset(token)
+
+
+def _emit_outcome(outcome: str, *, inserted: bool | None = None) -> None:
+    """Record one outcome to the process counters and any bound run sink."""
+    COUNTERS.record(outcome, inserted=inserted)
+    sink = _EDGE_WRITE_SINK.get()
+    if sink is not None:
+        sink.append({"outcome": outcome, "inserted": inserted})
+
+
 #: Module-level tally. Reset by tests; read by anything that wants a cheap
 #: "is the dual-write actually writing" gauge without a SQL round trip.
 COUNTERS = EdgeWriteCounters()
+
+
+_LEDGER_ENV = "LEGBA_EDGE_TRANSITION_LEDGER"
+
+
+def edge_transition_ledger_enabled() -> bool:
+    """Honor ``LEGBA_EDGE_TRANSITION_LEDGER`` (default OFF) — the V3/P3
+    append-only transition ledger gate (migration 0206, spec §3.5).
+
+    The ONE read site (the ``LEGBA_EVENTS`` / ``events_enabled`` pattern):
+    every ``entity_edge_events`` write routes through
+    :func:`_write_edge_transitions`, which is only reached under this flag,
+    so the flag's off state is structural — an unflagged write cannot land a
+    ledger row, and the edge write itself is byte-identical with the flag
+    off. Only "1"/"true"/"yes"/"on" enable it.
+    """
+    raw = os.environ.get(_LEDGER_ENV, "0").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 _RESOLVE_SQL = """
@@ -286,7 +360,10 @@ DO UPDATE SET
     -- is invisible here).
     valid_until    = COALESCE(EXCLUDED.valid_until, entity_edges.valid_until),
     updated_at     = now()
-RETURNING id
+-- (xmax = 0) is true exactly on the INSERT branch of this upsert — the
+-- fold-vs-insert split the V3/P5 receipt counts (the situation_clustering
+-- idiom, same engine guarantees).
+RETURNING id, (xmax = 0) AS inserted
 """
 
 
@@ -351,7 +428,7 @@ async def write_entity_edge_for_nexus(
                 "dst_matches": dst_n,
             },
         )
-        COUNTERS.record(outcome)
+        _emit_outcome(outcome)
         logger.info(
             "entity_edges.endpoint_unresolved reason=%s family=%s subject=%r "
             "object=%r analyst=%s", outcome, edge_family, subject[:120],
@@ -362,7 +439,7 @@ async def write_entity_edge_for_nexus(
         # Both names resolved to the SAME entity — a merge has since made this
         # triple a self-reference. Not an error and not a park: the nexus row is
         # the historical assertion, and an entity is not related to itself.
-        COUNTERS.record(SELF_EDGE)
+        _emit_outcome(SELF_EDGE)
         return SELF_EDGE
 
     # An intermediary that does not resolve degrades to NULL rather than
@@ -374,7 +451,7 @@ async def write_entity_edge_for_nexus(
         edge_type=rel_type, polarity=polarity)
 
     evidence = _evidence_set(data)
-    landed = await conn.fetchval(
+    row = await conn.fetchrow(
         _INSERT_SQL,
         edge_id, src_id, dst_id, resolved_via, rel_type, edge_family,
         int(polarity), intent or "", channel or "direct", float(confidence),
@@ -384,6 +461,8 @@ async def write_entity_edge_for_nexus(
         source_type, seed_batch_id, analyst_id, analyst_version, run_id,
         target_id, target_version, produced_at,
     )
+    landed = row["id"] if row is not None else None
+    edge_inserted = bool(row["inserted"]) if row is not None else None
 
     if closed and landed is not None:
         # Link the rows we just closed to the row that replaced them. Read the
@@ -395,8 +474,107 @@ async def write_entity_edge_for_nexus(
             " WHERE id = ANY($2::uuid[]) AND id <> $1",
             landed, closed)
 
-    COUNTERS.record(WRITTEN)
+    if edge_transition_ledger_enabled():
+        # V3/P3 — the transition ledger (0206), in THIS transaction: a ledger
+        # row and the transition it records commit or roll back together.
+        # With the flag off this block is unreachable and the write path is
+        # byte-identical to before the ledger existed.
+        await _write_edge_transitions(
+            conn,
+            closed_ids=closed,
+            landed_id=landed,
+            inserted=edge_inserted,
+            occurred_at=produced_at,
+            polarity=int(polarity),
+            edge_type=rel_type,
+            derived_from=list(derived_from),
+            source_signal_ids=list(source_signal_ids),
+            analyst_id=analyst_id,
+            analyst_version=analyst_version,
+            run_id=run_id,
+        )
+
+    _emit_outcome(WRITTEN, inserted=edge_inserted)
     return WRITTEN
+
+
+async def _write_edge_transitions(
+    conn: Any,
+    *,
+    closed_ids: list[UUID],
+    landed_id: UUID | None,
+    inserted: bool | None,
+    occurred_at: datetime,
+    polarity: int,
+    edge_type: str,
+    derived_from: list[UUID],
+    source_signal_ids: list[UUID],
+    analyst_id: str | None,
+    analyst_version: str | None,
+    run_id: UUID | None,
+) -> None:
+    """Append `entity_edge_events` rows for what this write TRANSITIONED.
+
+    Transitions only, never observations (spec §3.5): a same-polarity
+    re-assert that folds into the open row writes NOTHING here — the fold is
+    already summarised by ``observed_count``/``last_seen_at``, and a row per
+    re-observation is the ~2,900/week of noise the spec priced. What lands:
+
+    * ``observed`` on the landed row when this write MINTED an edge (the
+      ``xmax = 0`` branch) — its first observation. ``derived_from`` may be
+      empty; the CHECK allows that for 'observed' alone.
+    * ``polarity_flip`` on each edge ``close_prior_entity_edges`` just
+      closed — the incoming re-assert contradicted their sign. The replacing
+      edge id leads ``derived_from`` so the row always carries its evidence.
+    """
+    evidence = list(dict.fromkeys(
+        [str(u) for u in derived_from] + [str(u) for u in source_signal_ids]))
+
+    if inserted and landed_id is not None:
+        await conn.execute(
+            """
+            INSERT INTO entity_edge_events
+                (edge_id, occurred_at, transition,
+                 polarity_to, edge_type_to, why, derived_from,
+                 analyst_id, analyst_version, run_id)
+            VALUES ($1, $2, 'observed', $3, $4, $5, $6::uuid[],
+                    $7, $8, $9)
+            """,
+            landed_id, occurred_at, polarity, edge_type,
+            f"edge asserted by {analyst_id or 'unknown'} ({edge_type})",
+            evidence, analyst_id, analyst_version, run_id,
+        )
+
+    if closed_ids:
+        # The closed rows carry their own pre-flip polarity/edge_type —
+        # read them back rather than assuming they matched the incoming
+        # triple's shape (a retyped edge is closed by a different caller,
+        # but polarity mismatches close here under the incoming type too).
+        old = await conn.fetch(
+            "SELECT id, polarity, edge_type FROM entity_edges "
+            " WHERE id = ANY($1::uuid[])",
+            closed_ids)
+        for r in old:
+            transition_evidence = list(dict.fromkeys(
+                ([str(landed_id)] if landed_id is not None else [])
+                + evidence))
+            await conn.execute(
+                """
+                INSERT INTO entity_edge_events
+                    (edge_id, occurred_at, transition,
+                     polarity_from, polarity_to,
+                     edge_type_from, edge_type_to, why, derived_from,
+                     analyst_id, analyst_version, run_id)
+                VALUES ($1, $2, 'polarity_flip', $3, $4, $5, $6, $7, $8::uuid[],
+                        $9, $10, $11)
+                """,
+                r["id"], occurred_at,
+                r["polarity"], polarity,
+                r["edge_type"], edge_type,
+                f"re-asserted with polarity {polarity} "
+                f"(was {r['polarity']}) by {analyst_id or 'unknown'}",
+                transition_evidence, analyst_id, analyst_version, run_id,
+            )
 
 
 def _evidence_set(data: dict[str, Any] | None) -> dict[str, Any] | None:

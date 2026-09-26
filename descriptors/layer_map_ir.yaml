@@ -1,0 +1,264 @@
+# CURATED — descriptors/layer_map_ir.yaml. Was
+# planning/LAYER_MAP_DRAFTS_2026-09-24/layer_map_ir.yaml (the retag
+# generator's `--country IR` output, map_version layer_map_ir.draft, every
+# reason "derived:" and every aperture `unmeasured`). Curation is the
+# layer's bias (docs/LAYERS.md): every entries[].reason below is now either
+# "curated: ..." (a per-country judgement was made and is explained) or the
+# original "derived: ..." with " — confirmed" appended (the derived layer
+# was checked against this country's information environment and is
+# right). All six apertures are declared present/absent/unmeasured — never
+# left at the generator's blanket unmeasured; an `absent` declaration
+# always carries a reason (schema-enforced) so a missing layer never reads
+# as silent agreement.
+
+identity:
+  id: layer_map_ir
+  name: IR layer map (curated)
+  schema_uri: legba/layer_map/1.0.0
+  kind: layer_map
+  owner: operator_curated
+  created: '2026-01-01T00:00:00Z'
+  state: reviewed
+country: IR
+map_version: layer_map_ir.v1
+entries:
+- source_id: source.acled.conflict
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.aljazeera.world
+  layer: foreign_press
+  reason: 'curated: reporting source_class, no country scope — international broadcaster with
+    dense Iran coverage; foreign_press, part of the dense foreign-press layer this country
+    note calls out (not a wire copy, not Iran''s own voice).'
+- source_id: source.armscontrol.news
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.bbc.world
+  layer: foreign_press
+  reason: 'curated: reporting source_class, no country scope — international broadcaster with
+    dense Iran coverage; foreign_press, part of the dense foreign-press layer this country
+    note calls out.'
+- source_id: source.breakingdefense.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.common_crawl.news
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.defensenews.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.dfrlab.reports
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.discord.default
+  layer: social_digest
+  reason: 'derived: kind=discord_webhook — always relevant regardless of country — doubt:
+    this descriptor is KEYED and unconfigured (no registered Discord application, no server/channel
+    set — config.application_id is still the literal placeholder), so whose channels this
+    would cover for Iran cannot be told from the descriptor; it contributes no actual Iran
+    coverage until an operator registers a real app and channel set.'
+- source_id: source.dw.world
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.euronews.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.euvsdisinfo.cases
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.firecrawl.default
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.france24.afrique
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.gdelt.bigquery
+  layer: public_data
+  reason: 'curated: structured CAMEO event rows, model-free ingest — a public-data feed, not press; reconciled across all four maps at merge, the RU lane made the call'
+- source_id: source.gdelt.files
+  layer: public_data
+  reason: 'curated: structured CAMEO event rows, model-free ingest — a public-data feed, not press; reconciled across all four maps at merge, the RU lane made the call'
+- source_id: source.generic_webhook.default
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.guardian.world
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.intelmq.cisa_kev
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO feed
+    — confirmed'
+- source_id: source.irna.english
+  layer: official
+  reason: 'curated: state_media source_class, geo-scoped to IR — IRNA is the Islamic Republic''s
+    own primary state news agency; read as the official layer for THIS country (confirmed:
+    not a case of the foreign-state-messaging reading docs/LAYERS.md warns the same channel
+    can take elsewhere). Source is active.'
+- source_id: source.isw.assessments
+  layer: public_data
+  reason: 'derived: analysis source_class, no country scope — treated as a structured/analytical
+    public-data feed (no separate analysis layer in the vocabulary) — confirmed'
+- source_id: source.malijet.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.maritimeexecutive.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.mediacloud.world
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.middleeasteye.news
+  layer: foreign_press
+  reason: 'curated: reporting source_class, no country scope — London-based, explicitly Gulf
+    + Israel/Iran adjacency coverage (identity comment); an exile/foreign-based outlet covering
+    Iran, not an Iran-headquartered masthead — foreign_press is right, part of the dense foreign-press
+    coverage of Iran this country note calls out.'
+- source_id: source.navalnews.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.northernminer.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.oilprice.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.opensanctions.api
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO feed
+    — confirmed'
+- source_id: source.opensanctions.bulk
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO feed
+    — confirmed'
+- source_id: source.presstv.english
+  layer: official
+  reason: 'curated: state_media source_class, geo-scoped to IR — Press TV is Iran''s own English
+    state broadcaster, the same official-layer reading as IRNA (a second, more editorially
+    assertive state voice). Source is currently paused (identity.state), so it contributes
+    no live signal right now, but it is still curated into the official layer for when it
+    resumes — presence of the layer does not require every source in it to be actively polling.'
+- source_id: source.reliefweb.reports
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO feed
+    — confirmed'
+- source_id: source.rferl.news
+  layer: foreign_press
+  reason: 'curated: reporting source_class, no country scope — RFE/RL is a USAGM (US government-funded)
+    broadcaster with a statutory editorial firewall, not Iran''s own state voice; for Iran
+    it reads as a foreign-based outlet covering the country (its News zone is explicitly Russia/Ukraine/Iran/Central
+    Asia — identity comment), same as Al Jazeera/BBC/DW here. foreign_press, not official
+    — confirmed the derived layer is right for this country precisely because RFE/RL is a
+    foreign state''s broadcaster, not Iran''s own.'
+- source_id: source.rigzone.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.rsshub.apnews.world
+  layer: foreign_press
+  reason: 'derived: wire/agency feed — descriptors/wire_map.yaml same_publisher[''ap''] —
+    confirmed'
+- source_id: source.rsshub.rfa.korea
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.rsshub.rfi.afrique
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.rsshub.rfi.ameriques
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.sahelintelligence.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.splash247.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.telegram.org_channels
+  layer: social_digest
+  reason: 'curated: kind=telegram_channel, one shared global batch (scope.source_class: reporting
+    default) — for Iran the only channel in the curated list that is Iran-relevant is "Irna_en"
+    (IRNA''s own Telegram channel, config.channels), i.e. the state''s own voice republished
+    on Telegram, not independent monitoring of Iranian civil/social discourse. No independent
+    Persian-language or Iranian-opposition channel is curated here. Kept in social_digest
+    per the kind-based rule (channel-level counts/summaries, never identities), but the coverage
+    this gives Iran specifically is thin and state-echoing, not a real social layer — noted
+    here rather than left implicit.'
+- source_id: source.theloadstar.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.un.press
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO feed
+    — confirmed'
+- source_id: source.un_news.africa
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO feed
+    — confirmed'
+- source_id: source.un_news.middle_east
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO feed
+    — confirmed'
+- source_id: source.un_news.peace_security
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO feed
+    — confirmed'
+- source_id: source.usgs.earthquakes
+  layer: physical
+  reason: 'derived: kind=geojson — always relevant regardless of country — confirmed'
+- source_id: source.who.disease_outbreak_news
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO feed
+    — confirmed'
+- source_id: source.worldnuclearnews.news
+  layer: foreign_press
+  reason: 'derived: reporting source_class, no country scope — international press — confirmed'
+- source_id: source.wto.news
+  layer: public_data
+  reason: 'derived: official source_class, no country scope — a global public-data/IGO feed
+    — confirmed'
+apertures:
+- layer: official
+  declared: present
+  reason: 'curated: source.irna.english (active) and source.presstv.english (paused) are both
+    Iran''s own state outlets, geo-scoped to IR — the official layer is populated for this
+    country.'
+- layer: domestic_press
+  declared: absent
+  reason: 'curated: absent, both grounds apply and are stated separately — structurally, Iran
+    has no independent domestic press able to operate (state licensing/censorship suppresses
+    it) so the layer is genuinely thin inside the country; and separately, we carry zero domestic_press-class
+    sources scoped to IR in descriptors/source_*.yaml (no entry in this map is domestic_press)
+    — declared absent rather than unmeasured, per docs/LAYERS.md''s warning that a missing
+    layer must never read as silent agreement.'
+- layer: foreign_press
+  declared: present
+  reason: 'curated: present and dense — Al Jazeera, BBC, DW, Middle East Eye, RFE/RL, Guardian,
+    Euronews, France24, plus the AP wire copy (rsshub.apnews.world) and defense/energy/maritime
+    trade press all carry Iran coverage; none is IR-geo-scoped in its own descriptor (they
+    are global/foreign-based outlets), which is exactly the foreign_press reading.'
+- layer: social_digest
+  declared: present
+  reason: 'curated: present but thin — source.telegram.org_channels curates "Irna_en" (IRNA''s
+    own Telegram channel), so a social_digest row exists for IR, but it echoes the state voice
+    already captured under official rather than adding independent civil-discourse monitoring;
+    source.discord.default is unconfigured (no real server/channel yet) and adds nothing today.
+    Declared present because a curated source does exist, not because the layer is substantively
+    independent — see the entry-level doubt on both sources.'
+- layer: public_data
+  declared: present
+  reason: 'curated: present — ACLED conflict events, OpenSanctions (api+bulk), UN press/news
+    (world, Middle East, peace & security desks), WHO outbreak news, ReliefWeb, WTO, ISW assessments,
+    DFRLab, EU vs Disinfo, GDELT, Common Crawl, Firecrawl and the generic webhook are all
+    global/structured feeds with no single-country scope, and Iran is a subject in several
+    of them (ACLED events, OpenSanctions designations, UN/WHO reporting) — the layer applies
+    the same way it does for every country.'
+- layer: physical
+  declared: present
+  reason: 'curated: present — source.usgs.earthquakes is a global model-free GeoJSON hazard
+    feed; Iran sits on active seismic belts (Alborz/Zagros), so this layer is not merely structurally
+    included but meaningfully applies to this country.'

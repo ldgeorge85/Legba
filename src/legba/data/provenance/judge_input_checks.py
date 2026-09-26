@@ -97,6 +97,17 @@ def _fold_soft(
         unsupported_spans=list(report.unsupported_spans) + [span],
         judge_status=report.judge_status,
         judge_unavailable_reason=report.judge_unavailable_reason,
+        # 2026-09-08/1 — the judge TRANSPORT receipts ride every rebuild of a
+        # report, or a fold that adds one span would erase the evidence that
+        # the judge had to be asked three times. ``report`` is typed ``Any``
+        # here (these folds take report-SHAPED objects, doubles included), so
+        # the read is defensive — a missing field is absent, never a raise.
+        judge_attempts=getattr(report, "judge_attempts", None),
+        judge_http_statuses=list(
+            getattr(report, "judge_http_statuses", None) or []
+        ),
+        # H3 (2026-09-25/1) — the same defensive carry as the pair above.
+        judge_miscount_claims=getattr(report, "judge_miscount_claims", 0) or 0,
         confidence_ceiling=report.confidence_ceiling,
         branch_scores=report.branch_scores,
         claim_verdicts=list(report.claim_verdicts)
@@ -110,7 +121,9 @@ def _fold_soft(
     return out
 
 
-def fold_salience_lead(report: Any, *, eval_block: Any, body: str) -> Any:
+def fold_salience_lead(
+    report: Any, *, eval_block: Any, body: str, assembly: Any = None
+) -> Any:
     """R3 — promote ``data.eval.salience_check`` from advisory to COUNTED.
 
     Only a verdict of ``pass is False`` costs anything. ``pass is None`` is the
@@ -122,9 +135,60 @@ def fold_salience_lead(report: Any, *, eval_block: Any, body: str) -> Any:
     ledger row points at the sentence that opened the composition rather than at
     an abstraction. A missing lead claim degrades to the check's own reason
     string; it never blocks the fold.
+
+    DISABLED FOR ASSEMBLY-REGIME ROWS (D-3, 2026-09-03), and the reason is that
+    the check is asking a question the assembly has already answered better.
+
+    ``salience_check`` compares the LEAD's magnitude to the TOP input's on
+    ``max_salience()`` — a max-pool measured at sd **0.024** across the
+    composition tier, where the world burial guard is 58 pass / 0 fail with a
+    maximum observed gap of 0.050 against a 0.300 threshold. It is
+    mathematically unable to fire, and every assumption under it is now false on
+    an assembled row:
+
+      * the KEY is repaired. Ordering runs on ``cited_mass.v1`` — the signals a
+        desk actually CITED, not the slice it was shown — and D-2 measured sd
+        1.673 on the live candidate pool against the max-pool's 0.024. A gap
+        threshold calibrated on a dead key is not a threshold at all;
+      * the LEAD is PLURAL. ``assembly.lead.kind`` is ``earned_single`` |
+        ``co_leads`` | ``none``, and this check presupposes exactly one correct
+        lead — VOICE §4.5.7 says it "will fight a plural one". Charging a
+        ``co_leads`` or ``none`` row for burying "the" lead is a category error;
+      * the VERDICT is already ON THE ROW, with its arithmetic. ``lead.test``
+        publishes ``top_share``, ``ratio_12``, both bars and ``earned``. The
+        ordering IS the payload — ``blocks[].ordinal`` follows the ranking by
+        construction — so an assembled read cannot bury its own lead. There is
+        no discretionary act left to charge for.
+
+    DISABLED, NOT RE-POINTED, and the choice is stated in the D-3 lineage entry
+    rather than in this comment alone. Re-pointing it at ``cited_mass.v1`` would
+    mean inventing a new gap threshold on a key with 70× the variance and no
+    calibration behind it — a NEW INSTRUMENT wearing an old reason code, which
+    is exactly the move the stamp discipline exists to prevent. When the
+    assembled population has a measured distribution, a plural-lead check is its
+    own train with its own bar.
+
+    THE SUPPRESSION IS COUNTED. A row where the legacy check WOULD have charged
+    bumps ``salience_lead_suppressed_assembly``, so "how often did the dead key
+    disagree with the repaired one" is a number rather than a silence. Legacy-
+    regime rows are untouched: the check runs exactly as it does today.
     """
     check = _eval_section(eval_block, "salience_check")
     if not isinstance(check, Mapping) or check.get("pass") is not False:
+        return report
+    # Imported HERE rather than at module scope, the ``_verify()`` idiom two
+    # functions up: this branch is reached only when the legacy check would have
+    # charged, so the edge costs nothing and cannot become a cycle later.
+    from . import assembly_arms
+
+    if assembly_arms.is_assembly(assembly):
+        report.bump("salience_lead_suppressed_assembly")
+        logger.info(
+            "verify.salience.buried_lead_suppressed lead_ref=%s gap=%s — the "
+            "assembled read's lead is EARNED on cited_mass.v1 and published in "
+            "assembly.lead.test; the legacy max-pool check does not apply",
+            check.get("lead_ref"), check.get("gap"),
+        )
         return report
 
     lead_ref = check.get("lead_ref")
@@ -204,12 +268,23 @@ def fold_input_contradictions(report: Any, *, eval_block: Any, body: str) -> Any
     return out
 
 
-def fold_input_checks(report: Any, *, eval_block: Any, body: str) -> Any:
+def fold_input_checks(
+    report: Any, *, eval_block: Any, body: str, assembly: Any = None
+) -> Any:
     """Both checks, in one call. No-op without an ``eval`` block (every unit
-    finding, every pre-R2 composition) — byte-identical for those callers."""
+    finding, every pre-R2 composition) — byte-identical for those callers.
+
+    ``assembly`` reaches ONLY the salience-lead half. R2's unsurfaced-
+    contradiction check stays live on assembled rows on purpose: the assembly
+    publishes ``tensions[]`` deterministically but D-3 does NOT ship ARM 5, so
+    withdrawing the one detector that reads the producer's own contradiction
+    ledger would leave the class with no grader at all until D-6.
+    """
     if not isinstance(eval_block, Mapping) or not eval_block:
         return report
-    report = fold_salience_lead(report, eval_block=eval_block, body=body)
+    report = fold_salience_lead(
+        report, eval_block=eval_block, body=body, assembly=assembly
+    )
     return fold_input_contradictions(report, eval_block=eval_block, body=body)
 
 

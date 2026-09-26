@@ -1,6 +1,13 @@
 /**
  * Component test for the UI-3 Target Findings panel (rebuilt against the
  * frozen `/findings` page shape with nullable severity + `data.tags`).
+ *
+ * The panel also mounts the 7b-ii gap strip (`GapStrip`), which fires its own
+ * `/findings?analyst_id_in=...` and `/v3/eval/country_scorecard?target_id=...`
+ * requests against the SAME global `fetch` stub these tests already control —
+ * `routedFetch` below dispatches on the URL so the panel's own `/findings`
+ * assertions are unaffected by the strip's extra calls (see `GapStrip.test.tsx`
+ * for the strip's own coverage).
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -51,6 +58,24 @@ function finding(over: Record<string, unknown> = {}) {
   }
 }
 
+/**
+ * Routes the global `fetch` stub by URL: the gap strip's two calls
+ * (`analyst_id_in=` and `country_scorecard`) always get an honest empty
+ * payload, and every other `/findings` call (the panel's own query) gets
+ * `mainFindings`.
+ */
+function routedFetch(mainFindings: unknown) {
+  return vi.fn(async (url: string) => {
+    if (typeof url === 'string' && url.includes('analyst_id_in=')) {
+      return { ok: true, json: async () => ({ data: [] }) }
+    }
+    if (typeof url === 'string' && url.includes('country_scorecard')) {
+      return { ok: true, json: async () => [] }
+    }
+    return { ok: true, json: async () => mainFindings }
+  })
+}
+
 beforeEach(() => {
   vi.restoreAllMocks()
   localStorage.clear()
@@ -58,10 +83,7 @@ beforeEach(() => {
 
 describe('TargetFindingsPanel', () => {
   it('shows the empty state when there are no findings', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({ ok: true, json: async () => ({ data: [], next_cursor: null }) })),
-    )
+    vi.stubGlobal('fetch', routedFetch({ data: [], next_cursor: null }))
     render(wrap(<TargetFindingsPanel registration={reg()} scope={{ target_id: 'brazil' }} mode="personal" />))
     await waitFor(() => {
       expect(screen.getByTestId('target-findings-empty')).toBeInTheDocument()
@@ -69,10 +91,7 @@ describe('TargetFindingsPanel', () => {
   })
 
   it('renders a finding, badges nullable severity as "unrated", and drops bookkeeping tags', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({ ok: true, json: async () => ({ data: [finding()], next_cursor: null }) })),
-    )
+    vi.stubGlobal('fetch', routedFetch({ data: [finding()], next_cursor: null }))
     render(wrap(<TargetFindingsPanel registration={reg()} scope={{ target_id: 'brazil' }} mode="personal" />))
 
     await waitFor(() => {

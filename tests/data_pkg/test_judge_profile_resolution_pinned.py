@@ -265,6 +265,45 @@ _EXPECTED_FAIL_CLASSES = {
     # A coinage QUOTED as a named desk's own words that appears nowhere in that
     # desk's cited read. Soft — provenance, not a fabricated world fact.
     "attribution_ungrounded_quote": "soft_fail",
+    # D-3 (2026-09-03) — THE ASSEMBLY ARMS. Sixteen classes, ALL HARD, and the
+    # reason they are all hard is one sentence: they grade a GENERATED payload,
+    # so none of them can express "the model outran its evidence". Each says
+    # "the record does not say what it says it says", which is the house
+    # definition of hard verbatim. A fire here is a BROKEN CONSTRUCTOR, not a
+    # bad finding — the assembler self-checks every span at construction and
+    # raises rather than emitting one that does not resolve, so these arms
+    # reading anything but clean means the generator is wrong.
+    #
+    # ARM 1 — quote fidelity, in precedence order (an earlier class explains a
+    # later one, which is why the fold charges only the first).
+    "quote_origin_truncated": "hard_fail",
+    "quote_origin_drift": "hard_fail",
+    "quote_offset_mismatch": "hard_fail",
+    "quote_not_contained": "hard_fail",
+    # ARM 2 — scope preservation, BOTH directions. The JP mechanism as a span
+    # boundary rule instead of a judged rubric: a span may not cut away the
+    # collection denominator its source sentence carried (truncated), and may
+    # not declare one its source sentence never had (widened).
+    "scope_truncated": "hard_fail",
+    "scope_widened": "hard_fail",
+    # ARM 3 — attribution equality. R3 §4.2's "proliferation-watch desk that
+    # does not exist among the seven unit heads", made impossible by generation
+    # and then checked anyway: the arm is a regression test on the generator.
+    "attribution_head_unresolved": "hard_fail",
+    "attribution_desk_mismatch": "hard_fail",
+    "attribution_target_mismatch": "hard_fail",
+    "attribution_date_mismatch": "hard_fail",
+    # ARM 4 — selection honesty. (a) the coverage ledger accounts for every
+    # declared roster unit exactly once with a status from the closed set;
+    # (b) the drop ledger's arithmetic closes, its why-classes are in the closed
+    # enum, and the ranked not-selected list sits strictly below the carried
+    # prefix.
+    "coverage_unit_missing": "hard_fail",
+    "coverage_unit_duplicated": "hard_fail",
+    "coverage_status_invalid": "hard_fail",
+    "drop_count_mismatch": "hard_fail",
+    "drop_why_unknown": "hard_fail",
+    "drop_order_violation": "hard_fail",
 }
 
 
@@ -312,7 +351,33 @@ def test_structural_exempt_set_pinned() -> None:
         "source_track_record",
         "narrative_mapper",
         "desk_baseline",
-    })
+        # R-D research measurement (RESEARCH_PROGRAM_SPEC §4) — a FINDING
+        # emitter of pure SQL arithmetic, so it joins the structural exemption
+        # the way every other deterministic counter did.
+        "research_measurement",
+        # A-1 attention desk_reference (ATTENTION_MEASUREMENT_DESIGN §3.1) — an
+        # INSTRUMENT, never a claim about the world, so it is verify-exempt for
+        # the same reason and must never enter the judge population.
+        "desk_reference",
+        # G1 correctness_grader (LEDGER_RESET_2026-09-16 §3, Program 2). Its
+        # receipt reports what the instrument DID — which units it graded,
+        # against which reference, under which calibration, at what cost — and
+        # asserts nothing about the world a faithfulness judge could grade.
+        # Routing it into the verify population would also be circular in the
+        # worst way: the pass that measures groundedness scoring the output of
+        # the pass that exists because groundedness is not truth.
+        "correctness_grader",
+        # R2 reference_builder — the grader's other half, same argument. Its
+        # receipt counts what each fence dropped and which dimensions came out
+        # thin; the REFERENCE it writes is not a finding at all but an INPUT to
+        # a measurement, and grading our own prose against our own citations is
+        # exactly the circularity a blind reference exists to escape.
+        "reference_builder",
+            # H12 Program 5 lane 1 (2026-09-24): the weekly ledger-yield instrument, pure SQL arithmetic.
+        "inquiry_yield",
+        # Program 6 L2 (2026-09-24): the divergence-baseline unit, deterministic counts and baselines.
+        "layer_divergence",
+})
 
 
 @pytest.mark.parametrize("analyst", sorted(K.STRUCTURAL_VERIFY_EXEMPT_ANALYSTS))
@@ -350,11 +415,21 @@ _EXPECTED_PROFILES = {
     # V-H (2026-08-04): both prompted kinds bumped. The rubrics are unchanged;
     # the EVIDENCE is not — every unit citation now renders an ``OUTLET:`` line,
     # which both leads carry (V-H1).
-    "citation_support": ("citsupp.v5", False),
-    "absence": ("absence.v4", True),
+    # H3 (2026-09-24/1): both prompted kinds bumped again — the reply contract
+    # now asks every verdict entry for its ``claim_index``, and that text rides
+    # the shared lead AND the absence rubric.
+    "citation_support": ("citsupp.v6", False),
+    "absence": ("absence.v5", True),
     "synthesis": ("synthesis.v0", False),
     "forward_looking": ("fwd.v0", False),
     "structure": ("structure.v0", False),
+    # D-3 (2026-09-03): the ASSEMBLY branch. The only entry here that is NOT a
+    # prose claim kind — ``_claim_kind`` never returns it, deliberately, because
+    # an assembly violation is a structural fact about a payload rather than a
+    # segmented sentence. ``judge_system=None`` for a reason no other stubbed
+    # kind has: this branch has no judge and never will, so a version bump here
+    # means the ARMS changed, not that a rubric did.
+    "assembly": ("assembly_arms.v1", False),
 }
 
 
@@ -458,7 +533,7 @@ def test_verify_capable_kinds_are_real_output_kinds() -> None:
 
 
 def test_output_kind_roster_pinned() -> None:
-    """The 13 kinds. A new kind is a deliberate addition — and must be
+    """The 14 kinds. A new kind is a deliberate addition — and must be
     classified against the verify gate above."""
     assert {k.name for k in OutputKind} == {
         "FINDING",
@@ -474,6 +549,10 @@ def test_output_kind_roster_pinned() -> None:
         "JOURNAL",
         "SCORECARD",
         "SITUATION_UPDATE",
+        # DATA MODEL V3 / P0 (2026-09-22): the bounded occurrence, written to its
+        # own `events` table behind LEGBA_EVENTS. Deterministic rows, no prose —
+        # NOT verify-capable; the gate guard above stays at three kinds.
+        "EVENT",
     }
 
 

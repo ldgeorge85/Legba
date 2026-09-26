@@ -18,7 +18,15 @@
  *    visibility.
  *  - A GROUPED-BY-CYCLE collapsed list (§2b) replacing the old unbounded
  *    scroll — rows bucketed by `period_end` date, newest cycle expanded, an
- *    entry_kind priority order within a group, a diary-row reveal cap.
+ *    entry_kind priority order within a group, a diary-row reveal cap. Each
+ *    cycle splits into two BANDS (h7): SYNTHESIS (chronicle + lens +
+ *    lens_diff — the cross-cycle reading, never capped) above DIARY (entry +
+ *    consolidation — the running self-account, reveal-capped).
+ *  - A KIND BADGE on every list row and every card (h7) — one colour per
+ *    `entry_kind`, so the five kinds are told apart at a glance instead of
+ *    by reading a uniformly-grey label. The palette deliberately avoids the
+ *    amber ("unverified") and rose ("contradicted") meanings this panel
+ *    already spends colour on; see `KIND_BADGE_CLASSES`.
  *  - A READER PANE (§2c) — selecting a row fetches the full row and reuses
  *    `EntryCard` + `ClaimRow` + `HonestyBanner` wholesale (they already render
  *    any `entry_kind` generically). When the row's `verify_body` names
@@ -59,6 +67,7 @@ import type {
   JournalRef,
   JournalCalibration,
 } from '@/lib/api'
+import { stripJournalRefMarkers } from '@/lib/proseText'
 import type { ProvenanceRef } from '@/v4/why/types'
 import type { PanelProps } from '@/types'
 
@@ -76,14 +85,61 @@ function flagLabel(flag: string): string {
   return HONESTY_FLAG_LABELS[flag] ?? flag
 }
 
+/** The chip-label truncation budget for a ref's title — kept short so
+ *  "kind · source · title" stays reasonable before `ProvenanceChip`'s own
+ *  28-char clamp does the rest (the full text still lives in the chip's
+ *  title/aria-label, so nothing here is ever lost, only visually clipped). */
+const REF_TITLE_MAX = 60
+
+function clampRefTitle(s: string): string {
+  return s.length <= REF_TITLE_MAX ? s : `${s.slice(0, REF_TITLE_MAX - 1)}…`
+}
+
+/** `source.gdelt.files` → `gdelt.files` — the short display name for a
+ *  signal ref's originating feed (T1.3). Every `source_id` in the substrate
+ *  carries the `source.` namespace prefix; stripping it is purely cosmetic
+ *  (never applied to anything used for lookup/matching). */
+function sourceShortName(sourceId: string): string {
+  return sourceId.startsWith('source.') ? sourceId.slice('source.'.length) : sourceId
+}
+
+/**
+ * The honest label for a resolved journal ref (T1.3,
+ * planning/JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09.md §6). Before this,
+ * every ref rendered as `title ?? id` regardless of kind — so a `kind='unknown'`
+ * ref (the server's placeholder for an id matching no substrate row) showed a
+ * bare UUID indistinguishable from a resolved one, and the underlying
+ * `kind: "unknown"` field is what an external read of the API surfaced as
+ * "unknown: <uuid>". The reader must never print the bare word "unknown":
+ *
+ *  - unresolved (`kind==='unknown'`) → `unresolved · <uuid8>` — visible,
+ *    honest, never hidden, never "unknown".
+ *  - a signal → `signal · <short source> · <title>` (falls back to the id
+ *    when the row somehow carries no title).
+ *  - anything else (finding/situation/fact/nexus/hypothesis/critique/…) →
+ *    `<kind> · <title>`, the same "kind + title" convention findings' own
+ *    citation cards already use (`citationKindLabel` in
+ *    `@/lib/citationsModel`).
+ */
+export function journalRefLabel(ref: JournalRef): string {
+  if (ref.kind === 'unknown') return `unresolved · ${ref.id.slice(0, 8)}`
+  const title = ref.title ? clampRefTitle(ref.title) : ref.id
+  if (ref.kind === 'signal') {
+    const source = ref.source_id ? sourceShortName(ref.source_id) : 'signal'
+    return `signal · ${source} · ${title}`
+  }
+  return `${ref.kind} · ${title}`
+}
+
 /** Project a resolved journal ref onto the shared `ProvenanceRef` chip contract.
  *  `kind` flows straight through — the chip palette colours known substrate
- *  kinds and falls back to slate for `nexus`/`fact`/`unknown`. */
+ *  kinds and falls back to slate for `nexus`/`fact`/`unknown`; the visible
+ *  `label` text is `journalRefLabel` (T1.3). */
 function refToChip(ref: JournalRef): ProvenanceRef {
   return {
     kind: ref.kind as ProvenanceRef['kind'],
     id: ref.id,
-    label: ref.title ?? ref.id,
+    label: journalRefLabel(ref),
   }
 }
 
@@ -91,7 +147,7 @@ function refToChip(ref: JournalRef): ProvenanceRef {
  *  other rooms. `selectRow` coerces an unknown/non-first-class kind to a
  *  walkable Inspector path, so a click is never a dead-end (§9). */
 function openRef(ref: JournalRef): void {
-  selectRow(ref.kind, ref.id, ref.title ?? undefined, { origin: 'journal' })
+  selectRow(ref.kind, ref.id, journalRefLabel(ref), { origin: 'journal' })
 }
 
 /** An explicit speculation / perspective / self-instrument marker family the
@@ -110,8 +166,7 @@ const SPECULATION_MARKER_RE =
  *     left as literal brackets or silently deleted — deleting would hide the
  *     honesty signal the server deliberately preserved. */
 function normalizeMarkers(body: string): string {
-  return body
-    .replace(/\[\[ref:[0-9a-fA-F-]+\]\]/g, '')
+  return stripJournalRefMarkers(body)
     .replace(SPECULATION_MARKER_RE, (_m, tag: string) => `{{spec:${tag.toLowerCase()}}}`)
     .replace(/[ \t]{2,}/g, ' ')
 }
@@ -347,6 +402,10 @@ function EntryCard({
       data-entry-kind={entry.entry_kind}
     >
       <header className="mb-2 flex flex-wrap items-center gap-2">
+        {/* The kind badge leads the card — the reader pane renders any
+            `entry_kind` through this same component, so "what am I reading?"
+            is answered before the title (h7). */}
+        <KindBadge kind={entry.entry_kind} />
         {prominent && (
           <span className="rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide bg-emerald-900/60 text-emerald-200">
             current inner landscape
@@ -521,10 +580,90 @@ const KIND_LABELS: Record<string, string> = {
   chronicle: 'Chronicle',
   lens: 'Lens',
   lens_diff: 'Lens diff',
+  inquiry: 'Inquiry',
+  crossroads: 'Crossroads',
 }
 
 function kindLabel(kind: string): string {
   return KIND_LABELS[kind] ?? kind
+}
+
+/** One colour per `entry_kind` — the at-a-glance "which voice is this?"
+ *  marker the panel previously lacked. Every list row's kind chip used to
+ *  render in the same neutral slate and the cards carried no kind marker at
+ *  all, so a `lens` row and an `entry` row were indistinguishable without
+ *  stopping to read the label.
+ *
+ *  The families are picked AROUND the two meanings this panel already spends
+ *  colour on, so a kind badge can never be misread as a verdict:
+ *    - AMBER means "unverified / uncited / perspective / warn" (`ClaimRow`,
+ *      `SpeculationTag`, `VerifyScorePill`, the honesty pills) — never a kind.
+ *    - ROSE means "judge contradicted" (`VerdictBlock`) — never a kind.
+ *  Emerald IS reused for `consolidation`, deliberately: it is already the
+ *  "current inner landscape" hue on the prominent card, so the badge
+ *  reinforces that existing binding rather than inventing a second colour for
+ *  the same row. `entry` keeps the neutral surface/ink tokens — it is the
+ *  high-volume diary row, where colour would be noise rather than signal —
+ *  and, being token-driven, it flips with the light/dark toggle. */
+const KIND_BADGE_CLASSES: Record<string, string> = {
+  entry: 'border-line bg-surf-3 text-ink-2',
+  consolidation: 'border-emerald-800/50 bg-emerald-950/40 text-emerald-300',
+  chronicle: 'border-sky-800/50 bg-sky-950/40 text-sky-300',
+  lens: 'border-violet-800/50 bg-violet-950/40 text-violet-300',
+  lens_diff: 'border-fuchsia-800/50 bg-fuchsia-950/40 text-fuchsia-300',
+  // Program 5 — the stateful tier. Indigo and teal are the two remaining
+  // families that are neither AMBER (unverified/perspective/warn) nor ROSE
+  // (judge contradicted) and are distinguishable from the violet/fuchsia the
+  // lens pair already holds, so a badge still cannot be misread as a verdict.
+  inquiry: 'border-indigo-800/50 bg-indigo-950/40 text-indigo-300',
+  crossroads: 'border-teal-800/50 bg-teal-950/40 text-teal-300',
+}
+
+/** An unforeseen kind still gets a badge — the neutral one, labelled with its
+ *  raw id (`kindLabel`'s own fallback). Never blank, never silently dropped. */
+const KIND_BADGE_FALLBACK = 'border-line bg-surf-3 text-ink-2'
+
+/** What each kind actually IS — the badge's tooltip, so the one-word label
+ *  never has to carry the whole explanation. */
+const KIND_DESCRIPTIONS: Record<string, string> = {
+  entry: 'Diary — one reflective entry over a single cycle',
+  consolidation:
+    'Consolidation — the standing inner landscape, rewritten as entries accumulate',
+  chronicle: 'Chronicle — the narrative synthesis across a cycle',
+  lens: 'Lens — a faculty-lens read of the cycle',
+  lens_diff: 'Lens diff — what moved between two lens reads',
+  inquiry:
+    'Inquiry — a standing investigation, carrying its own ledger across cycles',
+  crossroads:
+    'Crossroads — cross-desk patterns, drifts, contradictions and silences',
+}
+
+/** The badge's text AND colour for one `entry_kind`, returned together so the
+ *  label and the colour can never drift apart. */
+export function journalKindBadge(kind: string): { label: string; className: string } {
+  return {
+    label: kindLabel(kind),
+    className: KIND_BADGE_CLASSES[kind] ?? KIND_BADGE_FALLBACK,
+  }
+}
+
+/** The per-kind badge — rendered on every cycle-list row AND on every entry
+ *  card, so the kind stays legible both while scanning and while reading. */
+function KindBadge({ kind }: { kind: string }) {
+  const { label, className } = journalKindBadge(kind)
+  return (
+    <span
+      className={cn(
+        'shrink-0 rounded border px-1.5 py-0.5 text-[9px] uppercase leading-none tracking-wide',
+        className,
+      )}
+      data-testid="journal-kind-badge"
+      data-kind={kind}
+      title={KIND_DESCRIPTIONS[kind] ?? kind}
+    >
+      {label}
+    </span>
+  )
 }
 
 /** emerald ≥0.7 / amber <0.7 / slate if absent — reuses HonestyBanner's
@@ -649,6 +788,72 @@ function kindPriority(kind: string): number {
   return KIND_PRIORITY[kind] ?? 5
 }
 
+/** The two bands a cycle group splits into (h7).
+ *
+ *  SYNTHESIS is the cross-cycle reading — `chronicle` plus the faculty-lens
+ *  rows (`lens` / `lens_diff`) plus the Program 5 stateful tier (`inquiry` /
+ *  `crossroads`, which read ACROSS cycles by construction) — and is what the
+ *  operator scans first.
+ *  DIARY is the running self-account: the high-volume `entry` stream plus any
+ *  `consolidation` row that reaches a group (the single OPEN consolidation is
+ *  held out in the prominent slot above the list, so only a historical one
+ *  ever lands here).
+ *
+ *  Before this the split was `entry` vs. everything-else, which read as one
+ *  undifferentiated run and put `consolidation` on the wrong side of the
+ *  line. An unforeseen kind bands as SYNTHESIS deliberately: that band leads
+ *  and is never capped, so a new kind surfaces rather than being buried under
+ *  the diary's reveal cap. */
+export type CycleBand = 'synthesis' | 'diary'
+
+const DIARY_KINDS: ReadonlySet<string> = new Set(['entry', 'consolidation'])
+
+export function cycleBand(kind: string): CycleBand {
+  return DIARY_KINDS.has(kind) ? 'diary' : 'synthesis'
+}
+
+/** Split one cycle group's rows into the two bands, preserving the incoming
+ *  `kindPriority` order within each (h7). */
+export function splitCycleBands(
+  rows: JournalEntrySummary[],
+): Record<CycleBand, JournalEntrySummary[]> {
+  const synthesis: JournalEntrySummary[] = []
+  const diary: JournalEntrySummary[] = []
+  for (const row of rows) {
+    if (cycleBand(row.entry_kind) === 'diary') diary.push(row)
+    else synthesis.push(row)
+  }
+  return { synthesis, diary }
+}
+
+const BAND_HEADINGS: Record<CycleBand, { label: string; title: string }> = {
+  synthesis: {
+    label: 'synthesis',
+    title: 'Chronicle and faculty-lens rows — the cross-cycle reading',
+  },
+  diary: {
+    label: 'diary',
+    title: 'Entries and consolidations — the running self-account',
+  },
+}
+
+/** The small band heading that makes the split visible rather than merely
+ *  ordered — non-essential meta, so `--ink-3` at label size (h7). */
+function BandHeading({ band, count }: { band: CycleBand; count: number }) {
+  const { label, title } = BAND_HEADINGS[band]
+  return (
+    <div
+      className="flex items-center gap-1 px-2 py-0.5 text-[9px] uppercase tracking-wide text-ink-3"
+      title={title}
+      data-testid="journal-cycle-band-heading"
+      data-band={band}
+    >
+      {label}
+      <span className="font-mono">({count})</span>
+    </div>
+  )
+}
+
 /** `period_end` date-bucketed to `YYYY-MM-DD` — the grouping key (§2b): when
  *  the reflected-on window closes, not write time (which can lag under
  *  retry/backoff). */
@@ -710,9 +915,7 @@ function CycleRow({
         active ? 'bg-surf-3 ring-1 ring-accent-info' : 'hover:bg-surf-2',
       )}
     >
-      <span className="shrink-0 rounded bg-surf-3 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-slate-400">
-        {kindLabel(row.entry_kind)}
-      </span>
+      <KindBadge kind={row.entry_kind} />
       <span className="min-w-0 flex-1 truncate text-slate-200">{row.title}</span>
       <VerifyScorePill score={row.verify_score} />
       <span className="shrink-0 text-[10px] text-slate-500">
@@ -737,10 +940,11 @@ function CycleGroupSection({
 }) {
   const [revealAll, setRevealAll] = useState(false)
 
-  // Synthesized rows (consolidation/chronicle/lens*) are never capped — only
-  // the high-volume `entry` kind is, per §2b.
-  const synth = group.rows.filter((r) => r.entry_kind !== 'entry')
-  const diary = group.rows.filter((r) => r.entry_kind === 'entry')
+  // The synthesis band (chronicle + lens + lens_diff) renders APART from the
+  // diary band (entry + consolidation), each under its own heading — the kind
+  // badges say what a row is, the bands say which reading it belongs to (h7).
+  // Synthesis is never capped; only the high-volume diary stream is, per §2b.
+  const { synthesis, diary } = splitCycleBands(group.rows)
   const visibleDiary = revealAll ? diary : diary.slice(0, DIARY_REVEAL_CAP)
   const hiddenCount = diary.length - visibleDiary.length
 
@@ -761,32 +965,50 @@ function CycleGroupSection({
         <span className="font-mono text-[10px] text-slate-600">({group.rows.length})</span>
       </button>
       {expanded && (
-        <div className="space-y-0.5 pl-1 pt-0.5">
-          {synth.map((row) => (
-            <CycleRow
-              key={row.id}
-              row={row}
-              active={row.id === selectedId}
-              onSelect={() => onSelectRow(row)}
-            />
-          ))}
-          {visibleDiary.map((row) => (
-            <CycleRow
-              key={row.id}
-              row={row}
-              active={row.id === selectedId}
-              onSelect={() => onSelectRow(row)}
-            />
-          ))}
-          {hiddenCount > 0 && (
-            <button
-              type="button"
-              onClick={() => setRevealAll(true)}
-              className="w-full rounded px-2 py-1 text-left text-[11px] text-slate-500 hover:text-slate-300"
-              data-testid="journal-cycle-reveal-more"
+        <div className="space-y-1 pl-1 pt-0.5">
+          {synthesis.length > 0 && (
+            <section data-testid="journal-cycle-band" data-band="synthesis">
+              <BandHeading band="synthesis" count={synthesis.length} />
+              <div className="space-y-0.5">
+                {synthesis.map((row) => (
+                  <CycleRow
+                    key={row.id}
+                    row={row}
+                    active={row.id === selectedId}
+                    onSelect={() => onSelectRow(row)}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+          {diary.length > 0 && (
+            <section
+              data-testid="journal-cycle-band"
+              data-band="diary"
+              className={synthesis.length > 0 ? 'border-t border-line pt-1' : undefined}
             >
-              … {hiddenCount} more
-            </button>
+              <BandHeading band="diary" count={diary.length} />
+              <div className="space-y-0.5">
+                {visibleDiary.map((row) => (
+                  <CycleRow
+                    key={row.id}
+                    row={row}
+                    active={row.id === selectedId}
+                    onSelect={() => onSelectRow(row)}
+                  />
+                ))}
+                {hiddenCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setRevealAll(true)}
+                    className="w-full rounded px-2 py-1 text-left text-[11px] text-slate-500 hover:text-slate-300"
+                    data-testid="journal-cycle-reveal-more"
+                  >
+                    … {hiddenCount} more
+                  </button>
+                )}
+              </div>
+            </section>
           )}
         </div>
       )}

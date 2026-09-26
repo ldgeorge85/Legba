@@ -29,6 +29,7 @@ scope:
   # S1-T8 — the English international news arm; classed reporting (conservative).
   # Note: the stronger-slant Arabic edition is separately catalogued.
   source_class: reporting
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

@@ -12,14 +12,42 @@
  *
  * Row clicks dispatch `legba:open-lineage` so the Lineage panel picks
  * up the deep-link.
+ *
+ * "desk brief" (7b-iii) is a header action: `@/state/exportBasket
+ * :buildDeskBrief` fills the export basket with this desk's current
+ * composition, each unit's latest admitted read (in the composition's own
+ * declared order), and its open situations/tracked events, then this panel
+ * calls the SAME `POST /api/v1/v3/export` route `system.report_export` uses
+ * and downloads the result — one click, one file, no new backend surface.
+ *
+ * "read as page" (P-A) opens `target.desk_brief_page`, which renders the SAME
+ * composed document as a scrollable surface organised by the desk's units.
+ * The two download actions below it are unchanged: the markdown file and the
+ * print document stay exactly the bytes they were.
+ *
+ * The composed brief is HELD after the download so the sibling
+ * "print / save as PDF" action can hand it to `@/lib/printDocument` — the
+ * same dedicated print document the Report Export panel prints, built from
+ * the bytes that were just downloaded rather than from a second compose, so
+ * the paper and the file can never disagree. Disabled until a brief exists.
  */
 
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { BookOpen, Newspaper, Printer } from 'lucide-react'
 import { PanelChrome } from '@/components/PanelChrome'
-import { apiGet, ApiError } from '@/lib/api'
+import {
+  apiGet,
+  ApiError,
+  downloadExportArtifact,
+  exportCollection,
+  type ExportArtifact,
+} from '@/lib/api'
 import type { PanelProps } from '@/types'
 import { selectRow } from '@/state/selection'
 import { humanizeAnalystId } from '@/lib/analystNames'
+import { printExportDocument } from '@/lib/printDocument'
+import { buildDeskBrief, deskBriefAppendix } from '@/state/exportBasket'
 
 interface TargetRuntimeResponse {
   descriptor_id: string
@@ -119,10 +147,120 @@ export default function TargetOverviewPanel({ registration, scope }: PanelProps)
   const signals = signalsQ.data?.data ?? []
   const findings = findingsQ.data?.data ?? []
 
+  // A10/7b-iii — one click: the desk's current composition + each unit's
+  // latest admitted read (in the composition's own declared order) + its
+  // open situations/tracked events, exported as one markdown file. Reuses
+  // the SAME basket + export route `system.report_export` composes through —
+  // this button just fires the same flow without a trip through that panel.
+  const [briefing, setBriefing] = useState(false)
+  const [briefError, setBriefError] = useState<string | null>(null)
+  // The composed brief, held so it can be printed without re-composing.
+  const [brief, setBrief] = useState<ExportArtifact | null>(null)
+
+  async function doDeskBrief() {
+    if (!target_id || briefing) return
+    setBriefError(null)
+    setBriefing(true)
+    try {
+      const built = await buildDeskBrief(target_id)
+      const artifact = await exportCollection({
+        items: built.items.map((i) => ({ kind: i.kind, id: i.id })),
+        format: 'markdown',
+        title: `Desk brief — ${desc?.name ?? target_id}`,
+        // k5b — the situations markdown plus the ask for this desk's
+        // typed absence; the same payload the Report Export panel sends,
+        // so one desk brief means one document wherever it is built.
+        appendix: deskBriefAppendix(target_id, built.appendix),
+      })
+      downloadExportArtifact(artifact)
+      setBrief(artifact)
+    } catch (e) {
+      setBriefError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBriefing(false)
+    }
+  }
+
+  function printBrief() {
+    if (!brief) return
+    setBriefError(null)
+    const opened = printExportDocument({
+      markdown: brief.content,
+      filename: brief.filename,
+      printedAt: new Date().toISOString(),
+    })
+    if (!opened) {
+      setBriefError(
+        'the browser refused a print frame — the downloaded markdown file ' +
+          'carries the same document',
+      )
+    }
+  }
+
+  // P-A — the brief READ rather than downloaded. The page is a Dockview panel
+  // on the existing bound-panel machinery, so opening it is a DOM event the
+  // shell bridges (`legba:open-desk-brief`) exactly as the optimizer diff does
+  // — a panel cannot mount a sibling panel, and the shell must not have to
+  // know that this one exists.
+  function openDeskBriefPage() {
+    if (!target_id) return
+    window.dispatchEvent(
+      new CustomEvent('legba:open-desk-brief', { detail: { targetId: target_id } }),
+    )
+  }
+
+  const deskBriefAction = (
+    <div className="flex items-center gap-2">
+      {briefError && (
+        <span className="text-accent-critical" data-testid="desk-brief-error">
+          {briefError}
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={openDeskBriefPage}
+        disabled={!target_id}
+        className="flex items-center gap-1 rounded border border-slate-700 bg-surface-200 px-2 py-0.5 text-xs hover:bg-surface-300 disabled:opacity-40"
+        title="Open this desk's brief as a page — the same composed document, read in place, with markdown, print, JSON and PNG on it"
+        data-testid="desk-brief-open-page"
+      >
+        <BookOpen className="h-3 w-3" aria-hidden />
+        read as page
+      </button>
+      <button
+        type="button"
+        onClick={doDeskBrief}
+        disabled={!target_id || briefing}
+        className="flex items-center gap-1 rounded border border-slate-700 bg-surface-200 px-2 py-0.5 text-xs hover:bg-surface-300 disabled:opacity-40"
+        title="Fill the export basket with this desk's current read and download it as one markdown file"
+        data-testid="desk-brief-button"
+      >
+        <Newspaper className="h-3 w-3" aria-hidden />
+        {briefing ? 'briefing…' : 'desk brief'}
+      </button>
+      <button
+        type="button"
+        onClick={printBrief}
+        disabled={!brief}
+        className="flex items-center gap-1 rounded border border-slate-700 bg-surface-200 px-2 py-0.5 text-xs hover:bg-surface-300 disabled:opacity-40"
+        title={
+          brief
+            ? 'Print the brief that was just composed (citations as numbered endnotes) → Save as PDF'
+            : 'Compose a desk brief first — there is nothing composed to print'
+        }
+        data-testid="desk-brief-print"
+      >
+        <Printer className="h-3 w-3" aria-hidden />
+        print / save as PDF
+      </button>
+    </div>
+  )
+
   return (
     <PanelChrome
       registration={registration}
       subtitle={`target ${target_id}`}
+      actions={deskBriefAction}
       onRefresh={() => {
         runtimeQ.refetch()
         signalsQ.refetch()

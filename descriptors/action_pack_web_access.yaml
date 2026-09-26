@@ -85,6 +85,12 @@ tools:
         factory_kind: stack_ref
         raw: search.searxng.local
         expected_family: search_provider   # documentation only — the bind-time
+      # 2026-09-20 operator: the PAID second rung (serper.dev) — reached ONLY by the audit's
+      # absence-claim pin (web_search provider=serper), never by the ladder's degrade path.
+      fallback_providers:
+        - factory_kind: stack_ref
+          raw: search.serper.paid
+          expected_family: search_provider
                                            # check is assert_search_component()
       # Rung 3 — the legacy operator-pinned endpoint (unchanged).
       # endpoint: "https://searx.example.invalid/search"
@@ -107,5 +113,6 @@ rules:
 
 governor:
   budget_account: web_access
-  max_invocations_per_hour: 120
-  api_rate_per_minute: 20
+  max_cost_usd_per_day: 1.0   # 2026-09-20 operator: serper at $0.001/query ⇒ ≤1,000 paid searches/day; the free rung is uncounted
+  max_invocations_per_hour: 1000000   # 2026-09-20 operator: no search cap — was 120/h shared, starving the auditor and researcher
+  api_rate_per_minute: 1000000   # 2026-09-20 operator: no search cap — was 20/min

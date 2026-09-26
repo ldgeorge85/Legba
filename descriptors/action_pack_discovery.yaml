@@ -53,8 +53,8 @@ applies_to_tags:
 
 governor:
   budget_account: discovery
-  max_invocations_per_hour: 20
-  api_rate_per_minute: 5
+  max_invocations_per_hour: 200   # 2026-09-20 operator: was 20/h
+  api_rate_per_minute: 30   # 2026-09-20 operator: was 5/min
   # discovery/crawl-specific caps
   max_sources_per_window: 50
   crawl_max_depth: 3

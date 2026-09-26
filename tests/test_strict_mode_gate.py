@@ -11,8 +11,10 @@ suite (copied verbatim from their call sites), in both directions:
   * rig-infra gates (Postgres/NATS/pivot-DB/daprd/Qdrant/Redis/substrate
     tables) MUST be escalated;
   * opt-in env gates, external-credential gates, optional libraries,
-    docker-CLI capability probes and permanent ``retired:`` markers MUST
-    NOT be (strict mode cannot will a third-party token into existence).
+    docker-CLI capability probes, host resource CONFLICTS (a port the
+    running rig holds) and permanent ``retired:`` markers MUST NOT be
+    (strict mode cannot will a third-party token into existence, and
+    "the runtime is up and owns port 6090" is not a broken rig).
 
 The end-to-end escalation path (report outcome mutation) is exercised by
 running any infra-skipping test with LEGBA_TEST_STRICT=1 on a rig with
@@ -24,6 +26,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests._isolated_nats_gate import isolated_nats_skip_reason
 from tests.conftest import _is_infra_gate_reason, strict_mode_enabled
 
 
@@ -58,6 +61,20 @@ _EXEMPT_REASONS = [
     "docker version lacks --check support; stderr='...'",
     "retired: the `predictions` table was DROPPED in migration 0024 "
     "(succeeded by `hypotheses`) ...",
+    # 2026-09-26 (o6). Host resource CONFLICT — the rig is up and holding the
+    # port, the inverse of a dependency being down. Verbatim from
+    # tests/runtime/test_critic_descriptor_e2e.py; note it names the runtime
+    # container, so it also matches the daprd INFRA pattern — the exemption
+    # sweep running first is what this case pins.
+    "port 6090 is bound by another process (likely the production "
+    "legba-runtime-dapr container) — the spike test's in-process "
+    "uvicorn cannot claim it; this flow is exercised by manual "
+    "validation against the running production runtime",
+    # 2026-09-26 (o6). The opt-in gate for the five tests that may only run
+    # against a NATS the live runtime is not attached to. Verbatim from
+    # tests/_isolated_nats_gate.py — it says "NATS" twice and must still be
+    # read as the declared opt-in it is.
+    isolated_nats_skip_reason("the live runtime's legba.dlq.> stream"),
 ]
 
 

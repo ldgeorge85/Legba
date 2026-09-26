@@ -9,6 +9,8 @@ declaration is NEVER a fake ``ok``) and ``empty`` states.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from legba.data.registry.source_freshness import (
@@ -18,6 +20,7 @@ from legba.data.registry.source_freshness import (
     cadence_interval_minutes,
     derive_budget_minutes,
     grade_freshness,
+    next_fire_after,
 )
 
 
@@ -115,3 +118,35 @@ def test_grade_truth_table(state, age_seconds, budget_minutes, expected):
 
 def test_warn_multiple_contract():
     assert WARN_MULTIPLE == 3.0
+
+
+# ---------------------------------------------------------------------------
+# next_fire_after — the "when does this next run" half, added for the typed
+# absence route's `expires_at` stamp (lane k5).
+# ---------------------------------------------------------------------------
+
+
+def test_next_fire_after_walks_the_declared_schedule():
+    """The first fire strictly after the given instant, on the unit stagger's
+    own 2×/day shape."""
+    base = datetime(2026, 9, 24, 2, 0, tzinfo=timezone.utc)
+    nxt = next_fire_after("0 1,13 * * *", base)
+    assert nxt == datetime(2026, 9, 24, 13, 0, tzinfo=timezone.utc)
+    # Strictly after: an instant exactly ON a fire moves to the NEXT one.
+    assert next_fire_after("0 1,13 * * *", nxt) == datetime(
+        2026, 9, 25, 1, 0, tzinfo=timezone.utc
+    )
+
+
+def test_next_fire_after_reads_a_naive_instant_as_utc():
+    naive = datetime(2026, 9, 24, 2, 0)
+    assert next_fire_after("0 1,13 * * *", naive) == datetime(
+        2026, 9, 24, 13, 0, tzinfo=timezone.utc
+    )
+
+
+@pytest.mark.parametrize("expr", [None, "", "   ", "not a cron", "* * *"])
+def test_next_fire_after_refuses_rather_than_guesses(expr):
+    """No honest answer ⇒ None. A caller that stamps an expiry from this must
+    leave it unset rather than invent a schedule the descriptor never declared."""
+    assert next_fire_after(expr, datetime(2026, 9, 24, tzinfo=timezone.utc)) is None

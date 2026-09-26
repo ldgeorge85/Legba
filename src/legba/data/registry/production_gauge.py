@@ -143,9 +143,18 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Mapping, Optional, Sequence
 
 from .backlog_drains import BACKLOG_DRAINS, BacklogDrain  # noqa: F401 — re-export
+from ..provenance.origin import origin_class_clause
 from .source_freshness import cadence_interval_minutes
 
 logger = logging.getLogger(__name__)
+
+#: P7/7g-1 — the origin-class leg on the source PRODUCTION reads (SEAMS
+#: #57 sweep; `freshness` and `source_health` in the collection firewall).
+#: A source's expectation-vs-actual is about what it PRODUCED on its
+#: cadence. A collection has no cadence and no health, and a loaded row
+#: carrying a provider's source id would read as that publisher coming
+#: back to life — the failure mode the firewall exists to prevent.
+_LIVE_SIGNALS = origin_class_clause("")
 
 # ---------------------------------------------------------------------------
 # Vocabulary
@@ -1170,13 +1179,13 @@ _ANALYST_SQL = """
 #: birth — never ``fetched_at``, which a no-op poll bumps (see the module
 #: docstring: that substitution is precisely why the frozen AP feeds were
 #: invisible for six days).
-_SOURCE_SQL = """
+_SOURCE_SQL = f"""
     WITH heads AS (
         SELECT d.descriptor_id AS source_id,
                d.state,
                d.created_at    AS head_created_at,
                NULLIF(btrim(coalesce(
-                   jsonb_path_query_first(d.body, '$.**.schedule.raw') #>> '{}',
+                   jsonb_path_query_first(d.body, '$.**.schedule.raw') #>> '{{}}',
                    '')), '') AS cron
           FROM source_descriptors d
          WHERE d.is_head
@@ -1191,6 +1200,7 @@ _SOURCE_SQL = """
                    AS gap_minutes
           FROM signals
          WHERE created_at > now() - make_interval(days => $1)
+           AND {_LIVE_SIGNALS}
     ),
     sig AS (
         SELECT source_id,
@@ -1216,6 +1226,7 @@ _SOURCE_SQL = """
                count(*)::int   AS lifetime_signals,
                max(created_at) AS lifetime_last_created_at
           FROM signals
+         WHERE {_LIVE_SIGNALS}
          GROUP BY 1
     )
     SELECT h.source_id,

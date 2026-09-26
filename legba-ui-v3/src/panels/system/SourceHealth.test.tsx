@@ -599,3 +599,166 @@ describe('SourceHealthPanel — controls', () => {
     })
   })
 })
+
+// ---------------------------------------------------------------------------
+// The COMPUTED freshness grade column.
+//
+// `/v3/source-quality` grades every source's freshest-signal age against a
+// budget derived from that source's OWN declared cadence, and reports a closed
+// grade on `computed.freshness_grade` (a live read on 2026-09-25 returned
+// ok=88, stale=25, ungraded=21, warn=5 over 139 sources — all five values of
+// the closed vocabulary except `empty` are in play right now).
+//
+// Two things are on trial here and both are honesty, not styling:
+//   * the grade is rendered VERBATIM. An absence (`empty` / `ungraded`) is
+//     never coerced into a grade, into `ok`, or into a fault colour.
+//   * the tone comes from `lib/sourceFreshness.freshnessTone` and nothing
+//     else. There is no second classification in the panel that could drift
+//     from the server's vocabulary.
+// ---------------------------------------------------------------------------
+
+/** One row per grade, so each state can be asserted independently. */
+function gradeRow(id: string, grade: string, budget: number | null): SourceQualityRow {
+  return {
+    ...MEASURED,
+    source_id: id,
+    computed: computed({ freshness_grade: grade, budget_minutes: budget }),
+  }
+}
+
+const GRADE_ROWS: SourceQualityRow[] = [
+  gradeRow('g-ok', 'ok', 60),
+  gradeRow('g-stale', 'stale', 60),
+  gradeRow('g-warn', 'warn', 60),
+  gradeRow('g-empty', 'empty', 60),
+  gradeRow('g-ungraded', 'ungraded', null),
+]
+
+describe('SourceHealthPanel — the freshness grade column', () => {
+  it('heads a COMPUTED column and renders one grade chip per source', async () => {
+    mockFetch({ rows: GRADE_ROWS })
+    renderPanel()
+    const table = await screen.findByTestId('source-health-table')
+    expect(table).toHaveTextContent('freshness')
+    for (const row of GRADE_ROWS) {
+      expect(
+        screen.getByTestId(`source-health-freshness-${row.source_id}`),
+      ).toBeInTheDocument()
+    }
+  })
+
+  it('renders each of the five grades verbatim — never coerced, never blank', async () => {
+    mockFetch({ rows: GRADE_ROWS })
+    renderPanel()
+    await screen.findByTestId('source-health-table')
+    for (const [id, grade] of [
+      ['g-ok', 'ok'],
+      ['g-stale', 'stale'],
+      ['g-warn', 'warn'],
+      ['g-empty', 'empty'],
+      ['g-ungraded', 'ungraded'],
+    ] as const) {
+      expect(screen.getByTestId(`source-health-freshness-grade-${id}`)).toHaveTextContent(
+        grade,
+      )
+    }
+  })
+
+  it('takes its tone from the helper: ok green, stale amber, warn rose', async () => {
+    mockFetch({ rows: GRADE_ROWS })
+    renderPanel()
+    await screen.findByTestId('source-health-table')
+    expect(screen.getByTestId('source-health-freshness-grade-g-ok').className).toMatch(
+      /emerald/,
+    )
+    expect(screen.getByTestId('source-health-freshness-grade-g-stale').className).toMatch(
+      /amber/,
+    )
+    expect(screen.getByTestId('source-health-freshness-grade-g-warn').className).toMatch(
+      /rose/,
+    )
+  })
+
+  it('the two absences stay muted and SAY they are absences, not faults', async () => {
+    mockFetch({ rows: GRADE_ROWS })
+    renderPanel()
+    await screen.findByTestId('source-health-table')
+    for (const id of ['g-empty', 'g-ungraded']) {
+      const chip = screen.getByTestId(`source-health-freshness-grade-${id}`)
+      expect(chip).toHaveTextContent(/absence, not a fault/)
+      expect(chip.className).not.toMatch(/emerald|amber|rose/)
+    }
+    // …and a graded source is NOT labelled an absence.
+    expect(
+      screen.getByTestId('source-health-freshness-grade-g-stale'),
+    ).not.toHaveTextContent(/absence/)
+  })
+
+  it('carries the helper\'s meaning in the tooltip, budget included when one exists', async () => {
+    mockFetch({ rows: GRADE_ROWS })
+    renderPanel()
+    await screen.findByTestId('source-health-table')
+    expect(screen.getByTestId('source-health-freshness-grade-g-stale')).toHaveAttribute(
+      'title',
+      'over its cadence-derived budget (budget 60m)',
+    )
+    expect(screen.getByTestId('source-health-freshness-grade-g-warn')).toHaveAttribute(
+      'title',
+      'badly overdue — beyond 3× its cadence-derived budget (budget 60m)',
+    )
+    expect(screen.getByTestId('source-health-freshness-grade-g-empty')).toHaveAttribute(
+      'title',
+      'active + cadence-declared, but has never produced a signal',
+    )
+    // `ungraded` has no derivable budget, so the title must not claim one.
+    expect(
+      screen.getByTestId('source-health-freshness-grade-g-ungraded').getAttribute('title'),
+    ).toMatch(/no parsable cadence declaration, or the head is not active/)
+    expect(
+      screen.getByTestId('source-health-freshness-grade-g-ungraded').getAttribute('title'),
+    ).not.toMatch(/budget/)
+  })
+
+  it('flags stale/warn as OVERDUE with the existing copy — and never flags an absence', async () => {
+    mockFetch({ rows: GRADE_ROWS })
+    renderPanel()
+    await screen.findByTestId('source-health-table')
+    for (const id of ['g-stale', 'g-warn']) {
+      expect(screen.getByTestId(`source-health-flag-${id}-overdue`)).toHaveAttribute(
+        'title',
+        'freshness_grade is stale or warn — the source is past its cadence-derived budget.',
+      )
+    }
+    for (const id of ['g-ok', 'g-empty', 'g-ungraded']) {
+      expect(screen.queryByTestId(`source-health-flag-${id}-overdue`)).not.toBeInTheDocument()
+    }
+  })
+
+  it('sorts by the grade worst-first — faults above absences, ok last', async () => {
+    mockFetch({ rows: GRADE_ROWS })
+    renderPanel()
+    await screen.findByTestId('source-health-table')
+
+    fireEvent.click(screen.getByTestId('source-health-sort-freshness'))
+    await waitFor(() => {
+      expect(
+        screen.getAllByTestId(/^source-health-row-/).map((el) => el.getAttribute('data-testid')),
+      ).toEqual([
+        'source-health-row-g-warn',
+        'source-health-row-g-empty',
+        'source-health-row-g-stale',
+        'source-health-row-g-ungraded',
+        'source-health-row-g-ok',
+      ])
+    })
+  })
+
+  it('an unknown future grade renders verbatim and reads muted, never a fabricated ok', async () => {
+    mockFetch({ rows: [gradeRow('g-future', 'some_future_grade', null)] })
+    renderPanel()
+    await screen.findByTestId('source-health-table')
+    const chip = screen.getByTestId('source-health-freshness-grade-g-future')
+    expect(chip).toHaveTextContent('some_future_grade')
+    expect(chip.className).not.toMatch(/emerald|amber|rose/)
+  })
+})

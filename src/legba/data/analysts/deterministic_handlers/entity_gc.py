@@ -80,11 +80,18 @@ from typing import Any, Mapping
 from pydantic import BaseModel, ConfigDict
 
 from ...provenance.models import FindingPayload
+from ...provenance.origin import origin_class_clause
 from ...sources._contract import InMemoryStateStore, SourceContext
 from ....runtime.analyst_method import AnalystMethodResult
 from ....runtime.source_factory import build_source_handler
 
 logger = logging.getLogger(__name__)
+
+#: P7/7g-1 — the origin-class leg on the fact re-point (SEAMS #57 sweep).
+#: An entity merge re-points the LIVE graph; a loaded holding is fetched once
+#: and left alone, and provider naming reaches our entity ids through
+#: `entity_aliases` instead. Rendered from the one place the vocabulary lives.
+_LIVE_FACTS = origin_class_clause("")
 
 
 class _RawConfig(BaseModel):
@@ -992,9 +999,10 @@ async def _repoint_facts(conn: Any, loser: str, keeper: str) -> int:
     collision on the open (subject,predicate,value,valid_from) index closes the
     loser fact. Returns rows touched."""
     rows = await conn.fetch(
-        """
+        f"""
         SELECT id, predicate, value, valid_from FROM facts
          WHERE valid_until IS NULL AND superseded_by IS NULL
+           AND {_LIVE_FACTS}
            AND lower(subject) = lower($1)
         """,
         loser,
@@ -1002,9 +1010,10 @@ async def _repoint_facts(conn: Any, loser: str, keeper: str) -> int:
     touched = 0
     for row in rows:
         collide = await conn.fetchval(
-            """
+            f"""
             SELECT id FROM facts
              WHERE valid_until IS NULL AND superseded_by IS NULL AND id <> $5
+               AND {_LIVE_FACTS}
                AND lower(subject) = lower($1)
                AND lower(predicate) = lower($2)
                AND lower(COALESCE(value, '')) = lower(COALESCE($3, ''))

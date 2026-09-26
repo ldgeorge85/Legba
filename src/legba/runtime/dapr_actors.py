@@ -771,7 +771,7 @@ _DEPS_FALLBACK_ENV = "LEGBA_DEPS_FALLBACK_ENABLED"
 #: Was a hard-coded `== "inline_target"` check at the re-point site; this set is
 #: the generalization. Kept in lock-step with dapr_host._GATHER_KINDS.
 _GATHER_BINDING_KINDS: frozenset[str] = frozenset(
-    {"inline_target", "journal_assessor"}
+    {"inline_target", "journal_assessor", "inquiry"}
 )
 
 #: Opt-in flag for the AGE :DerivedFrom output-lineage mirror (D3). OFF by
@@ -3490,7 +3490,7 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                         # ENTRY id; the entry row itself is NEVER mutated.
                         or (
                             output_kind == OutputKind.JOURNAL
-                            and deps_bundle.descriptor.identity.kind == "journal_assessor"
+                            and deps_bundle.descriptor.identity.kind in ("journal_assessor", "inquiry")  # noqa: E501 — Program 5: the inquiry kind's entries ride the SAME V1 journal verify profile
                             and _descriptor_declares_verify(deps_bundle.descriptor)
                         )
                         # Continuity P2 (plan D3): the SITUATION_UPDATE kind goes

@@ -27,6 +27,7 @@ from starlette.testclient import TestClient
 import legba.data.registry.consult_api as consult_api
 from legba.data.registry.api import RegistryAPIDeps
 from legba.data.registry.consult_api import build_consult_router
+from legba.data.registry.errors import DescriptorNotFound
 
 
 API_TOKEN_ENV = "LEGBA_REGISTRY_API_TOKEN"
@@ -84,6 +85,29 @@ class _DescriptorRegistry:
         return _DescRow()
 
 
+class _StackRegistry:
+    """Minimal ``StackRegistry.get`` stub for the F1 pre-flight existence
+    check. ``registered`` holds the component ids that resolve; anything else
+    raises :class:`DescriptorNotFound` — mirrors the real registry's ``get``
+    (``src/legba/data/registry/stack.py``)."""
+
+    def __init__(self, registered: set[str] | None = None) -> None:
+        self._registered = (
+            registered
+            if registered is not None
+            else {
+                "llm.anthropic.opus_4_7",
+                "llm.anthropic.fable_5_1",
+                "llm.primary.openai_compat",
+            }
+        )
+
+    async def get(self, component_id: str, version: str | None = None):
+        if component_id not in self._registered:
+            raise DescriptorNotFound("stack", component_id, version)
+        return object()
+
+
 def _stub_dapr(actor_envelope: dict[str, Any], captured: dict[str, Any]):
     """Patch consult_api.httpx.AsyncClient with a fake that records the invoke
     body and returns ``actor_envelope`` as the JSON response."""
@@ -116,11 +140,11 @@ def _stub_dapr(actor_envelope: dict[str, Any], captured: dict[str, Any]):
     return _Client
 
 
-def _build_app(pg: Any) -> FastAPI:
+def _build_app(pg: Any, *, stack_registry: Any | None = None) -> FastAPI:
     os.environ.pop(API_TOKEN_ENV, None)  # dev mode — token optional
     deps = RegistryAPIDeps(
         descriptor_registry=_DescriptorRegistry(pg),  # type: ignore[arg-type]
-        stack_registry=None,  # type: ignore[arg-type]
+        stack_registry=stack_registry or _StackRegistry(),  # type: ignore[arg-type]
         vault=None,  # type: ignore[arg-type]
         dlq=None,  # type: ignore[arg-type]
         audit_logger=None,  # type: ignore[arg-type]
@@ -287,7 +311,12 @@ def test_resolve_consult_model_override_mapping():
     assert consult_api.resolve_consult_model_override("core") == (
         "core", "llm.primary.openai_compat",
     )
+    assert consult_api.resolve_consult_model_override("fable") == (
+        "fable", "llm.anthropic.fable_5_1",
+    )
     assert consult_api.CONSULT_MODEL_ALLOWLIST["opus"] == "llm.anthropic.opus_4_7"
+    assert consult_api.CONSULT_MODEL_ALLOWLIST["fable"] == "llm.anthropic.fable_5_1"
+    assert consult_api.DEFAULT_CONSULT_MODEL == "opus"
 
 
 def _chat_envelope() -> dict[str, Any]:
@@ -336,6 +365,55 @@ def test_model_default_omits_override(monkeypatch):
     assert r2.status_code == 200
     assert "llm_component_override" not in captured["body"]["inputs"][0]
     assert r2.json()["model"] == "opus"
+
+
+def test_model_fable_threads_override_and_echoes(monkeypatch):
+    """model='fable' → the sanctioned Claude Fable 5.1 component id is threaded
+    into the invoke body (once registered — the stub _StackRegistry default
+    carries it), and the response echoes the chosen friendly plane."""
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        consult_api.httpx, "AsyncClient", _stub_dapr(_chat_envelope(), captured)
+    )
+    app = _build_app(_NoReadBackPg())
+    client = TestClient(app)
+    r = client.post("/api/v1/consult", json={"question": "q", "model": "fable"})
+    assert r.status_code == 200, r.text
+    assert (
+        captured["body"]["inputs"][0]["llm_component_override"]
+        == "llm.anthropic.fable_5_1"
+    )
+    assert r.json()["model"] == "fable"
+
+
+def test_model_fable_unregistered_fails_closed_503(monkeypatch):
+    """A request for 'fable' before the operator registers the component
+    fails CLOSED with a clear 503 naming the model + component — it must NOT
+    silently fall back to Opus, and must never reach the actor invoke at
+    all (the stub dapr client would raise if called — proving the pre-flight
+    check short-circuits before any invoke)."""
+
+    class _NeverInvoked:
+        def __init__(self, *a, **k):
+            raise AssertionError(
+                "must not invoke the actor when the override component is "
+                "unregistered"
+            )
+
+    monkeypatch.setattr(consult_api.httpx, "AsyncClient", _NeverInvoked)
+    # Only Opus + Core are registered — Fable is allowlisted but not yet live.
+    app = _build_app(
+        _NoReadBackPg(),
+        stack_registry=_StackRegistry(
+            registered={"llm.anthropic.opus_4_7", "llm.primary.openai_compat"}
+        ),
+    )
+    client = TestClient(app)
+    r = client.post("/api/v1/consult", json={"question": "q", "model": "fable"})
+    assert r.status_code == 503, r.text
+    detail = r.json()["detail"]
+    assert "fable" in detail
+    assert "llm.anthropic.fable_5_1" in detail
 
 
 def test_model_invalid_value_422(monkeypatch):

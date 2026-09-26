@@ -1,0 +1,1934 @@
+{
+ "_provenance": "THEMATIC tier, escalation_composition, 2026-09-03 08:30Z. 31 heads shown, 8 carried - the tier whose measured drop rate is 0.678 (1.7). Exercises the co_leads branch and the deterministic CHECKED NEGATIVE (pairs_found == 0).",
+ "id": "5303cf0f-4cde-4585-96bb-c6dcfa4ab951",
+ "kind": "finding",
+ "analyst_id": "escalation_composition",
+ "target_id": null,
+ "title": "Escalation read · 3 Sep — 2 threads above the line: G20 — Saudi Arabia, G20 — Russian Federation",
+ "body": null,
+ "severity": "elevated",
+ "confidence": 1.0,
+ "produced_at": "2026-09-03 08:30:27.360607+00",
+ "derived_from": [],
+ "data": {
+  "data": {
+   "meta": true,
+   "assembly": {
+    "schema": "assembly.v1",
+    "regime": "assembly",
+    "tier": "thematic",
+    "as_of": "2026-09-03 08:30:27.360607+00",
+    "lead": {
+     "kind": "co_leads",
+     "block_ordinals": [
+      1,
+      2
+     ],
+     "test": {
+      "key": "cited_mass.v1",
+      "top_share": 0.2914,
+      "ratio_12": 1.3889,
+      "bar_share": 0.15,
+      "bar_ratio": 1.5,
+      "earned": false,
+      "n_candidates": 31
+     }
+    },
+    "blocks": [
+     {
+      "ordinal": 1,
+      "finding_id": "e771e661-721d-4306-becc-12117ac39a84",
+      "desk": "escalation",
+      "target_id": "country_g20_sa",
+      "target_name": "G20 — Saudi Arabia",
+      "question": "Is the risk of armed escalation rising, holding or falling here — and on what evidence?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 07:04:02.312707+00",
+      "evidence_age_h": 1.44,
+      "tier": "basis",
+      "severity": "elevated",
+      "verify": {
+       "overall_score": 0.625,
+       "effective_confidence": 0.625,
+       "checkable_claims": 9,
+       "supported_claims": 6,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.9,
+       "cited_mass": 2.5,
+       "n_above": 7,
+       "n_cited_scored": 13,
+       "legacy_magnitude": 0.95
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "Recent confirmed attacks on Saudi oil tankers in the Strait of Hormuz are intensifying the country's maritime escalation risk.",
+        "origin": {
+         "head_id": "e771e661-721d-4306-becc-12117ac39a84",
+         "start": 87,
+         "end": 213,
+         "body_sha256": "4a12c8f6a1d6d381113b87986a30a852bf3dd6ec57cf0daba5742477886ab0e2",
+         "body_len": 2184
+        },
+        "markers": [],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "New attacks on Saudi‑flagged tankers in the Strait of Hormuz were reported on 2 September, killing two Filipino seafarers and injuring crew members [7][8][10][19][21][23][35].",
+        "origin": {
+         "head_id": "e771e661-721d-4306-becc-12117ac39a84",
+         "start": 233,
+         "end": 412,
+         "body_sha256": "4a12c8f6a1d6d381113b87986a30a852bf3dd6ec57cf0daba5742477886ab0e2",
+         "body_len": 2184
+        },
+        "markers": [
+         "[7]",
+         "[8]",
+         "[10]",
+         "[19]",
+         "[21]",
+         "[23]",
+         "[35]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "Additional reports on 3 September highlight ongoing concerns about Red Sea routes being avoided due to Houthi attacks, reinforcing the threat to Saudi shipping [3][4][5].",
+        "origin": {
+         "head_id": "e771e661-721d-4306-becc-12117ac39a84",
+         "start": 415,
+         "end": 587,
+         "body_sha256": "4a12c8f6a1d6d381113b87986a30a852bf3dd6ec57cf0daba5742477886ab0e2",
+         "body_len": 2184
+        },
+        "markers": [
+         "[3]",
+         "[4]",
+         "[5]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "Saudi Arabia’s diplomatic condemnations of Iranian aggression were issued on 2 September, but no direct military response has been confirmed [8][12][15].",
+        "origin": {
+         "head_id": "e771e661-721d-4306-becc-12117ac39a84",
+         "start": 590,
+         "end": 747,
+         "body_sha256": "4a12c8f6a1d6d381113b87986a30a852bf3dd6ec57cf0daba5742477886ab0e2",
+         "body_len": 2184
+        },
+        "markers": [
+         "[8]",
+         "[12]",
+         "[15]"
+        ],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[7]",
+        "signal_id": "7e98612b-b6db-436b-ac07-dfe5d014d98c",
+        "source_id": "source.gcaptain.all",
+        "title": "Saudi Oil Exports Dive as Tankers at Risk From Hormuz to Red Sea",
+        "url": "https://gcaptain.com/saudi-oil-exports-dive-as-tankers-at-risk-from-hormuz-to-red-sea/",
+        "age_h": 13.0,
+        "salience_magnitude": 0.7,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "internal_stability",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "leadership_transition",
+          "target_id": "country_g20_sa"
+         }
+        ]
+       },
+       {
+        "marker": "[8]",
+        "signal_id": "ad41ae55-28dd-4e96-b301-4700d6102766",
+        "source_id": "source.aljazeera.world",
+        "title": "Saudi Arabia condemns deadly Iranian attack on tanker in Strait of Hormuz",
+        "url": "https://www.aljazeera.com/news/2026/9/2/saudi-arabia-condemns-deadly-iranian-attack-on-tanker-in-strait-of-hormuz?traffic_source=rss",
+        "age_h": 13.0,
+        "salience_magnitude": 0.9,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "economic_coercion",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_g20_sa"
+         }
+        ]
+       },
+       {
+        "marker": "[10]",
+        "signal_id": "28b38636-76c4-4421-b5e4-4c702495852c",
+        "source_id": "source.bbc.world",
+        "title": "Iranian attack on Saudi tanker killed two Filipino sailors, Saudi Arabia says",
+        "url": "https://www.bbc.co.uk/news/articles/cx2zxgg4mx9o?at_medium=RSS&at_campaign=rss",
+        "age_h": 14.5,
+        "salience_magnitude": 0.85,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_g20_sa"
+         }
+        ]
+       },
+       {
+        "marker": "[19]",
+        "signal_id": "6088bd60-875c-4e2f-a6f9-0d3c1a2ad205",
+        "source_id": "source.middleeasteye.news",
+        "title": "Two dead after Monday attack on Saudi oil tanker in Hormuz, says shipping firm",
+        "url": "https://www.middleeasteye.net/live-blog/live-blog-update/two-dead-after-monday-attack-saudi-oil-tanker-hormuz-says-shipping-firm",
+        "age_h": 21.9,
+        "salience_magnitude": 0.8,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "internal_stability",
+          "target_id": "country_g20_sa"
+         }
+        ]
+       },
+       {
+        "marker": "[21]",
+        "signal_id": "6a49f73b-362f-470d-a87e-1280abc88b15",
+        "source_id": "source.anadolu.english",
+        "title": "2 sailors killed in security incident involving Saudi tanker in Hormuz 2 days ago: Saudi shipping company",
+        "url": "https://www.aa.com.tr/en/middle-east/2-sailors-killed-in-security-incident-involving-saudi-tanker-in-hormuz-2-days-ago-saudi-shipping-company/4044968",
+        "age_h": 22.8,
+        "salience_magnitude": 0.3,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "internal_stability",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_g20_sa"
+         }
+        ]
+       },
+       {
+        "marker": "[23]",
+        "signal_id": "87513c63-614d-4e65-8d9c-54639acc3bdc",
+        "source_id": "source.jpost.frontpage",
+        "title": "Saudi shipping company Bahri says two sailors killed in incident in Hormuz",
+        "url": "https://www.jpost.com/middle-east/article-907312",
+        "age_h": 23.3,
+        "salience_magnitude": 0.2,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[35]",
+        "signal_id": "ab24cd1d-3ecb-4f5a-9c05-e30770b8af2d",
+        "source_id": "source.gcaptain.all",
+        "title": "Two Tankers Carrying Saudi Oil Attacked in Strait of Hormuz",
+        "url": "https://gcaptain.com/two-tankers-carrying-saudi-oil-attacked-in-strait-of-hormuz/",
+        "age_h": 43.0,
+        "salience_magnitude": 0.9,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "internal_stability",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_g20_sa"
+         }
+        ]
+       },
+       {
+        "marker": "[3]",
+        "signal_id": "b15bc608-9a86-4514-8324-399f67b2b4c4",
+        "source_id": "source.telegram.org_channels",
+        "title": "(untitled wire item)",
+        "url": "https://t.me/Almasirah_En/92915",
+        "age_h": 3.5,
+        "salience_magnitude": 0.5,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[4]",
+        "signal_id": "c6a2a6af-4c7c-4f14-8073-344f6cf4bb10",
+        "source_id": "source.telegram.org_channels",
+        "title": "(untitled wire item)",
+        "url": "https://t.me/Almasirah_En/92914",
+        "age_h": 3.5,
+        "salience_magnitude": 0.75,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[5]",
+        "signal_id": "e0cad66b-f9bd-4d22-bf17-6f1fa39d0301",
+        "source_id": "source.telegram.org_channels",
+        "title": "(untitled wire item)",
+        "url": "https://t.me/Almasirah_En/92912",
+        "age_h": 4.0,
+        "salience_magnitude": 0.6,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[12]",
+        "signal_id": "513cb031-a9fd-498c-a0f6-d3320c7166e5",
+        "source_id": "source.middleeasteye.news",
+        "title": "Saudi Arabia accuses Iran of attacking Saudi tanker in Strait of Hormuz",
+        "url": "https://www.middleeasteye.net/live-blog/live-blog-update/saudi-arabia-accuses-iran-attacking-saudi-tanker-strait-hormuz",
+        "age_h": 19.9,
+        "salience_magnitude": 0.85,
+        "also_cited_by": [
+         {
+          "desk": "energy_security",
+          "target_id": "country_g20_sa"
+         }
+        ]
+       },
+       {
+        "marker": "[15]",
+        "signal_id": "dc7c1ce3-5961-4466-94fc-85a474713e4a",
+        "source_id": "source.aawsat.english",
+        "title": "Riyadh Condemns Iran Attack on Saudi Vessel in Hormuz",
+        "url": "https://english.aawsat.com/node/5313848",
+        "age_h": 20.1,
+        "salience_magnitude": 0.65,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_sa"
+         }
+        ]
+       },
+       {
+        "marker": "[9]",
+        "signal_id": "1bcb9834-2ba6-42ff-ba76-553cbee4ef93",
+        "source_id": "source.aawsat.english",
+        "title": "Multinational Maritime Defense Coalition Begins Operations from Saudi Headquarters",
+        "url": "https://english.aawsat.com/node/5314000",
+        "age_h": 14.1,
+        "salience_magnitude": 0.35,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "leadership_transition",
+          "target_id": "country_g20_sa"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_g20_sa"
+         }
+        ]
+       }
+      ],
+      "corroboration": {
+       "n_sources": 8,
+       "n_desks_sharing": 6
+      }
+     },
+     {
+      "ordinal": 2,
+      "finding_id": "426698eb-ed55-4347-8963-cf3966bf8b6b",
+      "desk": "escalation",
+      "target_id": "country_g20_ru",
+      "target_name": "G20 — Russian Federation",
+      "question": "Is the risk of armed escalation rising, holding or falling here — and on what evidence?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 07:07:43.166448+00",
+      "evidence_age_h": 1.38,
+      "tier": "basis",
+      "severity": "elevated",
+      "verify": {
+       "overall_score": 0.6,
+       "effective_confidence": 0.6,
+       "checkable_claims": 6,
+       "supported_claims": 4,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.9,
+       "cited_mass": 1.8,
+       "n_above": 5,
+       "n_cited_scored": 7,
+       "legacy_magnitude": 0.9
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "Russia’s cross‑border drone and missile strikes on Ukraine keep near‑term escalation risk elevated.",
+        "origin": {
+         "head_id": "426698eb-ed55-4347-8963-cf3966bf8b6b",
+         "start": 88,
+         "end": 193,
+         "body_sha256": "cadc4f5be74710e6fe141b5efdd511e07e3764a2394b5b364c64897eef111860",
+         "body_len": 1796
+        },
+        "markers": [],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[120]",
+        "signal_id": null,
+        "source_id": null,
+        "title": "Russia’s intensified cross‑border drone strikes on Ukraine raise near‑term escalation risk",
+        "url": null,
+        "age_h": null,
+        "salience_magnitude": null,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[16]",
+        "signal_id": "05225e32-f3da-41eb-93ba-4ca486a2bfcf",
+        "source_id": "source.ukrinform.english",
+        "title": "Russian forces launch over 20 attacks on Dnipropetrovsk region, enterprise damaged",
+        "url": "https://www.ukrinform.net/rubric-ato/4160349-russian-forces-launch-over-20-attacks-on-dnipropetrovsk-region-enterprise-damaged.html",
+        "age_h": 2.7,
+        "salience_magnitude": 0.9,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[60]",
+        "signal_id": "f5c93c84-dc75-430a-be57-1c19514b6b40",
+        "source_id": "source.ukrinform.english",
+        "title": "Russian drone attack sparks fires in high-rise buildings in Kramatorsk",
+        "url": "https://www.ukrinform.net/rubric-ato/4160268-russian-drone-attack-sparks-fires-in-highrise-buildings-in-kramatorsk.html",
+        "age_h": 13.7,
+        "salience_magnitude": 0.9,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[62]",
+        "signal_id": "17e55bc6-67a4-4ba8-885c-695486babd33",
+        "source_id": "source.ukrinform.english",
+        "title": "Russians strike Odesa–Dnipro train with drone",
+        "url": "https://www.ukrinform.net/rubric-ato/4160289-russians-strike-odesadnipro-train-with-a-drone.html",
+        "age_h": 13.7,
+        "salience_magnitude": 0.7,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[75]",
+        "signal_id": "2ff0564b-9649-4245-8abc-ee9f15c3b94e",
+        "source_id": "source.ukrinform.english",
+        "title": "General Staff confirms destruction of Russian MiG-29 jet, Ka-27 helicopter",
+        "url": "https://www.ukrinform.net/rubric-ato/4160192-general-staff-confirms-destruction-of-russian-mig29-jet-ka27-helicopter.html",
+        "age_h": 16.7,
+        "salience_magnitude": 0.9,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[18]",
+        "signal_id": "e4c605f4-6425-4d05-b2e5-c0e6a8be2fe7",
+        "source_id": "source.anadolu.english",
+        "title": "Russia destroys 37 drones flying toward Moscow",
+        "url": "https://www.aa.com.tr/en/russia-ukraine-war/russia-destroys-37-drones-flying-toward-moscow/4045888",
+        "age_h": 2.8,
+        "salience_magnitude": 0.9,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_ru"
+         }
+        ]
+       },
+       {
+        "marker": "[12]",
+        "signal_id": "dfebded6-7730-4a15-970c-12d1b6223bfc",
+        "source_id": "source.tass.english",
+        "title": "Attempts to destabilize society take place in Russia ahead of parliamentary vote — Lavrov",
+        "url": "https://tass.com/politics/2181705",
+        "age_h": 2.2,
+        "salience_magnitude": 0.2,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[119]",
+        "signal_id": "036dd50f-ca3d-4e44-8e99-2d3c5b732a2e",
+        "source_id": "source.jpost.frontpage",
+        "title": "Putin says Russia is winning on battlefield, will not negotiate with 'terrorists'",
+        "url": "https://www.jpost.com/international/internationalrussia-ukraine-war/article-907289",
+        "age_h": 29.3,
+        "salience_magnitude": 0.3,
+        "also_cited_by": [
+         {
+          "desk": "leadership_transition",
+          "target_id": "country_g20_ru"
+         }
+        ]
+       }
+      ],
+      "corroboration": {
+       "n_sources": 4,
+       "n_desks_sharing": 2
+      }
+     },
+     {
+      "ordinal": 3,
+      "finding_id": "a0d6da74-5f87-4740-be80-7abec845496a",
+      "desk": "escalation",
+      "target_id": "country_watch_ne",
+      "target_name": "Watch — Niger",
+      "question": "Is the risk of armed escalation rising, holding or falling here — and on what evidence?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 07:11:08.744446+00",
+      "evidence_age_h": 1.32,
+      "tier": "basis",
+      "severity": "elevated",
+      "verify": {
+       "overall_score": 0.5,
+       "effective_confidence": 0.5,
+       "checkable_claims": 8,
+       "supported_claims": 4,
+       "judge_status": "deterministic",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.78,
+       "cited_mass": 1.33,
+       "n_above": 5,
+       "n_cited_scored": 8,
+       "legacy_magnitude": 0.78
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "The deployment of Algerian Su‑30 combat jets and continued Russian Africa Corps assistance are actively raising Niger's escalation risk.",
+        "origin": {
+         "head_id": "a0d6da74-5f87-4740-be80-7abec845496a",
+         "start": 90,
+         "end": 228,
+         "body_sha256": "7764333d347715af11e12847e207cdab4db2187c65c99016183d299dd0ee8084",
+         "body_len": 2348
+        },
+        "markers": [],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "Four Algerian Su‑30 fighter jets and support aircraft arrived in Niamey on 30 August, a new external back‑stop not noted in the prior read [15][18][20][32].",
+        "origin": {
+         "head_id": "a0d6da74-5f87-4740-be80-7abec845496a",
+         "start": 248,
+         "end": 410,
+         "body_sha256": "7764333d347715af11e12847e207cdab4db2187c65c99016183d299dd0ee8084",
+         "body_len": 2348
+        },
+        "markers": [
+         "[15]",
+         "[18]",
+         "[20]",
+         "[32]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "Russian Africa Corps ground and air support was again confirmed as having helped suppress the mutiny, underscoring a solidified foreign military foothold [13][14][24][30].",
+        "origin": {
+         "head_id": "a0d6da74-5f87-4740-be80-7abec845496a",
+         "start": 413,
+         "end": 584,
+         "body_sha256": "7764333d347715af11e12847e207cdab4db2187c65c99016183d299dd0ee8084",
+         "body_len": 2348
+        },
+        "markers": [
+         "[13]",
+         "[14]",
+         "[24]",
+         "[30]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "**Materiel:** Confirmed foreign aircraft (Algerian Su‑30s) and Russian mercenary forces constitute tangible force augmentation for the junta, expanding its combat capabilities beyond the domestic army [15][18][20][32][13][14][24][30].",
+        "origin": {
+         "head_id": "a0d6da74-5f87-4740-be80-7abec845496a",
+         "start": 606,
+         "end": 842,
+         "body_sha256": "7764333d347715af11e12847e207cdab4db2187c65c99016183d299dd0ee8084",
+         "body_len": 2348
+        },
+        "markers": [
+         "[15]",
+         "[18]",
+         "[20]",
+         "[32]",
+         "[13]",
+         "[14]",
+         "[24]",
+         "[30]"
+        ],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[15]",
+        "signal_id": "bcb28bf1-e0de-42ed-a54a-6d1fa993f840",
+        "source_id": "source.france24.afrique",
+        "title": "Niger : pourquoi l’Algérie déploie ses avions militaires à Niamey ?",
+        "url": "https://www.france24.com/fr/vid%C3%A9o/20260901-niger-pourquoi-l-alg%C3%A9rie-d%C3%A9ploie-ses-avions-militaires-%C3%A0-niamey",
+        "age_h": 41.6,
+        "salience_magnitude": 0.7,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_ne"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_ne"
+         },
+         {
+          "desk": "narrative_coordination",
+          "target_id": "country_watch_ne"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_ne"
+         }
+        ]
+       },
+       {
+        "marker": "[18]",
+        "signal_id": "8dabd3f8-c508-4731-b171-974b10c4eec9",
+        "source_id": "source.france24.english",
+        "title": "As capital goes back to normal, Niger downplays soldiers' mutiny",
+        "url": "https://www.france24.com/en/video/20260901-as-capital-goes-back-to-normal-niger-downplays-soldiers-mutiny",
+        "age_h": 45.3,
+        "salience_magnitude": 0.78,
+        "also_cited_by": [
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_ne"
+         },
+         {
+          "desk": "leadership_transition",
+          "target_id": "country_watch_ne"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_ne"
+         },
+         {
+          "desk": "leadership_transition",
+          "target_id": "country_watch_ne"
+         }
+        ]
+       },
+       {
+        "marker": "[20]",
+        "signal_id": "10f6d193-6cf7-4e10-b4f0-97e330a1a3a0",
+        "source_id": "source.actuniger.politique",
+        "title": "Événements de Niamey : le Général Tiani rassure son homologue algérien que la situation est « totalement sous contrôle »",
+        "url": "https://www.actuniger.com/politique/22316-evenements-de-niamey-le-general-tiani-rassure-son-homologue-algerien-que-la-situation-est-totalement-sous-controle.html",
+        "age_h": 50.0,
+        "salience_magnitude": 0.75,
+        "also_cited_by": [
+         {
+          "desk": "narrative_coordination",
+          "target_id": "country_watch_ne"
+         }
+        ]
+       },
+       {
+        "marker": "[32]",
+        "signal_id": "10b0924b-4a6b-42e9-9808-7c29db6239b8",
+        "source_id": "source.france24.afrique",
+        "title": "En déployant ses avions de combat au Niger, l'Algérie veut \"prévenir d'éventuelles attaques\"",
+        "url": "https://www.france24.com/fr/afrique/20260831-avions-combat-niger-alg%C3%A9rie-pr%C3%A9venir-%C3%A9ventuelles-attaques",
+        "age_h": 64.6,
+        "salience_magnitude": 0.4,
+        "also_cited_by": [
+         {
+          "desk": "narrative_coordination",
+          "target_id": "country_watch_ne"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_ne"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_watch_ne"
+         },
+         {
+          "desk": "internal_stability",
+          "target_id": "country_watch_ne"
+         }
+        ]
+       },
+       {
+        "marker": "[13]",
+        "signal_id": "f55f7366-5c44-46c1-8836-2524d48d276e",
+        "source_id": "source.france24.english",
+        "title": "Niger's thwarted mutiny highlights junta's dependence on Russia",
+        "url": "https://www.france24.com/en/africa/20260901-what-russia-helping-niger-junta-stop-mutiny-means-for-its-sovereignty",
+        "age_h": 40.3,
+        "salience_magnitude": 0.75,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_ne"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_watch_ne"
+         },
+         {
+          "desk": "leadership_transition",
+          "target_id": "country_watch_ne"
+         },
+         {
+          "desk": "narrative_coordination",
+          "target_id": "country_watch_ne"
+         }
+        ]
+       },
+       {
+        "marker": "[14]",
+        "signal_id": "0c1a3742-232e-4d27-9915-b3b52d8d7eb7",
+        "source_id": "source.telegram.org_channels",
+        "title": "(untitled wire item)",
+        "url": "https://t.me/France24_en/18445",
+        "age_h": 41.0,
+        "salience_magnitude": 0.65,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_ne"
+         }
+        ]
+       },
+       {
+        "marker": "[24]",
+        "signal_id": "2f44e5cc-ac71-480c-8b77-2e1511af9c67",
+        "source_id": "source.gdelt.files",
+        "title": "JUNTA: fight in Niamey, Niamey, Niger",
+        "url": "http://www.africaleader.com/news/279274970/niger-junta-puts-down-mutiny-with-help-from-russia-africa-corps",
+        "age_h": 54.3,
+        "salience_magnitude": 0.45,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[30]",
+        "signal_id": "db8b1a32-6a4a-4892-a810-dafbf0721594",
+        "source_id": "source.gdelt.files",
+        "title": "PRESIDENTIAL PALACE: fight in Niamey, Niamey, Niger",
+        "url": "http://www.nigeriasun.com/news/279276847/niger-coup-attempt-russians-saved-the-day-analyst-tells-rfi",
+        "age_h": 62.3,
+        "salience_magnitude": 0.7,
+        "also_cited_by": []
+       }
+      ],
+      "corroboration": {
+       "n_sources": 5,
+       "n_desks_sharing": 6
+      }
+     },
+     {
+      "ordinal": 4,
+      "finding_id": "d6d3a897-2fc1-4747-a38e-7263c55f07db",
+      "desk": "escalation",
+      "target_id": "country_watch_ua",
+      "target_name": "Watch — Ukraine",
+      "question": "Is the risk of armed escalation rising, holding or falling here — and on what evidence?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 07:12:21.05867+00",
+      "evidence_age_h": 1.3,
+      "tier": "basis",
+      "severity": "elevated",
+      "verify": {
+       "overall_score": 0.7,
+       "effective_confidence": 0.7,
+       "checkable_claims": 11,
+       "supported_claims": 8,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.9,
+       "cited_mass": 1.25,
+       "n_above": 3,
+       "n_cited_scored": 4,
+       "legacy_magnitude": 0.92
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "Ukrainian cross‑border drone strikes into Russia are intensifying, driving a rise in near‑term escalation risk.",
+        "origin": {
+         "head_id": "d6d3a897-2fc1-4747-a38e-7263c55f07db",
+         "start": 88,
+         "end": 203,
+         "body_sha256": "c78e31c12802838e4cd588ec4064c6ecb0f64545a3a5ef10910d4f25d196b7eb",
+         "body_len": 2834
+        },
+        "markers": [],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "The prior read noted a generic cross‑border drone threat but lacked concrete incidents (prior read [120]).",
+        "origin": {
+         "head_id": "d6d3a897-2fc1-4747-a38e-7263c55f07db",
+         "start": 223,
+         "end": 333,
+         "body_sha256": "c78e31c12802838e4cd588ec4064c6ecb0f64545a3a5ef10910d4f25d196b7eb",
+         "body_len": 2834
+        },
+        "markers": [
+         "[120]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "On 1 September 2026 Ukraine struck the strategic Ust‑Luga oil terminal in Russia, a deep‑inside target, confirming a new level of offensive capability [77].",
+        "origin": {
+         "head_id": "d6d3a897-2fc1-4747-a38e-7263c55f07db",
+         "start": 336,
+         "end": 500,
+         "body_sha256": "c78e31c12802838e4cd588ec4064c6ecb0f64545a3a5ef10910d4f25d196b7eb",
+         "body_len": 2834
+        },
+        "markers": [
+         "[77]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "On 31 August 2026 Ukrainian drones hit Yekaterinburg, damaging homes and a logistics site, showing the geographic spread of attacks [113].",
+        "origin": {
+         "head_id": "d6d3a897-2fc1-4747-a38e-7263c55f07db",
+         "start": 503,
+         "end": 645,
+         "body_sha256": "c78e31c12802838e4cd588ec4064c6ecb0f64545a3a5ef10910d4f25d196b7eb",
+         "body_len": 2834
+        },
+        "markers": [
+         "[113]"
+        ],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[120]",
+        "signal_id": null,
+        "source_id": null,
+        "title": "Ukrainian cross‑border drone strikes into Russia intensify escalation",
+        "url": null,
+        "age_h": null,
+        "salience_magnitude": null,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[77]",
+        "signal_id": "6bdec580-4fc3-4e0b-8afa-e7749c5947f8",
+        "source_id": "source.maritimeexecutive.news",
+        "title": "Ukraine Strikes Russia’s Ust-Luga Oil Terminal as Attacks Intensify",
+        "url": "https://maritime-executive.com/article/ukraine-strikes-russia-s-ust-luga-oil-terminal-as-attacks-intensify",
+        "age_h": 36.4,
+        "salience_magnitude": 0.9,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_ua"
+         },
+         {
+          "desk": "narrative_coordination",
+          "target_id": "country_watch_ua"
+         },
+         {
+          "desk": "economic_coercion",
+          "target_id": "country_watch_ua"
+         }
+        ]
+       },
+       {
+        "marker": "[113]",
+        "signal_id": "e7ac49b8-a635-4707-b087-150c62eeb8b7",
+        "source_id": "source.meduza.english",
+        "title": "Ukrainian drones attack Russia’s Yekaterinburg. Three apartment buildings damaged, four people injured.",
+        "url": "https://meduza.io/en/news/2026/08/31/ukrainian-drones-attack-russia-s-yekaterinburg-three-apartment-buildings-damaged-four-people-injured",
+        "age_h": 66.7,
+        "salience_magnitude": 0.9,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[64]",
+        "signal_id": "e69fe59f-0499-489f-b857-d207689a0286",
+        "source_id": "source.ukrinform.english",
+        "title": "Ukraine’s air defenses down 138 Russian drones, three Banderol UAVs overnight",
+        "url": "https://www.ukrinform.net/rubric-ato/4159992-ukraines-air-defenses-down-138-russian-drones-three-banderol-uavs-overnight.html",
+        "age_h": 24.7,
+        "salience_magnitude": 0.6,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[5]",
+        "signal_id": "bc6fd565-a2d4-4c97-a92d-269476d54650",
+        "source_id": "source.telegram.org_channels",
+        "title": "(untitled wire item)",
+        "url": "https://t.me/tassagency_en/92264",
+        "age_h": 2.5,
+        "salience_magnitude": 0.85,
+        "also_cited_by": [
+         {
+          "desk": "economic_coercion",
+          "target_id": "country_watch_ua"
+         }
+        ]
+       }
+      ],
+      "corroboration": {
+       "n_sources": 4,
+       "n_desks_sharing": 3
+      }
+     },
+     {
+      "ordinal": 5,
+      "finding_id": "e0767cdb-05c6-4c70-a708-42d2504a9d2f",
+      "desk": "escalation",
+      "target_id": "country_watch_ht",
+      "target_name": "Watch — Haiti",
+      "question": "Is the risk of armed escalation rising, holding or falling here — and on what evidence?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 07:09:09.918804+00",
+      "evidence_age_h": 1.35,
+      "tier": "basis",
+      "severity": "elevated",
+      "verify": {
+       "overall_score": 0.7143,
+       "effective_confidence": 0.7143,
+       "checkable_claims": 8,
+       "supported_claims": 6,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.95,
+       "cited_mass": 1.0,
+       "n_above": 3,
+       "n_cited_scored": 5,
+       "legacy_magnitude": 0.95
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "Haiti’s gang‑driven massacre in Kenscoff keeps escalation risk elevated but its forward momentum is constrained by limited gang capacity and UN investigations.",
+        "origin": {
+         "head_id": "e0767cdb-05c6-4c70-a708-42d2504a9d2f",
+         "start": 87,
+         "end": 250,
+         "body_sha256": "1149e0468e2f69fcef5f191cf2e61be9cb93c7c9e6c24d4f1d04ff9f8da4f903",
+         "body_len": 2045
+        },
+        "markers": [],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "**Mass casualties and large‑scale kidnapping:** On 23 August, gangs killed at least 47 people, injured 22 and abducted more than 50 in Kenscoff, a fact reported by the United Nations and echoed across multiple outlets (AP 3 September 2026 [3]; Tribune 2026‑09‑01 [7]; African News 2026‑08‑31 [9]; African News 2026‑08‑31 [10]).",
+        "origin": {
+         "head_id": "e0767cdb-05c6-4c70-a708-42d2504a9d2f",
+         "start": 587,
+         "end": 952,
+         "body_sha256": "1149e0468e2f69fcef5f191cf2e61be9cb93c7c9e6c24d4f1d04ff9f8da4f903",
+         "body_len": 2045
+        },
+        "markers": [
+         "[3]",
+         "[7]",
+         "[9]",
+         "[10]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "**Continued hostage‑taking of foreign nationals:** Two South Korean workers kidnapped on 31 July were released in mid‑August, underscoring the gangs’ capacity to target nationals (Yonhap 2 September 2026 [5]).",
+        "origin": {
+         "head_id": "e0767cdb-05c6-4c70-a708-42d2504a9d2f",
+         "start": 955,
+         "end": 1180,
+         "body_sha256": "1149e0468e2f69fcef5f191cf2e61be9cb93c7c9e6c24d4f1d04ff9f8da4f903",
+         "body_len": 2045
+        },
+        "markers": [
+         "[5]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "**Limited gang capacity and external scrutiny:** Witnesses noted reconnaissance drones before the attack, yet UN officials report that only eight armored vehicles were present, highlighting a shortfall in protective assets (Tribune 2026‑09‑01 [7]). Ongoing UN investigations and international attention act as a brake on further escalation.",
+        "origin": {
+         "head_id": "e0767cdb-05c6-4c70-a708-42d2504a9d2f",
+         "start": 1183,
+         "end": 1531,
+         "body_sha256": "1149e0468e2f69fcef5f191cf2e61be9cb93c7c9e6c24d4f1d04ff9f8da4f903",
+         "body_len": 2045
+        },
+        "markers": [
+         "[7]"
+        ],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[12]",
+        "signal_id": null,
+        "source_id": null,
+        "title": "Haiti’s gang‑driven Kenscoff massacre sustains elevated escalation risk",
+        "url": null,
+        "age_h": null,
+        "salience_magnitude": null,
+        "also_cited_by": []
+       },
+       {
+        "marker": "[3]",
+        "signal_id": "45bc3546-ee88-4c6c-9939-52cafe842a1d",
+        "source_id": "source.rsshub.apnews.world",
+        "title": "Mourners file into a church in Haiti where gangs killed dozens of people in latest rampage",
+        "url": "https://apnews.com/article/haiti-gang-attack-funeral-1bacaf16c7d2c29acfab810930bdbfdf",
+        "age_h": 7.1,
+        "salience_magnitude": 0.95,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_ht"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_ht"
+         },
+         {
+          "desk": "energy_security",
+          "target_id": "country_watch_ht"
+         },
+         {
+          "desk": "internal_stability",
+          "target_id": "country_watch_ht"
+         }
+        ]
+       },
+       {
+        "marker": "[7]",
+        "signal_id": "f505ca6f-60a5-4163-87c4-f423e96f2c6f",
+        "source_id": "source.gdelt.files",
+        "title": "UNITED NATIONS: fight in Kenscoff, Ouest, Haiti",
+        "url": "https://www.tribune242.com/news/2026/sep/01/world-view-haiti-after-kenscoff/",
+        "age_h": 39.0,
+        "salience_magnitude": 0.7,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_ht"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_ht"
+         },
+         {
+          "desk": "narrative_coordination",
+          "target_id": "country_watch_ht"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_ht"
+         }
+        ]
+       },
+       {
+        "marker": "[9]",
+        "signal_id": "954a9228-41c4-45cd-939e-a55e72abd1bd",
+        "source_id": "source.gdelt.files",
+        "title": "GANG: assault in Kenscoff, Ouest, Haiti",
+        "url": "https://www.africanews.com/2026/08/31/haiti-mourns-victims-of-kenscoff-gang-attack-as-fear-grips-community/",
+        "age_h": 62.5,
+        "salience_magnitude": 0.2,
+        "also_cited_by": [
+         {
+          "desk": "energy_security",
+          "target_id": "country_watch_ht"
+         },
+         {
+          "desk": "internal_stability",
+          "target_id": "country_watch_ht"
+         },
+         {
+          "desk": "leadership_transition",
+          "target_id": "country_watch_ht"
+         },
+         {
+          "desk": "narrative_coordination",
+          "target_id": "country_watch_ht"
+         }
+        ]
+       },
+       {
+        "marker": "[10]",
+        "signal_id": "7334e127-cc0b-431c-95c6-6188e86c2379",
+        "source_id": "source.africanews.all",
+        "title": "Haiti mourns victims of Kenscoff gang attack as fear grips community",
+        "url": "http://www.africanews.com/2026/08/31/haiti-mourns-victims-of-kenscoff-gang-attack-as-fear-grips-community/",
+        "age_h": 65.1,
+        "salience_magnitude": 0.85,
+        "also_cited_by": [
+         {
+          "desk": "internal_stability",
+          "target_id": "country_watch_ht"
+         },
+         {
+          "desk": "leadership_transition",
+          "target_id": "country_watch_ht"
+         },
+         {
+          "desk": "narrative_coordination",
+          "target_id": "country_watch_ht"
+         },
+         {
+          "desk": "internal_stability",
+          "target_id": "country_watch_ht"
+         }
+        ]
+       },
+       {
+        "marker": "[5]",
+        "signal_id": "fb13a533-bdb8-457b-a02e-7a0159354379",
+        "source_id": "source.yonhap.english",
+        "title": "2 S. Koreans kidnapped in Haiti released safely: foreign ministry",
+        "url": "https://en.yna.co.kr/view/AEN20260902006100315",
+        "age_h": 26.5,
+        "salience_magnitude": 0.25,
+        "also_cited_by": [
+         {
+          "desk": "internal_stability",
+          "target_id": "country_watch_ht"
+         },
+         {
+          "desk": "leadership_transition",
+          "target_id": "country_watch_ht"
+         }
+        ]
+       }
+      ],
+      "corroboration": {
+       "n_sources": 4,
+       "n_desks_sharing": 6
+      }
+     },
+     {
+      "ordinal": 6,
+      "finding_id": "f48e79b4-b7ae-404f-85fc-f10878439663",
+      "desk": "escalation",
+      "target_id": "country_watch_mm",
+      "target_name": "Watch — Myanmar",
+      "question": "Is the risk of armed escalation rising, holding or falling here — and on what evidence?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 07:10:04.116984+00",
+      "evidence_age_h": 1.34,
+      "tier": "basis",
+      "severity": "elevated",
+      "verify": {
+       "overall_score": 1.0,
+       "effective_confidence": 0.9,
+       "checkable_claims": 10,
+       "supported_claims": 10,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.95,
+       "cited_mass": 0.7,
+       "n_above": 2,
+       "n_cited_scored": 2,
+       "legacy_magnitude": 0.95
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "Myanmar’s ongoing airstrike campaign, highlighted by a civilian‑casualty strike on 30 August and intensified use of long‑range weapons, keeps escalation risk elevated with no diplomatic mitigation observed in this desk’s collection [17][28].",
+        "origin": {
+         "head_id": "f48e79b4-b7ae-404f-85fc-f10878439663",
+         "start": 87,
+         "end": 338,
+         "body_sha256": "038502211bed2ab286c101c36f27306b6ceef9afa410684340fde2d03c710373",
+         "body_len": 2550
+        },
+        "markers": [
+         "[17]",
+         "[28]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "A new civilian‑casualty airstrike on 30 August in Mindat Township was reported, confirming the campaign’s continuation since the prior read [43] [17].",
+        "origin": {
+         "head_id": "f48e79b4-b7ae-404f-85fc-f10878439663",
+         "start": 358,
+         "end": 514,
+         "body_sha256": "038502211bed2ab286c101c36f27306b6ceef9afa410684340fde2d03c710373",
+         "body_len": 2550
+        },
+        "markers": [
+         "[43]",
+         "[17]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "A HURFOM report documented the junta’s expanded use of long‑range weapons and intensified airstrikes, indicating a deepening of firepower since the prior read [43] [28].",
+        "origin": {
+         "head_id": "f48e79b4-b7ae-404f-85fc-f10878439663",
+         "start": 517,
+         "end": 690,
+         "body_sha256": "038502211bed2ab286c101c36f27306b6ceef9afa410684340fde2d03c710373",
+         "body_len": 2550
+        },
+        "markers": [
+         "[43]",
+         "[28]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "**Airstrike campaign** – continued strikes on civilian areas, confirmed by recent reports (triggered) [17][28]",
+        "origin": {
+         "head_id": "f48e79b4-b7ae-404f-85fc-f10878439663",
+         "start": 2268,
+         "end": 2382,
+         "body_sha256": "038502211bed2ab286c101c36f27306b6ceef9afa410684340fde2d03c710373",
+         "body_len": 2550
+        },
+        "markers": [
+         "[17]",
+         "[28]"
+        ],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[17]",
+        "signal_id": "90d34abd-709a-4367-a016-4d3894fed113",
+        "source_id": "source.telegram.org_channels",
+        "title": "(untitled wire item)",
+        "url": "https://t.me/dvbtvnews/40941",
+        "age_h": 33.0,
+        "salience_magnitude": 0.95,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_mm"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_mm"
+         },
+         {
+          "desk": "internal_stability",
+          "target_id": "country_watch_mm"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_mm"
+         }
+        ]
+       },
+       {
+        "marker": "[28]",
+        "signal_id": "f25ae80f-7017-40f2-930d-db60ad68340f",
+        "source_id": "source.telegram.org_channels",
+        "title": "(untitled wire item)",
+        "url": "https://t.me/dvbtvnews/40916",
+        "age_h": 56.5,
+        "salience_magnitude": 0.75,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_watch_mm"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_mm"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_watch_mm"
+         },
+         {
+          "desk": "internal_stability",
+          "target_id": "country_watch_mm"
+         }
+        ]
+       },
+       {
+        "marker": "[43]",
+        "signal_id": null,
+        "source_id": null,
+        "title": "Myanmar airstrike surge sustains elevated escalation risk",
+        "url": null,
+        "age_h": null,
+        "salience_magnitude": null,
+        "also_cited_by": []
+       }
+      ],
+      "corroboration": {
+       "n_sources": 1,
+       "n_desks_sharing": 3
+      }
+     },
+     {
+      "ordinal": 7,
+      "finding_id": "dd16e1c2-85db-4ed5-8d07-2cadf5524633",
+      "desk": "escalation",
+      "target_id": "country_g20_cn",
+      "target_name": "G20 — China",
+      "question": "Is the risk of armed escalation rising, holding or falling here — and on what evidence?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 07:01:37.388575+00",
+      "evidence_age_h": 1.48,
+      "tier": "basis",
+      "severity": "elevated",
+      "verify": {
+       "overall_score": 0.5714,
+       "effective_confidence": 0.5714,
+       "checkable_claims": 8,
+       "supported_claims": 5,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.4,
+       "cited_mass": 0.0,
+       "n_above": 0,
+       "n_cited_scored": 1,
+       "legacy_magnitude": 0.95
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "China is moving to conduct a joint border‑defence exercise with Russia and Mongolia, modestly raising its near‑term escalation risk [98].",
+        "origin": {
+         "head_id": "dd16e1c2-85db-4ed5-8d07-2cadf5524633",
+         "start": 87,
+         "end": 228,
+         "body_sha256": "6d4dc7634b6af467416b57354569832ee098530957ae6303466b9a293f7883d9",
+         "body_len": 1864
+        },
+        "markers": [
+         "[98]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "The first public report that China, Russia and Mongolia will hold a coordinated Border Defense Cooperation 2026 drill in the first ten days of September appears in this window (published 1 September 2026) [98].",
+        "origin": {
+         "head_id": "dd16e1c2-85db-4ed5-8d07-2cadf5524633",
+         "start": 248,
+         "end": 462,
+         "body_sha256": "6d4dc7634b6af467416b57354569832ee098530957ae6303466b9a293f7883d9",
+         "body_len": 1864
+        },
+        "markers": [
+         "[98]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "**Border‑force‑buildup:** confirmed joint border‑defence exercise scheduled for early September (triggered) [98]",
+        "origin": {
+         "head_id": "dd16e1c2-85db-4ed5-8d07-2cadf5524633",
+         "start": 1531,
+         "end": 1649,
+         "body_sha256": "6d4dc7634b6af467416b57354569832ee098530957ae6303466b9a293f7883d9",
+         "body_len": 1864
+        },
+        "markers": [
+         "[98]"
+        ],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[98]",
+        "signal_id": "130d80f5-0e20-45cc-ae95-5b7cd4e95fa1",
+        "source_id": "source.tass.english",
+        "title": "China, Russia, Mongolia to hold Border Defense Cooperation 2026 drills in early September",
+        "url": "https://tass.com/defense/2180497",
+        "age_h": 42.2,
+        "salience_magnitude": 0.4,
+        "also_cited_by": [
+         {
+          "desk": "military_posture",
+          "target_id": "country_g20_cn"
+         }
+        ]
+       }
+      ],
+      "corroboration": {
+       "n_sources": 1,
+       "n_desks_sharing": 1
+      }
+     },
+     {
+      "ordinal": 8,
+      "finding_id": "8fc48a33-8777-4ccc-9fab-c06b02255a79",
+      "desk": "escalation",
+      "target_id": "country_g20_mx",
+      "target_name": "G20 — Mexico",
+      "question": "Is the risk of armed escalation rising, holding or falling here — and on what evidence?",
+      "question_source": "descriptor",
+      "produced_at": "2026-09-03 07:07:49.174474+00",
+      "evidence_age_h": 1.38,
+      "tier": "basis",
+      "severity": "elevated",
+      "verify": {
+       "overall_score": 0.8333,
+       "effective_confidence": 0.8333,
+       "checkable_claims": 7,
+       "supported_claims": 6,
+       "judge_status": "llm",
+       "score_state": "scored"
+      },
+      "salience": {
+       "cited_max": 0.2,
+       "cited_mass": 0.0,
+       "n_above": 0,
+       "n_cited_scored": 2,
+       "legacy_magnitude": 0.86
+      },
+      "spans": [
+       {
+        "role": "bluf",
+        "text": "New cartel bombings and a border firearms seizure confirm that proxy cartel violence continues to sustain Mexico’s elevated escalation risk.",
+        "origin": {
+         "head_id": "8fc48a33-8777-4ccc-9fab-c06b02255a79",
+         "start": 87,
+         "end": 229,
+         "body_sha256": "698b255c0ee753193f5742d21c512966d3a0586d3a7d9da41ac277b78d7a4587",
+         "body_len": 1915
+        },
+        "markers": [],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "A car bomb on 31 August injured 11 people and caused extensive damage in Zacatecas, providing fresh, confirmed evidence of ongoing cartel‑led explosives attacks [31].",
+        "origin": {
+         "head_id": "8fc48a33-8777-4ccc-9fab-c06b02255a79",
+         "start": 249,
+         "end": 419,
+         "body_sha256": "698b255c0ee753193f5742d21c512966d3a0586d3a7d9da41ac277b78d7a4587",
+         "body_len": 1915
+        },
+        "markers": [
+         "[31]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "Federal agents seized 210 firearms from three gun‑runners near the U.S. border on 31 August, a security response that may curb weapon flow but does not alter the underlying proxy‑violence driver [36].",
+        "origin": {
+         "head_id": "8fc48a33-8777-4ccc-9fab-c06b02255a79",
+         "start": 422,
+         "end": 628,
+         "body_sha256": "698b255c0ee753193f5742d21c512966d3a0586d3a7d9da41ac277b78d7a4587",
+         "body_len": 1915
+        },
+        "markers": [
+         "[36]"
+        ],
+        "scope_tokens": []
+       },
+       {
+        "role": "body",
+        "text": "No new military deployments, diplomatic ruptures, or alliance shifts were reported, leaving the overall escalation risk profile unchanged from the prior read (Cartel bombings sustain elevated risk) [41].",
+        "origin": {
+         "head_id": "8fc48a33-8777-4ccc-9fab-c06b02255a79",
+         "start": 631,
+         "end": 834,
+         "body_sha256": "698b255c0ee753193f5742d21c512966d3a0586d3a7d9da41ac277b78d7a4587",
+         "body_len": 1915
+        },
+        "markers": [
+         "[41]"
+        ],
+        "scope_tokens": []
+       }
+      ],
+      "signals": [
+       {
+        "marker": "[31]",
+        "signal_id": "86fa0c0f-0f93-41b3-89f7-ed86d51e0dd5",
+        "source_id": "source.mexiconewsdaily.news",
+        "title": "11 injured in car bomb attack on Zacatecas police station",
+        "url": "https://mexiconewsdaily.com/news/car-bomb-zacatecas/",
+        "age_h": 58.4,
+        "salience_magnitude": 0.2,
+        "also_cited_by": [
+         {
+          "desk": "escalation",
+          "target_id": "country_g20_mx"
+         },
+         {
+          "desk": "narrative_coordination",
+          "target_id": "country_g20_mx"
+         }
+        ]
+       },
+       {
+        "marker": "[36]",
+        "signal_id": "4d8ae7ac-7752-49fc-b3e4-eecec552b950",
+        "source_id": "source.mexiconewsdaily.news",
+        "title": "Mexico stops 2 tractor-trailers at northern border hauling hundreds of firearms",
+        "url": "https://mexiconewsdaily.com/news/mexico-tractor-trailers-firearms/",
+        "age_h": 62.4,
+        "salience_magnitude": 0.2,
+        "also_cited_by": [
+         {
+          "desk": "military_posture",
+          "target_id": "country_g20_mx"
+         },
+         {
+          "desk": "military_posture",
+          "target_id": "country_g20_mx"
+         }
+        ]
+       },
+       {
+        "marker": "[41]",
+        "signal_id": null,
+        "source_id": null,
+        "title": "Cartel bombings sustain Mexico's elevated escalation risk",
+        "url": null,
+        "age_h": null,
+        "salience_magnitude": null,
+        "also_cited_by": []
+       }
+      ],
+      "corroboration": {
+       "n_sources": 1,
+       "n_desks_sharing": 3
+      }
+     }
+    ],
+    "tensions": [],
+    "tension_checked": {
+     "pairs_examined": 28,
+     "pairs_found": 0,
+     "scope": "shown_and_dropped",
+     "scope_note": "BLUF-grain; ambivalent pairs declined"
+    },
+    "drops": {
+     "shown_not_carried": [
+      {
+       "finding_id": "5c2fe2f2-55f8-4456-b50c-957f4b6a6dad",
+       "desk": "escalation",
+       "target_id": "country_watch_cd",
+       "target_name": "Watch — Congo, The Democratic Republic of the",
+       "title": "DR Congo’s Ebola outbreak fuels rising spillover risk despite nascent slowdown",
+       "rank": 9,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "a4d2f834-afc4-46b5-bbc0-b553c09fbcab",
+       "desk": "escalation",
+       "target_id": "country_g20_us",
+       "target_name": "G20 — United States",
+       "title": "U.S. expands Middle‑East naval deployment, raising escalation risk",
+       "rank": 10,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "beb00bb8-e56f-42b4-84ed-d4d03a578990",
+       "desk": "escalation",
+       "target_id": "country_watch_pk",
+       "target_name": "Watch — Pakistan",
+       "title": "Pakistan – proxy militant attacks surge in Balochistan frontier",
+       "rank": 11,
+       "tier": "basis",
+       "severity": "high",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "b4dd4c49-8172-48c2-b3a6-4021fc8dbdc8",
+       "desk": "escalation",
+       "target_id": "country_watch_il",
+       "target_name": "Watch — Israel",
+       "title": "Israel’s West Bank demolition surge fuels border‑force buildup",
+       "rank": 12,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "39eab446-dc1d-40a7-81c1-272e644ada68",
+       "desk": "escalation",
+       "target_id": "country_g20_id",
+       "target_name": "G20 — Indonesia",
+       "title": "Indonesia’s wildfire‑response force surge sustains moderate escalation risk",
+       "rank": 13,
+       "tier": "basis",
+       "severity": "moderate",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "a26cc0c0-51ae-4099-a806-a20783e42a12",
+       "desk": "escalation",
+       "target_id": "country_g20_fr",
+       "target_name": "G20 — France",
+       "title": "French legionnaire captured in Colombia underscores proxy mercenary risk",
+       "rank": 14,
+       "tier": "basis",
+       "severity": "moderate",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "184ac6e9-26f3-41e1-bb6c-13e6d67f0fd1",
+       "desk": "escalation",
+       "target_id": "country_g20_za",
+       "target_name": "G20 — South Africa",
+       "title": "South Africa’s diplomatic clash with Israel remains the sole escalation driver",
+       "rank": 15,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "3bd05ce5-0bf5-4e55-ace3-f795bd67c1e5",
+       "desk": "escalation",
+       "target_id": "country_g20_de",
+       "target_name": "G20 — Germany",
+       "title": "Germany’s diplomatic rupture with Russia deepens",
+       "rank": 16,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "dde3ae98-6020-4d50-907d-4c5c5d42144e",
+       "desk": "escalation",
+       "target_id": "country_g20_tr",
+       "target_name": "G20 — Türkiye",
+       "title": "Turkey’s Mecca defence pact lifts G20 escalation risk",
+       "rank": 17,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "c02fe5ec-7c2f-4375-ad83-093e1e4c6140",
+       "desk": "escalation",
+       "target_id": "country_g20_gb",
+       "target_name": "G20 — United Kingdom",
+       "title": "UK diplomatic clash with Israel escalates amid new stern statements",
+       "rank": 18,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "d0a351e4-f338-41f7-9f51-716cc9f99cfc",
+       "desk": "escalation",
+       "target_id": "country_g20_in",
+       "target_name": "G20 — India",
+       "title": "India‑Pakistan water‑treaty dispute fuels diplomatic escalation risk",
+       "rank": 19,
+       "tier": "basis",
+       "severity": "moderate",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "d5196dc5-2aa0-475c-8f85-9e18bee49bd7",
+       "desk": "escalation",
+       "target_id": "country_g20_ca",
+       "target_name": "G20 — Canada",
+       "title": "Canada‑US trade‑war diplomatic rupture fuels elevated escalation risk",
+       "rank": 20,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "9871c145-d2d8-42e6-8a95-a96017081cd2",
+       "desk": "escalation",
+       "target_id": "country_g20_jp",
+       "target_name": "G20 — Japan",
+       "title": "Japan’s escalation risk stays elevated as Russian missile activity near the Kurils persists",
+       "rank": 21,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "0a86c092-aba9-4c99-858f-5df73e8236fe",
+       "desk": "escalation",
+       "target_id": "country_g20_ar",
+       "target_name": "G20 — Argentina",
+       "title": "Milei’s Falklands push raises Argentina’s escalation risk",
+       "rank": 22,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "d5169586-f624-4e01-8f2f-cd9a6b0f0945",
+       "desk": "escalation",
+       "target_id": "country_g20_kr",
+       "target_name": "G20 — Korea, Republic of",
+       "title": "South Korea’s escalation risk stays high as defence‑minister reshuffle fuels tension",
+       "rank": 23,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "e8f75ad9-80a9-4558-bf44-cbb8d825b57c",
+       "desk": "escalation",
+       "target_id": "country_g20_it",
+       "target_name": "G20 — Italy",
+       "title": "Italy maintains Schengen suspension with Spain, keeping diplomatic tension alive",
+       "rank": 24,
+       "tier": "basis",
+       "severity": "moderate",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "480a288d-10f0-4f85-ad20-9eebcbb2559d",
+       "desk": "escalation",
+       "target_id": "country_g20_br",
+       "target_name": "G20 — Brazil",
+       "title": "EU suspends Brazilian meat imports, raising trade‑related escalation risk",
+       "rank": 25,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "17e21027-4ae8-496f-b5a8-239ab250f113",
+       "desk": "escalation",
+       "target_id": "country_g20_au",
+       "target_name": "G20 — Australia",
+       "title": "Australia – maritime ISR expansion sustains elevated escalation risk",
+       "rank": 26,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "5cb02a66-647f-44ed-88e7-83ad81ed3fff",
+       "desk": "escalation",
+       "target_id": "country_watch_kp",
+       "target_name": "Watch — Korea, Democratic People's Republic of",
+       "title": "North Korea’s New Yalu River Bridge nears opening, driving escalation",
+       "rank": 27,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "9a5750f3-cc73-43c3-9a7b-d5c60220ea06",
+       "desk": "escalation",
+       "target_id": "country_watch_bf",
+       "target_name": "Watch — Burkina Faso",
+       "title": "Burkina Faso’s modest escalation risk unchanged, border security cooperation holds steady",
+       "rank": 28,
+       "tier": "basis",
+       "severity": "moderate",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "7a53af9d-f915-4088-bddd-eee6c08cd573",
+       "desk": "escalation",
+       "target_id": "country_watch_ml",
+       "target_name": "Watch — Mali",
+       "title": "Mali – Russian‑linked proxy activity sustains elevated escalation risk",
+       "rank": 29,
+       "tier": "basis",
+       "severity": "elevated",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "66e253d0-f675-4a5e-9d91-e22df1f4ca72",
+       "desk": "escalation",
+       "target_id": "country_watch_tw",
+       "target_name": "Watch — Taiwan, Province of China",
+       "title": "China Coast Guard patrols east of Taiwan sustain elevated escalation risk",
+       "rank": 30,
+       "tier": "periphery",
+       "severity": "elevated",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      },
+      {
+       "finding_id": "a85dd5d5-b3a5-41bb-8545-8738c26a05b3",
+       "desk": "escalation",
+       "target_id": "country_watch_sd",
+       "target_name": "Watch — Sudan",
+       "title": "Sudan army reinforces Blue Nile, bolstering ground offensive",
+       "rank": 31,
+       "tier": "periphery",
+       "severity": "elevated",
+       "cited_mass": null,
+       "why": "shown_not_selected"
+      }
+     ],
+     "not_selected": [],
+     "trimmed": [],
+     "below_floor": [],
+     "no_head": [],
+     "counts": {
+      "shown": 31,
+      "carried": 8,
+      "shown_not_carried": 23,
+      "candidates": 31,
+      "not_selected": 23,
+      "trimmed": 0,
+      "below_floor": 0,
+      "no_head": 0,
+      "invisible_heads": 0
+     },
+     "why_classes": [
+      "shown_not_selected",
+      "not_selected",
+      "cap_trimmed",
+      "below_floor",
+      "no_head_in_horizon",
+      "superseded",
+      "correlated_duplicate",
+      "not_a_candidate"
+     ]
+    },
+    "coverage": [],
+    "connectives": {
+     "vocabulary_version": "connective.v1"
+    }
+   }
+  }
+ },
+ "verification": {
+  "overall_score": 1.0,
+  "score_state": "scored",
+  "judge_status": "deterministic",
+  "assembly_arms": {
+   "gate": "passed",
+   "schema": "assembly_arms.v1",
+   "quote_fidelity": 1.0,
+   "scope_preservation": 1.0,
+   "attribution_equality": 1.0,
+   "coverage_completeness": 1.0,
+   "spans": 28,
+   "failed_ordinals": []
+  }
+ }
+}

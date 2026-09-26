@@ -86,8 +86,17 @@ from uuid import UUID, uuid4
 
 from ....runtime.analyst_method import AnalystMethodResult
 from ...provenance.models import FindingPayload
+from ...provenance.origin import origin_class_clause
 
 logger = logging.getLogger(__name__)
+
+#: P7/7g-1 — the origin-class legs on the earned-record read (SEAMS #57
+#: sweep; `source_health` in the collection firewall). A source's earned
+#: weight is what it got right in the LIVE contest; a provider whose
+#: numbers were imported never entered that contest and must not be
+#: credited or debited by it.
+_LIVE_FACTS = origin_class_clause("f")
+_LIVE_SIGNALS = origin_class_clause("s")
 
 SUB_HANDLER_NAME = "source_track_record"
 
@@ -285,6 +294,8 @@ cluster_sources AS (
      CROSS JOIN LATERAL unnest(f.derived_from) AS d(sig)
       JOIN signals s ON s.id = d.sig
      WHERE ($3::text[] IS NULL OR s.source_id = ANY($3::text[]))
+       AND {live_facts}
+       AND {live_signals}
 ),
 per_contention_source AS (
     SELECT contention_id, source_id,
@@ -317,7 +328,9 @@ SELECT COALESCE(o.source_id, c.source_id) AS source_id,
   FULL OUTER JOIN corr c ON c.source_id = o.source_id
  ORDER BY (COALESCE(o.wins, 0) + COALESCE(o.losses, 0)) DESC, source_id
  LIMIT {limit}
-""".format(limit=_MAX_RECORDS)
+""".format(
+    limit=_MAX_RECORDS, live_facts=_LIVE_FACTS, live_signals=_LIVE_SIGNALS
+)
 
 
 async def compute_source_records(

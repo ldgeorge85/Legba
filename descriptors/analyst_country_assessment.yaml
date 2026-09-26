@@ -1,0 +1,213 @@
+# country_assessment — THE INTERPRETIVE CHANNEL, PER COUNTRY (P3 Lane A).
+#
+# CLONED FROM analyst_world_assessment.yaml, and the clone is the point: the two
+# channels are the SAME code path under the SAME kind, differing only in which
+# record they read and at which grain. Read that file's comments first — every
+# argument it makes for the world tier holds here unchanged.
+#
+# ── WHY THIS EXISTS ─────────────────────────────────────────────────────────
+# Since the 2026-09-04 composition demotion EVERY composition tier is an
+# ASSEMBLY. `country_composition` quotes ONE sentence — the BLUF lead span — from
+# each of its eight desk heads, byte-for-byte, under ordinals, with a closed
+# connective vocabulary; it writes no sentence of its own. D-5 retired the region
+# tier to a deterministic rollup. D-6 gave the WORLD assembly a voice.
+#
+# Nobody was left writing the cross-dimension per-country read: the read that
+# says what an energy finding and an escalation finding ON THE SAME DESK mean
+# together this week. That is the read a country board opens the product for, and
+# between 09-04 and this descriptor it did not exist anywhere in the system.
+#
+# ── why the SAME kind, again ────────────────────────────────────────────────
+# `identity.kind: meta_findings_synthesizer` makes the same four integrations
+# no-ops it made for world_assessment (spec §2.1b): the verify dispatch's kind
+# allowlist already admits this kind when the descriptor declares
+# `method.llm.verify`; the rubric is chosen from the PAYLOAD (`[[ref:N]]`
+# citations route to the composition branch); `judge_assessability.
+# JUDGE_SAMPLE_ALWAYS_DEFAULT` contains this kind so the Assessment is ALWAYS
+# judged, never sampled out; and `/api/v1/findings` filters kind='finding' and
+# takes analyst_id, so the reader serves it on day one. Nothing in
+# `runtime/dapr_actors.py` moves — that file is at its module ceiling with no
+# seam, and a clause there would have blocked this train exactly as it would
+# have blocked D-6's.
+#
+# ── THE ONE STRUCTURAL DIFFERENCE: this analyst is PER-TARGET ───────────────
+# `subscription.targets` is PRESENT below. `_cadence_targets` (dapr_actors.py)
+# keys the per-target-vs-global split PURELY on that block's presence — present
+# ⇒ one worker per matched target with `target_filter=<country target id>`;
+# absent ⇒ one global run. It is the same mechanism `analyst_country_composition.
+# yaml` documents, and the same predicate, so this channel's fan-out set is
+# exactly the set of desks that HAVE a country_composition head to read.
+#
+# That fan-out forced ONE code change, in `assessment_channel.read_assessment_
+# spine`: the spine read now honours `target_filter`. Without it all 32 workers
+# would read the newest `country_composition` row in the window — whichever
+# country composed last — and 31 of them would publish an interpretive read of
+# another country's record under their own target id. That is not a degraded
+# read, it is a mislabelled one, and no reader could see it. The world path
+# (no target_filter) is byte-identical: same SQL text, same four parameters.
+#
+# ── what the voice is HANDED here that it is not handed at the world tier ───
+# Each block's origin desk head IN FULL, byte-identical, as a `context_body`
+# span (`assembly_spans.SPAN_ROLE_CONTEXT_BODY`), rendered into the prompt under
+# "THE DESK READS IN FULL". The reason is the job: a cross-dimension argument
+# lives in the paragraphs a lead sentence opens, and eight lead sentences cannot
+# carry it. The span goes through the SAME construction gate as the quoted lead,
+# so it is PROVED byte-identical rather than asserted; it is never rendered into
+# the record's own body (the record still quotes one sentence per desk — the
+# demotion is untouched, and a golden test pins the body byte-for-byte); and it
+# enters the evidence map automatically, because `assessment_unsupported.
+# spine_span_text` joins a block's spans and the map is defined as what the voice
+# was handed. The WORLD tier carries no context span and is unchanged: a world
+# block's origin is itself a composition, so "the full body" there would hand
+# the world voice the country tier's rendered arithmetic as if it were evidence.
+#
+# ── the fence is the same fence ─────────────────────────────────────────────
+# `derived_from` is EXACTLY ONE element — this run's country_composition head id
+# — and that single-element array IS the enforcement of "input = the assembly
+# payload only". `build_assessment_prompt(payload)` still has the payload as its
+# only data argument (a signature test pins it), and an out-of-range ordinal
+# still RAISES rather than degrading to a reason code.
+#
+# ── state: draft, and what has to be true before it goes active ────────────
+# Same lifecycle call D-6 made, for the same class of reason plus one of its own:
+#   (a) LEGBA_COMPOSITION_ASSEMBLY must include country_composition, or every
+#       run reads a `regime: legacy` row and NOOPs with "No assembled record to
+#       assess";
+#   (b) this fan-out is ~32 runs per cycle against the world channel's 1, and
+#       every one of them is ALWAYS judged — the 33x judge spend D-6 named as
+#       the reason the country tier was deferred. It is a $0 core-plane call per
+#       the model policy below, but it is 32 of them twice a day plus their
+#       judge passes, and that is an operator's number to accept, not a
+#       builder's. `state: draft` registers the descriptor and creates NO live
+#       actor (no cadence reminder is ever registered), so the transition
+#       draft → configured → active is a lifecycle route call with a human at
+#       the other end and no deploy.
+
+identity:
+  id: country_assessment
+  name: Country Assessment — the interpretive channel, per country
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: meta_findings_synthesizer
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: country_assessment
+
+subscription:
+  # PRESENT `targets` block ⇒ per-COUNTRY analyst, one worker per matched desk
+  # with `target_filter=<country target id>`. The predicate is
+  # country_composition's OWN predicate, verbatim and deliberately: this channel
+  # reads that analyst's heads, so a wider set would fan out workers onto desks
+  # with no record to read (they would NOOP honestly, but they would still be
+  # scheduled runs), and a narrower one would leave a composed country voiceless.
+  targets:
+    predicate: 'has_tag("g20") or has_tag("watch")'
+    data_types: [finding]
+    time_window: 24h
+  other_analysts:
+    - id: country_composition
+      data_types: [finding]
+      # 24h, and this window is a FRESHNESS bound rather than the composition's
+      # own 336h ADMISSIBILITY HORIZON — the same deliberate difference D-6
+      # spells out one tier up. A composition admits each desk's NEWEST head
+      # however old, because a stale read is still the desk's current answer. An
+      # Assessment written over yesterday's record while today's exists is simply
+      # the wrong record: the reader has the new one on screen and the voice
+      # would be arguing about the old one. No record inside the window ⇒ no
+      # Assessment, and the actor NOOPs rather than publishing a read about
+      # nothing. On a country desk that NOOP is the common case on a quiet week,
+      # and it is the honest one.
+      time_window: 24h
+  substrate:
+    direct_queries: false        # reads via the kind's READ_SLICE, not ad-hoc SQL
+    # THE MARKER. READ_SLICE checks it FIRST and returns exactly one row: the
+    # newest non-superseded head of THIS analyst, for THIS run's target, carrying
+    # `data.data.assembly.schema = assembly.v1` AND `regime = assembly`, inside
+    # the window above. Without the marker a verify-declaring descriptor falls
+    # through to the per-country COMPOSITION branch and would read this desk's
+    # eight unit heads — which is the exact fence this channel exists to hold.
+    assessment_spine: country_composition
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  # Runtime dispatch is on identity.kind; method.kind only needs to be a valid
+  # enum, and llm_planner matches the single-turn chat_complete shape.
+  kind: llm_planner
+  prompt_module: "legba.prompts.meta_findings_synthesizer.v1"
+  # No method.bounded_question — same refusal as country_composition, for the
+  # same reason one floor up: this channel does not answer a bounded question,
+  # it argues about a record that carries eight of them. The fallback
+  # (identity.name) stamps question_source "fallback_desk_name", an honest
+  # absence.
+  #
+  # No method.system_prompt either: the channel's prose doctrine is a CODE
+  # constant (`assessment_prompts.COUNTRY_ASSESSMENT_SYSTEM`, selected from the
+  # PAYLOAD's tier rather than from this descriptor), so a voice change is a
+  # deploy and a diff rather than a descriptor PUT no test can see.
+  llm:
+    # Fleet-wide 1.0 per the 2026-07-24 sampling audit.
+    temperature: 1.0
+    # MODEL POLICY (operator): the CORE plane via a stack_ref ($0). NEVER a
+    # hardcoded model — a stack_ref keeps a later switch a one-line PUT.
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # THE VERIFY OPT-IN, and its PRESENCE is what the dispatch keys on. No new
+    # rubric is needed: the channel mints one citation per cited spine ordinal
+    # whose `evidence_text` is that block's QUOTED SPAN **plus the desk read the
+    # span was cut from** (the country tier's context span) **plus the record's
+    # own arithmetic** — so `supported/checkable` is measured against everything
+    # the voice was handed, which is fidelity-to-spine.
+    #
+    # OWN POPULATION: this analyst_id is its own key, and it must never pool
+    # with world_assessment's. They read different records at different grains
+    # under different prompts (`country_assessment_prompt.v1` vs
+    # `assessment_prompt.v3`); one number over both would describe neither.
+    verify:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 768            # the kind's DEFAULT_MAX_TOKENS
+  budget_tokens_per_day: 0
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # 30 MINUTES AFTER THE COUNTRY COMPOSITION (11:30 / 23:30 UTC), so the record
+  # this reads is the one this cycle just wrote. Same offset D-6 chose over the
+  # world composition (:00 → :15); a wider gap buys nothing because the
+  # composition's own fan-out is done well inside 30 minutes, and a narrower one
+  # risks reading the PREVIOUS cycle's head on a slow desk — which is not a
+  # failure the reader can see, it is yesterday's argument printed as today's.
+  #
+  # The tower's stagger, with this floor added:
+  #   country compose :30 → COUNTRY ASSESSMENT :00 → region :45 → world :00 →
+  #   world assessment :15.
+  # This does share the hour boundary with the world composition, and that is
+  # tolerable rather than ideal: the two read different rows, neither feeds the
+  # other, and the country assessment feeds nothing downstream at all (the
+  # region tier reads country_composition, never this). If the shared slot ever
+  # shows up as contention, the next-cheapest move is :05 — not an earlier
+  # slot, which would race the composition it reads.
+  fallback_schedule: "0 0,12 * * *"
+  # 11h — below the 12h interval, stamped per-(analyst, target) at completion. A
+  # cooldown == the 12h interval lands past the next fire and silently halves
+  # each country's cadence (12h → 24h). 11h keeps a 1h margin and matches every
+  # other floor of the tower.
+  cooldown_seconds: 39600
+
+# No `outputs` binding and no `action_packs`. The A2A skill surface belongs to
+# the reads that ARE the product's answers; this channel publishes through the
+# default FINDING write and is read by analyst_id. And no escalate grant: the
+# composition one floor down already holds it over the SAME target with the same
+# evidence, so a grant here would let one cycle's evidence fire the alert gate
+# twice.
+outputs: []

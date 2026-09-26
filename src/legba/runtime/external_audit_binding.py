@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Wire the ``web_access`` action pack onto the ``standing_auditor`` sub-handler.
+"""Wire the ``web_access`` action pack onto a DETERMINISTIC sub-handler.
+
+Two callers today: ``standing_auditor`` (D5) and ``desk_reference`` (A-1),
+each under its own ``deps.extras`` key. Everything below was written for the
+first and applies unchanged to the second.
 
 WHY THIS IS A MODULE AND NOT TEN LINES IN THE BUILDER. ``dapr_host`` already
 builds a ``web_access`` :class:`AgencyToolBinding`, but only for an in-actor
@@ -26,6 +30,18 @@ running target, so the binding runs under ``GLOBAL_SCOPE`` with
 (``actor_output_emit._gather_binding_for_target``, the journal_assessor and
 corpus_researcher precedent).
 
+IT ALSO RESOLVES THE SEARCH PROVIDER (#85). The binding is not complete without
+one: the pack's ``web_search`` ToolSpec declares ``config.provider ->
+search.searxng.local``, and rung 1 of the ladder only fires if something turns
+that ref into a configured handler. This module used to COPY that handler off
+``AGENCY_HOLDER["tool_context"]`` instead — a context ``source_first_runtime``
+builds with ``queue`` + ``emit`` and nothing else — so the auditor ran for weeks
+with ``search=None``, every ``web_search`` failing ``search_provider_unresolved``
+and every verdict ``UNCHECKED``. Resolution now goes through
+:mod:`legba.runtime.search_handler_factory`, the SAME resolver ``dapr_host``'s
+GATHER path uses, at deps-build time (so a late registration or an operator
+re-point lands on the actor's next build, not the next container recreate).
+
 DEGRADE-NOT-BREAK, WITH ONE EXCEPTION IN SPIRIT. Every failure here returns
 ``deps`` unmodified and logs at WARNING (a missing agency plane, an unregistered
 pack, a registry hiccup). It does NOT fail deps-build. That looks like the
@@ -34,6 +50,12 @@ run a single search without the binding, so the gap surfaces LOUDLY one layer
 down as a heartbeat row carrying ``degraded_reason="no web_access binding
 wired"`` — an observable, operator-actionable state that outlives the log line a
 build failure would produce.
+
+An UNRESOLVABLE search ref is deliberately NOT in that class: the pack binding is
+still returned, with ``search=None`` and the ``search_route`` kept, because
+``web_search`` needs the route to name the gap. The auditor then reports
+``UNCHECKED`` verdicts and an unhealthy heartbeat — honest, and never an empty
+result set masquerading as "nothing found".
 """
 
 from __future__ import annotations
@@ -50,6 +72,7 @@ async def wire_standing_auditor_web_pack(
     deps: Any,
     *,
     registry_client: Any,
+    extra_key: str | None = None,
 ) -> Any:
     """Merge a ``web_access`` :class:`AgencyToolBinding` into ``deps.extras``.
 
@@ -57,16 +80,29 @@ async def wire_standing_auditor_web_pack(
     function-local for the same reason the host's are: the agency plane pulls in
     the whole action-pack stack, and a slim image that never binds an analyst
     must not pay for it at import time.
+
+    ``extra_key`` selects which ``deps.extras`` slot the binding lands in and
+    defaults to the standing auditor's. A-1 (``desk_reference``) is the second
+    deterministic sub-handler that wants the PACK rather than the planner loop,
+    and it wants it under its own key so neither handler can ever be handed the
+    other's binding — every argument in this module's banner applies to it
+    unchanged, so it reuses this wiring rather than growing a copy of it.
     """
     from ..data.analysts.agency.binding import AgencyToolBinding, fetch_action_pack
+    from ..data.analysts.agency.search_cost import PackInvocationCostLedger
     from ..data.analysts.agency.tools import ToolContext
     from ..data.analysts.agency.web_tools import WEB_ACCESS_PACK_ID
     from ..data.analysts.deterministic_handlers.standing_auditor import (
         WEB_BINDING_DEPS_EXTRA_KEY,
     )
     from ..data.schemas.action_pack import ActionPackRef
+    from .search_handler_factory import (
+        resolve_pack_search_binding,
+        resolve_pack_search_fallback_bindings,
+    )
     from .source_first_runtime import AGENCY_HOLDER
 
+    key = extra_key or WEB_BINDING_DEPS_EXTRA_KEY
     analyst_id = getattr(getattr(descriptor, "identity", None), "id", "?")
 
     # The GRANT leg. A descriptor that does not declare the pack gets nothing —
@@ -111,20 +147,75 @@ async def wire_standing_auditor_web_pack(
         )
         return deps
 
+    # #85 — RESOLVE the rung-1 provider. This used to read `base_ctx.search`
+    # off the process-wide bring-up ToolContext, on the belief that the host had
+    # already bound a provider there. It never had: `source_first_runtime` builds
+    # that context with `queue` + `emit` and nothing else, and the ONLY resolution
+    # in the runtime lived inside `dapr_host`'s in-actor GATHER branch, which a
+    # `deterministic` sub-handler never enters. So `search` was structurally None
+    # on every auditor run while the pack's `config.provider` ref still RESOLVED
+    # — every search took web_search's declared-but-unbound branch and failed
+    # `search_provider_unresolved`, leaving every verdict UNCHECKED and the
+    # heartbeat honestly `healthy:false`.
+    #
+    # Resolving HERE (not at bring-up) is deliberate and matches the GATHER
+    # path: this runs on every analyst deps build, so a component registered
+    # after boot — or an operator PUT repointing the ref — takes effect on the
+    # actor's next build instead of the next container recreate. The shared
+    # factory's cache is what keeps the "ONE provider, ONE control-probe budget,
+    # ONE deferral ladder" promise real: the GATHER path resolves through the
+    # same cache, so both get the same handler instance.
+    #
+    # Rung discipline is unchanged: no `provider` key on the ToolSpec ⇒ no route
+    # ⇒ nothing bound ⇒ web_search falls through to the rung-3 operator-pinned
+    # endpoint. A DECLARED route we could not build binds None and web_search
+    # fails LOUDLY — never an empty result set.
+    search_handler, search_route = await resolve_pack_search_binding(
+        pack,
+        registry_client=registry_client,
+        secrets_resolve=getattr(deps, "secrets_resolve", None),
+    )
+    # Rung 2 — a provider the runtime bound with NO descriptor ref still wins
+    # when the pack declares none, so the bring-up context stays a real source.
+    if search_handler is None and search_route is None:
+        search_handler = getattr(base_ctx, "search", None)
+        search_route = getattr(base_ctx, "search_route", None)
+    # R-C — the rungs BELOW rung 0. Empty unless the ToolSpec declares
+    # `fallback_providers`, so this changes nothing for the shipped
+    # searxng-only pack; when a paid rung IS declared, resolving it here (not
+    # at bring-up) means an operator PUT that adds it takes effect on the
+    # auditor's next deps build, exactly like rung 0.
+    search_fallbacks = await resolve_pack_search_fallback_bindings(
+        pack,
+        registry_client=registry_client,
+        secrets_resolve=getattr(deps, "secrets_resolve", None),
+    )
+
     binding = AgencyToolBinding(
         agency=agency,
         pack=pack,
         pg_pool=pool,
-        # The search PROVIDER + its liveness cache are carried straight off the
-        # process-wide tool context the host assembled at bring-up, so this
-        # analyst shares ONE provider, ONE control-probe budget and ONE deferral
-        # ladder with every other search caller — never its own second stack.
+        # The liveness cache is carried off the process-wide tool context so this
+        # analyst shares ONE control-probe budget and ONE deferral ladder with
+        # every other search caller — never its own second stack. (None here is
+        # not a gap: web_tools falls back to the process-wide DEFAULT_LIVENESS_CACHE,
+        # which is the same single budget.)
         tool_context=ToolContext(
             queue=getattr(base_ctx, "queue", None),
             emit=getattr(base_ctx, "emit", None),
-            search=getattr(base_ctx, "search", None),
-            search_route=getattr(base_ctx, "search_route", None),
+            search=search_handler,
+            search_route=search_route,
             search_liveness=getattr(base_ctx, "search_liveness", None),
+            search_fallbacks=search_fallbacks,
+            # R-C — the day-spend reader a METERED rung must clear before it
+            # may issue a query. It reads the SAME `action_pack_invocations`
+            # rows the governor caps on, so the pre-spend check and the
+            # post-call settle close over one number. Bound unconditionally:
+            # it costs one pool reference, and binding it only when a paid rung
+            # happens to be declared is exactly how a capability ends up
+            # missing on the run that needs it.
+            search_cost_ledger=PackInvocationCostLedger(pool),
+            search_budget_account=str(analyst_id),
         ),
         analyst_grants=grants,
         # META: there is no running target, so there is no
@@ -141,12 +232,11 @@ async def wire_standing_auditor_web_pack(
         requested_by=f"analyst::{analyst_id}",
         budget_account=str(analyst_id),
     )
-    merged = {**dict(getattr(deps, "extras", None) or {}),
-              WEB_BINDING_DEPS_EXTRA_KEY: binding}
+    merged = {**dict(getattr(deps, "extras", None) or {}), key: binding}
     logger.info(
-        "external_audit_binding.wired analyst=%r pack=%s search_bound=%s",
+        "external_audit_binding.wired analyst=%r pack=%s route=%s search_bound=%s",
         analyst_id, WEB_ACCESS_PACK_ID,
-        getattr(base_ctx, "search", None) is not None,
+        getattr(search_route, "component_id", None), search_handler is not None,
     )
     return _dc_replace(deps, extras=merged)
 

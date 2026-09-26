@@ -15,8 +15,10 @@ import { useQuery } from '@tanstack/react-query'
 import { apiGet } from '@/lib/api'
 import { resolveCountry } from '@/lib/countryGeo'
 import type {
+  EventLifecycle,
   Severity,
   SituationLifecycle,
+  WorldEvent,
   WorldFinding,
   WorldSignal,
   WorldSituation,
@@ -87,6 +89,23 @@ interface SituationRow {
   [k: string]: unknown
 }
 
+/** V3/P6 — the `/v3/events` row (events_api.EventRow). */
+interface EventRow {
+  id: string
+  title: string
+  lifecycle_state: string
+  severity?: string | null
+  category?: string | null
+  target_id?: string | null
+  /** ISO2 codes (events.geo). */
+  geo?: string[] | null
+  geo_lat?: number | null
+  geo_lon?: number | null
+  time_start?: string | null
+  time_end?: string | null
+  produced_at?: string | null
+}
+
 interface Page<R> {
   data: R[]
   next_cursor: string | null
@@ -125,6 +144,22 @@ function asLifecycle(v: unknown): SituationLifecycle {
     : 'active'
 }
 
+/** V3/P6 — the event five-state vocabulary; an unknown value coerces to
+ *  `active` (the ledger-stamped event is live unless it says resolved). */
+const EVENT_LIFECYCLES: ReadonlySet<string> = new Set<EventLifecycle>([
+  'emerging',
+  'developing',
+  'active',
+  'evolving',
+  'resolved',
+])
+
+function asEventLifecycle(v: unknown): EventLifecycle {
+  return typeof v === 'string' && EVENT_LIFECYCLES.has(v)
+    ? (v as EventLifecycle)
+    : 'active'
+}
+
 /**
  * Parse an ISO timestamp to epoch ms; falls back to `now` so a malformed/absent
  * timestamp still places inside the default window rather than at epoch 0.
@@ -146,7 +181,7 @@ function centroidOf(countries: string[]): { lat: number; lon: number } | null {
 
 /** Country targets encode their ISO2 in the id (country_g20_us → US). */
 function targetCountry(targetId: string | null): string | null {
-  const m = targetId?.match(/country_g20_([a-z]{2})/i)
+  const m = targetId?.match(/country_(?:g20|watch)_([a-z]{2})/i) // 2026-09-21: watch desks (IL, UA, SD, IR, KP …) were never placed — the regex knew only g20
   return m ? m[1].toUpperCase() : null
 }
 
@@ -309,4 +344,57 @@ export function useWorldSituations(): UseWorldSituationsResult {
     return { ...s, lat: fix ? fix.lat : null, lon: fix ? fix.lon : null }
   })
   return { situations, isLoading: q.isLoading }
+}
+
+// ---------------------------------------------------------------------------
+// Events (V3/P6) — bounded occurrences, geo from events.geo_lat/geo_lon ONLY.
+// ---------------------------------------------------------------------------
+
+const EVENT_LIMIT = 500
+
+async function fetchWorldEvents(): Promise<WorldEvent[]> {
+  const page: Page<EventRow> = await apiGet<Page<EventRow>>(
+    `/v3/events?limit=${EVENT_LIMIT}`,
+  )
+  const out: WorldEvent[] = []
+  for (const row of page.data) {
+    // NO centroid fallback (spec §6.3 — deliberate): an event's placement is
+    // the coordinate its writers stamped; a country-only event does not
+    // claim a precision it never asserted and simply does not place.
+    if (
+      typeof row.geo_lat !== 'number' ||
+      typeof row.geo_lon !== 'number' ||
+      Number.isNaN(row.geo_lat) ||
+      Number.isNaN(row.geo_lon)
+    ) {
+      continue
+    }
+    out.push({
+      id: row.id,
+      lat: row.geo_lat,
+      lon: row.geo_lon,
+      countries: row.geo ?? [],
+      severity: asSeverity(row.severity),
+      lifecycle: asEventLifecycle(row.lifecycle_state),
+      targetId: row.target_id ?? null,
+      ts: parseTs(row.time_start ?? row.produced_at),
+      title: row.title ?? '(untitled)',
+    })
+  }
+  return out
+}
+
+export interface UseWorldEventsResult {
+  events: WorldEvent[]
+  isLoading: boolean
+}
+
+export function useWorldEvents(): UseWorldEventsResult {
+  const q = useQuery<WorldEvent[]>({
+    queryKey: ['world-events'],
+    queryFn: fetchWorldEvents,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  })
+  return { events: q.data ?? [], isLoading: q.isLoading }
 }

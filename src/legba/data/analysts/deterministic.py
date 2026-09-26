@@ -73,13 +73,18 @@ from .deterministic_handlers import (
     claim_watch,
     collection_gap,
     composition_lineage_sweep,
+    contrary_evidence_pass,
     corpus_indexer,
     corpus_retention,
+    correctness_grader,
     cross_source_coalesce,
     cross_source_dedup,
     desk_baseline,
+    desk_reference,
     entity_gc,
     entity_resolution,
+    event_clustering,
+    event_reconciler,
     evidence_archiver,
     fact_contention_arbiter,
     fact_decay,
@@ -87,8 +92,11 @@ from .deterministic_handlers import (
     finding_supersession,
     forecast_scoreboard,
     geo_convergence_scan,
+    graph_projector,
     hypothesis_lifecycle,
     indicator_tracker,
+    inquiry_yield,
+    layer_divergence,
     situation_clustering,
     thematic_proposal,
     graph_mining,
@@ -96,8 +104,11 @@ from .deterministic_handlers import (
     narrative_mapper,
     nexus_decay,
     proposed_edge_governance,
+    receipt_anchor,
     reenrich_ner,
     reenrich_translation,
+    reference_builder,
+    research_measurement,
     scorecard_producer,
     signal_embedder,
     signal_summarizer,
@@ -167,6 +178,16 @@ OUTPUT_KIND_BY_SUB_HANDLER: dict[str, object] = {
     # warning signposts a duty officer reads); a no-flip sweep is suppressed via
     # the run's force_trace_only (NOT this map — the map is the always-on kind).
     "indicator_tracker": OutputKind.FINDING,
+    # Program 6 L2 layer_divergence — per target country, the CHANGE in that
+    # country's own layer-to-layer divergence (official vs social digest;
+    # domestic vs foreign press; official vs public data), measured against
+    # the country's OWN rolling baseline and fired only on a two-day move. A
+    # user-facing analytical product: a duty officer reads "the official layer
+    # has been running two MADs below its own fortnight for two days" the same
+    # way they read a fired indicator. A run that fires nothing is suppressed
+    # via force_trace_only (NOT this map — the map is the always-on kind), and
+    # its receipt still lands in analyst_traces.
+    "layer_divergence": OutputKind.FINDING,
     # S3-T3 collection_gap — monthly aggregation of the scorecard
     # insufficient-evidence signal into a "collection requirements" FINDING
     # (which desk×dimension cells are starved + the source classes that would
@@ -224,6 +245,55 @@ OUTPUT_KIND_BY_SUB_HANDLER: dict[str, object] = {
     # Brier, no skill, no prediction-as-claim — a falsifiable prior the desk LLM
     # reads + the P1-3 baseline_deviation trigger can consume, never a forecast.
     "desk_baseline": OutputKind.FINDING,
+    # A-1 ATTENTION MEASUREMENT — the out-of-plane daily desk reference plus the
+    # two diffs it feeds (collection_recall / attention_rate) and the validity
+    # harness that grades them. The RETURNED summary IS the measurement product
+    # (the calibration_tracking / fact_decay_scan / composition_lineage_sweep
+    # precedent): a counting-not-repairing GAUGE carrying data.collection_gauge /
+    # data.attention_gauge / data.instrument, every ratio None-not-0.0 on an
+    # empty denominator. So it stays a genuine FINDING — which keeps this
+    # handler in the FINDING-emitters set the STRUCTURAL_VERIFY_EXEMPT_ANALYSTS
+    # drift guard asserts equality against. It NEVER alerts and NEVER dispatches:
+    # A-4 (the reference_gap research side-write) and A-5 (the attention_gap
+    # trigger class) are separate trains, and A-5 is gated on the harness.
+    "desk_reference": OutputKind.FINDING,
+    # G1 correctness_grader — THE PER-UNIT CORRECTNESS INSTRUMENT. A genuine
+    # FINDING on the desk_reference precedent: a counting-not-repairing receipt
+    # carrying data.per_target (each unit's correctness_share BESIDE its
+    # coverage_share, both None-not-0.0 on an empty denominator) plus the
+    # calibration row it ran under and the ceiling in force. The NUMBERS
+    # themselves are side-written to unit_correctness / unit_correctness_claims
+    # (migration 0196); this receipt is the sweep's own watchable heartbeat, and
+    # it NEVER alerts and NEVER gates — the composition gate is track G2.
+    "correctness_grader": OutputKind.FINDING,
+    # R2 reference_builder — THE REFERENCE UNIT. A genuine FINDING on the
+    # correctness_grader precedent: a counting-not-repairing receipt carrying
+    # data.per_target (each target's verified-development count beside the
+    # candidates that failed each fence, its per-dimension counts and its thin
+    # set) plus the cost the build spent on the core plane. The REFERENCES
+    # themselves are side-written to unit_references (migration 0196, G1's
+    # table, which G1 only reads); this receipt is the lane's own watchable
+    # heartbeat, and it NEVER alerts and NEVER gates.
+    "reference_builder": OutputKind.FINDING,
+    # R-D the outbound-research program's three counters (NOVELTY /
+    # CORROBORATION / CONSEQUENCE, RESEARCH_PROGRAM_SPEC §4). The counters ARE
+    # the product — §4.4 rules them onto kind='finding' +
+    # analyst_id='research_measurement' explicitly, on the calibration_tracking
+    # precedent, so that /api/v1/findings?analyst_id=research_measurement
+    # serves them with no API edit and NO new OutputKind is minted. A
+    # measurement that only reached analyst_traces would be a program watching
+    # itself in private, which is the exact failure §4 exists to prevent.
+    "research_measurement": OutputKind.FINDING,
+    # H12 inquiry_yield — Program 5 lane 1's weekly ledger instrument
+    # (PROGRAM5_INQUIRY_DESIGN_2026-09-24.md §4). The per-descriptor counters
+    # ARE the product — there is no side table this receipt summarizes (unlike
+    # receipt_anchor / forecast_scoreboard, which are TRACE_ONLY because their
+    # real product is a dedicated ledger row) — so it stays a genuine FINDING,
+    # on the calibration_tracking / research_measurement precedent. It is also
+    # required here: STRUCTURAL_VERIFY_EXEMPT_ANALYSTS (kinds.py) must equal
+    # the FINDING-emitting deterministic sub-handlers, and a pure-arithmetic
+    # weekly count has no model prose for the faithfulness verify pass to grade.
+    "inquiry_yield": OutputKind.FINDING,
     # Signals TTL purge — NOT in the operator-confirmed trace-only list;
     # disabled by default (ttl_days<=0). Left FINDING (unchanged). C2 "one
     # janitor" (2026-07-28 coherence pass, migration 0109): the handler now
@@ -254,6 +324,12 @@ OUTPUT_KIND_BY_SUB_HANDLER: dict[str, object] = {
     # kind=finding would put an audit receipt into the finding stream the audit
     # is supposed to be grading.
     "standing_auditor": TRACE_ONLY,
+    # contrary_evidence_pass (7a) — the REAL product is side-written: one
+    # claim_contentions row per material claim. The returned summary is a
+    # per-run RECEIPT already audited in analyst_traces and mirrored into the
+    # durable heartbeat row, and emitting it AGAIN as a kind=finding would put
+    # a retrieval receipt into the finding stream the pass exists to contend.
+    "contrary_evidence_pass": TRACE_ONLY,
     # L-203 migrated maintenance modules — pure substrate maintenance, no
     # analytical finding: GC of orphaned entities, canonical entity merges,
     # temporal fact-decay stamps, nexus-decay stamps.
@@ -312,6 +388,16 @@ OUTPUT_KIND_BY_SUB_HANDLER: dict[str, object] = {
     # P2 cross-source semantic/temporal coalesce — substrate-wide near-dup
     # linker; the coalesce counts live in the trace.
     "cross_source_coalesce": TRACE_ONLY,
+    # V3/P1 event plane — the real products are side-written events, links,
+    # lifecycle ledger rows and event_edges; the per-run funnel lives in the
+    # trace. Both remain inert while the descriptor is draft / LEGBA_EVENTS off.
+    "event_clustering": TRACE_ONLY,
+    "event_reconciler": TRACE_ONLY,
+    # V3/P4b — the cross-layer graph projection: a whole-rebuild side-write
+    # into graph_arcs (+ graph_arcs_meta receipt); the returned summary is the
+    # per-build receipt (arc_count / source_counts / build_seconds), audited
+    # in analyst_traces, never a finding on a trust surface.
+    "graph_projector": TRACE_ONLY,
     # P-FS finding-level dedup / supersession — stamps supersession on existing
     # findings; the superseded counts live in the trace.
     "finding_supersession": TRACE_ONLY,
@@ -355,6 +441,11 @@ OUTPUT_KIND_BY_SUB_HANDLER: dict[str, object] = {
     # the STRUCTURAL_VERIFY_EXEMPT_ANALYSTS drift guard asserts equality
     # against.
     "claim_watch": TRACE_ONLY,
+    # H13 receipt_anchor — the REAL product is the side-written
+    # `receipt_anchors` rows (day × calendar Merkle-root OpenTimestamps
+    # attestations); the returned summary is a per-run counts receipt.
+    # TRACE_ONLY so the anchor is never a finding on a trust surface.
+    "receipt_anchor": TRACE_ONLY,
 }
 
 # READ_SLICE defaults to the signals reader — graph_mining + anomaly +
@@ -391,6 +482,14 @@ SUB_HANDLERS: dict[str, Any] = {
     # the faithfulness one) plus a heartbeat row that makes the auditor itself
     # watchable.
     "standing_auditor": standing_auditor.handle,
+    # 7a CONTRARY-EVIDENCE PASS — the only organ in the fleet that goes looking
+    # for opposition. Daily, it takes the auditor's own material claims,
+    # formulates ONE counter-query each (R2's polarity negation where it
+    # applies, else one bounded core-plane call that may return a query and
+    # never a verdict), runs it on the FREE rung, fetches the hits through the
+    # auditor's fences, and writes a claim_contentions row carrying a stance
+    # derived in code. No model is ever asked whether a claim is true.
+    "contrary_evidence_pass": contrary_evidence_pass.handle,
     # L-203 migrated maintenance modules
     "adversarial_signals": adversarial_signals.handle,
     "entity_gc": entity_gc.handle,
@@ -447,6 +546,14 @@ SUB_HANDLERS: dict[str, Any] = {
     # P2 cross-source semantic/temporal coalesce (review data-integrity) — the
     # substrate-wide near-dup linker (reuses Dedupe4TierHandler tier-3/4).
     "cross_source_coalesce": cross_source_coalesce.handle,
+    # V3/P1 — bounded event clustering over canonical signals + tower
+    # candidates, then lifecycle maintenance through the append-only ledger.
+    "event_clustering": event_clustering.handle,
+    # V3/P1 — deterministic correlated_with / evolves_from event-edge writer.
+    "event_reconciler": event_reconciler.handle,
+    # V3/P4b — whole-rebuild graph_arcs projection (INSERT...SELECT per source
+    # into graph_arcs_new, transactional rename swap). No incremental path.
+    "graph_projector": graph_projector.handle,
     # P-FS finding-level dedup / supersession (PIVOT_BUILD_PLAN §12, W3)
     "finding_supersession": finding_supersession.handle,
     # Situation clustering — materializes `situations` from stamped signatures.
@@ -458,6 +565,13 @@ SUB_HANDLERS: dict[str, Any] = {
     # I&W indicators per (target_id, source unit analyst_id); emits a summary
     # finding on status flips, trace-only on a no-flip/unchanged sweep.
     "indicator_tracker": indicator_tracker.handle,
+    # Program 6 L2 — the divergence-baseline unit. Pure arithmetic over the
+    # loaded layer map (migration 0214) + the signal counts it implies: folded
+    # per-layer daily counts, a rolling median/MAD baseline per layer pair, a
+    # finding on a two-day |z| move, and a receipt that names WHY nothing
+    # fired on a quiet day. No LLM, no new table — the series rides
+    # analyst_outputs.data (the indicator_tracker read).
+    "layer_divergence": layer_divergence.handle,
     # S3-T3 collection_gap — monthly deterministic aggregation of the scorecard
     # insufficient-evidence signal per desk×dimension into a "collection
     # requirements" finding (starved cells + the plausible feed source classes);
@@ -511,6 +625,22 @@ SUB_HANDLERS: dict[str, Any] = {
     # bearing_edges + (for questions tracing FORWARD over output_consumption to
     # live products) review_flags. Zero LLM; never mutates any output.
     "claim_watch": claim_watch.handle,
+    # H13 receipt_anchor — daily external timestamp on the receipt chain:
+    # Merkle root over the latest analyst_traces.receipt_hash per analyst,
+    # POSTed to the OpenTimestamps public calendars; side-writes one
+    # `receipt_anchors` row per (day, calendar) ('submitted'/'pending',
+    # retried next tick). Reads + writes via deps.pg_pool.
+    "receipt_anchor": receipt_anchor.handle,
+    # H12 inquiry_yield — Program 5 lane 1's weekly instrument over the
+    # inquiry_ledger (migration 0215): per descriptor, hypotheses
+    # opened/confirmed/refuted/expired, questions dispatched/answered,
+    # observations a desk later carried forward ("anticipated" — its
+    # close-time cited_refs overlap a LATER finding's derived_from), and
+    # blind spots (a dispatched, still-open question whose target had no
+    # read this cycle). Pure arithmetic over already-materialized rows; no
+    # LLM. Published as a genuine FINDING (never TRACE_ONLY — the receipt IS
+    # the product, there is no side table it summarizes) and never a gate.
+    "inquiry_yield": inquiry_yield.handle,
     # A7 geographic convergence detector — ~30-min LLM-free scan that bins the
     # rolling 24h of geolocated signals (1°×1° cells for point-trustworthy
     # coordinates; country bins for ISO2-tagged signals) and fires a medium
@@ -549,6 +679,52 @@ SUB_HANDLERS: dict[str, Any] = {
     # neighbour-desk spillover), into desk_baselines (0103). Returns an honest
     # distribution FINDING; NEVER a forecast (no Brier / skill / prediction).
     "desk_baseline": desk_baseline.handle,
+    # A-1 desk_reference — THE OUT-OF-PLANE DAILY DESK REFERENCE. Daily META
+    # sweep: per (read-set target x bounded unit) it runs ONE code-built
+    # web_search through the web_access pack, hands a THIRD-family model (the
+    # descriptor binds llm.judge.cerebras_gemma4_31b — not the writer's family,
+    # not the judge's) the unit's own method.bounded_question plus those results
+    # and NO substrate row, and writes the answer to unit_reference_labels
+    # (mig 0057 + 0191). Then it runs both diffs ($0, no LLM) and publishes the
+    # gauge. Flag LEGBA_DESK_REFERENCE_ENABLED, default OFF: off, the handler
+    # writes nothing at all.
+    "desk_reference": desk_reference.handle,
+    # G1 correctness_grader — PROGRAM 1'S INSTRUMENT, AS A JOB. Per (country
+    # target with a live unit_references row, as-of stamp): freeze the desk +
+    # composition heads, segment with the SHIPPED segmenter, build ONE
+    # byte-identical leak-scanned packet against the reference, refuse unless a
+    # passing grader_calibrations row covers this rubric sha and these model
+    # ids, grade with F0 ($0 core plane) on every claim and F2/F3 only on the
+    # claims F0 did not call `silent` and only while
+    # LEGBA_GRADER_DAILY_CEILING_USD allows (default $0 = never), adjudicate
+    # >=2 of 3 else `split`, and write the unit row + its per-claim ledger.
+    # Flag LEGBA_CORRECTNESS_GRADER_ENABLED, default OFF: off, it writes
+    # nothing at all.
+    "correctness_grader": correctness_grader.handle,
+    # R2 reference_builder — THE REFERENCE UNIT (docs/SEAMS.md #55 closed).
+    # Per tick: resolve the live roster (targets whose dimension desks have
+    # produced recently), take the SINGLE most overdue one, and build its
+    # 14-day reference on the $0 core plane through the web_access pack —
+    # searching under a Tier 1-2 discovery allowlist, fetching under a
+    # 2-failure domain blocklist, forcing a NOTE turn after every fetch,
+    # archiving every page content-addressed, then DROPPING every committed
+    # development that cites an unfetched URL, carries no machine-readable
+    # in-window publish date, or whose decisive span is not an exact substring
+    # of the archived text. Dimensions left with fewer than two survivors are
+    # written to thin_dimensions, which the grader reads. Flag
+    # LEGBA_REFERENCE_BUILDER_ENABLED, default OFF: off, it does nothing at all.
+    "reference_builder": reference_builder.handle,
+    # R-D MEASUREMENT — the outbound-research program's three counters
+    # (RESEARCH_PROGRAM_SPEC_2026-09-05 §4). Daily LLM-free sweep over the
+    # research signals (`retrieval_origin LIKE 'web_search:%'`, the seam
+    # migration 0112 built and nothing has ever written) computing NOVELTY from
+    # R-A's write-time stamp, CORROBORATION over a matured 7-day forward window
+    # against NON-research rows, and the CONSEQUENCE reach ladder (cited by
+    # anything -> cited by a DESK head -> that head quoted into a composition).
+    # A GAUGE: it COUNTS + NAMES and repairs nothing — no ceiling lift, no
+    # sidecar, no UPDATE. Refuses loud without a pool; publishes every rate
+    # beside its n and honest-null (with a reason) below gate G9's floor.
+    "research_measurement": research_measurement.handle,
 }
 
 

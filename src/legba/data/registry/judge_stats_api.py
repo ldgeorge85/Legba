@@ -94,6 +94,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
+from ..provenance.judge_transport import JUDGE_STATUS_PARTIAL
 from .api import RegistryAPIDeps, require_bearer
 
 logger = logging.getLogger(__name__)
@@ -217,7 +218,20 @@ WITH {_JUDGE_CALLS_CTE},
                    o.data->'data'->'verification'->>'judge_pipeline_version',
                    '{SENTINEL_UNKNOWN_STATUS}') AS pipeline_version,
                (o.data->'data'->'verification'->>'faithfulness_score')::float8
-                   AS faithfulness
+                   AS faithfulness,
+               -- H3 (2026-09-25/1) — the alignment audit. Absent on every row
+               -- written before this stamp (and on every deterministic /
+               -- unsampled row, which never called the judge): coalesced to 0,
+               -- never guessed, so a legacy row cannot inflate either share.
+               coalesce(
+                   (o.data->'data'->'verification'->>'aligned_by_id')::int, 0)
+                   AS aligned_by_id,
+               coalesce(
+                   (o.data->'data'->'verification'->>'aligned_positionally')::int, 0)
+                   AS aligned_positionally,
+               (coalesce(
+                   (o.data->'data'->'verification'->>'miscount_claims')::int, 0)
+                   <> 0)::int AS miscounted
           FROM public.analyst_outputs o
          WHERE o.kind = 'critique'
            AND o.title LIKE $3::text
@@ -230,7 +244,10 @@ SELECT crit.day                                        AS day,
        crit.pipeline_version                           AS pipeline_version,
        count(*)::int                                   AS n,
        count(crit.faithfulness)::int                   AS faithfulness_n,
-       sum(crit.faithfulness)::float8                  AS faithfulness_sum
+       sum(crit.faithfulness)::float8                  AS faithfulness_sum,
+       sum(crit.aligned_by_id)::int                    AS aligned_by_id,
+       sum(crit.aligned_positionally)::int             AS aligned_positionally,
+       sum(crit.miscounted)::int                       AS miscount_n
   FROM crit
   LEFT JOIN run_provider rp ON rp.run_id = crit.run_id
  GROUP BY 1, 2, 3, 4
@@ -285,6 +302,13 @@ class JudgeStatsCell(BaseModel):
     n: int = 0
     faithfulness_n: int = 0
     faithfulness_mean: Optional[float] = None
+    #: H3 (2026-09-25/1) — the raw alignment-audit counts, summed over this
+    #: cell's rows. Rates over these span STATUS (see `positional_share` /
+    #: `miscount_rate` on the rollups below, where a cell's fixed status would
+    #: make a rate here either trivial or undefined) so they live one level up.
+    aligned_by_id: int = 0
+    aligned_positionally: int = 0
+    miscount_n: int = 0
 
 
 class JudgeStatsProvider(BaseModel):
@@ -302,6 +326,16 @@ class JudgeStatsProvider(BaseModel):
     adjudicated_share: Optional[float] = None
     faithfulness_n: int = 0
     faithfulness_mean: Optional[float] = None
+    #: H3 (2026-09-25/1) — the share of this provider's judge-graded ledger
+    #: rows the id arm aligned by POSITION rather than by `claim_index`. Falls
+    #: sharply once the 2026-09-24/1 reply contract is live; `None` when this
+    #: provider carries no aligned rows at all (every row predates H3).
+    positional_share: Optional[float] = None
+    #: The share of this provider's ADJUDICATED critiques (`llm` + `partial`)
+    #: whose judge reply carried a different verdict count than claims sent —
+    #: the defect H3 exists to make SALVAGEABLE, not to make rarer (see
+    #: `judge_pipeline_version`'s H3 lineage entry: the rate is expected FLAT).
+    miscount_rate: Optional[float] = None
     judge_calls: int = 0
     judge_call_errors: int = 0
     latency_p95_ms: Optional[float] = None
@@ -326,6 +360,16 @@ class JudgePipelineVersionRow(BaseModel):
     providers: list[str] = Field(default_factory=list)
     faithfulness_n: int = 0
     faithfulness_mean: Optional[float] = None
+    #: H3 (2026-09-25/1) — read this beside `judge_pipeline_version`'s own
+    #: written lineage entry for the stamp: before 2026-09-24/1 every aligned
+    #: row is positional by construction (no prompt ever asked for an id), so
+    #: `positional_share` should read ~1.0 on every earlier stamp and fall on
+    #: this one — that is the ONE-GET proof the reply contract is reaching the
+    #: model. `miscount_rate` is the control: the lineage declares it FLAT
+    #: across this boundary (H3 changes what a miscount DOES, never how often
+    #: it happens), so a mover here on this stamp is a different defect.
+    positional_share: Optional[float] = None
+    miscount_rate: Optional[float] = None
 
 
 class JudgeStatsTotals(BaseModel):
@@ -342,6 +386,11 @@ class JudgeStatsTotals(BaseModel):
     adjudicated_share: Optional[float] = None
     faithfulness_n: int = 0
     faithfulness_mean: Optional[float] = None
+    #: H3 (2026-09-25/1) — THE day's proof, window-wide. See the field docs on
+    #: `JudgePipelineVersionRow` for how to read the pair; this is the same two
+    #: rates pooled over every stamp in the window instead of split by one.
+    positional_share: Optional[float] = None
+    miscount_rate: Optional[float] = None
     judge_calls: int = 0
     judge_call_errors: int = 0
 
@@ -379,7 +428,10 @@ class _Acc:
     """Mutable accumulator — sums and counts only; every rate is derived once at
     the end so a mean can never be built over a denominator it did not use."""
 
-    __slots__ = ("n", "by_status", "f_n", "f_sum", "providers")
+    __slots__ = (
+        "n", "by_status", "f_n", "f_sum", "providers",
+        "aligned_by_id", "aligned_positionally", "miscount_n",
+    )
 
     def __init__(self) -> None:
         self.n = 0
@@ -387,12 +439,29 @@ class _Acc:
         self.f_n = 0
         self.f_sum = 0.0
         self.providers: set[str] = set()
+        # H3 (2026-09-25/1) — the alignment-audit accumulators.
+        self.aligned_by_id = 0
+        self.aligned_positionally = 0
+        self.miscount_n = 0
 
-    def add(self, status: str, n: int, f_n: int, f_sum: float | None) -> None:
+    def add(
+        self,
+        status: str,
+        n: int,
+        f_n: int,
+        f_sum: float | None,
+        *,
+        aligned_by_id: int = 0,
+        aligned_positionally: int = 0,
+        miscount_n: int = 0,
+    ) -> None:
         self.n += n
         self.by_status[status] = self.by_status.get(status, 0) + n
         self.f_n += f_n
         self.f_sum += f_sum or 0.0
+        self.aligned_by_id += aligned_by_id
+        self.aligned_positionally += aligned_positionally
+        self.miscount_n += miscount_n
 
     @property
     def adjudicated_n(self) -> int:
@@ -410,6 +479,32 @@ class _Acc:
     @property
     def faithfulness_mean(self) -> float | None:
         return _mean(self.f_sum, self.f_n)
+
+    @property
+    def positional_share(self) -> float | None:
+        """H3 (2026-09-25/1) — the share of ALIGNED judge-graded ledger rows
+        the id arm matched by POSITION rather than by ``claim_index``. ``None``
+        when nothing here ever went through alignment (every row predates H3,
+        or the stratum never called the judge)."""
+        denom = self.aligned_by_id + self.aligned_positionally
+        if denom <= 0:
+            return None
+        return round(self.aligned_positionally / denom, 4)
+
+    @property
+    def miscount_rate(self) -> float | None:
+        """H3 — the share of critiques a judge call actually GRADED (``llm`` +
+        ``partial``) whose reply carried a different verdict count than claims
+        sent. NARROWER than ``adjudicated_n`` on purpose: a ``deterministic``
+        row is IN that denominator (it dilutes ``adjudicated_share`` by
+        design) but never called the judge, so it cannot carry a miscount and
+        must not dilute this rate the same way."""
+        denom = self.by_status.get("llm", 0) + self.by_status.get(
+            JUDGE_STATUS_PARTIAL, 0
+        )
+        if denom <= 0:
+            return None
+        return round(self.miscount_n / denom, 4)
 
 
 def build_payload(
@@ -437,6 +532,11 @@ def build_payload(
         n = int(r["n"] or 0)
         f_n = int(r["faithfulness_n"] or 0)
         f_sum = r["faithfulness_sum"]
+        # H3 (2026-09-25/1) — absent on a fixture / a pre-H3 row; `.get` so
+        # neither breaks the read into `measured: false`.
+        aligned_by_id = int(r.get("aligned_by_id") or 0)
+        aligned_positionally = int(r.get("aligned_positionally") or 0)
+        miscount_n = int(r.get("miscount_n") or 0)
 
         cells.append(
             JudgeStatsCell(
@@ -447,13 +547,31 @@ def build_payload(
                 n=n,
                 faithfulness_n=f_n,
                 faithfulness_mean=_mean(f_sum, f_n),
+                aligned_by_id=aligned_by_id,
+                aligned_positionally=aligned_positionally,
+                miscount_n=miscount_n,
             )
         )
-        per_provider.setdefault(provider, _Acc()).add(status, n, f_n, f_sum)
+        per_provider.setdefault(provider, _Acc()).add(
+            status, n, f_n, f_sum,
+            aligned_by_id=aligned_by_id,
+            aligned_positionally=aligned_positionally,
+            miscount_n=miscount_n,
+        )
         vacc = per_version.setdefault(version, _Acc())
-        vacc.add(status, n, f_n, f_sum)
+        vacc.add(
+            status, n, f_n, f_sum,
+            aligned_by_id=aligned_by_id,
+            aligned_positionally=aligned_positionally,
+            miscount_n=miscount_n,
+        )
         vacc.providers.add(provider)
-        overall.add(status, n, f_n, f_sum)
+        overall.add(
+            status, n, f_n, f_sum,
+            aligned_by_id=aligned_by_id,
+            aligned_positionally=aligned_positionally,
+            miscount_n=miscount_n,
+        )
 
     receipts = {r["served_by"]: r for r in receipt_rows}
 
@@ -472,6 +590,8 @@ def build_payload(
                 adjudicated_share=acc.adjudicated_share,
                 faithfulness_n=acc.f_n,
                 faithfulness_mean=acc.faithfulness_mean,
+                positional_share=acc.positional_share,
+                miscount_rate=acc.miscount_rate,
                 judge_calls=int(rec.get("calls") or 0),
                 judge_call_errors=int(rec.get("call_errors") or 0),
                 latency_p95_ms=round(float(p95), 1) if p95 is not None else None,
@@ -490,6 +610,8 @@ def build_payload(
             providers=sorted(acc.providers),
             faithfulness_n=acc.f_n,
             faithfulness_mean=acc.faithfulness_mean,
+            positional_share=acc.positional_share,
+            miscount_rate=acc.miscount_rate,
         )
         for v, acc in sorted(per_version.items(), key=lambda kv: -kv[1].n)
     ]
@@ -507,6 +629,8 @@ def build_payload(
         adjudicated_share=overall.adjudicated_share,
         faithfulness_n=overall.f_n,
         faithfulness_mean=overall.faithfulness_mean,
+        positional_share=overall.positional_share,
+        miscount_rate=overall.miscount_rate,
         judge_calls=sum(p.judge_calls for p in providers),
         judge_call_errors=sum(p.judge_call_errors for p in providers),
     )

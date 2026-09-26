@@ -22,6 +22,17 @@ writes — the deterministic dispatcher persists exactly one ``analyst_output``
 per run, so a per-cluster fan-out of situation rows is written here directly and
 the returned FindingPayload is the run summary.
 
+The frame-content gauge (R1-d)
+-----------------------------
+This handler's receipt also carries :mod:`legba.data._frame_content`'s three
+instrument keys — ``frame_content_gauge``, ``naming_census``, ``churn``. It
+rides HERE, and not beside here, for one reason: the domestic/retiring split
+(design D-l) needs to know which stored frames received members THIS RUN, and
+this is the only place in the tower that knows. The gauge counts and names; it
+never repairs and never gates, it runs on its own interval cursor, it writes
+nothing, and it is spliced into ``data`` additively — every field this receipt
+carried before it is byte-identical with it present. See that module's banner.
+
 Idempotency
 -----------
 A situation is keyed by ``(situation_signature, analyst_id)``. A re-run UPDATES
@@ -69,6 +80,7 @@ from math import exp, log, sqrt
 from typing import Any, Mapping
 from uuid import UUID, uuid4
 
+from ... import _frame_content
 from ...provenance.models import _SEVERITY_RANK
 from ...provenance.models import FindingPayload
 from ...situations.trajectory import (
@@ -313,6 +325,30 @@ _INTENSITY_HALF_LIFE_DAYS = 3.0
 _STATUS_ACTIVE_MAX_DAYS = 2.0
 _STATUS_DORMANT_MAX_DAYS = 7.0
 _LN2 = log(2.0)
+
+#: H12 — the METHOD/SCALE version every situation row's numbers were computed
+#: under, stamped ``situations.data.method_version`` on every write. Covers the
+#: whole intensity/lifecycle scale: ``_INTENSITY_HALF_LIFE_DAYS``,
+#: ``_STATUS_*_MAX_DAYS``, the corroboration-curve constants
+#: (``_CORROBORATION_HALF_LIFE_*``, ``_CORROBORATION_ACTIVE_MAX_DAYS``,
+#: ``_UNCORROBORATED_ACTIVE_MAX_DAYS``) and the persistence factor they feed.
+#: Bump it when any of them moves, so an intensity or status diff across the
+#: change reads as an instrument revision, not a world change.
+METHOD_VERSION = "situation_clustering/2026-09.1"
+
+#: K3 — the SCALE the ``intensity_score`` above is expressed ON, stamped
+#: ``situations.data.scale_version`` beside the method. Coarser than
+#: :data:`METHOD_VERSION` and answering a different question: the method version
+#: says whether the same CODE produced two numbers, the scale version says
+#: whether the two numbers MEAN the same thing. Named for the QUANTITY, not the
+#: module, because a scale outlives the handler that publishes onto it.
+#:
+#: ``2026-08`` is the era migration 0188 opened (2026-08-29, the mega-frame
+#: split): it re-based every stored ``intensity_score`` by the split frame's
+#: share of the members, so an intensity of 59 before it and 59 after it are
+#: numbers on two different scales. Rows written before the stamp existed carry
+#: NULL — the honest mark of the pre-stamp era, never a guessed retro label.
+SCALE_VERSION = "intensity/2026-08"
 
 
 # ---------------------------------------------------------------------------
@@ -672,6 +708,14 @@ def _situation_fields(
     return {
         "situation_signature": sig,
         "name": name,
+        # H12 — the instrument revision the intensity/status numbers below were
+        # computed under, on EVERY situation write (the stamp a re-base diff
+        # needs; the migration 0188 re-base predates it and reads NULL).
+        "method_version": METHOD_VERSION,
+        # K3 — the SCALE the intensity below is ON (see SCALE_VERSION). The
+        # method says which code ran; this says whether two intensities are
+        # comparable at all.
+        "scale_version": SCALE_VERSION,
         "category": _topic_from_signature(sig),
         # #64 — WHICH of the desk's questions this frame answers. Derived from
         # the key rather than from the members so it is stable even on a tick
@@ -793,6 +837,15 @@ async def _upsert_situation(
         "situation_signature": sig,
         "member_finding_ids": fields["member_finding_ids"],
         "sub_handler": SUB_HANDLER_NAME,
+        # H12 — the instrument revision this row's intensity/status were
+        # computed under, on the PERSISTED row (review 2026-09-24: the stamp
+        # lived only on the in-memory cluster dict; 0 of 296 live rows carried
+        # it). `data=EXCLUDED.data` below re-stamps every touched frame.
+        "method_version": METHOD_VERSION,
+        # K3 — the intensity SCALE, on the PERSISTED row beside the method, so
+        # the register read and the Inspector can show a reader which frame of
+        # comparison this number belongs to.
+        "scale_version": SCALE_VERSION,
         # DQ P6 — authoritative steady-state marker (see _situation_fields).
         "steady_state": bool(fields.get("steady_state")),
         # H1 — the evidence clock, stamped for the register reads.
@@ -1011,23 +1064,36 @@ def _resolve_synthetic(inputs: list[dict[str, Any]]) -> tuple[int, int, list[dic
 
 def _build_finding(
     *, created: int, updated: int, clusters: list[dict[str, Any]] | None, target_id: str | None,
+    gauge: dict[str, Any] | None = None,
 ) -> FindingPayload:
     n = len(clusters or [])
     title = f"Situation clustering: {n} situations ({created} new, {updated} updated)"
     if target_id:
         title = f"{title} for {target_id}"
+    data: dict[str, Any] = {
+        "sub_handler": SUB_HANDLER_NAME,
+        "method_version": METHOD_VERSION,
+        "scale_version": SCALE_VERSION,
+        "situations_created": created,
+        "situations_updated": updated,
+        "clusters": clusters if clusters is not None and len(clusters) <= 100 else None,
+    }
+    # R1-d — the FRAME-CONTENT GAUGE rides this receipt, purely ADDITIVELY:
+    # ``gauge`` contributes its own three keys (``frame_content_gauge``,
+    # ``naming_census``, ``churn``) and touches none of the four above, so a
+    # run with the gauge present and one without are byte-identical on every
+    # field that existed before it. ``None`` (not this tick's turn, no pool, or
+    # the gauge degraded) leaves the receipt exactly as it was. See
+    # :mod:`legba.data._frame_content` — it counts and names, never repairs.
+    if gauge:
+        data.update(gauge)
     return FindingPayload(
         title=title[:2048],
         body="\n".join([f"situations={n}", f"created={created}", f"updated={updated}"])[:65536],
         confidence=1.0,
         evidence=[],
         tags=["deterministic", SUB_HANDLER_NAME],
-        data={
-            "sub_handler": SUB_HANDLER_NAME,
-            "situations_created": created,
-            "situations_updated": updated,
-            "clusters": clusters if clusters is not None and len(clusters) <= 100 else None,
-        },
+        data=data,
     )
 
 
@@ -1075,8 +1141,30 @@ async def handle(
         created, updated, clusters = _resolve_synthetic(inputs)
         clusters_for_finding = clusters
 
+    # R1-d — the gauge, AFTER the clustering work and outside its connection,
+    # so it can never lengthen a write transaction, and behind its own
+    # try/except so an instrument can never cost the thing it measures. A
+    # failure logs and publishes nothing; the receipt is then byte-identical
+    # to its pre-gauge self. The signatures that received members this run are
+    # the one input no other reader of the substrate has (D-l's
+    # domestic/retiring split needs it) — which is why the gauge rides here.
+    gauge: dict[str, Any] | None = None
+    if pool is not None:
+        try:
+            gauge = await _frame_content.collect(
+                pool,
+                options=options,
+                touched_signatures=[
+                    str(c.get("situation_signature") or "") for c in clusters
+                ],
+            )
+        except Exception as exc:  # noqa: BLE001 — an instrument never costs a run
+            logger.warning("situation_clustering.gauge_failed err=%s", exc)
+            gauge = None
+
     finding = _build_finding(
         created=created, updated=updated, clusters=clusters_for_finding, target_id=target_id,
+        gauge=gauge,
     )
     # Emit a FEED finding only when a NEW situation actually formed. A run that
     # only re-touched existing situations (created == 0) is an idempotent

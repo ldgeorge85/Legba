@@ -234,7 +234,7 @@ async def test_direct_reader_dedupe_heads_folds_one_head_per_desk():
     q, p = conn.calls[0]
     assert "f.superseded_by IS NULL" in q
     assert "DISTINCT ON (f.analyst_id, f.target_id)" in q
-    assert "JOIN LATERAL" in q                      # verify-floor gate
+    assert "JOIN v ON v.fid = f.id::text" in q      # H17 fold, verify-floor gate
     assert "Faithfulness verify%" in q
     # target-LESS: no target scope on the dimension read.
     assert "f.target_id = $" not in q
@@ -270,7 +270,7 @@ async def test_thematic_read_slice_reads_dimension_and_diffs_roster():
     assert sp[0] == ["escalation"]
     assert "f.superseded_by IS NULL" in sq
     assert "DISTINCT ON (f.analyst_id, f.target_id)" in sq
-    assert "JOIN LATERAL" in sq                     # verify-floored
+    assert "JOIN v ON v.fid = f.id::text" in sq     # H17 fold, verify-floored
     assert "->> 'meta'" in sq                       # meta EXCLUDED (unit first-order)
     assert "f.target_id = $" not in sq              # NOT target-scoped
     assert sp[-1] == synth.DEFAULT_VERIFY_FLOOR

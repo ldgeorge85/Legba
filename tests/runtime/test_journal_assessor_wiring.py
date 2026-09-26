@@ -656,6 +656,52 @@ def test_journal_gather_catalog_includes_real_propose_tools_when_granted():
         assert name in catalog
 
 
+def test_propose_instruction_names_the_three_shapes_with_examples():
+    """H10 — the proposal instruction (both the PROPOSE-phase turn and the
+    GATHER catalog's WRITE-BACK preview, since both render from the SAME
+    ``_JOURNAL_PROPOSE_TOOL_SCHEMAS`` + ``_PROPOSE_SHAPE_DISCIPLINE``) must
+    name the three diff shapes the apply worker recognises — one concrete
+    example op each — and say plainly that a diff fitting none of them is an
+    observation, not a proposal."""
+    from legba.data.analysts.journal_assessor import (
+        _journal_gather_catalog,
+        _propose_phase_prompt,
+    )
+    from legba.data.registry.journal_proposals_apply import validate_proposal_shape
+
+    propose_prompt = _propose_phase_prompt(
+        body="entry body", cited_refs=[], write_fragments=[],
+    )
+    gather_catalog = _journal_gather_catalog(granted_propose=True)
+
+    for rendered in (propose_prompt, gather_catalog):
+        # The three ops, named explicitly.
+        assert "supersede_fact" in rendered
+        assert "update_descriptor" in rendered
+        assert "update_stack" in rendered
+        assert "revise_prompt" in rendered
+        # The explicit fallback rule.
+        assert "observation" in rendered.lower()
+        assert "not a proposal" in rendered.lower()
+
+    # The examples aren't decorative prose — each one is itself a diff that
+    # actually validates against the apply worker's own shape rules.
+    validate_proposal_shape(
+        "correction",
+        {"op": "supersede_fact", "subject": "x", "predicate": "y", "value": "z"},
+    )
+    validate_proposal_shape(
+        "change",
+        {"op": "update_descriptor", "family": "analyst", "descriptor_id": "x",
+         "patch": {"cadence": {"cooldown_seconds": 21000}}},
+    )
+    validate_proposal_shape(
+        "self_revision",
+        {"op": "revise_prompt", "target_analyst_id": "x", "new_prompt_text": "y",
+         "summary": "z"},
+    )
+
+
 def test_journal_gather_catalog_never_shows_the_ungranted_propose_facts_pack():
     """Fix 2 — the journal is never granted propose_facts (the generic write
     pack); the model must never be handed propose_fact/request_source/

@@ -39,7 +39,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import datetime
 from typing import Any, Awaitable, Callable, Mapping, NamedTuple, Sequence
 from urllib.parse import urlparse
 
@@ -52,6 +51,7 @@ from ..data.schemas.analyst import AnalystDescriptor
 from ..data.schemas.stack import LLMProviderConfig
 from ..data.stack.llm import LLM_HANDLERS
 from ..data.stack.llm.base import LLMProviderHandler, TelemetryHandle
+from .analyst_deps_kinds import wire_instrument_kind_deps
 from .deps import StandardDeps
 from .receipt_chain_factory import build_receipt_chain_for_analyst
 from .registry_client import RegistryClientError, RegistryHTTPClient
@@ -61,6 +61,12 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "AnalystDepsBuildError",
+    "GRADER_FAMILY_BY_COMPONENT",
+    "GRADER_REFUSE_ANTHROPIC",
+    "GRADER_REFUSE_JUDGE_FAMILY",
+    "GRADER_REFUSE_WRITER_FAMILY",
+    "GRADER_STACK_REF_ENV",
+    "GraderRoute",
     "JUDGE_ROUTE_CONFIGURED",
     "JUDGE_ROUTE_FALLBACK_PRIMARY",
     "JUDGE_ROUTE_FALLBACK_VERIFY",
@@ -69,7 +75,11 @@ __all__ = [
     "build_analyst_run_method",
     "build_llm_handler_from_stack_component",
     "build_search_handler_from_stack_component",
+    "grader_family_for_component",
+    "grader_fence_refusal",
     "infer_llm_subprovider",
+    "resolve_grader_route",
+    "resolve_grader_route_from_llm_block",
     "resolve_judge_route",
     "resolve_judge_route_from_llm_block",
     "resolve_llm_budget_params",
@@ -281,7 +291,7 @@ async def build_analyst_run_method(
         trio = await _build_cross_target_raw(handler, _resolve_primary_llm)
     elif kind == "meta_findings_synthesizer":
         trio = await _build_meta_findings_synthesizer(
-            descriptor, handler, _resolve_primary_llm,
+            descriptor, handler, _resolve_primary_llm, pg_pool=pg_pool,
         )
     elif kind == "cross_analyst_correlator":
         trio = await _build_cross_analyst_correlator(handler, _resolve_primary_llm)
@@ -329,12 +339,18 @@ async def build_analyst_run_method(
         trio = _build_deep_consult(
             descriptor, handler, deep_consult_client=deep_consult_client,
         )
-    elif kind == "journal_assessor":
+    elif kind in ("journal_assessor", "inquiry"):
         # The journal runs on the in-actor llm_planner envelope (NOT deep_consult
         # — plan §4.1). It reuses the inline_target deps shape + GATHER loop but
         # emits a JournalPayload (off-chain). The GATHER binding (for the
         # journal_read pack) is wired by the host's §4.9-generalized gate and
         # threaded through the same `inline_target_agency_binding` channel.
+        # Program 5's `inquiry` kind is the SAME deps shape — same envelope, same
+        # per-phase LLM split, same JournalPayload — differing only in its
+        # run_method and in which read pack the host binds as its GATHER default
+        # (substrate_read rather than journal_read). A second builder here would
+        # be a copy that drifts; the branch is the honest expression of "same
+        # deps, different method".
         trio = await _build_journal_assessor(
             descriptor, handler, _resolve_primary_llm, pg_pool=pg_pool,
             agency_binding=inline_target_agency_binding,
@@ -594,6 +610,8 @@ async def _build_inline_target(
         max_rounds=max_rounds,
         invoke_timeout_seconds=invoke_timeout_seconds,
         budget_precheck=budget_precheck,
+        # V3/P2 — the substrate pool for the event-citation expansion.
+        pg=pg_pool,
     )
     return runner, None, handler.output_kind
 
@@ -689,10 +707,17 @@ async def _build_journal_assessor(
     )
     if system_prompt is None:
         # Reached only when the descriptor declares NO prompt_module at all.
-        # The journal persona is the right default for that case; it is no
-        # longer reachable by a broken reference.
-        from legba.prompts.journal_assessor import JOURNAL_SYSTEM
-        system_prompt = JOURNAL_SYSTEM
+        # The KIND's own persona is the right default for that case; it is no
+        # longer reachable by a broken reference. Program 5: an `inquiry`
+        # descriptor defaults to the INQUIRY voice, never the diary's — handing
+        # a stateful investigator the journal's first-person apparatus persona
+        # is the same silent mis-voicing K-3 closed for the lenses.
+        if descriptor.identity.kind == "inquiry":
+            from legba.prompts.inquiry import INQUIRY_SYSTEM
+            system_prompt = INQUIRY_SYSTEM
+        else:
+            from legba.prompts.journal_assessor import JOURNAL_SYSTEM
+            system_prompt = JOURNAL_SYSTEM
     # The journal may still opt into Tier-1 grounding (it's a META analyst over
     # the global slice) — the GROUND preamble corrects stale-cutoff drift before
     # it narrates (§4.5 point 3). Off (None) unless the descriptor opts in.
@@ -768,12 +793,12 @@ def _build_grounding_hook(
         GROUNDING_RAG_STATS_SINK_KEY,
     )
     from ..data.config import QdrantConfig
+    from .dispatched_question import resolve_backlog_block
     from .grounding import (
         SubstrateGroundingResolver,
         build_graph_structure_block,
         build_grounding_preamble,
         build_narratives_block,
-        build_open_questions_block,
         build_situations_block,
         build_world_context_block,
         collect_grounding_candidates,
@@ -825,6 +850,11 @@ def _build_grounding_hook(
     # answering one of these over self-selecting a topic. See
     # ``grounding.SubstrateGroundingResolver.resolve_open_questions`` for the
     # ranking + ``build_open_questions_block`` for the render.
+    #
+    # 2026-09-07 — that PREFER is now conditional. A question of a DISPATCHED
+    # class (an alert already fired on it) is not a preference but the run's
+    # assignment, and ``runtime.dispatched_question.resolve_backlog_block``
+    # owns that whole decision: settle, rank, assign-or-offer, claim, sink.
     want_open_questions = "open_questions" in sources
     # AUTO-ROLLBACK KILL-SWITCH (M22 — FIX A: per-run authoritative). A unit rolled
     # back off (via the persisted rag_rollback state or the
@@ -912,26 +942,19 @@ def _build_grounding_hook(
         # leaves the sink untouched (stays {}), so the analyst falls back to
         # self-selection — BYTE-IDENTICAL to its behavior before this source
         # existed (requirement: empty backlog -> unchanged fallback).
+        # THE DISPATCH IS AN ASSIGNMENT, NOT A SUGGESTION (2026-09-07) — the
+        # settle / rank / assign-or-offer / claim / sink-fill sequence lives
+        # whole in ``dispatched_question`` so this branch stays one call. No
+        # dispatched question open ⇒ the ranked backlog renders exactly as it
+        # did before, and the run self-selects as before (byte-identical).
         if want_open_questions:
-            questions = await resolver.resolve_open_questions(limit=max_facts)
-            oq_block = build_open_questions_block(questions)
+            oq_block = await resolve_backlog_block(
+                resolver, pg_pool, limit=max_facts, analyst_id=ws_analyst_id,
+                run_id=options.get("run_id"),
+                sink=options.get(GROUNDING_QUESTION_SINK_KEY),
+            )
             if oq_block:
                 parts.append(oq_block)
-                # Fill the tag -> question sink (SAME order as the render, so
-                # "Q1"/"Q2"/... match the rendered tags exactly) for REFLECT
-                # to resolve the model's ``addressed_question`` answer against.
-                oq_sink = options.get(GROUNDING_QUESTION_SINK_KEY)
-                if isinstance(oq_sink, dict):
-                    for i, q in enumerate(questions, start=1):
-                        oq_sink[f"Q{i}"] = {
-                            "id": str(q.id),
-                            "produced_at": (
-                                q.produced_at.isoformat()
-                                if isinstance(q.produced_at, datetime)
-                                else None
-                            ),
-                            "harvest_class": q.harvest_class,
-                        }
 
         # Ground-truth block (facts + signed nexuses), provenance-gated.
         if want_substrate:
@@ -1125,6 +1148,11 @@ async def _build_meta_findings_synthesizer(
     descriptor: AnalystDescriptor,
     handler: KindHandler,
     resolve_llm: Callable[[], Awaitable[LLMProviderHandler]],
+    *,
+    # V3/P2 — the substrate pool, threaded onto the deps carrier so the
+    # composition path's [[event:<uuid>]] expansion can read
+    # signal_event_links when LEGBA_EVENT_CITATIONS is on.
+    pg_pool: "asyncpg.Pool | None" = None,
 ) -> tuple[Callable[..., Any], Any | None, OutputKind]:
     """meta_findings_synthesizer — second-order synthesis kind.
 
@@ -1145,6 +1173,7 @@ async def _build_meta_findings_synthesizer(
         _LLMOnlyDeps(
             llm=llm,
             temperature=(None if temperature is None else float(temperature)),
+            pg=pg_pool,
         ),
         handler.output_kind,
     )
@@ -1628,34 +1657,23 @@ async def _build_deterministic(
             descriptor, deps, nlp_client=nlp_client
         )
 
-    # standing_auditor (D5) — the STANDING EXTERNAL-AUDIT plane. Two legs, both
-    # optional and both degrading to an observable heartbeat rather than a build
-    # failure (the handler reports the gap; see external_audit_binding):
-    #   * the $0 CORE plane, through the SAME shared helper as
-    #     signal_summarizer, so the Anthropic hard-refuse applies — an external
-    #     auditor is a scheduled analyst and may never route onto the billed
-    #     plane;
-    #   * the web_access ACTION PACK, as a real AgencyToolBinding. Every
-    #     external byte this analyst reads arrives through the registered
-    #     web_search pack tool (SSRF guard + governor + ledger); there is no
-    #     ad-hoc HTTP anywhere in its path.
-    if is_deterministic and sub_handler == "standing_auditor":
-        from ..data.analysts.deterministic_handlers.standing_auditor import (
-            LLM_DEPS_EXTRA_KEY as _AUDITOR_LLM_KEY,
-        )
-        from .external_audit_binding import wire_standing_auditor_web_pack
-
-        if component_id is not None:
-            deps = await _wire_deterministic_llm(
-                descriptor, deps, resolve_llm,
-                component_id=component_id,
-                extra_key=_AUDITOR_LLM_KEY,
-                purpose="standing_auditor",
-            )
-        if registry_client is not None:
-            deps = await wire_standing_auditor_web_pack(
-                descriptor, deps, registry_client=registry_client,
-            )
+    # THE OUT-OF-PLANE / INSTRUMENT KIND LEGS — standing_auditor (D5),
+    # desk_reference (A-1), correctness_grader (G1), reference_builder (R2) and
+    # contrary_evidence_pass (7a). Each is a self-hosted-or-fenced LLM leg plus,
+    # for four of them, a web_access action-pack leg, and each shares the same
+    # degrade-not-break posture. The per-kind reasoning lives in
+    # analyst_deps_kinds, one docstring per function; the DISPATCH moved there
+    # with them (module-size gate) rather than five near-identical call blocks
+    # accumulating here, one per instrument.
+    deps = await wire_instrument_kind_deps(
+        descriptor, deps,
+        sub_handler=sub_handler if is_deterministic else None,
+        registry_client=registry_client,
+        resolve_llm=resolve_llm,
+        component_id=component_id,
+        wire_deterministic_llm=_wire_deterministic_llm,
+        handler_builder=build_llm_handler_from_stack_component,
+    )
     return handler.run_method, deps, handler.output_kind
 
 
@@ -2696,6 +2714,35 @@ def resolve_judge_route(descriptor: AnalystDescriptor) -> JudgeRoute | None:
     return resolve_judge_route_from_llm_block(llm)
 
 
+# ---------------------------------------------------------------------------
+# THE GRADER ROUTE (W-4) — extracted to a leaf sibling for the size gate
+# ---------------------------------------------------------------------------
+#
+# The fence, the family map and the resolution ladder moved to
+# ``runtime/external_grader_route.py`` (a leaf that reimplements the two tiny
+# helpers it needs, so the dependency runs ONE WAY). Re-exported here so
+# ``analyst_deps_builder.resolve_grader_route`` and every historical spelling
+# resolve unchanged. The sibling reads the descriptor shape-tolerantly (getattr
+# over ``method.llm``), so nothing about ``AnalystDescriptor`` had to move with
+# it, and ``_wire_external_grader`` below still calls these names as before.
+from .external_grader_route import (  # noqa: E402
+    GRADER_FAMILY_BY_COMPONENT,
+    GRADER_REFUSE_ANTHROPIC,
+    GRADER_REFUSE_JUDGE_FAMILY,
+    GRADER_REFUSE_WRITER_FAMILY,
+    GraderRoute,
+    _same_plane,
+    grader_family_for_component,
+    grader_fence_refusal,
+    resolve_grader_route,
+    resolve_grader_route_from_llm_block,
+    wire_external_grader,
+)
+
+GRADER_STACK_REF_ENV = "LEGBA_EXTERNAL_GRADER_STACK_REF"
+
+
+
 async def resolve_llm_budget_params(
     descriptor: AnalystDescriptor,
     *,
@@ -2846,13 +2893,18 @@ class _LLMOnlyDeps:
     built without the knob behaves byte-identically.
     """
 
-    __slots__ = ("llm", "temperature")
+    __slots__ = ("llm", "temperature", "pg")
 
     def __init__(
         self, llm: LLMProviderHandler, *, temperature: float | None = None,
+        # V3/P2 — optional substrate pool for the event-citation expansion
+        # (LEGBA_EVENT_CITATIONS). Only the meta_findings carrier sets it;
+        # every other construction passes None and behaves identically.
+        pg: "asyncpg.Pool | None" = None,
     ) -> None:
         self.llm = llm
         self.temperature = temperature
+        self.pg = pg
 
     def __repr__(self) -> str:                              # pragma: no cover
         return f"_LLMOnlyDeps(llm={type(self.llm).__name__})"

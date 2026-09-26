@@ -34,7 +34,7 @@ import asyncpg
 import pytest
 import pytest_asyncio
 
-from legba.data.schemas.action_pack import ActionPack, ActionPackRef
+from legba.data.schemas.action_pack import ActionPack, ActionPackRef, PackGovernor
 from legba.data.analysts.agency import (
     Agency,
     ChannelEmitter,
@@ -45,6 +45,7 @@ from legba.data.analysts.agency import (
     recent_events,
     resolve_pack,
 )
+from tests._isolated_nats_gate import requires_isolated_nats
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -180,10 +181,7 @@ async def test_not_granted_and_not_applicable_blocks(pool):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="needs an isolated NATS; per-test job queue's jobs.> subjects "
-    "overlap the live runtime's LEGBA_JOBS stream on --network host"
-)
+@requires_isolated_nats("the live runtime's LEGBA_JOBS stream (jobs.> subjects)")
 async def test_process_media_pack_enqueues_real_job(pool, migrated_pg):
     if not _port_open("127.0.0.1", 4222):
         pytest.skip("dev-rig NATS not reachable on 127.0.0.1:4222")
@@ -514,3 +512,130 @@ async def test_binding_override_tightens_governor(pool):
     )
     assert res.effective
     assert res.governor.api_rate_per_minute == 1       # tightened (min of 100, 1)
+
+
+# ---------------------------------------------------------------------------
+# R2-FIX(1) — a per-analyst budget_account carve-out (ops 2026-09-17)
+#
+# ``Agency.run_pack_tool`` resolves the ledger account as
+# ``res.governor.budget_account or call.budget_account`` — the PACK's account
+# beats the per-analyst one the binding passes, so every analyst holding a grant
+# draws on ONE hourly bucket. Live, that bucket was ``web_access`` at 120/hour
+# and the standing auditor spent all 120 of it inside two hours; the reference
+# builder's tick then found the hour gone and 63 of its 67 tool calls came back
+# "not admitted by the pack", burning 927.9 s and 4.5 M tokens for nothing.
+#
+# ``ActionPackRef.governor_override`` is the supported carve-out: tightening
+# only for every numeric cap, with ``budget_account`` following the override
+# because re-targeting a ledger account is not a loosening.
+# ---------------------------------------------------------------------------
+
+
+async def test_one_analysts_override_gives_it_a_bucket_the_others_cannot_spend(
+    pool,
+):
+    """The starvation, and the carve-out that ends it, on one real pack.
+
+    Two analysts, one pack, one shared cap of 3/hour. The first spends all of
+    it — and the second, holding the SAME grant with a ``budget_account``
+    override, is still admitted, because the two are counting in different
+    ledger accounts. Without the override the second analyst's very first call
+    is refused; that is exactly what a whole reference build spent itself
+    discovering.
+    """
+    pack = _pack("web_access_like", tools=["web_search"], tags=["news"],
+                 governor={"budget_account": "shared_bucket",
+                           "max_invocations_per_hour": 3})
+    scope = TargetScopeView(target_id="t_share", tags=["news"])
+    agency = Agency()
+    allows = [_ref("web_access_like")]
+
+    # Unique account names so a re-run cannot inherit the last run's hour.
+    shared = f"shared-{uuid4().hex[:8]}"
+    private = f"private-{uuid4().hex[:8]}"
+    pack = pack.model_copy(update={
+        "governor": pack.governor.model_copy(update={"budget_account": shared}),
+    })
+
+    # THE GREEDY NEIGHBOUR — a bare grant, so the pack's own account applies.
+    hog_grant = [_ref("web_access_like")]
+    # THE CARVE-OUT — the same grant, re-targeted and TIGHTENED.
+    own_grant = [_ref("web_access_like",
+                      governor_override=PackGovernor(budget_account=private,
+                                                     max_invocations_per_hour=2))]
+
+    def _call(who):
+        return ToolCall(
+            pack_id="web_access_like", tool_name="web_search",
+            budget_account=who, requested_by=f"analyst.{who}",
+            args={"query": "x"})
+
+    ctx = ToolContext()
+    hog, mine = [], []
+    async with pool.acquire() as conn:
+        # the neighbour drains the shared hour
+        for _ in range(4):
+            o = await agency.run_pack_tool(
+                conn, pack=pack, call=_call("auditor"), analyst_grants=hog_grant,
+                target_allows=allows, scope=scope, ctx=ctx)
+            hog.append(o.admitted)
+        # the builder's own hour is untouched by any of it
+        for _ in range(3):
+            o = await agency.run_pack_tool(
+                conn, pack=pack, call=_call("builder"), analyst_grants=own_grant,
+                target_allows=allows, scope=scope, ctx=ctx)
+            mine.append(o.admitted)
+
+    assert hog == [True, True, True, False], f"shared cap did not bind: {hog}"
+    assert mine[:2] == [True, True], (
+        "the override did not carve out a private bucket — the builder is "
+        f"still starved by the neighbour: {mine}"
+    )
+    # and the carve-out is a CAP, not an escape hatch: its own 2/hour binds too
+    assert mine[2] is False, f"the private cap did not bind: {mine}"
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT budget_account, COUNT(*) AS n FROM action_pack_invocations "
+            "WHERE budget_account = ANY($1::text[]) GROUP BY 1",
+            [shared, private],
+        )
+    ledger = {r["budget_account"]: r["n"] for r in rows}
+    # the two accounts are genuinely separate rows, not one bucket read twice
+    assert ledger.get(shared) == 3
+    assert ledger.get(private) == 2
+
+
+async def test_a_budget_account_override_can_never_LOOSEN_a_cap(pool):
+    """The safety half. ``_merge_governor`` takes the more restrictive numeric
+    cap, so a descriptor asking for a bigger hour on a private account gets the
+    pack's number anyway — a grant is not a place to raise a limit, and the
+    override could otherwise become the widest hole in the gate."""
+    account = f"loosen-{uuid4().hex[:8]}"
+    pack = _pack("capped_pack", tools=["web_search"], tags=["news"],
+                 governor={"budget_account": "shared", "max_invocations_per_hour": 2})
+    grant = [_ref("capped_pack",
+                  governor_override=PackGovernor(budget_account=account,
+                                                 max_invocations_per_hour=500))]
+    res = resolve_pack(
+        pack=pack, analyst_grants=grant, target_allows=[_ref("capped_pack")],
+        scope=TargetScopeView(target_id="t_loosen", tags=["news"]),
+    )
+    assert res.effective
+    assert res.governor.budget_account == account      # re-target: allowed
+    assert res.governor.max_invocations_per_hour == 2  # raise: refused
+
+    agency = Agency()
+    admitted = []
+    async with pool.acquire() as conn:
+        for _ in range(3):
+            o = await agency.run_pack_tool(
+                conn, pack=pack,
+                call=ToolCall(pack_id="capped_pack", tool_name="web_search",
+                              budget_account=account, requested_by="analyst.l",
+                              args={"query": "x"}),
+                analyst_grants=grant, target_allows=[_ref("capped_pack")],
+                scope=TargetScopeView(target_id="t_loosen", tags=["news"]),
+                ctx=ToolContext())
+            admitted.append(o.admitted)
+    assert admitted == [True, True, False], f"the pack's own cap was loosened: {admitted}"

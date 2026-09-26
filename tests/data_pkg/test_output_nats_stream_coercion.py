@@ -20,6 +20,7 @@ import dataclasses
 import json
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 
@@ -33,6 +34,7 @@ from legba.data.provenance.models import (
     FindingPayload,
     MetaFindingPayload,
 )
+from legba.runtime.actor_output_emit import _emit_output_bindings
 
 
 # ---------------------------------------------------------------------------
@@ -173,3 +175,104 @@ def test_dataclass_type_object_not_coerced():
         a: int
 
     assert _coerce_to_mapping(Leaf) is None
+
+
+# ---------------------------------------------------------------------------
+# The REAL binding path — `_emit_output_bindings` (dapr_actors.py:3733's
+# dispatcher) through to a live `nats_stream.emit` publish.
+#
+# 2026-09-06 defect: `_emit_output_bindings` builds one
+# `OutputDeps(nats=_NatsPublishAdapter(nats_publish))` for every emit-capable
+# output-kind handler — the alert / stix_bundle / webhook sinks all read
+# `deps.nats.publish_json(...)`, but `nats_stream._resolve_publisher` looked
+# ONLY for `deps.nats_publish` / `deps.nats_store`, neither of which
+# `OutputDeps` exposes. So every `nats_stream` output binding raised
+# `OutputDepsError` on its very first live publish. Live evidence: zero
+# `output_emit.ok kind=nats_stream` had EVER been logged, and the only two
+# descriptors that had actually exercised this path —
+# `corpus_researcher` (identity.kind=inline_target, method.kind=llm_planner —
+# descriptors/analyst_corpus_researcher.yaml) and `cross_doc_corroborator` —
+# both failed identically (`dapr_actors.output_emit.failed kind=nats_stream
+# err=deps must expose either \`nats_publish\` ... got neither`).
+#
+# No broker needed: this leg (`deps.nats` → `_NatsPublishAdapter.publish_json`
+# → the injected closure) never touches JetStream directly — it IS the
+# closure. The real-broker round-trip for `deps.nats_publish` /
+# `deps.nats_store` lives in `test_output_nats_stream.py` (integration-marked).
+# ---------------------------------------------------------------------------
+
+
+class _FakeOutputBinding:
+    def __init__(self, kind: str, config: dict[str, Any]) -> None:
+        self.kind = kind
+        self.config = config
+
+
+class _FakeIdentity:
+    def __init__(self, analyst_id: str, version: str = "deadbeef") -> None:
+        self.id = analyst_id
+        self.version = version
+
+
+class _FakeInlineTargetDescriptor:
+    """Minimal descriptor stand-in shaped like corpus_researcher's
+    ``outputs: [{kind: nats_stream, config: {channel: findings}}]`` binding —
+    only the attributes ``_emit_output_bindings`` actually reads."""
+
+    def __init__(self, analyst_id: str, *, channel: str = "findings") -> None:
+        self.identity = _FakeIdentity(analyst_id)
+        self.outputs = [_FakeOutputBinding("nats_stream", {"channel": channel})]
+
+
+async def test_emit_output_bindings_nats_stream_reaches_real_publish_via_output_deps():
+    """Exercise the REAL dispatcher entry point
+    (``legba.runtime.actor_output_emit._emit_output_bindings`` — the function
+    ``dapr_actors.AnalystActor.run`` calls at its output-emit step) for an
+    ``llm_planner`` finding, with a fake ``nats_publish`` callable standing in
+    for the runtime's real closure, and assert the finding actually reaches
+    it on the canonical ``analyst.<id>.<channel>`` subject. This is the
+    regression test for the fix: before it, this call raised
+    ``OutputDepsError`` instead of publishing."""
+    calls: list[tuple[str, bytes]] = []
+
+    async def fake_nats_publish(subject: str, payload: bytes) -> None:
+        calls.append((subject, payload))
+
+    fp = FindingPayload(
+        title="IRGC ballistic missile test", body="cited body", confidence=0.6,
+    )
+    descriptor = _FakeInlineTargetDescriptor("corpus_researcher")
+
+    await _emit_output_bindings(
+        descriptor=descriptor,
+        payload=fp,
+        output_id=uuid.uuid4(),
+        derived_from=[],
+        target_id=None,
+        nats_publish=fake_nats_publish,
+    )
+
+    assert len(calls) == 1
+    subject, body = calls[0]
+    assert subject == "analyst.corpus_researcher.findings"
+    decoded = json.loads(body.decode("utf-8"))
+    assert decoded["title"] == "IRGC ballistic missile test"
+
+
+async def test_emit_output_bindings_nats_stream_with_no_publisher_is_best_effort():
+    """When the runtime has no NATS publisher wired at all (``nats_publish is
+    None``, e.g. a degraded boot), the dispatcher's OutputDeps carries
+    ``nats=None`` and the sink's OutputDepsError is caught + logged — the
+    already-durable finding must never be lost over an export failure."""
+    fp = FindingPayload(title="t", body="b", confidence=0.5)
+    descriptor = _FakeInlineTargetDescriptor("corpus_researcher")
+
+    # Must not raise — best-effort export, never breaks the run.
+    await _emit_output_bindings(
+        descriptor=descriptor,
+        payload=fp,
+        output_id=uuid.uuid4(),
+        derived_from=[],
+        target_id=None,
+        nats_publish=None,
+    )

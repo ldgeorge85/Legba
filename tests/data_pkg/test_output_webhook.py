@@ -72,6 +72,7 @@ from legba.data.outputs.webhook import (
 )
 from legba.data.provenance import canonical_json
 from legba.data.registry.signing import SigningIdentity
+from tests._isolated_nats_gate import requires_isolated_nats
 
 
 pytestmark = [pytest.mark.integration]
@@ -383,10 +384,7 @@ async def test_emit_4xx_does_not_retry(identity: SigningIdentity):
     assert len(handler.requests) == 1
 
 
-@pytest.mark.skip(
-    reason="needs an isolated NATS; DLQ subject overlaps the live runtime's "
-    "legba.dlq.> stream on --network host"
-)
+@requires_isolated_nats("the live runtime's legba.dlq.> stream")
 async def test_emit_4xx_does_not_dlq(
     identity: SigningIdentity, nats_store: NatsStore, session_prefix: str
 ):
@@ -463,10 +461,7 @@ async def test_emit_5xx_then_success(identity: SigningIdentity):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="needs an isolated NATS; DLQ subject overlaps the live runtime's "
-    "legba.dlq.> stream on --network host"
-)
+@requires_isolated_nats("the live runtime's legba.dlq.> stream")
 async def test_emit_retry_exhausted_routes_to_dlq(
     identity: SigningIdentity, nats_store: NatsStore, session_prefix: str
 ):

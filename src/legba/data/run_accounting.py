@@ -74,6 +74,31 @@ actually affordable:
   * ``prompt_sha256`` is stored in its own column, NOT folded into
     ``compute_receipt_hash``'s payload — supplementary provenance, not chain
     material, same posture as ``llm_calls``/``tool_calls``.
+
+THE HARD-FAIL BLIND SPOT (2026-09-09) — the account is the failure receipt
+--------------------------------------------------------------------------
+
+Everything above was read ONLY on the success path. A run that RAISED wrote
+``_write_failure_trace``'s minimal row: ``prompt_rendered`` NULL,
+``intermediate_steps`` ``[]``, ``llm_calls`` ``[]``, ``tool_calls`` ``[]`` —
+even when the run had rendered a 110k-char prompt, made five completions and
+landed five substrate rows. Three consecutive ``corpus_researcher`` hard fails
+(09-08 15:37Z, 09-09 03:37Z, 09-09 15:37Z) carried the identical error string
+and NOTHING to diagnose it with: the model's final answer, the one artefact
+that would have named the defect in a second, was never written down anywhere.
+
+The account already held three of the four fields. Two additions close it:
+
+  * :func:`bind_run_steps` registers the kind's OWN ``intermediate_steps``
+    list on the account — the live list object, not a copy, so every append
+    the run makes afterwards is visible to a reader that arrives during the
+    except-handler. Deliberately shaped to be usable as the initializer
+    (``steps = bind_run_steps()``) so a kind adopts it without growing a line.
+  * ``completion_text`` on each ``llm_calls`` entry (recorded at the provider
+    chokepoint, capped at :data:`_MAX_COMPLETION_TEXT_CHARS`) — what the model
+    actually SAID. A receipt that records that a call happened, how many tokens
+    it cost and what it was asked, but not one character of the answer, cannot
+    diagnose an output-contract failure at all.
 """
 
 from __future__ import annotations
@@ -108,6 +133,18 @@ _MAX_FIELD_CHARS = 500
 #: (see :func:`current_prompt_rendered`) — never a silent cut.
 _MAX_PROMPT_RENDERED_CHARS = 32_000
 
+#: Cap on the per-call ``completion_text`` receipt. Far above
+#: :data:`_MAX_FIELD_CHARS` (which exists to backstop error strings and block
+#: causes) because this field's whole job is to make a bad answer readable:
+#: the live failures were 76-, 153- and 174-character protocol objects, and a
+#: real finding body runs a few thousand. Bounded so a runaway completion
+#: cannot inflate the row, and marked when it cuts.
+_MAX_COMPLETION_TEXT_CHARS = 4_000
+
+#: The account field carrying the per-call completion text. Named here because
+#: the recorder must exempt it from the general :func:`_clip` cap.
+COMPLETION_TEXT_FIELD = "completion_text"
+
 
 @dataclass
 class _RunAccount:
@@ -117,6 +154,10 @@ class _RunAccount:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     llm_dropped: int = 0
     tool_dropped: int = 0
+    #: The kind's LIVE ``intermediate_steps`` list (see
+    #: :func:`bind_run_steps`) — held by reference, so a reader in an
+    #: except-handler sees every step the run appended before it died.
+    steps: list[dict[str, Any]] | None = None
     #: The MOST RECENT call's full rendered prompt + its sha256 — overwritten
     #: (never appended) on every :func:`record_prompt_rendered` call, so this
     #: never grows past one prompt's worth regardless of run length.
@@ -179,6 +220,41 @@ def current_tool_calls() -> list[dict[str, Any]]:
     if acct is None:
         return []
     return _flush(acct.tool_calls, acct.tool_dropped)
+
+
+def bind_run_steps(
+    steps: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Register a kind's ``intermediate_steps`` list on the bound account and
+    return it, so the FAILURE path can read the phases the run reached.
+
+    Shaped as ``steps = bind_run_steps()`` on purpose: a kind adopts the sink
+    by changing its initializer, not by adding a line, which matters where the
+    kind module is already at its size ceiling. Pass an existing list to
+    register one already built.
+
+    Held BY REFERENCE. The success path still reads
+    ``method_result.intermediate_steps`` and is untouched; this exists for the
+    path where there IS no method result. No-op (returns the list unregistered)
+    when no account is bound — every test and script path stays unchanged.
+    """
+    out = steps if steps is not None else []
+    try:
+        acct = _account.get()
+        if acct is not None:
+            acct.steps = out
+    except Exception:  # pragma: no cover — instrumentation must never fail a run
+        logger.debug("run_accounting.bind_run_steps failed", exc_info=True)
+    return out
+
+
+def current_steps() -> list[dict[str, Any]]:
+    """The steps the bound run has appended so far — ``[]`` when unbound or
+    when the kind never registered a list."""
+    acct = _account.get()
+    if acct is None or acct.steps is None:
+        return []
+    return list(acct.steps)
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +397,24 @@ def _clip(value: Any) -> Any:
     return value
 
 
+def clip_completion_text(value: Any) -> Any:
+    """``completion_text``'s own cap — generous, and MARKED when it cuts.
+
+    Separate from :func:`_clip` in both directions: the 500-char backstop
+    would throw away the answer this field exists to preserve, and a silent
+    cut on a completion is exactly the ambiguity that makes an
+    output-contract post-mortem guesswork ("did the model stop there, or did
+    we?").
+    """
+    if isinstance(value, str) and len(value) > _MAX_COMPLETION_TEXT_CHARS:
+        omitted = len(value) - _MAX_COMPLETION_TEXT_CHARS
+        return (
+            value[:_MAX_COMPLETION_TEXT_CHARS]
+            + f"…[TRUNCATED: {omitted} of {len(value)} chars omitted]"
+        )
+    return value
+
+
 def record_llm_call(**fields: Any) -> None:
     """Append one LLM-call record to the bound account (no-op when unbound).
 
@@ -332,6 +426,9 @@ def record_llm_call(**fields: Any) -> None:
     ``finish_reason``, ``prompt_sha256``, ``prompt_chars``, ``error``, and —
     only when non-zero, so an uncached provider's receipt is unchanged —
     ``cache_read_tokens`` / ``cache_write_tokens``.
+
+    ``completion_text`` (2026-09-09) is exempt from the general field cap and
+    carries its own, larger, MARKED one — see :func:`clip_completion_text`.
     """
     try:
         acct = _account.get()
@@ -340,7 +437,10 @@ def record_llm_call(**fields: Any) -> None:
         if len(acct.llm_calls) >= _MAX_CALLS:
             acct.llm_dropped += 1
             return
-        entry = {k: _clip(v) for k, v in fields.items() if v is not None}
+        entry = {
+            k: (clip_completion_text(v) if k == COMPLETION_TEXT_FIELD else _clip(v))
+            for k, v in fields.items() if v is not None
+        }
         entry.setdefault("at", datetime.now(tz=timezone.utc).isoformat())
         acct.llm_calls.append(entry)
     except Exception:  # pragma: no cover — instrumentation must never fail a run
@@ -552,10 +652,14 @@ def prompt_digest(messages: Any, system: Any = None) -> tuple[str | None, int]:
 
 
 __all__ = [
+    "COMPLETION_TEXT_FIELD",
     "bind_run_accounting",
+    "bind_run_steps",
+    "clip_completion_text",
     "reset_run_accounting",
     "current_llm_calls",
     "current_prompt_rendered",
+    "current_steps",
     "current_tool_calls",
     "llm_call_watermark",
     "llm_calls_since",

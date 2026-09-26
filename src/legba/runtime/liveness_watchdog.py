@@ -38,6 +38,10 @@ observed upstream entry <= our last ingest → silent below a much higher
 prolonged-quiet bound, escalated past it) from cursor/filter faults (upstream
 carries newer entries yet polls yield 0 → escalate) using the
 ``newest_entry_ts`` evidence the source handlers record per poll.
+
+L1 (2026-09-20) adds a fourth durable channel, ``llm_route_dead`` — a busy LLM
+component answering almost nothing (a model retired upstream) is a liveness
+fault every check above reads as health. See :mod:`.llm_route_liveness`.
 """
 
 from __future__ import annotations
@@ -51,6 +55,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from . import llm_route_liveness as _llm_route
 from .dapr_cron import cron_to_reminder_timing
 
 logger = logging.getLogger(__name__)
@@ -87,6 +92,37 @@ _DEFAULT_CADENCE_FACTOR = 2.0
 # fire, a brief reconcile gap). 90 min is well above the 60s check interval and
 # the longest deterministic cooldown, but far below the 6h meta cadences.
 _CADENCE_MIN_THRESHOLD_S = 90.0 * 60.0
+
+# R2-FIX (2026-09-17) — A BUDGET PAUSE IS NOT A STALL, and the fleet had no way
+# to tell them apart. When an analyst's per-day token bucket is exhausted, the
+# actor's own precall check returns ``exhausted``, writes a
+# ``budget_demotion_events`` row and — under the default
+# ``pause_until_next_window`` strategy — stamps ``cooldown_until`` for
+# ``BudgetRetryPolicy.cooldown_seconds`` (1 h). Every tick inside that window
+# then returns ``noop reason=cooldown scope=global`` and writes NO
+# ``analyst_traces`` row at all, because it returns before the run body. So the
+# query below sees the analyst's newest SUCCESSFUL run getting older and older
+# and calls it a stall — which is exactly what happened to ``reference_builder``
+# at 02:43Z: the budget doing precisely its job, reported as the analyst going
+# dark. The operator is sent to "check actor activation, descriptor head
+# version, deps resolution" for a condition none of those explain.
+#
+# The suppression is BOUNDED and it is LOUD. Bounded: it lasts one cooldown
+# window from the demotion, so an analyst that is chronically exhausted still
+# alerts once the window lapses — being out of budget every day IS worth
+# knowing, and this must not become the way that fact hides. Loud: every
+# suppression logs the analyst, the age and the demotion that explains it, so
+# "no alert" is never the same as "nothing happened".
+#
+# WHAT IT DOES NOT COVER, stated rather than discovered later: the ``throttle``
+# decision (a projected overrun) also stamps a cooldown but writes NO audit row,
+# so it is invisible from Postgres. Closing that would mean writing a row from
+# the actor's throttle branch — in ``dapr_actors.py``, which is frozen. It is
+# also the rarer branch: ``throttle`` needs a non-zero per-run estimate, which
+# the deterministic wiring does not set.
+_BUDGET_PAUSE_GRACE_ENV = "LEGBA_CADENCE_STALL_BUDGET_PAUSE_GRACE_S"
+#: Matches ``BudgetRetryPolicy.cooldown_seconds``'s own default (1 h).
+_DEFAULT_BUDGET_PAUSE_GRACE_S = 3600.0
 
 # OBS — per-SOURCE cadence-liveness (DQ-H5). Sources poll on their own crons
 # (hourly … 6-hourly); the sweep found 10 active sources silent >7d (feeds
@@ -181,10 +217,15 @@ ALERT_CHANNEL_GLOBAL = "liveness_stall"
 ALERT_CHANNEL_ANALYST = "analyst_cadence_stall"
 ALERT_CHANNEL_SOURCE = "source_cadence_stall"
 ALERT_CHANNEL_SOURCE_DEGRADED = "source_degraded"
+#: L1 (2026-09-20) — a DEAD LLM ROUTE is the one fault every other check on
+#: this loop reports as health (the analyst still runs, the rows still land).
+#: Mechanics + the incident record: :mod:`.llm_route_liveness`.
+ALERT_CHANNEL_LLM_ROUTE = _llm_route.ALERT_CHANNEL_LLM_ROUTE
 _TRANSITION_CHANNELS = (
     ALERT_CHANNEL_ANALYST,
     ALERT_CHANNEL_SOURCE,
     ALERT_CHANNEL_SOURCE_DEGRADED,
+    ALERT_CHANNEL_LLM_ROUTE,
 )
 
 
@@ -383,6 +424,16 @@ class LivenessWatchdog:
                 except Exception as exc:  # pragma: no cover — never kill the loop
                     logger.warning(
                         "liveness_watchdog.empty_streak_check_error err=%s", exc
+                    )
+                # L1 — dead LLM route (a model retired upstream looks like
+                # health from every other check on this loop).
+                try:
+                    await self.check_llm_route_liveness_once(time.monotonic())
+                except asyncio.CancelledError:  # pragma: no cover
+                    raise
+                except Exception as exc:  # pragma: no cover — never kill the loop
+                    logger.warning(
+                        "liveness_watchdog.llm_route_check_error err=%s", exc
                     )
 
     def _last_activity_at(self) -> float | None:
@@ -703,6 +754,28 @@ class LivenessWatchdog:
             factor=self._cfg.cadence_stall_factor,
             min_threshold_s=_CADENCE_MIN_THRESHOLD_S,
         )
+        # R2-FIX: a BUDGET PAUSE is not a stall. See the banner at
+        # ``_BUDGET_PAUSE_GRACE_ENV`` for why this cannot be read off the
+        # actor record (it lives in the Dapr state store, not Postgres) and why
+        # the suppression is bounded to one cooldown window.
+        paused = await self._fetch_budget_pauses()
+        kept: list[tuple[str, float, float]] = []
+        for analyst_id, age_s, threshold_s in stale:
+            since = paused.get(analyst_id)
+            if since is not None:
+                logger.info(
+                    "liveness_watchdog.cadence_stall_suppressed analyst=%s "
+                    "age_hours=%.1f reason=budget_pause demoted_s_ago=%.0f — "
+                    "the analyst is silent because its per-day token bucket is "
+                    "exhausted and the actor is on a BUDGET_THROTTLED cooldown, "
+                    "which is the budget working; it will alert if it is still "
+                    "silent once the cooldown window lapses",
+                    analyst_id, age_s / 3600.0, since,
+                )
+                continue
+            kept.append((analyst_id, age_s, threshold_s))
+        stale = kept
+
         states = await self._get_alert_states(ALERT_CHANNEL_ANALYST)
         alerted: list[str] = []
         for analyst_id, age_s, threshold_s in stale:
@@ -717,6 +790,42 @@ class LivenessWatchdog:
             still_bad={aid for aid, _, _ in stale},
         )
         return alerted
+
+    async def _fetch_budget_pauses(self) -> dict[str, float]:
+        """Analysts whose newest budget demotion is inside the pause window.
+
+        ``{analyst_id: seconds_since_the_demotion}``. Empty on any failure —
+        this gate may only ever SUPPRESS an alert, so a broken read must
+        degrade to alerting rather than to silence.
+        """
+        grace = _env_float(
+            _BUDGET_PAUSE_GRACE_ENV, _DEFAULT_BUDGET_PAUSE_GRACE_S
+        )
+        if grace <= 0 or self._pg is None:
+            return {}
+        try:
+            async with self._pg.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT analyst_id,
+                           extract(epoch FROM (now() - max(occurred_at)))
+                               AS since_s
+                      FROM budget_demotion_events
+                     WHERE occurred_at > now() - ($1 || ' seconds')::interval
+                     GROUP BY 1
+                    """,
+                    str(int(grace)),
+                )
+        except Exception as exc:  # noqa: BLE001 — never suppress on a failure
+            logger.warning(
+                "liveness_watchdog.budget_pause_lookup_failed err=%s — cadence "
+                "stalls alert normally this pass", exc,
+            )
+            return {}
+        return {
+            str(row["analyst_id"]): float(row["since_s"] or 0.0)
+            for row in rows
+        }
 
     async def _fetch_cadence_rows(self) -> list[dict[str, Any]]:
         """The active cadence-bearing analysts + their newest successful run.
@@ -756,7 +865,9 @@ class LivenessWatchdog:
             "aggregate pipeline may look healthy (other analysts still "
             "publishing), so the global stall check won't catch this. Check "
             "this analyst's actor activation, descriptor head version, deps "
-            "resolution, and the registry /typed deserialization for its kind."
+            "resolution, and the registry /typed deserialization for its kind. "
+            "A budget pause inside the last hour is already ruled out — this "
+            "check suppresses those, and says so in the log when it does."
         )
         envelope = _cadence_envelope(
             analyst_id=analyst_id, title=title, body=body, age_seconds=age_s
@@ -780,6 +891,45 @@ class LivenessWatchdog:
             body=body,
             extra={"age_hours": round(age_h, 1)},
         )
+
+    # -- L1: dead LLM route (2026-09-20) --------------------------------
+
+    async def check_llm_route_liveness_once(
+        self, now_monotonic: float
+    ) -> list[str]:
+        """Alert on any BUSY LLM stack component that is answering nothing.
+
+        Returns the alerted component ids. Thresholds, the receipts read and
+        the verdict live in :mod:`.llm_route_liveness` (which carries the full
+        account of the 2.7-day silent grader outage this closes); the watchdog
+        owns the leader gate, the boot grace and the transition-edge ledger.
+        """
+        if self._pg is None:
+            return []
+        if self._is_leader is not None and not self._is_leader():
+            return []
+        # Boot grace: a thin window of receipts is not a verdict on a route.
+        if (now_monotonic - self._started_at) < self._cfg.stall_after_s:
+            return []
+        dead = await _llm_route.dead_routes(self._pg)
+        states = await self._get_alert_states(ALERT_CHANNEL_LLM_ROUTE)
+        alerted: list[str] = []
+        for route in dead:
+            if states.get(route["component_id"]) == "entered":
+                continue  # ongoing condition — the entry edge already fired
+            await self._emit_llm_route_alert(route)
+            alerted.append(route["component_id"])
+        await self._emit_recoveries(
+            channel=ALERT_CHANNEL_LLM_ROUTE,
+            kind="llm_route_recovered",
+            noun="LLM route",
+            still_bad={r["component_id"] for r in dead},
+        )
+        return alerted
+
+    async def _emit_llm_route_alert(self, route: dict[str, Any]) -> None:
+        _llm_route.log_dead_route(route)
+        await self._record_transition(**_llm_route.transition_kwargs(route))
 
     # -- OBS: per-source cadence-liveness (DQ-H5) -----------------------
 

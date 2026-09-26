@@ -57,6 +57,28 @@ export function stripMarkdown(md: string): string {
 }
 
 /**
+ * Strip a raw-signal JOURNAL citation marker (`[[ref:<uuid>]]`) from prose.
+ * A journal claim cites a raw signal this way (T1.3,
+ * planning/JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09.md §6) — a DIFFERENT
+ * marker family from the ordinal `[[ref:N]]` `stripCitationMarkers` (below)
+ * and `citationsModel`'s marker tokenizer strip/resolve, so it passes through
+ * both untouched and would otherwise render as literal bracket noise. Matched
+ * on the canonical 8-4-4-4-12 UUID shape specifically (not just "hex-ish"
+ * characters) so this can never also eat a digit-only ordinal marker like
+ * `[[ref:1]]` — the two forms must stay disjoint. The chip binding for these
+ * refs lives in the entry's `claims[].refs`, never in the prose, so stripping
+ * here is always safe — the SAME choice `panels/system/Journal.tsx`'s desktop
+ * reader already makes. Kept here (DOM-free, no desktop-panel import) so the
+ * mobile `JournalView` can apply it too.
+ */
+const JOURNAL_REF_UUID_MARKER_RE =
+  /\[\[ref:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\]\]/g
+
+export function stripJournalRefMarkers(text: string): string {
+  return text.replace(JOURNAL_REF_UUID_MARKER_RE, '')
+}
+
+/**
  * Remove citation markers (`[N]`, `[ref:N]`, `[[ref:N]]`) from a scan preview —
  * they read as noise (`[3][4][31]`) in a two-line clamp and can't be clickable
  * chips there. Full-width variants (`【N】`/`［N］`) are normalized to ASCII first

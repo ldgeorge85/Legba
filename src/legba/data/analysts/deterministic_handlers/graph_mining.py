@@ -43,6 +43,9 @@ from uuid import UUID
 
 import networkx as nx
 
+from ...graph_projection import (
+    projection_state as graph_projection_state,
+)
 from ...provenance.models import FindingPayload
 from ....runtime.analyst_method import AnalystMethodResult
 # M20 (2026-07-06 mining audit) — the shared canon spine vets edge endpoints so
@@ -738,6 +741,46 @@ def _is_person_only(ep_classes: set[str] | None) -> bool:
 #: edge is not evidence of alignment. Same table, different question.
 MINING_FAMILIES = ("relation", "reference", "structural")
 
+#: Pre-P4b substrate reads, kept verbatim for the flag-off state (see the
+#: ``projection_disabled`` branch in each reader). They are the queries the
+#: 2026-09-23 P4b review restored: with LEGBA_GRAPH_PROJECTION off the two live
+#: analysts must behave exactly as before the projection existed.
+_LEGACY_AUGMENT_SQL = """
+                SELECT sp.canonical_name AS subject,
+                       ip.canonical_name AS intermediary,
+                       dp.canonical_name AS object,
+                       e.polarity, e.edge_type AS rel_type
+                  FROM entity_edges e
+                  JOIN entity_profiles sp ON sp.id = e.src_id
+                  JOIN entity_profiles dp ON dp.id = e.dst_id
+                  LEFT JOIN entity_profiles ip ON ip.id = e.intermediary_id
+                 WHERE e.valid_until IS NULL AND e.superseded_by IS NULL
+                   AND e.edge_family = ANY($1::text[])
+                   -- #99: NEVER re-discover from our own inferred reifications,
+                   -- else proxy-chain mining amplifies inferred-on-inferred.
+                   AND COALESCE(e.source_type, '') <> 'inferred'
+                 LIMIT 20000
+"""
+_LEGACY_RECENT_HOSTILE_SQL = """
+                SELECT sp.canonical_name AS subject,
+                       dp.canonical_name AS object,
+                       e.polarity, e.edge_type AS rel_type,
+                       e.valid_from, e.confidence,
+                       ARRAY[sp.entity_class] AS subject_classes,
+                       ARRAY[dp.entity_class] AS object_classes
+                  FROM entity_edges e
+                  JOIN entity_profiles sp ON sp.id = e.src_id
+                  JOIN entity_profiles dp ON dp.id = e.dst_id
+                 WHERE e.valid_until IS NULL AND e.superseded_by IS NULL
+                   AND e.polarity < 0
+                   AND e.valid_from IS NOT NULL
+                   AND e.edge_family = ANY($1::text[])
+                   -- #99: exclude our own inferred reifications from re-discovery.
+                   AND COALESCE(e.source_type, '') <> 'inferred'
+                 ORDER BY e.valid_from DESC
+                 LIMIT 200
+"""
+
 
 async def _augment_from_nexuses(
     deps: Any, g: "nx.MultiDiGraph", families: Sequence[str] | None = None,
@@ -759,6 +802,16 @@ async def _augment_from_nexuses(
     degree AND its betweenness, demoting exactly the broker the mining exists
     to surface.
 
+    V3/P4b — READS THE PROJECTION, NOT THE SUBSTRATE. The snapshot now comes
+    from ``graph_arcs WHERE plane='world' AND src_table='entity_edges'`` — the
+    same rows the ``/graph/arcs`` API serves, so mining and the walk can never
+    disagree about what the world graph contains. The join back to
+    ``entity_edges`` through ``a.src_id`` restores only what the arc contract
+    does not carry (``source_type`` for the #99 guard, ``intermediary_id`` for
+    the proxy-chain hop). When the projection is disabled, empty or stale the
+    augment contributes nothing and says why — per spec §4.2 rule 5 a reader
+    never silently answers from a table that is not there.
+
     The #99 self-amplification guard survives the move: the reifier's own
     inferred proxy chains carry ``source_type='inferred'`` on the edge row, so
     the predicate is unchanged.
@@ -769,18 +822,36 @@ async def _augment_from_nexuses(
     fams = list(families) if families else list(MINING_FAMILIES)
     try:
         async with pool.acquire() as conn:
+            # P4b refusal contract: disabled/empty/stale projections are named
+            # states, never a silently-empty graph.
+            state, _meta = await graph_projection_state(conn)
+            if state == "projection_disabled":
+                # V3/P4b flag-off identity (review, 2026-09-23): while
+                # LEGBA_GRAPH_PROJECTION is off the projection is not this
+                # reader's declared source, so the pre-P4b substrate read runs
+                # byte-for-byte. Spec §4.2 rule 5 (never answer silently from
+                # a table that is not there) binds only once the flag names
+                # graph_arcs as the source — then empty/stale contribute nothing.
+                state = "legacy"
+            elif state != "ok":
+                logger.info("graph_mining.edge.projection_state=%s", state)
+                return 0
             rows = await conn.fetch(
-                """
+                _LEGACY_AUGMENT_SQL if state == "legacy" else """
                 SELECT sp.canonical_name AS subject,
                        ip.canonical_name AS intermediary,
                        dp.canonical_name AS object,
-                       e.polarity, e.edge_type AS rel_type
-                  FROM entity_edges e
-                  JOIN entity_profiles sp ON sp.id = e.src_id
-                  JOIN entity_profiles dp ON dp.id = e.dst_id
+                       a.polarity, a.arc_type AS rel_type
+                  FROM public.graph_arcs a
+                  JOIN entity_edges e ON e.id = a.src_id
+                  JOIN entity_profiles sp ON sp.id = a.from_id
+                  JOIN entity_profiles dp ON dp.id = a.to_id
                   LEFT JOIN entity_profiles ip ON ip.id = e.intermediary_id
-                 WHERE e.valid_until IS NULL AND e.superseded_by IS NULL
-                   AND e.edge_family = ANY($1::text[])
+                 WHERE a.plane = 'world'
+                   AND a.src_table = 'entity_edges'
+                   AND a.arc_type <> 'via'
+                   AND a.valid_until IS NULL AND e.superseded_by IS NULL
+                   AND a.family = ANY($1::text[])
                    -- #99: NEVER re-discover from our own inferred reifications,
                    -- else proxy-chain mining amplifies inferred-on-inferred.
                    AND COALESCE(e.source_type, '') <> 'inferred'
@@ -832,29 +903,50 @@ async def _recent_hostile_edges(
     fams = list(families) if families else list(MINING_FAMILIES)
     try:
         async with pool.acquire() as conn:
+            # P4b: the projection is the one world-graph read surface — and a
+            # disabled/empty/stale projection is a named state, not a silently
+            # empty answer.
+            state, _meta = await graph_projection_state(conn)
+            if state == "projection_disabled":
+                # V3/P4b flag-off identity (review, 2026-09-23): while
+                # LEGBA_GRAPH_PROJECTION is off the projection is not this
+                # reader's declared source, so the pre-P4b substrate read runs
+                # byte-for-byte. Spec §4.2 rule 5 (never answer silently from
+                # a table that is not there) binds only once the flag names
+                # graph_arcs as the source — then empty/stale contribute nothing.
+                state = "legacy"
+            elif state != "ok":
+                logger.info(
+                    "graph_mining.recent_hostile.projection_state=%s", state
+                )
+                return []
             # M20: also fetch the edge confidence (feeds the per-edge quality
             # score) + the entity_class of each endpoint (feeds the fragment /
             # state->person attribution guards in _build_interesting). The class
             # arrays stay ARRAYS so the downstream guards are untouched; they
             # are now single-element by construction.
             rows = await conn.fetch(
-                """
+                _LEGACY_RECENT_HOSTILE_SQL if state == "legacy" else """
                 SELECT sp.canonical_name AS subject,
                        dp.canonical_name AS object,
-                       e.polarity, e.edge_type AS rel_type,
-                       e.valid_from, e.confidence,
+                       a.polarity, a.arc_type AS rel_type,
+                       a.valid_from, a.confidence,
                        ARRAY[sp.entity_class] AS subject_classes,
                        ARRAY[dp.entity_class] AS object_classes
-                  FROM entity_edges e
-                  JOIN entity_profiles sp ON sp.id = e.src_id
-                  JOIN entity_profiles dp ON dp.id = e.dst_id
-                 WHERE e.valid_until IS NULL AND e.superseded_by IS NULL
-                   AND e.polarity < 0
-                   AND e.valid_from IS NOT NULL
-                   AND e.edge_family = ANY($1::text[])
+                  FROM public.graph_arcs a
+                  JOIN entity_edges e ON e.id = a.src_id
+                  JOIN entity_profiles sp ON sp.id = a.from_id
+                  JOIN entity_profiles dp ON dp.id = a.to_id
+                 WHERE a.plane = 'world'
+                   AND a.src_table = 'entity_edges'
+                   AND a.arc_type <> 'via'
+                   AND a.valid_until IS NULL AND e.superseded_by IS NULL
+                   AND a.polarity < 0
+                   AND a.valid_from IS NOT NULL
+                   AND a.family = ANY($1::text[])
                    -- #99: exclude our own inferred reifications from re-discovery.
                    AND COALESCE(e.source_type, '') <> 'inferred'
-                 ORDER BY e.valid_from DESC
+                 ORDER BY a.valid_from DESC
                  LIMIT 200
                 """,
                 fams,

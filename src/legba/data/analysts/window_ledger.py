@@ -79,6 +79,7 @@ import logging
 import re
 from typing import Any, Mapping, Sequence
 
+from .. import critic_fold
 from ..situations.trajectory import DELTA_UNCHANGED_CHECKPOINT
 from .composition_window import (
     MAX_TITLE_CHARS,
@@ -311,11 +312,12 @@ async def read_window_ledger(
         float(verify_floor),
         list(LEDGER_SEVERITIES),
     ]
+    # The f-ONLY admissibility. The verify leg is applied after the fold join
+    # below, where `v.faithfulness_score` exists.
     where = [
         "f.kind = 'finding'",
         "f.target_id = $1",
         "f.produced_at > NOW() - make_interval(hours => $2)",
-        "LEAST(f.confidence, v.faithfulness_score) >= $3",
         "f.severity = ANY($4::TEXT[])",
         "(f.data -> 'data' ->> 'meta') IS DISTINCT FROM 'true'",
         "(f.data -> 'tags' ?| array['unstructured','coerce_failed']) IS NOT TRUE",
@@ -324,21 +326,29 @@ async def read_window_ledger(
         params.append([str(a) for a in analyst_ids])
         where.append(f"f.analyst_id = ANY(${len(params)}::TEXT[])")
 
+    # H17 — SET-BASED. The target+window+severity set is taken FIRST, then ONE
+    # `DISTINCT ON` pass reads the latest faithfulness critique for those ids
+    # through the expression index. The INNER join to `v` is the same "verify
+    # must have run" gate the INNER lateral was; the outer set is bounded by
+    # `target_id` + the window rather than by a LIMIT (the LIMIT applies after
+    # the floor, so it cannot bound the fold).
+    fold = critic_fold.latest_critique_cte(
+        "v",
+        "(cr.data->>'overall_score')::real AS faithfulness_score",
+        "SELECT id::text FROM f",
+    )
     sql = f"""
+    WITH f AS MATERIALIZED (
+        SELECT f.id, f.analyst_id, f.title, f.severity, f.produced_at,
+               f.confidence
+          FROM analyst_outputs f
+         WHERE {' AND '.join(where)}
+    ), {fold}
     SELECT f.id, f.analyst_id, f.title, f.severity, f.produced_at,
            LEAST(f.confidence, v.faithfulness_score) AS effective_confidence
-      FROM analyst_outputs f
-      JOIN LATERAL (
-          SELECT (cr.data->>'overall_score')::real AS faithfulness_score
-            FROM analyst_outputs cr
-           WHERE cr.kind = 'critique'
-             AND cr.data->>'analyzed_output_id' = f.id::text
-             AND cr.data->>'overall_score' IS NOT NULL
-             AND cr.title LIKE 'Faithfulness verify%'
-           ORDER BY cr.produced_at DESC, cr.id DESC
-           LIMIT 1
-      ) v ON TRUE
-     WHERE {' AND '.join(where)}
+      FROM f
+      JOIN v ON v.fid = f.id::text
+     WHERE LEAST(f.confidence, v.faithfulness_score) >= $3
      ORDER BY {_SEVERITY_CASE_SQL} DESC, f.produced_at DESC, f.id DESC
      LIMIT {int(limit)}
     """

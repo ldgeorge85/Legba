@@ -357,8 +357,11 @@ def test_full_pass_soak_defers_young_group(monkeypatch):
         "status": "contested", "surfaced_value": None, "surfaced_fact_id": None,
         "surfaced_by": None, "surfaced_at": None, "surface_rationale": None,
     }]
+    # fetch order: open_triples, functional_role, prior-groups prefetch
+    # (empty -> nothing known unchanged, so the group is recomputed as before),
+    # surface_state, stale-group scan.
     conn = RecordingConn(
-        fetch_script=[rows, [], surface_state, []],
+        fetch_script=[rows, [], [], surface_state, []],
         fetchval_script=[uuid4()],
     )
     counts = asyncio.run(arb._run_arbiter(FakePool(conn), None))
@@ -389,9 +392,10 @@ def test_cached_verdict_served_without_llm_call(monkeypatch):
         "verdict": "pick", "winner_value_key": winning_key,
         "justification": "cached decision", "model_id": "vllm-cached",
     }]
-    # fetch order: open_triples, functional_role, surface_state, cache-hit.
+    # fetch order: open_triples, functional_role, prior-groups prefetch
+    # (empty), surface_state, cache-hit.
     conn = RecordingConn(
-        fetch_script=[rows, [], [], cached],
+        fetch_script=[rows, [], [], [], cached],
         fetchval_script=[uuid4()],
     )
     llm = StubLLM("pick:de-escalating")

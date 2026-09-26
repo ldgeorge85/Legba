@@ -283,7 +283,7 @@ async def test_prior_read_query_is_verify_gated_and_head_pinned():
         verify_floor=0.5,
     )
     query, params = conn.calls[0]
-    assert "JOIN LATERAL" in query and "LEFT JOIN LATERAL" not in query
+    assert "JOIN v ON v.fid = f.id::text" in query and "LEFT JOIN v ON v.fid = f.id::text" not in query
     assert "Faithfulness verify%" in query
     assert "LEAST(f.confidence, v.faithfulness_score) >= $3" in query
     assert "?| array['unstructured','coerce_failed']" in query

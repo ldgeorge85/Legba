@@ -130,6 +130,24 @@ from .absence_slice import (  # noqa: F401 — re-exported verify surface
     row_restates_the_negative,
 )
 from . import composition_integrity  # H2 — the composition-integrity brick (§6)
+# D-3 (2026-09-03) — THE ASSEMBLY ARMS, the judge subsystem's seventh brick and
+# the verify seam this train names in its first commit (D-1 §5.1 requires one:
+# this module had ~130 lines of ceiling and the four arms are ~700). Four
+# deterministic auditors over the ``assembly.v1`` payload, INERT on every
+# non-assembly caller by construction. Imported ONE WAY, module-qualified at the
+# single fold site; its reasons arrive through ``FAIL_CLASSES`` exactly as H2's do.
+from . import assembly_arms  # D-3 — the assembly arms brick (D-1 §3)
+# G3 (2026-09-06) — THE WEIGHTED-COMPARISON LICENCE, the judge subsystem's eighth
+# brick and this train's own seam (49 lines of ceiling here against a subsystem).
+# The Assessment's voice contract MANDATES a weighted cross-block comparison and
+# the composition rubric grades each claim against the ONE sub-claim its marker
+# names, so the judge could only ever answer "unsupported" to the sentence the
+# channel asked for. The assembly performs exactly one ranking and publishes it
+# (the ordinal order + the earned-lead verdict, both in the arithmetic block P1
+# put behind every citation), so a comparison that names the blocks it weighs is
+# relaying it. INERT for every finding whose citations carry no arithmetic rule,
+# which is the whole fleet except an Assessment.
+from . import assessment_weighting  # G3 — the weighted-comparison licence
 # K-1 (2026-08-05) — the QUOTE RULES are the judge subsystem's fourth brick, and
 # the extraction seam the module-size gate named by name ("prompt registry +
 # ``_run_judge`` + the quote/severity rules"). Every deterministic test for
@@ -163,6 +181,7 @@ from .judge_quote_rules import (  # noqa: F401 — re-exported verify surface
     _VERDICT_ROUTE_EXCLUDED,
     _canonical_judge_quote,
     _judge_claim_block,
+    _judge_reply_contract,
     _normalize_quote_text,
     _numeral_fingerprint,
     _quote_hits_a_carve_out,
@@ -205,6 +224,7 @@ from .judge_verdict_parsing import (  # noqa: F401 — re-exported verify surfac
     _is_uncited_world_baseline,
     _judge_detail,
     _judge_reason,
+    alignment_audit_fields,
 )
 # V-G7 (2026-08-03) — the STRUCTURAL-CLAIMS verify profile is the SECOND,
 # deterministic critique path (see the sibling module's header for why it is a
@@ -1182,6 +1202,12 @@ _FAIL_CLASS_BY_REASON: dict[str, str] = {
     # ungraded, never a span and never a ledger row.
     _JUDGE_NONPROP_UNEARNED: FAIL_CLASS_SOFT,
     **composition_integrity.FAIL_CLASSES,  # H2 — see that module's banner
+    # D-3 (2026-09-03) — the SIXTEEN ASSEMBLY-ARM classes, all HARD. They grade a
+    # GENERATED payload, so none of them can express "the model outran its
+    # evidence"; each says "the record does not say what it says it says", which
+    # is the house definition of hard. Rationale per class lives beside the class
+    # in ``assembly_arms`` (this table stays THE lookup and THE drift guard).
+    **assembly_arms.FAIL_CLASSES,
 }
 
 
@@ -1237,6 +1263,24 @@ def _llm_judge_enabled() -> bool:
 # critique/trace contract is unchanged.
 from .judge_pipeline_version import (  # noqa: E402,F401 — re-exported surface
     JUDGE_PIPELINE_VERSION,
+)
+# K-1 (2026-09-08) — judge TRANSPORT is the subsystem's sixth brick: the bounded
+# retry that tells "the router was overloaded" apart from "the judge said
+# nothing" (OpenRouter reports an upstream 502 as HTTP 200 + an error envelope,
+# which no status-code retry can see), the PARTITION-PRESERVE policy and its
+# ceiling rule, and ``_judge_claim_partition`` — the send-and-parse of ONE judge
+# response, which moved with the transport it calls. Imported ONE WAY and
+# RE-EXPORTED, so ``verify._judge_claim_partition`` resolves exactly as before.
+from .judge_transport import (  # noqa: E402,F401 — re-exported verify surface
+    JUDGE_MAX_TOKENS,
+    JUDGE_STATUS_PARTIAL,
+    JUDGE_SURVEY_PARTITION,
+    JudgeTransportTelemetry,
+    _judge_claim_partition,
+    call_judge_with_retry,
+    judge_transport_receipts,
+    resolve_partition_outcome,
+    split_unchecked,
 )
 
 JUDGE_PROFILE_CURRENT = "current"
@@ -1352,6 +1396,7 @@ class ClaimVerdict:
     # carried on the ledger row so a verdict explains itself without a span join
     # (and so a deterministically-VERIFIED supported row can say what it checked).
     detail: str | None = None
+    aligned_by: str | None = None  # H3: HOW align_verdicts matched this row
 
     @classmethod
     def supported(
@@ -1382,6 +1427,7 @@ class ClaimVerdict:
             "verdict": self.verdict,
             "reason": self.reason,
             "detail": self.detail,
+            **({"aligned_by": self.aligned_by} if self.aligned_by is not None else {}),
         }
 
 
@@ -1469,6 +1515,17 @@ class FaithfulnessReport:
     # (tests, gepa) is byte-identical until it is stamped.
     score_state: str = SCORE_STATE_SCORED
     score_state_reason: str | None = None
+    # 2026-09-08/1 — the judge TRANSPORT receipts (judge_transport.py). Requests
+    # actually sent for this finding and one status token each, so a
+    # ``judge_empty`` row says WHICH ("200/502" = the router answered 200 and
+    # named an upstream 502 inside the body). Absent until a judge call is made.
+    judge_attempts: int | None = None
+    judge_http_statuses: list[str] = field(default_factory=list)
+    # 2026-09-20/1 — how many graded claims got NO verdict, and which (1-based,
+    # span order); ``None`` / empty on every complete pass.
+    judge_partial: int | None = None
+    judge_partial_claims: list[int] = field(default_factory=list)
+    judge_miscount_claims: int = 0  # H3: summed reply-count mismatch
 
     @property
     def provisional(self) -> bool:
@@ -1517,6 +1574,9 @@ class FaithfulnessReport:
             # P2-4 additive: the size-bounded per-claim ledger + honest cut flag.
             "claim_verdicts": bounded,
             "claim_verdicts_truncated": truncated,
+            **alignment_audit_fields(  # H3: the alignment audit
+                self.claim_verdicts, self.judge_miscount_claims, self.judge_partial
+            ),
             # 2026-07-31 additive: the structural-fix receipts counters (sparse)
             # + the population SPLIT key, so the trace envelope records which
             # verify pipeline produced this number.
@@ -1527,6 +1587,9 @@ class FaithfulnessReport:
             "score_state": self.score_state,
             "score_state_reason": self.score_state_reason,
             "provisional": self.provisional,
+            # 2026-09-08/1 additive + SPARSE: absent on every path that made no
+            # judge call, so those verification dicts stay byte-identical.
+            **judge_transport_receipts(self),
             # The PUBLISHED gate number, computed by the one policy function, so
             # every consumer of this block caps on the same value the critique row
             # carries instead of re-deriving it (or, as the escalation gate did,
@@ -1622,8 +1685,27 @@ def _signal_backed_ordinals(citations: Any) -> set[int]:
 # the judge is told so and softens "absent => unsupported" to "contradicted =>
 # unsupported" (F1) — otherwise a claim the analyst faithfully drew from deep in a
 # long article would be false-demoted for being past the excerpt cut.
-_EVIDENCE_SOURCE_CHARS = 3000
-_EVIDENCE_TOTAL_CHARS = 3600
+# 2026-09-20/1: 3000 -> 6000. The store cap is 3,200
+# (``inline_target._SOURCE_TEXT_CHARS``), so at 3,000 the judge RE-CUT a source
+# it could have seen whole and then called it an EXCERPT (F1). Full argument in
+# the ``2026-09-20/1`` lineage entry.
+_EVIDENCE_SOURCE_CHARS = 6000
+# P0c (2026-09-12 pre-round, INSTRUMENT_PLAN B1): raised 3600 -> 4000 IN
+# LOCKSTEP with ``meta_findings_synthesizer.MAX_EVIDENCE_TEXT_CHARS`` — the
+# composition citation's capture, which this constant is pinned equal to
+# (``test_composition_evidence_window.
+# test_the_composition_citation_carries_the_unit_evidence_window``). The
+# composition tier's renderer shows an input body up to
+# ``MAX_FULL_BODY_CHARS`` (4000) chars; leaving this at 3600 would have
+# reopened the same blind window one hop later, this time inside the pin
+# itself. See ``meta_findings_synthesizer.MAX_EVIDENCE_TEXT_CHARS`` for the
+# full defect writeup.
+# 2026-09-20/1: 4000 -> 8000, the load-bearing one — ``OUTLET + title + SOURCE
+# + Analyst summary`` against a 3,200-char source left ~700 chars for the
+# summary and cut it mid-sentence, so a claim drawn from the tail of what the
+# analyst was SHOWN read as absent. The P0c LOCKSTEP pin below is now a ``>=``:
+# the judge's window may never be NARROWER than the composition capture.
+_EVIDENCE_TOTAL_CHARS = 8000
 # BACKWARD-COMPAT (F3): entries with NO ``source_text`` (old data / non-signal
 # path) keep the ORIGINAL 600-char total cap so the C1 verify-floor calibration on
 # pre-existing findings is byte-unchanged. The larger caps above apply ONLY to the
@@ -1636,7 +1718,11 @@ _EVIDENCE_LEGACY_CHARS = 600
 # false-demote a faithful claim about a frame the model was actually shown. The
 # same reasoning ``SITUATION_REGISTER_EVIDENCE_CHARS`` carries on the composition
 # side.
-_EVIDENCE_GROUNDING_CHARS = 2400
+# 2026-09-20/1: 2400 -> 4800, and INERT TODAY — the producer captures a block at
+# ``unit_grounding.EVIDENCE_TEXT_CHARS`` (2,400), so nothing reaching here is
+# longer than the old cap. It moves so the grader is never the narrower of the
+# two when that producer pin is raised.
+_EVIDENCE_GROUNDING_CHARS = 4800
 
 
 def _grounding_ordinals(citations: Any) -> dict[int, str]:
@@ -2378,6 +2464,21 @@ CLAIM_KIND_ABSENCE = "absence"
 CLAIM_KIND_SYNTHESIS = "synthesis"
 CLAIM_KIND_CITATION_SUPPORT = "citation_support"
 
+#: D-3 (2026-09-03) — the ASSEMBLY branch. NOT returned by :func:`_claim_kind`,
+#: and that is the design rather than an omission: an assembly violation is not a
+#: SEGMENTED PROSE SPAN at all, it is a structural fact about a payload (a span
+#: that does not resolve, a ledger that does not close). Routing it through the
+#: prose classifier would mean inventing a lexical rule for a thing that has no
+#: prose. So the branch is populated by ``assembly_arms`` directly, and
+#: ``_claim_kind`` is BYTE-IDENTICAL — which is also what keeps the fleet's
+#: existing ``branch_scores`` telemetry unmoved by this train.
+#:
+#: NOT the D3/#71 CLAIM-CLASS SPLIT, which does not exist and which D-3 does not
+#: build (D-1 §3.7 / F-11: zero code, zero tests, zero occurrences of
+#: ``claim_class`` in the tree; the ruling is design-first, own stamp, sequenced
+#: after #69). This is one new branch for one new deterministic instrument.
+CLAIM_KIND_ASSEMBLY = "assembly"
+
 
 def _claim_kind(claim: str) -> str:
     """Assign a segmented span EXACTLY ONE claim kind (design §2.1).
@@ -2498,10 +2599,14 @@ class JudgeProfile:
 # tree to advertise the fourth verdict. ``citation_support`` does NOT move — its
 # prompt is byte-identical, which is what keeps the absence measurement
 # attributable to the absence rewrite alone (D5 Q4's control-arm reasoning).
+#
+# H3 (2026-09-24/1) bumps BOTH prompted kinds: the reply contract now asks every
+# verdict entry to name its claim (``claim_index``), and that text rides the
+# shared lead AND the absence rubric — two prompts changed, two version bumps.
 _JUDGE_PROFILES: dict[str, JudgeProfile] = {
     CLAIM_KIND_CITATION_SUPPORT: JudgeProfile(
         kind=CLAIM_KIND_CITATION_SUPPORT,
-        version="citsupp.v5",
+        version="citsupp.v6",
         judge_system=None,  # rides the existing unit/composition prompt in _run_judge
     ),
     CLAIM_KIND_ABSENCE: JudgeProfile(
@@ -2517,6 +2622,16 @@ _JUDGE_PROFILES: dict[str, JudgeProfile] = {
     ),
     CLAIM_KIND_STRUCTURE: JudgeProfile(
         kind=CLAIM_KIND_STRUCTURE, version="structure.v0", judge_system=None
+    ),
+    # D-3 (2026-09-03) — the ASSEMBLY branch. ``judge_system=None`` for a reason
+    # no other stubbed kind has: this branch has NO judge and never will. It is
+    # graded by four deterministic arms over a generated payload, and a version
+    # bump here means the ARMS changed, not that a rubric did. Stamped so
+    # ``branch_versions.assembly`` lands on every audited row and a later
+    # recalibration of the arms is a visible, greppable per-kind bump — the same
+    # contract the five prose kinds carry.
+    CLAIM_KIND_ASSEMBLY: JudgeProfile(
+        kind=CLAIM_KIND_ASSEMBLY, version="assembly_arms.v1", judge_system=None
     ),
 }
 
@@ -3434,6 +3549,8 @@ def _fold_indicators(
         unsupported_spans=floor.unsupported_spans + ind_spans,
         judge_status=floor.judge_status,
         judge_unavailable_reason=floor.judge_unavailable_reason,
+        judge_attempts=floor.judge_attempts,  # 2026-09-08/1 transport receipts
+        judge_http_statuses=list(floor.judge_http_statuses),
         confidence_ceiling=floor.confidence_ceiling,
         # P2-4: the indicator rows join the per-claim ledger (supported entries
         # were previously recorded nowhere; failures mirror their spans).
@@ -3525,6 +3642,8 @@ def _fold_guard_spans(
         unsupported_spans=floor.unsupported_spans + guard_spans,
         judge_status=floor.judge_status,
         judge_unavailable_reason=floor.judge_unavailable_reason,
+        judge_attempts=floor.judge_attempts,  # 2026-09-08/1 transport receipts
+        judge_http_statuses=list(floor.judge_http_statuses),
         confidence_ceiling=floor.confidence_ceiling,
         # P2-4: each guard hit is a checkable-but-failed ledger row (class from
         # the ONE _FAIL_CLASS_BY_REASON table), text mirroring its span.
@@ -3651,15 +3770,12 @@ def _apply_claim_overrides(
             ledger.append(cv)
             continue
         if ov.annotate_only:
-            # W4: the finding rides on the row, the verdict does not move. Never
-            # entered in ``applied``, so the span set is untouched too.
+            # W4: the row's verdict does not move (nor H3's aligned_by, below).
             ledger.append(
                 ClaimVerdict(
-                    text=cv.text,
-                    verdict=cv.verdict,
-                    reason=cv.reason,
-                    markers=list(cv.markers),
-                    detail=ov.detail or cv.detail,
+                    text=cv.text, verdict=cv.verdict, reason=cv.reason,
+                    markers=list(cv.markers), detail=ov.detail or cv.detail,
+                    aligned_by=cv.aligned_by,
                 )
             )
             continue
@@ -3751,6 +3867,9 @@ def _apply_claim_overrides(
         unsupported_spans=spans,
         judge_status=report.judge_status,
         judge_unavailable_reason=report.judge_unavailable_reason,
+        judge_attempts=report.judge_attempts,  # 2026-09-08/1 transport receipts
+        judge_http_statuses=list(report.judge_http_statuses),
+        judge_miscount_claims=report.judge_miscount_claims,  # H3 transport receipt
         confidence_ceiling=report.confidence_ceiling,
         branch_scores=report.branch_scores,
         claim_verdicts=ledger,
@@ -4348,6 +4467,7 @@ async def _maybe_llm_judge(
     if judge_llm is None:
         floor.judge_unavailable_reason = "no_judge_component"
         return floor
+    telem = JudgeTransportTelemetry()
     try:
         # The judge resolves through the EXISTING component machinery (the
         # caller passes a resolved ``LLMHandlerLike`` — same shape the critic
@@ -4356,17 +4476,27 @@ async def _maybe_llm_judge(
         # floor.  (The judge component is whatever the P2-4 judge ROUTE
         # resolved at the call site — a REGISTERED component, not hardcoded
         # here; today the core producer plane.)
-        verdicts, branch_scores = await _run_judge(
+        verdicts, branch_scores, floored_partitions = await _run_judge(
             judge_llm,
             body=body,
             citations=citations,
             judge_prompt_profile=judge_prompt_profile,
+            telemetry=telem,
         )
     except Exception as exc:  # noqa: BLE001 — soft-fail, never break the run
         logger.warning("verify.faithfulness.judge_failed err=%s", exc)
         floor.judge_unavailable_reason = "judge_error"
+        telem.stamp(floor)
         return floor
 
+    # 2026-09-08/1 — the transport receipts ride BOTH exits, so an empty judge is
+    # diagnosable from the row rather than only from the provider's dashboard.
+    telem.stamp(floor)
+    judge_status, partial_reason = resolve_partition_outcome(
+        judged=bool(verdicts),
+        floored=floored_partitions,
+        unchecked=telem.unchecked_by_partition,
+    )
     if not verdicts:
         floor.judge_unavailable_reason = "judge_empty"
         return floor
@@ -4464,7 +4594,7 @@ async def _maybe_llm_judge(
     # authoritative over the prose it saw.
     ungraded_nonpropositional = 0
     floor_counted_nonpropositional = 0
-    for claim_text, verdict, quote in verdicts:
+    for claim_text, verdict, quote, _aligned_by in verdicts:
         judged_texts.add(claim_text.strip())
         if verdict == VERDICT_NOT_A_PROPOSITION:
             ungraded_nonpropositional += 1
@@ -4533,7 +4663,7 @@ async def _maybe_llm_judge(
     # the headline tallies above are untouched.
     subclaim = _uses_subclaim_convention(citations)
     judge_ledger: list[ClaimVerdict] = []
-    for claim_text, verdict, quote in verdicts:
+    for claim_text, verdict, quote, aligned_by in verdicts:
         # RUST-3: an ungraded non-proposition is provenance, not a verdict. It
         # gets a COUNTER, never a ledger row — the V-F rule verbatim ("NEVER
         # graded, scored, or persisted as a verdict row"). Persisting one would
@@ -4544,21 +4674,16 @@ async def _maybe_llm_judge(
             continue
         markers = _markers_in_claim(claim_text, subclaim=subclaim)
         if verdict == "supported":
-            judge_ledger.append(ClaimVerdict.supported(claim_text, list(markers)))
+            cv = ClaimVerdict.supported(claim_text, list(markers))
         else:
-            # W2: the SAME ``_judge_reason`` the span above uses. This branch
-            # previously collapsed both demotion classes back to
-            # ``judge_unsupported``, so the label survived in unsupported_spans
-            # and vanished from claim_verdicts — the calibration loop reads the
-            # LEDGER, and so could not split the class it was built to measure.
-            judge_ledger.append(
-                ClaimVerdict.failed(
-                    claim_text,
-                    _judge_reason(verdict),
-                    list(markers),
-                    detail=_judge_detail(verdict, quote, claim_text),
-                )
+            # W2: the SAME ``_judge_reason`` the span above uses — this branch
+            # previously collapsed both demotion classes to ``judge_unsupported``.
+            cv = ClaimVerdict.failed(
+                claim_text, _judge_reason(verdict), list(markers),
+                detail=_judge_detail(verdict, quote, claim_text),
             )
+        cv.aligned_by = aligned_by  # H3 (2026-09-25/1)
+        judge_ledger.append(cv)
     carried_ledger = [
         cv for cv in floor.claim_verdicts if cv.text.strip() not in judged_texts
     ]
@@ -4579,7 +4704,20 @@ async def _maybe_llm_judge(
         # The judge's semantic spans + any floor structural span the judge did NOT
         # re-grade + the advisory (uncounted) notes.
         unsupported_spans=judged_spans + residual_floor_spans + advisory_spans,
-        judge_status="llm",
+        # 'llm' when every partition graded; 'partial' (2026-09-08/1) when one
+        # came back empty and its claims fell to the floor while the other's
+        # verdicts were KEPT. A partial pass is NOT provisional — see the ceiling
+        # rule in judge_transport.resolve_partition_outcome.
+        judge_status=judge_status,
+        judge_unavailable_reason=partial_reason,
+        # An INT, never ``or None``: reaching this return means the judge WAS
+        # asked, so the receipt must exist even when the answer came first try.
+        judge_attempts=telem.attempts,
+        judge_http_statuses=list(telem.http_statuses),
+        # 2026-09-20/1 — sparse: ``None`` unless a claim was left ungraded.
+        judge_partial=len(telem.unchecked_claims) or None,
+        judge_partial_claims=sorted(telem.unchecked_claims),
+        judge_miscount_claims=telem.reply_count_delta,  # H3: summed per-partition
         # Carry the floor's T7 evidence ceiling through — the judge only refines
         # the faithfulness number, never the double-count-corrected cap.
         confidence_ceiling=floor.confidence_ceiling,
@@ -4652,96 +4790,24 @@ def _generic_judge_system(profile: str | None = None) -> str:
     return _GENERIC_JUDGE_SYSTEM
 
 
-async def _judge_claim_partition(
-    judge_llm: Any,
-    *,
-    claims: list[str],
-    evidence_prompt: str,
-    system: str,
-) -> list[tuple[str, str]]:
-    """Send ONE partition of claims to the judge; return ``[(verdict, quote)]``.
-
-    Factored out of :func:`_run_judge` so the V3 absence partition AND the M14
-    whole-finding survey call reuse the identical call + parse machinery with
-    their OWN system prompts (design §3.5). A malformed / empty response yields
-    ``[]``; a length mismatch raises :class:`_JudgeVerdictError` (the
-    ONE-verdict-per-claim honesty contract from #116d). ``evidence_prompt`` is
-    the per-branch user message already carrying the evidence map + numbered
-    claim list.
-
-    V-D: ``quotes`` is the OPTIONAL parallel array of verbatim evidence spans —
-    ``""`` for every entry a judge omits, a wrong-length array ignored wholesale
-    (a misaligned quote is worse than none). Resolution against the shown
-    evidence is the CALLER's job (it holds the evidence map).
-    """
-    response = await judge_llm.chat_complete(
-        [{"role": "user", "content": evidence_prompt}],
-        # 2026-07-01: the faithfulness judge runs on the SAME core reasoning model
-        # as generation (llm.primary.openai_compat), because the 8B cross-family
-        # judge proved too weak — harsh + mis-aimed (see the composition
-        # shake-down). Matched to the main model's budget: a reasoning-class model
-        # may emit thinking before the strict-JSON verdicts, so a 512 cap would
-        # truncate the JSON → empty parse → soft-fail to floor. NOTE: same-family
-        # removes cross-family independence — a DOCUMENTED LIMITATION, pending a
-        # dedicated reasoning judge model (a self-verifying model shares blind
-        # spots with the generator; the deterministic citation floor + the
-        # provenance chain still backstop it).
-        max_tokens=16384,
-        temperature=0.0,
-        system=system,
-    )
-    content = getattr(response, "content", "") or ""
-    # (#116d) Fence/prose-tolerant parse: a reasoning-class judge may wrap the
-    # verdicts in a ```json fence or emit thinking around them, so scan for the
-    # object that actually carries ``verdicts`` instead of a fence-intolerant
-    # ``strip('`')`` that fails on ``` ```json\n{...}\n``` ```.
-    parsed = next(
-        (o for o in _extract_json_objects(content) if "verdicts" in o), None
-    )
-    if parsed is None:
-        return []  # no parseable verdict object → soft-fail to floor (judge_empty)
-    raw = parsed.get("verdicts")
-    if not isinstance(raw, list):
-        return []
-    # (#116d) HONEST length contract: the judge MUST return one verdict per graded
-    # claim. A short/long list previously zip-truncated to the shorter, silently
-    # passing the ungraded tail — fail to the floor labelled judge_error instead.
-    if len(raw) != len(claims):
-        raise _JudgeVerdictError(
-            f"judge returned {len(raw)} verdicts for {len(claims)} claims"
-        )
-    # V-D: the parallel quote array. A judge that omits it, or returns a
-    # misaligned one, yields empty quotes — every contradiction then demotes
-    # rather than risking a quote attached to the wrong claim.
-    quotes_raw = parsed.get("quotes")
-    quotes: list[str] = (
-        [q if isinstance(q, str) else "" for q in quotes_raw]
-        if isinstance(quotes_raw, list) and len(quotes_raw) == len(claims)
-        else [""] * len(claims)
-    )
-    out: list[tuple[str, str]] = []
-    for verdict, quote in zip(raw, quotes):
-        v = str(verdict).strip().lower()
-        # RUST-3: the accepted vocabulary is the FOUR-token contract. Anything
-        # outside it still coerces to ``unsupported``, exactly as before — the
-        # only change is that ``not_a_proposition`` stopped being "anything
-        # outside it". A judge on ANY route may now say a span asserts nothing;
-        # whether it is honoured is the severity chain's decision, not the
-        # parser's (only the absence rubric currently ADVERTISES the token).
-        if v not in JUDGE_VERDICT_TOKENS:
-            v = "unsupported"
-        out.append((v, quote))
-    return out
-
-
 async def _run_judge(
     judge_llm: Any,
     *,
     body: str,
     citations: Any,
     judge_prompt_profile: str | None = None,
-) -> tuple[list[tuple[str, str, str]], dict[str, dict[str, int | float]]]:
-    """Call the judge LLM; return ``([(claim, verdict, quote), ...], branch_scores)``.
+    telemetry: JudgeTransportTelemetry | None = None,
+) -> tuple[
+    list[tuple[str, str, str, str]], dict[str, dict[str, int | float]], list[str]
+]:
+    """Call the judge LLM; return ``(verdicts, branch_scores, floored_partitions)``.
+    Each ``verdicts`` entry is ``(claim, verdict, quote, aligned_by)`` (H3).
+
+    ``floored_partitions`` (2026-09-08/1) names every partition whose judge call
+    came back empty while ANOTHER partition was graded — the input to
+    ``judge_transport.resolve_partition_outcome``, which holds the policy and its
+    ceiling rule. Empty on every fully-graded pass and on every pass where
+    nothing was graded at all (there ``verdicts`` is empty and says so).
 
     ``verdict`` is one of the FOUR contract tokens a judge may emit (supported,
     unsupported, contradicted, not_a_proposition) or one of the sentinels the
@@ -4809,6 +4875,7 @@ async def _run_judge(
     """
     import json
 
+    telem = telemetry if telemetry is not None else JudgeTransportTelemetry()
     generic_system = _generic_judge_system(judge_prompt_profile)
 
     # H1: the judge grades EVERY prose span — including the BLUF / synthesis /
@@ -4817,7 +4884,7 @@ async def _run_judge(
     # the judge distinguishes faithful synthesis from invented fact via its prompt.
     claims = [c for c in _segment_claims(body) if _is_judgeable_claim(c)]
     if not claims:
-        return [], {}
+        return [], {}, []
     # M14: a corpus-negative / survey finding is graded with the NULL-RESULT
     # rubric (survey faithfulness) rather than the per-clause citation rubric, so
     # an honest un-citable NEGATIVE isn't scored like a fabrication.
@@ -4839,9 +4906,8 @@ async def _run_judge(
             "NO [[ref:N]] marker is a synthesis / BLUF / framing / severity / "
             "absence statement — mark it SUPPORTED unless it asserts a SPECIFIC "
             "fact (an event, number, name, or place) that is absent from, or "
-            "contradicted by, ALL of the sub-claims. Answer strict JSON only: "
-            '{"verdicts": ["supported"|"unsupported"|"contradicted", ...]} with '
-            "one verdict per claim, in order."
+            "contradicted by, ALL of the sub-claims."
+            + _judge_reply_contract()
             + _JUDGE_QUOTE_RULE
             + _JUDGE_QUALIFIER_RULE
             + "\n\n"
@@ -4890,9 +4956,8 @@ async def _run_judge(
             "claim with NO [N] marker is a synthesis / framing / severity / absence "
             "statement — mark it SUPPORTED unless it asserts a SPECIFIC fact (an event, "
             "number, name, or place) that is absent from, or contradicted by, ALL of "
-            "the evidence. "
-            'Answer strict JSON only: {"verdicts": ["supported"|"unsupported"|'
-            '"contradicted", ...]} with one verdict per claim, in order.'
+            "the evidence."
+            + _judge_reply_contract()
             + _JUDGE_QUOTE_RULE
             + _JUDGE_QUALIFIER_RULE
             + "\n\n"
@@ -5077,7 +5142,7 @@ async def _run_judge(
                 claim[:120],
             )
             return _VERDICT_CONTRADICTED_HEDGED, str(quote)
-        routed = claim_is_routed_out(claim)
+        routed = claim_is_routed_out(claim, body=body)
         if routed is not None:
             # V-I5: the V-B router already took this claim off the slice route as
             # a continuity / volume / trajectory read, and 08-03 rec #2 shipped
@@ -5109,15 +5174,20 @@ async def _run_judge(
             claims=claims,
             evidence_prompt=survey_prompt,
             system=_NULL_RESULT_JUDGE_SYSTEM,
+            telemetry=telem,
         )
+        # ONE call graded everything here, so there is no partition to preserve:
+        # empty means nothing was judged, which is the deterministic floor.
         if not survey_verdicts:
-            return [], {}
+            return [], {}, []
+        # 2026-09-20/1: an UNCHECKED slot is a claim the judge returned no
+        # verdict for — it leaves the graded list entirely (see split_unchecked).
+        graded, ungraded = split_unchecked(list(range(len(claims))), survey_verdicts)
+        telem.record_unchecked(JUDGE_SURVEY_PARTITION, ungraded)
         return (
-            [
-                (c, *_severity(v, q, c))
-                for c, (v, q) in zip(claims, survey_verdicts)
-            ],
+            [(claims[i], *_severity(v, q, claims[i]), ab) for i, (v, q, ab) in graded],
             {},
+            [],
         )
 
     # V3 partition — split graded claims by kind, preserving each claim's
@@ -5136,7 +5206,11 @@ async def _run_judge(
         else:
             shared_idx.append(i)
 
-    verdicts_by_idx: dict[int, tuple[str, str]] = {}
+    verdicts_by_idx: dict[int, tuple[str, str, str]] = {}
+    # 2026-09-08/1 — PARTITION-PRESERVE. An empty partition no longer discards
+    # the other one's verdicts; it is NAMED here and floored on its own. The
+    # policy and its ceiling rule live in judge_transport.resolve_partition_outcome.
+    floored_partitions: list[str] = []
 
     if shared_idx:
         shared_claims = [claims[i] for i in shared_idx]
@@ -5146,11 +5220,15 @@ async def _run_judge(
             claims=shared_claims,
             evidence_prompt=shared_prompt,
             system=generic_system,
+            telemetry=telem,
         )
         if not shared_verdicts:
-            return [], {}  # judge_empty on the load-bearing partition → soft-fail
-        for i, (v, q) in zip(shared_idx, shared_verdicts):
-            verdicts_by_idx[i] = _severity(v, q, claims[i])
+            floored_partitions.append(CLAIM_KIND_CITATION_SUPPORT)
+        # 2026-09-20/1 — a gap is dropped and reported here, never scored.
+        graded, ungraded = split_unchecked(shared_idx, shared_verdicts)
+        telem.record_unchecked(CLAIM_KIND_CITATION_SUPPORT, ungraded)
+        for i, (v, q, ab) in graded:
+            verdicts_by_idx[i] = (*_severity(v, q, claims[i]), ab)
 
     if absence_idx:
         absence_claims = [claims[i] for i in absence_idx]
@@ -5167,18 +5245,29 @@ async def _run_judge(
             claims=absence_claims,
             evidence_prompt=absence_prompt,
             system=absence_profile.judge_system or generic_system,
+            telemetry=telem,
         )
         if not absence_verdicts:
-            return [], {}  # judge_empty on the absence partition → soft-fail
-        for i, (v, q) in zip(absence_idx, absence_verdicts):
-            verdicts_by_idx[i] = _severity(v, q, claims[i])
+            floored_partitions.append(CLAIM_KIND_ABSENCE)
+        graded, ungraded = split_unchecked(absence_idx, absence_verdicts)
+        telem.record_unchecked(CLAIM_KIND_ABSENCE, ungraded)
+        for i, (v, q, ab) in graded:
+            verdicts_by_idx[i] = (*_severity(v, q, claims[i]), ab)
+
+    # Nothing graded at all → the pre-2026-09-08 soft-fail, byte-identical: the
+    # caller labels it ``judge_empty`` and publishes the deterministic floor.
+    if not verdicts_by_idx:
+        return [], {}, []
 
     # Re-zip in ORIGINAL span order + record per-branch sub-scores (design §2.3).
-    out: list[tuple[str, str, str]] = []
+    out: list[tuple[str, str, str, str]] = []
     branch_scores: dict[str, dict[str, int | float]] = {}
     for i, claim in enumerate(claims):
-        verdict, earned_quote = verdicts_by_idx[i]
-        out.append((claim, verdict, earned_quote))
+        graded = verdicts_by_idx.get(i)
+        if graded is None:
+            continue  # a floored partition's claim — never a fabricated verdict
+        verdict, earned_quote, aligned_by = graded
+        out.append((claim, verdict, earned_quote, aligned_by))
         kind = kinds[i]
         # RUST-3: an EARNED non-proposition is not a graded claim, so it enters
         # no branch denominator — counting it would dilute a route's sub-score
@@ -5194,7 +5283,7 @@ async def _run_judge(
     for bucket in branch_scores.values():
         c = bucket["checkable"]
         bucket["score"] = 1.0 if c == 0 else round(bucket["supported"] / c, 4)
-    return out, branch_scores
+    return out, branch_scores, floored_partitions
 
 
 async def _fold_absence_slice(
@@ -5236,9 +5325,9 @@ async def _fold_absence_slice(
         qual = absence_scope_qualifier(claim)
         if qual is None:
             continue
-        # W1(e): a VOLUME / CONTINUITY / TRAJECTORY read carries the absence SHAPE
-        # without being a slice-checkable negative — it keeps today's route.
-        excluded = _absence_route_exclusion(claim)
+        # W1(e) + o4: a VOLUME / CONTINUITY / TRAJECTORY read — or ANY sentence of
+        # the APERTURE SECTION — is not a slice-checkable negative. Same route out.
+        excluded = _absence_route_exclusion(claim, body=body)
         if excluded is not None:
             report.bump("absence_slice_route_excluded")
             # V-G2: the pooled counter said the router was working while 15.2% of
@@ -5469,7 +5558,7 @@ async def _absence_slice_stage2(
         return []
 
     out: list[_ClaimOverride] = []
-    for entry, (verdict, quote) in zip(stage2, verdicts):
+    for entry, (verdict, quote, _aligned_by) in zip(stage2, verdicts):  # no H3 here
         claim = entry.text
         if verdict == "supported":
             out.append(
@@ -5544,6 +5633,7 @@ async def verify_finding_faithfulness(
     run_id: Any | None = None,
     eval_block: Any = None,
     judge_sampling: JudgeSamplingPolicy | None = None,
+    assembly: Any = None,
 ) -> FaithfulnessReport:
     """MANDATORY faithfulness verify over ONE finding's cited prose.
 
@@ -5624,6 +5714,21 @@ async def verify_finding_faithfulness(
         handler gates: an unsampled row reads 'unsampled' even when the judge
         is off or down, because its population membership must not depend on
         judge health.
+    assembly:
+        OPTIONAL (D-3) — the finding's ``data['assembly']`` block, the typed
+        ``assembly.v1`` document D-2 emits (D-1 §1.2). Default ``None`` → the
+        four assembly arms are a no-op and every existing caller is
+        BYTE-IDENTICAL. When an ``assembly.v1`` payload is present, its spans
+        are audited against the origin bodies the citation bridge captured
+        (quote fidelity), against their own source sentences (scope
+        preservation), against the captured origin records (attribution
+        equality) and against the coverage + drop ledgers (selection honesty).
+        A LEGACY-REGIME composition is inert for the same reason a unit finding
+        is, and it needs the regime to say so: §5.2 puts
+        ``assembly.regime = "legacy"`` on every composition row from D-2's merge
+        (flag on or off), so a flag-off row carries a real ``assembly.v1``
+        ``schema`` key with no blocks behind it. The route gate is therefore
+        ``schema == "assembly.v1" AND regime != "legacy"``.
     """
     floor = _deterministic_floor(body, citations, finding_confidence)
     # V-F: record the NON-PROPOSITIONAL spans the splitter dropped (a bare
@@ -5707,6 +5812,14 @@ async def verify_finding_faithfulness(
     # it. Before V-B, whose coexistence rule then keeps a slice pass from erasing
     # the premise flag (the W31 pattern: the two defects are orthogonal).
     report = _fold_markerless_uncited(report, body=body, citations=citations)
+    # G3: THE WEIGHTED-COMPARISON LICENCE. After the judge, and for the third
+    # instance of the same reason as V-C and V-G5 — the judge is TOLD to grade a
+    # claim against the sub-claim its marker names, so a comparison ACROSS two
+    # blocks is a question it structurally cannot answer, and this is the
+    # authority on the class. Assessment-only by construction: the licence needs
+    # the record's arithmetic to travel with the citation, and only
+    # ``assessment_channel`` has ever written that rule into an evidence map.
+    report = assessment_weighting.fold(report, body=body, citations=citations)
     # V-B: SCOPED-ABSENCE claims are about the WHOLE input slice, which the judge
     # never saw — re-decide them against the retained slice. No-op without a
     # slice_conn/run_id, and never fabricates a pass from a missing slice.
@@ -5724,10 +5837,28 @@ async def verify_finding_faithfulness(
     # grade the finished composition against its inputs, which is only knowable
     # once the prose exists. No-op without an eval block: every unit finding and
     # every pre-R2 composition is byte-identical.
-    report = fold_input_checks(report, eval_block=eval_block, body=body)
+    # D-3: ``assembly`` reaches the SALIENCE-LEAD half only, which is DISABLED on
+    # assembly-regime rows — the assembled read's lead is EARNED on the repaired
+    # ``cited_mass.v1`` key (sd 1.673 vs the max-pool's 0.024) and its verdict is
+    # published with its arithmetic in ``assembly.lead.test``, so a gap check
+    # calibrated on a dead key and presupposing a single lead has nothing left to
+    # decide. R2's contradiction half stays live. See that function's docstring.
+    report = fold_input_checks(
+        report, eval_block=eval_block, body=body, assembly=assembly
+    )
     # H2: the composition graded against THE DESK READS IT CITES. Composition-only.
     report = composition_integrity.fold(
         report, body=body, citations=citations, target_id=target_id)
+    # D-3: THE ASSEMBLY ARMS — four deterministic auditors over the assembled
+    # payload (quote fidelity, scope preservation, attribution equality,
+    # selection honesty). Folded AFTER H2 because they grade the PAYLOAD rather
+    # than the prose, so they are the last word about a row's construction and
+    # the first thing to read when one of them fires. INERT for every unit
+    # finding AND every legacy-regime composition — byte-identical, which is a
+    # replay proof, not a hope. The arms read the PAYLOAD and never ``body``:
+    # the render defuses child ``[[ref:N]]`` markers and the payload does not, so
+    # a body comparison would false-fire on every defused marker.
+    report = assembly_arms.fold(report, assembly=assembly, citations=citations)
     # V-I6: the round-4 pass-side CAVEATS, as counters. Two classes sit inside
     # the supported denominator without being propositions about the world — the
     # `triggered indicator:` scaffold rows (97 in the frozen population, all

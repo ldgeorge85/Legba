@@ -236,6 +236,16 @@ def create_app(
     from .timeline_api import build_timeline_router
     app.include_router(build_timeline_router(deps), prefix="/api/v1/v3")
 
+    # c1 — the correctness GRADER's roster: every graded desk's correctness AND
+    # coverage over a trailing window, plus the roster totals (mean-of-desks and
+    # claim-pooled, each labelled). Its own leaf module on the /api/v1/v3 prefix
+    # rather than a section of v3_api: that file is one line under its
+    # module-size ceiling, and this axis is the machine grader's, never to be
+    # pooled with the operator gold-set axis /eval/correctness serves from
+    # there. See grader_roster_api.py for the four honesty rules.
+    from .grader_roster_api import build_grader_roster_router
+    app.include_router(build_grader_roster_router(deps), prefix="/api/v1/v3")
+
     # P3-1 — source assurance ledger read surface (A6 layers 1+2): current
     # per-rater ratings + dossier, visibility-filtered (private annex rows
     # only on explicit opt-in). Same /api/v1/v3 prefix; see
@@ -285,6 +295,68 @@ def create_app(
     # `analyst_outputs` critiques + the 0091 watermark row; no migration.
     from .external_audit_api import build_external_audit_router
     app.include_router(build_external_audit_router(deps), prefix="/api/v1/v3")
+
+    # V3/P4a — the five pre-registered graph-engine trigger gauges
+    # (JUDGE_SYNTHESIS §4.2) for the 2026-11-03 sitting: each of E1-E5 reports
+    # its threshold + reading + distance, or an explicit "unreadable" with the
+    # reason — a gauge that cannot be computed must say so, never return 0.
+    from .graph_triggers_api import build_graph_triggers_router
+    app.include_router(build_graph_triggers_router(deps), prefix="/api/v1/v3")
+
+    # V3/P4b — the cross-layer graph projection read. Plane-filtered bounded
+    # ego/walk over graph_arcs with as_of, publishing the build stamp on every
+    # response and refusing distinctly (projection_disabled / _empty /
+    # _stale) — never found=False — while LEGBA_GRAPH_PROJECTION is off or the
+    # projection is not there.
+    from .graph_arcs_api import build_graph_arcs_router
+    app.include_router(build_graph_arcs_router(deps), prefix="/api/v1/v3")
+
+    # V3/P3 — the decision-time belief register ("what did Legba believe on
+    # date D"). Bearer-gated, registry-slim, reads analyst_outputs directly.
+    from .belief_api import build_belief_router
+    app.include_router(build_belief_router(deps), prefix="/api/v1/v3")
+
+    # H13 — the receipt-chain external-timestamp ledger: one row per
+    # (day, calendar) the receipt_anchor handler attested via OpenTimestamps.
+    from .receipt_anchors_api import build_receipt_anchors_router
+    app.include_router(build_receipt_anchors_router(deps), prefix="/api/v1/v3")
+
+    # 7a — the contrary-evidence pass's records. A SIBLING of
+    # `/api/v1/contention` (which serves fact_contention), never an extension of
+    # it: different keys, different vocabulary, no winner and never one.
+    from .contentions_api import build_contentions_router
+    app.include_router(build_contentions_router(deps), prefix="/api/v1/v3")
+
+    # Program 6 L2 (7b-v) — the DIVERGENCE MAP read surface. The only reader of
+    # the layer_divergence receipt, which is where a QUIET run's series lives:
+    # a run that fires nothing is suppressed to trace-only, so a surface reading
+    # analyst_outputs alone would be blank on exactly the days the instrument
+    # worked. Reads the newest trace for the receipt and the recent findings for
+    # the fires. Registry-slim (only the stdlib-only layers._vocab leaf).
+    from .layers_api import build_layers_router
+    app.include_router(build_layers_router(deps), prefix="/api/v1/v3")
+    # 7b/k5 — TYPED ABSENCE as one named thing: the audit's scoped absence, the
+    # reads' insufficient evidence, Program 6's declared-absent layers, silent
+    # units and silent sources answered for one desk, each with its proof
+    # (`GET /v3/absence?scope=`). Registry-slim, defensive per kind.
+    from .absence_api import build_absence_router
+    app.include_router(build_absence_router(deps), prefix="/api/v1/v3")
+
+    # 7g-2 — the ERA COVERAGE MAP: what a curated collection's manifest
+    # DECLARES the provider holds for a desk, what `observations` actually
+    # carries, and the holes between them (`GET /v3/collections/coverage?
+    # scope=`). Shares ONE reader with the `history_gap` typed absence above,
+    # so the map and the absence cannot disagree about the same silence.
+    # Registry-slim.
+    from .collections_api import build_collections_router
+    app.include_router(build_collections_router(deps), prefix="/api/v1/v3")
+
+    # V3/P6 — the event read surface: the paged list (filters mirroring
+    # query_events + a route-only situation_id for the tracked-events read),
+    # the one-event dossier, and the lifecycle ledger. Same live/as_of +
+    # origin-class gate as the tool path.
+    from .events_api import build_events_router
+    app.include_router(build_events_router(deps), prefix="/api/v1/v3")
 
     # Continuity P2 — the situation TRAJECTORY ledger read. Additive route, no
     # panel (the UI is Phase 3); it is what the situation_escalation alert links

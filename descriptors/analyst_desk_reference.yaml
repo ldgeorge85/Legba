@@ -1,0 +1,221 @@
+# Out-of-Plane Desk Reference (A-1) — the ATTENTION instrument.
+#
+# THE GAP. Under the quotation regime the desk sentence IS the product, and
+# nothing anywhere in the stack asks whether a story the desk's OWN slice
+# carried reached the desk's OWN output. Measured 2026-09-05 at this exact
+# grain: country_watch_il's eight unit desks each carried 9 of 120 Iran-naming
+# rows in their own input slice; ZERO of the eight named Iran in prose, zero
+# cited an Iran signal, and zero open frames licensed it. The internal
+# coverage-floor detector cannot see it — it goes quiet exactly when our own
+# collection thins (country_g20_tr|israel resolved to breached:false on 09-04
+# while TR's desks still named Israel in 0 of 7 heads). The reference has to
+# come from OUTSIDE.
+#
+# WHAT THIS IS. A `deterministic`-kind META analyst (sub_handler=desk_reference)
+# that runs ONCE daily and, per (read-set target x bounded unit):
+#   1. builds a query DETERMINISTICALLY from a fixed, hand-written per-unit term
+#      table in the module (the collection_gap.SOURCE_CLASSES_BY_DIMENSION
+#      doctrine — a fixed, auditable table, NEVER model-generated) plus the
+#      country's NEWSROOM spelling (the gazetteer says "Türkiye"; the wire says
+#      "Turkey") and the window's date;
+#   2. runs ONE web_search through the web_access PACK TOOL;
+#   3. hands an OUT-OF-PLANE model the unit's own method.bounded_question, the
+#      country, the window and those 8 results — AND NO SUBSTRATE ROW OF ANY
+#      KIND. That fence is an AST + parameter guard on the prompt builder,
+#      checked on every run and not only in CI: if our own feeds seeded the
+#      reference, the collection diff would be circular by construction;
+#   4. FENCES the reply: an item citing a URL that was not in the result set is
+#      DROPPED WHOLE and counted (items_url_fenced), never repaired;
+#   5. reads web_tools' liveness contract instead of ignoring it, and maps all
+#      five documented outcomes onto the row's status. Only `ok` and
+#      `nothing_material` are scorable — a degraded or unverified day publishes
+#      None for BOTH metrics, never 0.0. A search outage must never read as a
+#      quiet world (the 08-12 judge outage moved fleet faithfulness 0.898 ->
+#      0.583 for three days and nothing alerted);
+#   6. writes the row to `unit_reference_labels` (migration 0057's purpose-built
+#      table — one row = one (unit, target) gold answer GROUNDED to the
+#      provenance it was drawn from; 0191 adds window/items/status/provenance
+#      and the one-per-day unique index);
+#   7. runs BOTH diffs ($0, no LLM) and publishes the gauge.
+#
+# THE TWO METRICS, AND WHY THEIR DENOMINATORS DIFFER.
+#   collection_recall = collected / anchorable   — did our collection have it?
+#   attention_rate    = engaged  / collected     — did the desk engage it?
+# You cannot be blind to what you never had. country_g20_jp -> North Korea is
+# 0.3 slice rows per 120-row slice and 0 of 7 desks: that is a COLLECTION gap
+# and belongs to the research program, not an attention failure. Separating the
+# denominators is the whole design.
+#
+# WHY `deterministic` AND NOT `llm_planner` — verbatim the standing auditor's
+# own ruling: the SAMPLE, the CAPS, the ROTATION, the VERDICT VOCABULARY and the
+# WRITES are code; the model is a bounded instrument. It also routes around
+# dapr_actors.py entirely: a sub-handler plus this descriptor.
+#
+# WHICH MODEL, AND WHY IT IS A FIELD HERE RATHER THAN A CONSTANT IN CODE.
+# The reference is worthless in-plane: a gpt-oss-120b reference against
+# gpt-oss-120b desks measures the family's shared blind spots and calls them
+# agreement. It must also not share a family with the JUDGE, or the instrument
+# that measures attention and the instrument that measures faithfulness inherit
+# each other's blindness. So this binds a THIRD family —
+# llm.judge.openrouter_mistral_large.openai_compat (Mistral Large 3 on OpenRouter; the Cerebras Gemma first pick was unfunded 09-05 —
+# a registered ACTIVE component) — which is neither the writer's family nor the
+# judge's. Because it is a DESCRIPTOR field resolved by the shared
+# _wire_deterministic_llm, an operator re-points it (to a self-hosted family on
+# ai1, say) with a PUT: no code edit, no image rebuild. That helper's Anthropic
+# hard-refuse still applies — a SCHEDULED analyst may never route onto the
+# billed plane, and consult / deep_consult remain the only sanctioned Anthropic
+# users.
+#
+# COST NOTE, STATED SO THE ZERO IS NOT BELIEVED. OpenRouter- and
+# Cerebras-class routes go through the openai_compat handler whose PRICE_TABLE
+# is empty, so `budget_ledger.cost_usd` will report 0.00 for this analyst. DO
+# NOT READ THAT ZERO AS FREE. The honest number this design can supply is
+# TOKENS: v1 is ~38 calls/day at 8-11k input + ~400-700 output each, i.e.
+# ~0.4M input + ~0.02M output tokens/day, against the fleet's measured ~26M/day.
+#
+# POPULATION — v1 IS THE READ SET ONLY. 5 targets x their live units = 38
+# (target, unit) pairs/day. Fleet total is 238 and daily-for-all is not on the
+# table: it would be 238 paid out-of-plane calls and 238 searches a day for an
+# instrument that is not yet graded. The target list is an OPTION, so widening
+# to the v2 rotation is a PUT. It is deliberately NOT read off the tier field:
+# design F-5 measured `analyst.cadence.fallback_schedule` on target_descriptors
+# to be a vestige the nine shared bounded units do not read (read-set desks
+# produce 13.8 findings/desk/day against tiered desks' 13.7 — the tier PUT moved
+# the per-target token budget, not desk cadence), so this analyst implements its
+# OWN durable rotation cursor instead of leaning on a mechanism that is not
+# wired.
+#
+# NOTHING PAGES, AND NOTHING DISPATCHES, FROM THIS TRAIN. The product is a
+# counting-not-repairing GAUGE: one kind='finding' row per sweep carrying
+# data.collection_gauge / data.attention_gauge / data.instrument, every ratio
+# None when its denominator is empty. The `attention_gap` alert class (A-5) and
+# the `reference_gap` research side-write (A-4) are separate trains, and A-5 is
+# gated absolutely on the validity harness: no page from an ungraded instrument.
+#
+# VERIFY-EXEMPT ON PURPOSE. desk_reference joins
+# STRUCTURAL_VERIFY_EXEMPT_ANALYSTS. It is an INSTRUMENT, not a claim about the
+# world, and it must never enter the verify/judge population — this design would
+# otherwise itself add to the ~84% of LLM calls that are the system watching
+# itself.
+#
+# WHAT THIS INSTRUMENT CANNOT CLAIM. It cannot see past the reference model's
+# own blindness: one search engine's first page is not the world, so THE GAP IS
+# A LOWER BOUND, NEVER AN UPPER ONE. It is one provider deep (SearXNG rung 0),
+# and the liveness gate is the mitigation rather than redundancy. It cannot say
+# the desk was WRONG — attention is not accuracy. It cannot attribute a gap to a
+# layer. Salience is the reference model's, not the world's.
+#
+# State: draft in-tree. FLAG LEGBA_DESK_REFERENCE_ENABLED defaults OFF; with it
+# off the handler writes nothing at all — no row, no search, no LLM call, no
+# watermark. Registration + the operator's activate flip are DEPLOY steps, and a
+# NEW deterministic sub-handler needs a REGISTRY REBUILD + runtime recreate.
+# Migration 0191 must be applied first, and the web_access action pack must
+# already be registered with its web_search provider bound, or the sweep runs
+# and reports an unreferenced heartbeat (loudly, on purpose).
+
+identity:
+  id: desk_reference
+  name: Out-of-Plane Desk Reference
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: a1_attention_measurement
+
+subscription:
+  # No `targets` block => META analyst: ONE global sweep per cadence tick. The
+  # handler reads the population census directly via deps.pg_pool and IGNORES
+  # the materialized input slice — which is load-bearing, not incidental: the
+  # reference must not see our substrate.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: desk_reference
+  # X-1 declared knobs (handler_options.HANDLER_OPTIONS['desk_reference']).
+  # Every one bounds a COST — paid out-of-plane calls, external searches, the
+  # size of the graded sample — so an operator widens or narrows the instrument
+  # with a PUT and no code edit. Values below are the in-source defaults, stated
+  # explicitly so this file documents the shipped volume rather than implying it.
+  options:
+    # v1 = the read set. Widening this list to the other 27 country desks is the
+    # v2 rotation, and it is one PUT away once the harness's bars are cleared.
+    reference_targets:
+      - country_g20_sa
+      - country_g20_us
+      - country_watch_il
+      - country_watch_ir
+      - country_watch_ua
+    max_pairs_per_run: 40           # 38 live pairs today; the cap is headroom
+    max_items_per_reference: 5
+    search_limit: 8
+    window_hours: 24
+    census_days: 7
+  llm:
+    # THE THIRD FAMILY. Not llm.primary (the desks' own family — a reference
+    # there measures shared blind spots and calls them agreement) and not
+    # llm.judge.openrouter_nemotron120b (the faithfulness judge — sharing a
+    # family with it is a weaker version of the same disease). Gemma-4-31B on
+    # Cerebras is a registered ACTIVE component and is neither.
+    #
+    # REPOINTABLE BY PUT. The deterministic deps-builder resolves this ref
+    # through the shared _wire_deterministic_llm, which hard-refuses an
+    # Anthropic component for any deterministic sub-handler — so this field can
+    # be moved to another cross-family route (a self-hosted family on ai1, for
+    # instance) without a code change, and can never be moved onto the billed
+    # plane.
+    temperature: 1.0        # a reference is not a writer; reproducibility wins
+    primary:
+      factory_kind: stack_ref
+      raw: llm.judge.openrouter_mistral_large.openai_compat   # third family; Cerebras Gemma was the first pick, its key unfunded (HTTP 402) 2026-09-05
+      expected_family: llm_provider
+    # Output cap. The handler's own REFERENCE_MAX_TOKENS is the live control;
+    # this is the hosted-endpoint safety net.
+    max_tokens: 900
+  # Per-day token cap (24h bucket). Sized above the v1 worst case (38 calls at
+  # ~11k input) with headroom for the v2 rotation, and far below anything that
+  # could crowd the shared gateway.
+  budget_tokens_per_day: 0
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # Daily at 04:22 UTC — AFTER the overnight desk runs have landed their heads
+  # (so the attention diff reads a settled head rather than racing it), and 50
+  # minutes BEFORE the standing auditor's 05:12Z so the two never contend for
+  # the web_access governor (max_invocations_per_hour: 120,
+  # api_rate_per_minute: 20 — v1's 38 searches are comfortable alone and would
+  # not be alongside another pack caller's burst).
+  fallback_schedule: "22 4 * * *"
+  # 22h — below the 24h interval, so an organic daily tick is never swallowed
+  # by its own cooldown (the alert_trigger_scan 0.8x ratio).
+  cooldown_seconds: 79200
+
+# THE AGENCY GRANT. `web_access` is the ONLY way this analyst reaches outside
+# the substrate: no ad-hoc HTTP anywhere in its path and no httpx import in its
+# module. Granting the pack does NOT activate search — the three-way gate still
+# applies (this META path self-allows under GLOBAL_SCOPE, as the META GATHER
+# path does), the web_search ToolSpec still needs its provider stack_ref bound,
+# and the SSRF egress guard still has to permit the engine host. Every one of
+# those gaps fails LOUDLY into the row's own status and the heartbeat's
+# degraded_reason, never as a silent empty result.
+action_packs:
+  - pack_id: web_access
+
+# No output bindings. The daily gauge finding is the run's own return value; the
+# reference rows are side-written to unit_reference_labels, and the matched
+# signal ids land in that table's canonical_source_ids — which is exactly what
+# migration 0057 built that column for. No outward fan-out from here.
+outputs: []

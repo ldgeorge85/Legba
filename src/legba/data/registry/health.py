@@ -597,6 +597,14 @@ def _split_full_endpoint(
     return scheme, host or None, port
 
 
+#: Search subproviders that CANNOT issue a query without a credential, so a
+#: component registered without one is UNHEALTHY rather than merely keyless.
+#: Deliberately enumerates only what has SHIPPED a handler — declaring the
+#: other names in the config vocabulary (``tavily`` / ``firecrawl`` / ``jina``)
+#: would be guessing about auth models for providers this tree cannot bind yet.
+KEY_REQUIRED_SEARCH_SUBPROVIDERS = frozenset({"brave", "serper"})
+
+
 class SearchProviderChecker:
     """TCP reachability of the search endpoint. NEVER a real query.
 
@@ -613,6 +621,22 @@ class SearchProviderChecker:
     with a known-nonzero expected count, alerting on zero) wired into the
     watchdog cron, and by the per-response ``degraded`` flag the handler sets
     from ``unresponsive_engines``. Do not read HEALTHY here as "search works".
+
+    KEYED SUBPROVIDERS (R-C) — the one false-HEALTHY this check CAN close.
+    ``api_key`` is optional on the config because the self-hosted subproviders
+    are keyless, and the resolve below therefore treats ``None`` as "nothing to
+    resolve". For a subprovider that CANNOT issue a query without a key
+    (:data:`KEY_REQUIRED_SEARCH_SUBPROVIDERS` — ``brave`` and ``serper``), that
+    is a lie
+    with a very specific shape: TCP to ``api.search.brave.com:443`` succeeds
+    from anywhere on the internet, so an operator who registered the component
+    but never loaded the vault entry gets a green healthcheck for a provider
+    that will refuse 100% of queries. A declared-but-keyless keyed component is
+    reported UNHEALTHY, naming the vault id and the env var.
+
+    METERED subproviders additionally publish ``cost_usd_per_query`` in
+    ``extra`` so an operator reading the health surface can see which
+    components spend money per call.
     """
 
     kind = "search_provider"
@@ -629,15 +653,64 @@ class SearchProviderChecker:
                 detail=f"unparseable endpoint {endpoint!r}",
                 extra={"subprovider": subprovider},
             )
+        cost_per_query = 0.0
+        try:
+            cost_per_query = max(0.0, float(cfg.cost_usd_per_query.raw or 0))
+        except (AttributeError, TypeError, ValueError):
+            cost_per_query = 0.0
+        # A KEYED subprovider with no api_key declared can never issue a query,
+        # and its endpoint host is publicly reachable — so without this branch
+        # the check would report HEALTHY for a provider that refuses every
+        # call. Checked BEFORE the resolve, because there is nothing to resolve.
+        if subprovider in KEY_REQUIRED_SEARCH_SUBPROVIDERS and cfg.api_key is None:
+            return StackComponentHealth(
+                component_id=component_id, kind=self.kind,
+                state=HealthState.UNHEALTHY, checked_at=_now(),
+                detail=(
+                    f"subprovider {subprovider!r} requires an api_key and the "
+                    "component declares none — every query would be refused. "
+                    "Point config.api_key at a vault id (e.g. "
+                    "'search.brave.api_key') and load it from .env with "
+                    "scripts/bringup_vault_load.py."
+                ),
+                extra={
+                    "subprovider": subprovider,
+                    "endpoint": endpoint,
+                    "key_required": True,
+                    "key_declared": False,
+                    "cost_usd_per_query": cost_per_query,
+                },
+            )
         try:
             # Optional: keyless subproviders (searxng) resolve nothing here.
-            await resolved.secret(cfg.api_key)
+            secret = await resolved.secret(cfg.api_key)
         except Exception as exc:
             return StackComponentHealth(
                 component_id=component_id, kind=self.kind,
                 state=HealthState.UNHEALTHY, checked_at=_now(),
                 detail=f"credential resolve failed: {exc}",
                 extra={"subprovider": subprovider},
+            )
+        # An EMPTY resolved key is the same failure as an absent one — the API
+        # rejects it — but it arrives through a different door (a vault entry
+        # that was stored blank), so it needs its own verdict rather than a
+        # green light. NEVER logs or returns the value itself.
+        if subprovider in KEY_REQUIRED_SEARCH_SUBPROVIDERS and not (secret or b""):
+            return StackComponentHealth(
+                component_id=component_id, kind=self.kind,
+                state=HealthState.UNHEALTHY, checked_at=_now(),
+                detail=(
+                    f"subprovider {subprovider!r} resolved an EMPTY api_key from "
+                    f"vault id {getattr(cfg.api_key, 'raw', '?')!r} — every query "
+                    "would be refused. Re-load the vault entry."
+                ),
+                extra={
+                    "subprovider": subprovider,
+                    "endpoint": endpoint,
+                    "key_required": True,
+                    "key_declared": True,
+                    "cost_usd_per_query": cost_per_query,
+                },
             )
         reachable = _tcp_reachable(host, port)
         return StackComponentHealth(
@@ -651,6 +724,10 @@ class SearchProviderChecker:
                 "subprovider": subprovider,
                 "scheme": scheme,
                 "probe": "tcp_only",
+                "key_required": subprovider in KEY_REQUIRED_SEARCH_SUBPROVIDERS,
+                "key_declared": cfg.api_key is not None,
+                "cost_usd_per_query": cost_per_query,
+                "metered": cost_per_query > 0.0,
                 "caveat": (
                     "reachable != serving results; upstream engines can all be "
                     "banned while this reports healthy — see the control-query "

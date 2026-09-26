@@ -52,6 +52,12 @@ SEARCH_STACK_REF_ENV = "LEGBA_SEARCH_STACK_REF"
 #: The stack family this route must resolve to.
 SEARCH_PROVIDER_KIND = "search_provider"
 
+#: OPTIONAL ToolSpec ``config`` key carrying the rungs BELOW the primary — an
+#: ordered list of ``StackRef``-shaped values. Absent (the shipped state) means
+#: there is no ladder and the resolved route is the only rung, which is what
+#: keeps the searxng path byte-identical.
+SEARCH_FALLBACK_PROVIDERS_KEY = "fallback_providers"
+
 
 class SearchRoute(NamedTuple):
     """Which component id serves a search call, and WHY that one."""
@@ -66,6 +72,8 @@ class SearchRoute(NamedTuple):
         degraded provider, ``""`` when unclassifiable. Carried into provenance
         so a finding records that it ran on the fallback."""
         if self.source.endswith(".fallback"):
+            return "fallback"
+        if f".{SEARCH_FALLBACK_PROVIDERS_KEY}[" in self.source:
             return "fallback"
         if self.source:
             return "configured"
@@ -151,6 +159,60 @@ def resolve_tool_search_route(tool_config: Any) -> SearchRoute | None:
     return SearchRoute(component_id=ref, source="config.provider")
 
 
+def resolve_tool_search_ladder(tool_config: Any) -> list[SearchRoute]:
+    """The FULL rung list for a ``web_search`` ToolSpec ``config`` mapping.
+
+    Rung 0 is exactly :func:`resolve_tool_search_route` — same ladder, same
+    rung-0 opt-in gate, same ``LEGBA_SEARCH_STACK_REF`` repoint — so a config
+    with no ``fallback_providers`` key yields a single-element list holding the
+    identical route object the pre-ladder code path resolved. That is what
+    makes the ladder ADDITIVE: absent the key, every caller sees what it
+    always saw.
+
+    Rungs below it come from ``config.fallback_providers``, an ordered list of
+    ``StackRef``-shaped values (the dumped mapping, a live ``StackRef``, or a
+    bare id — the same three shapes rung 0 accepts). Order IS the ladder: the
+    operator decides which paid provider is tried first, and nothing here
+    re-orders or scores them.
+
+    Two rules the resolution enforces rather than leaving to the caller:
+
+      * **No rung is listed twice.** A duplicate id (a fallback that repeats
+        the primary, or the same paid provider named twice) is dropped, because
+        the ladder's contract is that a rung is attempted AT MOST ONCE per run
+        — re-attempting a provider that just failed is precisely the hammering
+        the deferral ladder exists to prevent.
+      * **No fallbacks without a rung 0.** If the ToolSpec never opted into
+        search (no ``provider`` key), ``fallback_providers`` alone does NOT
+        enable it. Rung 0 is the opt-in GATE for the whole ladder, exactly as
+        it is for the single route; a fallback list that could switch search on
+        would be a second, quieter way to conscript an analyst that never asked
+        for external retrieval.
+
+    Returns ``[]`` when there is no route at all.
+    """
+    primary = resolve_tool_search_route(tool_config)
+    if primary is None:
+        return []
+    rungs = [primary]
+    if not isinstance(tool_config, Mapping):
+        return rungs
+    declared = tool_config.get(SEARCH_FALLBACK_PROVIDERS_KEY)
+    if not isinstance(declared, (list, tuple)):
+        return rungs
+    seen = {primary.component_id}
+    for index, entry in enumerate(declared):
+        ref = stack_ref_raw(entry)
+        if not ref or ref in seen:
+            continue
+        seen.add(ref)
+        rungs.append(SearchRoute(
+            component_id=ref,
+            source=f"config.{SEARCH_FALLBACK_PROVIDERS_KEY}[{index}]",
+        ))
+    return rungs
+
+
 def assert_search_component(schema_uri: str, component_id: str) -> None:
     """The bind-time validation ``expected_family`` does NOT give you.
 
@@ -178,11 +240,13 @@ def assert_search_component(schema_uri: str, component_id: str) -> None:
 
 
 __all__ = [
+    "SEARCH_FALLBACK_PROVIDERS_KEY",
     "SEARCH_PROVIDER_KIND",
     "SEARCH_STACK_REF_ENV",
     "SearchRoute",
     "assert_search_component",
     "resolve_search_route",
+    "resolve_tool_search_ladder",
     "resolve_tool_search_route",
     "stack_ref_raw",
 ]

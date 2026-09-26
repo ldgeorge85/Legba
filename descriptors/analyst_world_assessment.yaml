@@ -1,0 +1,199 @@
+# world_assessment — THE ASSESSMENT CHANNEL (D-6; DEMOTION_D1_SPEC_2026-09-04 §2).
+#
+# The interpretive voice, after the demotion. The world_assessor row stops being
+# prose about its inputs and becomes an ASSEMBLY — its inputs' own sentences,
+# quoted byte-for-byte under ordinals, with a deterministic body and title. This
+# descriptor is where the voice goes instead: a SEPARATE row, in its own labelled
+# band, written FROM that assembly and from nothing else, carrying its own badge
+# and graded as its own population.
+#
+# ── why a NEW analyst_id under the SAME kind ────────────────────────────────
+# `identity.kind: meta_findings_synthesizer` is not a convenience — it is what
+# makes four integrations no-ops (spec §2.1b, each re-verified in the D-6 build):
+#   1. the verify dispatch's kind allowlist already admits this kind when the
+#      descriptor declares `method.llm.verify` — and that file is at its module
+#      ceiling with no seam, so a clause there would have blocked this train;
+#   2. the rubric is chosen from the PAYLOAD (`[[ref:N]]` citations route to the
+#      composition branch), not from a kind parameter;
+#   3. `judge_assessability.JUDGE_SAMPLE_ALWAYS_DEFAULT` contains this kind, so
+#      the Assessment is ALWAYS judged, never sampled out;
+#   4. `/api/v1/findings` filters kind='finding' and takes analyst_id, so the
+#      reader serves it on day one.
+# The precedent is explicit and in-house: `JournalPayload.entry_kind` carries five
+# subtypes inside one OutputKind, and analyst_escalation_composition.yaml says it
+# outright — "It is the SAME meta_findings_synthesizer kind (no new Python kind)."
+#
+# ── STEP E (2026-09-20): WHAT THIS CHANNEL NOW READS ────────────────────────
+# NO FIELD ON THIS DESCRIPTOR CHANGES. The input restriction below is unchanged
+# and unwidened — `derived_from` is still EXACTLY the one assembly id, and the
+# prompt builder still has exactly one data argument. What changed is what that
+# ONE row carries: `world_assessor`'s assembly now attaches, to each carried
+# block, a `context_body` span holding that country's own `country_assessment` in
+# FULL (`assembly_payload.build_assembly(context_heads=...)`, resolved in
+# `composition_slice.resolve_country_assessment_context`). Every byte reaches the
+# voice through the spine row it was already allowed to read.
+#
+# WHY: measured 2026-09-20, the COUNTRY voice averages judge 0.86 over 126
+# LLM-judged reads while this one swings 0.50-0.95, because its whole input was
+# eight desk SENTENCES — nothing to argue from, so it argued about the record's
+# own arithmetic. It now reads the country voices and writes the cross-country
+# read. The voice and version follow the RECORD, not this file:
+# `assessment_prompts.system_prompt_for` answers WORLD_ASSESSMENT_SYSTEM_V4 /
+# `assessment_prompt.v4` when the payload carries context spans and the v3
+# constants byte-for-byte when it does not, so the rollout reverses by not
+# stamping context — no descriptor PUT either way.
+#
+# THE TOWER'S STAGGER IS NOW LOAD-BEARING, and as it stands STEP E will take
+# its FALLBACK path on almost every run. Measured 2026-09-20: `world_assessor`
+# and `country_assessment` both fire at `0 0,12`, so the world record assembled
+# at 12:00:08 while that cycle's country assessments were still being written
+# (they landed 12:03-12:17). At build time ZERO of its 7 country blocks had an
+# assessment of their OWN record; all 7 had one from the 00:04-00:16 cycle,
+# 11h44m-11h56m old and inside the 24h window. So what the world voice gets is
+# real, rich and correctly LABELLED `assessment_of_target_recent` — but it is
+# last cycle's country voice reading last cycle's record, not this one's.
+# THE ONE-LINE FIX IS A CADENCE DECISION AND IS DELIBERATELY NOT TAKEN HERE
+# (it re-times two live analysts): move `analyst_world_assessor.yaml` to
+# `20 0,12` (past country_assessment's ~:17 tail) and this file to `35 0,12`.
+# Until then the fallback IS the working path, and `citations[].context_match`
+# on every published row says which rule fired.
+#
+# ── the input restriction is MECHANICAL, not a prompt clause ────────────────
+# The channel's `derived_from` is EXACTLY ONE element: the assembly id. That
+# single-element array IS the enforcement of "input = the assembly payload only"
+# (§2.1). Three assertions carry it, all in `assessment_channel`:
+#   * len(derived_from) == 1 and derived_from[0] == spine_id, checked before the
+#     result leaves the run;
+#   * the prompt builder's ONLY data argument is the payload — a signature test
+#     pins it, because a builder that cannot reach the substrate cannot quote it;
+#   * every [[ref:N]] resolves to an ordinal the spine carries; an out-of-range
+#     ordinal RAISES (a construction failure, not a soft reason code).
+#
+# ── how the slice read finds ONE row ────────────────────────────────────────
+# `subscription.substrate.assessment_spine` names the producer whose assembly this
+# channel reads. READ_SLICE checks that marker FIRST and returns exactly one row:
+# the newest non-superseded head of that analyst carrying
+# `data.data.assembly.schema = assembly.v1` AND `regime = assembly`, inside the
+# window below. The marker is not decoration — without it, a target-less
+# verify-declaring composition descriptor falls through to the WORLD branch and
+# would quietly read the region/country slice, which is the exact fence this
+# channel exists to hold.
+#
+# ── THE ONE REGIME SWITCH ───────────────────────────────────────────────────
+# `LEGBA_COMPOSITION_ASSEMBLY` (operator ruling). There is no second env var: the
+# channel refuses to write unless the record it was handed is itself an assembly,
+# which is what that flag decides. The channel's own existence switch is
+# `identity.state` below — `draft` registers the descriptor and creates NO live
+# actor (no cadence reminder is ever registered), so it is promotable through the
+# lifecycle route without a deploy. Two switches, two different questions.
+#
+# ── state: draft, and what has to be true before it goes active ─────────────
+# The record it reads does not exist yet in production: every live composition row
+# is `regime: legacy` until the operator flips the flag at the D-3 cutover. An
+# active analyst here would run twice a day and write "No assembled record to
+# assess" every time. Promote when: (a) LEGBA_COMPOSITION_ASSEMBLY includes
+# world_assessor, and (b) D-3's arms are live so the badge's fidelity number stops
+# reading "unmeasured". The newest OutputKind's descriptor
+# (analyst_situation_tracker.yaml) sits in the same state for the same class of
+# reason, and its comment names the activation checklist.
+
+identity:
+  id: world_assessment
+  name: World Assessment — the interpretive channel
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  kind: meta_findings_synthesizer
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: world_assessment
+
+subscription:
+  # No `targets` block → ONE global run per cadence tick (_cadence_targets → None),
+  # the same global shape as world_assessor. Regime 1 is the WORLD tier only
+  # (spec §7 F-1): a country or thematic Assessment is one more descriptor plus
+  # one id in `assessment_channel.ASSESSMENT_ANALYST_IDS`, deferred because the
+  # judge spend is 33x and 32 country boards may not want a voice each.
+  other_analysts:
+    - id: world_assessor
+      data_types: [finding]
+      # 24h, and this window is a FRESHNESS bound rather than the compositions'
+      # 336h ADMISSIBILITY HORIZON — the difference is deliberate. A composition
+      # admits each desk's NEWEST head however old, because a stale read is still
+      # the desk's current answer. An Assessment written over yesterday's record
+      # while today's exists is simply the wrong record: the reader has the new
+      # one on screen and the voice would be arguing about the old one. No record
+      # inside the window ⇒ no Assessment, and the actor NOOPs rather than
+      # publishing a read about nothing.
+      time_window: 24h
+  substrate:
+    direct_queries: false        # reads via the kind's READ_SLICE, not ad-hoc SQL
+    # THE MARKER. Open dict, same seam `thematic_dimension` / `thematic_desks`
+    # use, so this needs no schema change.
+    assessment_spine: world_assessor
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  # Runtime dispatch is on identity.kind; method.kind only needs to be a valid
+  # enum, and llm_planner matches the single-turn chat_complete shape.
+  kind: llm_planner
+  prompt_module: "legba.prompts.meta_findings_synthesizer.v1"
+  # No method.bounded_question — same refusal as world_assessor, for the same
+  # reason one tier up: this channel does not answer a bounded question, it
+  # argues about a record that carries several. The fallback (identity.name)
+  # stamps question_source "fallback_desk_name", an honest absence.
+  #
+  # No method.system_prompt either: the channel's prose doctrine is a CODE
+  # constant (`assessment_prompts.ASSESSMENT_SYSTEM`, or since STEP E
+  # `WORLD_ASSESSMENT_SYSTEM_V4` when the record carries its countries' reads),
+  # the same binding the four composition variants use, so a voice change is a
+  # deploy and a diff rather than a descriptor PUT that no test can see.
+  llm:
+    # Fleet-wide 1.0 per the 2026-07-24 sampling audit.
+    temperature: 1.0
+    # MODEL POLICY (operator): the CORE plane via a stack_ref ($0). NEVER a
+    # hardcoded model — a stack_ref keeps a later switch a one-line PUT.
+    primary:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    # THE VERIFY OPT-IN, and it is the whole grading story. Its PRESENCE is what
+    # the dispatch keys on. The faithfulness pass needs no new rubric here: the
+    # channel mints one citation per cited spine ordinal whose `evidence_text` is
+    # that block's QUOTED SPAN, so `supported/checkable` is measured against the
+    # words the record carried — which is fidelity-to-spine (§2.5/§3.5), the
+    # thing the composition tier never had (no source article anywhere in a
+    # composition's evidence map).
+    #
+    # OWN POPULATION: this analyst_id is its own key. Its faithfulness must never
+    # pool with the assembly's 1.0-by-construction number, and the D-3 stamp's
+    # lineage entry records a new graded population entering with no history.
+    verify:
+      factory_kind: stack_ref
+      raw: llm.primary.openai_compat
+      expected_family: llm_provider
+    max_tokens: 768            # the kind's DEFAULT_MAX_TOKENS
+  budget_tokens_per_day: 0
+  retry:
+    budget:
+      strategy: pause_until_next_window
+
+cadence:
+  # 15 minutes after the world composition (00:00 / 12:00 UTC) so the record it
+  # reads is the one this cycle just wrote. The tower's stagger, one floor up:
+  # country :30 → region :45 → world :00 → assessment :15.
+  fallback_schedule: "35 0,12 * * *"   # 2026-09-20 STEP E: 15 min after the restaggered world record
+  # 11h, matching every other floor: a cooldown equal to the 12h interval lands
+  # past the next fire and silently halves the cadence.
+  cooldown_seconds: 39600
+
+# No `outputs` binding. world_assessor already surfaces the A2A skill
+# `intelligence.world_assessment`; the channel publishes through the default
+# FINDING write and is read by analyst_id, so a second skill on the same name
+# would be a collision that buys nothing.
+outputs: []

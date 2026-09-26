@@ -1,0 +1,79 @@
+# sources_wave_2 — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# Daily Maverick — South African investigative/politics daily (Scorpio
+# investigative unit, national politics, PAPER TRAIL series). Chosen over
+# TimesLive for the ZA-desk seat named in the brief ("TimesLive or Daily
+# Maverick"): both validated live, but Daily Maverick's editorial angle
+# (accountability journalism, PIC/state-capture-adjacent investigations)
+# complements GroundUp's community/social-justice beat rather than
+# duplicating it — together they close the audit-flagged Durban raid gap
+# (planning/COVERAGE_VS_SELECTION_AUDIT_2026-09-07.md item #6) from two
+# distinct angles. Verified live 2026-09-07: valid RSS 2.0, title
+# "Daily Maverick - Latest News", newest item same-day (includes a live
+# PAPER TRAIL investigative piece), language en-ZA.
+#
+# source_class: reporting. Credibility host dailymaverick.co.za (seeded
+# 0.75/wire — independent investigative daily, no state affiliation).
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after verifying the route
+# live on the instance.
+
+identity:
+  id: source.dailymaverick.news
+  name: Daily Maverick
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: sources_wave_2
+  created: "2026-09-07T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [ZA]
+  languages: [en]
+  tags: [news, africa, south_africa, sources_wave_2]
+  source_class: reporting
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "33 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.dailymaverick.co.za/dmrss/"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming the
+    # route yields full article text (mirrors the RSSHub-lane conservative default).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

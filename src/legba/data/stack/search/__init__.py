@@ -9,12 +9,18 @@ class, one module per subprovider, and a ``SEARCH_HANDLERS`` lookup so the
 runtime can bind a component id to a handler with NO import side effects and NO
 string sniffing.
 
-Two handlers ship:
+Four handlers ship:
 
   * :class:`~.searxng.SearxngSearchHandler` — the deployed local metasearch
-    engine (AGPL-3.0, $0/query, no key).
+    engine (AGPL-3.0, $0/query, no key). Rung 0 of the provider ladder.
   * :class:`~.json_generic.GenericJsonSearchHandler` — any HTTP endpoint that
     answers a query with a compatible ``results[]``.
+  * :class:`~.brave.BraveSearchHandler` — the paid first-party index, keyed and
+    METERED (``config.cost_usd_per_query``). The rung that takes over when
+    rung 0 degrades; see :func:`.route.resolve_tool_search_ladder`.
+  * :class:`~.serper.SerperSearchHandler` — the paid SERP proxy, keyed and
+    METERED, POST-only with an ``X-API-KEY`` header. The rung the EXTERNAL
+    AUDIT escalates to on an absence-shaped claim rung 0 could not decide.
 
 A Firecrawl/Jina-style fetch-and-extract provider, and an agentic searcher, are
 declared extension points — see the "EXTENSION POINTS" section of
@@ -50,7 +56,23 @@ from .base import (
     SearchStatus,
     TransientSearchFailure,
 )
+from .brave import (
+    BRAVE_API_KEY_ENV,
+    BRAVE_API_KEY_SECRET_ID,
+    BRAVE_NEWS_ENDPOINT,
+    BRAVE_WEB_ENDPOINT,
+    BraveSearchHandler,
+    parse_brave_payload,
+)
 from .json_generic import GenericJsonSearchHandler, parse_generic_payload
+from .serper import (
+    SERPER_API_KEY_ENV,
+    SERPER_API_KEY_SECRET_ID,
+    SERPER_NEWS_ENDPOINT,
+    SERPER_WEB_ENDPOINT,
+    SerperSearchHandler,
+    parse_serper_payload,
+)
 from .liveness import (
     CONTROL_PROBE_QUERY,
     CONTROL_PROBE_TTL_SECONDS,
@@ -63,11 +85,13 @@ from .liveness import (
     verify_engine_liveness,
 )
 from .route import (
+    SEARCH_FALLBACK_PROVIDERS_KEY,
     SEARCH_PROVIDER_KIND,
     SEARCH_STACK_REF_ENV,
     SearchRoute,
     assert_search_component,
     resolve_search_route,
+    resolve_tool_search_ladder,
     resolve_tool_search_route,
     stack_ref_raw,
 )
@@ -76,6 +100,8 @@ from .searxng import SearxngSearchHandler, parse_searxng_payload
 SEARCH_HANDLERS: dict[str, type[SearchProviderHandler]] = {
     SearxngSearchHandler.subprovider: SearxngSearchHandler,
     GenericJsonSearchHandler.subprovider: GenericJsonSearchHandler,
+    BraveSearchHandler.subprovider: BraveSearchHandler,
+    SerperSearchHandler.subprovider: SerperSearchHandler,
 }
 
 
@@ -197,14 +223,28 @@ __all__ = [
     # Subproviders
     "SearxngSearchHandler",
     "GenericJsonSearchHandler",
+    "BraveSearchHandler",
+    "SerperSearchHandler",
     "parse_searxng_payload",
     "parse_generic_payload",
+    "parse_brave_payload",
+    "parse_serper_payload",
+    "BRAVE_API_KEY_ENV",
+    "BRAVE_API_KEY_SECRET_ID",
+    "BRAVE_NEWS_ENDPOINT",
+    "BRAVE_WEB_ENDPOINT",
+    "SERPER_API_KEY_ENV",
+    "SERPER_API_KEY_SECRET_ID",
+    "SERPER_NEWS_ENDPOINT",
+    "SERPER_WEB_ENDPOINT",
     # Route
     "SearchRoute",
+    "SEARCH_FALLBACK_PROVIDERS_KEY",
     "SEARCH_PROVIDER_KIND",
     "SEARCH_STACK_REF_ENV",
     "assert_search_component",
     "resolve_search_route",
+    "resolve_tool_search_ladder",
     "resolve_tool_search_route",
     "stack_ref_raw",
     # Registry

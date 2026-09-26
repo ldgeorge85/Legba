@@ -51,7 +51,7 @@
  * SHOULD reset with the panel; only the conversation is durable.
  */
 import { create } from 'zustand'
-import type { ConsultSessionDetail } from '@/lib/api'
+import type { ConsultSessionDetail, ConsultUsage } from '@/lib/api'
 import type { Selection } from '@/state/selection'
 
 // ---------------------------------------------------------------------------
@@ -93,6 +93,58 @@ export interface ChatTurn {
   findingId?: string | null
   deep?: boolean
   model?: string | null
+  /**
+   * The run this answer came out of. Carried on the SETTLED turn, not just the
+   * pending one, because it is the address "Synthesize from evidence" posts to
+   * — an answer that was cut short is only recoverable while the panel still
+   * knows which run's evidence to rebuild it from.
+   */
+  requestId?: string | null
+  /**
+   * The persisted turn's own id. The OTHER address a re-synthesis can use, and
+   * the only one a turn written before the run id was recorded on the row has
+   * — which is every turn the incident itself is in.
+   */
+  turnId?: string | null
+  /** Did the final synthesis finish? See `ConsultResponseBody.synthesis_status`. */
+  synthesisStatus?: 'complete' | 'partial' | 'none' | null
+  /** Does the server still hold the evidence to re-synthesise from? */
+  resynthesizable?: boolean
+  /** How faithfully a re-synthesis reconstructed the transcript it read. */
+  replayFidelity?: 'exact' | 'rebuilt' | 'unavailable' | null
+  /** The human sentence that goes with a non-`exact` fidelity. Always shown. */
+  replayNote?: string | null
+  /**
+   * 7g-2 — the PROVENANCE CENSUS the server composed for this answer: cited
+   * refs by origin class, plus the number of sentences carrying no citation
+   * at all. Absent on every pre-7g-2 turn, and the counts inside it are
+   * `null` rather than 0 when the classes could not be measured — a zero
+   * would read as "cites no live reporting", which is a claim.
+   */
+  provenanceCensus?: ProvenanceCensus | null
+}
+
+/**
+ * What a consult answer rests on, counted by the SERVER
+ * (`analysts.consult_provenance_census`). The panel prints this; it derives
+ * nothing, because a share the client computed could disagree with the answer
+ * it is printed beside.
+ *
+ * The four class counts are REFS; `modelKnowledge` is SENTENCES. They are
+ * never added together, and the rendered line carries the unit on each.
+ */
+export interface ProvenanceCensus {
+  version?: string
+  live?: number | null
+  web_retrieval?: number | null
+  history?: number | null
+  seed?: number | null
+  unclassified?: number | null
+  unresolved?: number | null
+  cited_total?: number | null
+  model_knowledge?: number | null
+  sentences_examined?: number | null
+  basis?: string | null
 }
 
 /**
@@ -125,6 +177,30 @@ export interface PendingTurn {
    * it, rather than showing "Consulting…" forever.
    */
   stalled?: boolean
+  /**
+   * Running LLM spend for this turn, with its ceilings — folded off the
+   * `render_prompt` (ceilings) and `llm_call` (totals) step frames by
+   * {@link applyFrame}. Live, because a bill you only learn afterwards is a
+   * bill you could not have stopped.
+   */
+  usage?: ConsultUsage | null
+  /**
+   * The effective tool-round cap this run is actually operating under, and
+   * where it came from ("request" / "default" / "default_malformed_request").
+   *
+   * The whole of the 2026-09-16 over-spend traces to a cap nobody could see:
+   * the panel asked for one number and the loop ran under another. It is on the
+   * pending turn so it is visible DURING the run, not in a post-mortem.
+   */
+  roundCap?: number | null
+  roundsSource?: string | null
+  /**
+   * The final answer as it streams, accumulated from `answer_delta` frames in
+   * arrival order. This is the text that used to be DISCARDED when a synthesis
+   * ran out of budget — holding it client-side means the operator has read most
+   * of it before the server ever decides whether it finished.
+   */
+  answerPreview?: string
 }
 
 export interface ConsultPanelState {
@@ -183,6 +259,12 @@ export const MAX_PERSISTED_TURNS = 40
 /** ReAct traces are the bulk of a turn — cap them hard. */
 export const MAX_PERSISTED_STEPS = 40
 export const MAX_PERSISTED_TOOL_CALLS = 10
+/**
+ * The live answer preview is unbounded prose — cap what crosses into storage.
+ * The HEAD is kept, not the tail: a preview is read from the top, and the
+ * settled answer replaces it entirely the moment the turn lands.
+ */
+export const MAX_PERSISTED_PREVIEW = 4000
 
 /** The subset of a panel slice that is written to localStorage. */
 type PersistedPanel = Pick<
@@ -220,7 +302,11 @@ export function toPersisted(
       transcript: panel.transcript.slice(-MAX_PERSISTED_TURNS).map(trimTurn),
       pins: panel.pins,
       pendingTurn: pending
-        ? { ...pending, steps: pending.steps.slice(-MAX_PERSISTED_STEPS) }
+        ? {
+            ...pending,
+            steps: pending.steps.slice(-MAX_PERSISTED_STEPS),
+            answerPreview: pending.answerPreview?.slice(0, MAX_PERSISTED_PREVIEW),
+          }
         : null,
       draft: panel.draft,
       scope: panel.scope,
@@ -259,7 +345,34 @@ function parsePending(value: unknown): PendingTurn | null {
     pageLoadId: typeof p.pageLoadId === 'string' ? p.pageLoadId : '',
     steps: Array.isArray(p.steps) ? (p.steps as StepFrame[]) : [],
     stalled: p.stalled === true,
+    // Everything a reload would otherwise silently drop: the spend meter's
+    // totals and ceilings, the cap the run is under, and the answer the
+    // operator was already reading.
+    usage: parsePersistedUsage(p.usage),
+    roundCap: typeof p.roundCap === 'number' ? p.roundCap : null,
+    roundsSource: typeof p.roundsSource === 'string' ? p.roundsSource : null,
+    answerPreview: typeof p.answerPreview === 'string' ? p.answerPreview : undefined,
   }
+}
+
+/**
+ * A persisted spend snapshot. Missing/garbage numbers read as 0, but a value
+ * carrying NONE of them reads as null — a meter showing "$0.00 so far" off a
+ * stale storage blob would be a lie, and no meter is better than a wrong one.
+ */
+function parsePersistedUsage(value: unknown): ConsultUsage | null {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as Record<string, unknown>
+  const out: ConsultUsage = { ...ZERO_USAGE }
+  let found = false
+  for (const key of USAGE_FIELDS) {
+    const v = raw[key]
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      out[key] = v
+      found = true
+    }
+  }
+  return found ? out : null
 }
 
 /**
@@ -368,10 +481,124 @@ export function isDetached(pending: PendingTurn | null): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Live frame folding — what a step frame does to the turn BESIDES being listed
+// ---------------------------------------------------------------------------
+
+/** The six numbers of a spend snapshot: four running totals, two ceilings. */
+const USAGE_FIELDS = [
+  'calls',
+  'input_tokens',
+  'output_tokens',
+  'est_cost_usd',
+  'max_input_tokens',
+  'max_cost_usd',
+] as const
+
+/** Kinds that may carry the spend snapshot as FLAT fields rather than nested. */
+const SPEND_FRAME_KINDS = new Set(['render_prompt', 'llm_call', 'spend_ceiling_reached'])
+
+const ZERO_USAGE: ConsultUsage = {
+  calls: 0,
+  input_tokens: 0,
+  output_tokens: 0,
+  est_cost_usd: 0,
+  max_input_tokens: 0,
+  max_cost_usd: 0,
+}
+
+function finiteNumber(src: Record<string, unknown> | null, key: string): number | null {
+  if (!src) return null
+  const v = src[key]
+  return typeof v === 'number' && Number.isFinite(v) ? v : null
+}
+
+/**
+ * Merge whatever spend a frame carries onto the totals so far.
+ *
+ * Returns `null` when the frame says nothing about spend, so a caller can tell
+ * "no news" from "zero" — two very different readings of a live run.
+ *
+ * Two carriers are accepted because the run publishes both: `usage: {...}` on
+ * the LLM-call frames (running totals plus ceilings), and the same field names
+ * FLAT on the frames whose subject IS the budget (`render_prompt` seeding the
+ * ceilings, `spend_ceiling_reached` announcing the stop). Merging rather than
+ * replacing is what lets a ceiling arrive on the first frame of a run and still
+ * be standing twenty calls later.
+ */
+export function usageFromFrame(
+  frame: StepFrame,
+  prev?: ConsultUsage | null,
+  allowFlat = false,
+): ConsultUsage | null {
+  const raw = frame as Record<string, unknown>
+  const nested =
+    raw.usage && typeof raw.usage === 'object' && !Array.isArray(raw.usage)
+      ? (raw.usage as Record<string, unknown>)
+      : null
+  const flat = allowFlat ? raw : null
+  const out: ConsultUsage = { ...ZERO_USAGE, ...(prev ?? {}) }
+  let found = false
+  for (const key of USAGE_FIELDS) {
+    const value = finiteNumber(nested, key) ?? finiteNumber(flat, key)
+    if (value != null) {
+      out[key] = value
+      found = true
+    }
+  }
+  return found ? out : null
+}
+
+/**
+ * Fold one streamed frame into the pending turn.
+ *
+ * Most frames are just another line on the ticker. Three do more, and each one
+ * is here because the 2026-09-16 run was expensive in a way nobody could watch:
+ *
+ *   * `render_prompt` — the run's FIRST frame — declares the round cap it is
+ *     actually operating under (and whether that came from the request or a
+ *     default), plus the spend ceilings.
+ *   * `llm_call` carries the running spend, so the meter moves per call.
+ *   * `answer_delta` carries a chunk of the final answer. It accumulates into
+ *     `answerPreview` and is deliberately NOT listed as a step: a hundred
+ *     400-char chunks would bury the trace, blow the persisted-step cap, and
+ *     turn "Thinking… (N steps)" into a meaningless number.
+ */
+export function applyFrame(pending: PendingTurn, frame: StepFrame): PendingTurn {
+  const kind = String(frame.kind ?? '')
+  if (kind === 'answer_delta') {
+    const text = typeof frame.text === 'string' ? frame.text : ''
+    if (!text) return pending
+    return { ...pending, answerPreview: (pending.answerPreview ?? '') + text }
+  }
+  const next: PendingTurn = { ...pending, steps: [...pending.steps, frame] }
+  const usage = usageFromFrame(frame, pending.usage, SPEND_FRAME_KINDS.has(kind))
+  if (usage) next.usage = usage
+  if (kind === 'render_prompt') {
+    const cap = frame.max_rounds
+    if (typeof cap === 'number' && Number.isFinite(cap)) next.roundCap = cap
+    if (typeof frame.rounds_source === 'string') next.roundsSource = frame.rounds_source
+  }
+  return next
+}
+
+// ---------------------------------------------------------------------------
 // Server reconcile
 // ---------------------------------------------------------------------------
 
-/** Map the persisted server turns onto the client's transcript shape. */
+/**
+ * Map the persisted server turns onto the client's transcript shape.
+ *
+ * `turnId` is what makes a re-seeded turn recoverable AT ALL: the session API
+ * does not carry the run id, and a turn written before it was recorded on the
+ * row has none to carry, so the turn's own id is the address the synthesis
+ * endpoint resolves on.
+ *
+ * `requestId` / `synthesisStatus` are read through OPTIMISTICALLY — absent
+ * today, so the panel decides "was this answer cut?" by scanning the turn's
+ * steps for a `degraded_final` / `partial_final` instead. Reading them here
+ * means the cheaper, exact signal starts working the day the server sends it,
+ * with no client change.
+ */
 export function turnsFromServer(detail: ConsultSessionDetail): ChatTurn[] {
   return detail.turns.map((t) => ({
     role: t.role,
@@ -381,6 +608,9 @@ export function turnsFromServer(detail: ConsultSessionDetail): ChatTurn[] {
     citedRefs: (t.cited_refs as ConsultCitedRef[]) ?? [],
     findingId: t.finding_id ?? null,
     deep: Boolean(t.finding_id),
+    turnId: t.id,
+    requestId: t.request_id ?? null,
+    synthesisStatus: t.synthesis_status ?? null,
   }))
 }
 
@@ -468,6 +698,13 @@ interface ConsultSessionsState {
   pushStep: (panelId: string, requestId: string, frame: StepFrame) => void
   /** Land the answer: append the assistant turn and clear the pending one. */
   completeTurn: (panelId: string, requestId: string, turn: ChatTurn) => void
+  /**
+   * Swap one settled assistant turn for a better version of ITSELF — the
+   * re-synthesis of a cut-short answer. Replaced in place rather than appended
+   * because the two are one answer, not a conversation: appending would send
+   * the truncated text back to the model as history on the next turn.
+   */
+  replaceTurn: (panelId: string, index: number, turn: ChatTurn) => void
   /** Give up on a turn (request failed) — clears pending, records the error. */
   failTurn: (panelId: string, requestId: string, error: string) => void
   /** Stop waiting on a reattached turn that outlived the poll deadline. */
@@ -537,7 +774,11 @@ export const useConsultSessions = create<ConsultSessionsState>((set, get) => ({
       // A frame for a turn that already settled (or for a different turn) is
       // stale relay traffic — drop it rather than resurrecting a pending turn.
       if (!pending || pending.requestId !== requestId) return null
-      return { pendingTurn: { ...pending, steps: [...pending.steps, frame] } }
+      const next = applyFrame(pending, frame)
+      // `applyFrame` returns the SAME object for a frame that changed nothing
+      // (an empty `answer_delta`) — don't churn the store for it.
+      if (next === pending) return null
+      return { pendingTurn: next }
     }),
 
   completeTurn: (panelId, requestId, turn) =>
@@ -552,6 +793,17 @@ export const useConsultSessions = create<ConsultSessionsState>((set, get) => ({
         pendingTurn: null,
         error: null,
       }
+    }),
+
+  replaceTurn: (panelId, index, turn) =>
+    updatePanel(set, panelId, (panel) => {
+      const existing = panel.transcript[index]
+      // The transcript moved under us (a reconcile, a reset, a new turn) —
+      // writing an answer over whatever is at that index now would corrupt it.
+      if (!existing || existing.role !== 'assistant') return null
+      const transcript = panel.transcript.slice()
+      transcript[index] = turn
+      return { transcript, error: null }
     }),
 
   failTurn: (panelId, requestId, error) =>

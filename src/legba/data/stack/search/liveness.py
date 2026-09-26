@@ -177,6 +177,13 @@ class _FailureStreak:
 
     count: int = 0
     last_reason: str = ""
+    #: Wall-clock moment before which this provider must NOT be re-attempted.
+    #: The deferral advice already carried this to the CALLER; holding it here
+    #: too is what lets the provider LADDER honour it WITHIN a run — a rung
+    #: that is still deferred is skipped rather than re-queried, which is the
+    #: "never hammer a banned engine" rule applied across rungs instead of only
+    #: across ticks.
+    not_before: datetime | None = None
 
 
 class SearchLivenessCache:
@@ -239,6 +246,31 @@ class SearchLivenessCache:
     def failure_count(self, provider_key: str) -> int:
         streak = self._failures.get(provider_key)
         return streak.count if streak is not None else 0
+
+    def record_deferral(self, provider_key: str, not_before: datetime) -> None:
+        """Remember when this provider may next be attempted.
+
+        Written by :func:`compute_deferral` so the ladder and the caller read
+        ONE backoff, never two that can disagree.
+        """
+        streak = self._failures.setdefault(provider_key, _FailureStreak())
+        streak.not_before = not_before
+
+    def deferred_until(
+        self, provider_key: str, *, now: datetime | None = None,
+    ) -> datetime | None:
+        """The active deferral for this provider, or ``None`` if it may run.
+
+        Returns ``None`` — meaning "attempt it" — for a provider that has never
+        failed, and for one whose backoff window has elapsed. A caller uses
+        this to SKIP a rung, never to fail: a skipped rung is a reason recorded
+        on the ladder, not an error the run dies on.
+        """
+        streak = self._failures.get(provider_key)
+        if streak is None or streak.not_before is None:
+            return None
+        moment = now or datetime.now(tz=timezone.utc)
+        return streak.not_before if streak.not_before > moment else None
 
     # -- concurrency --------------------------------------------------------
 
@@ -493,11 +525,16 @@ def compute_deferral(
     streak = cache.record_failure(provider_key, reason)
     delay = min(DEFER_BASE_SECONDS * (2 ** (streak - 1)), DEFER_MAX_SECONDS)
     moment = now or datetime.now(tz=timezone.utc)
+    not_before = moment + timedelta(seconds=delay)
+    # Hold the window on the cache as well as handing it to the caller, so the
+    # provider ladder can honour the SAME backoff within a run (skip a still-
+    # deferred rung) rather than computing a second, divergent one.
+    cache.record_deferral(provider_key, not_before)
     return DeferralAdvice(
         defer=True,
         reason=reason,
         retry_after_seconds=delay,
-        not_before=moment + timedelta(seconds=delay),
+        not_before=not_before,
         consecutive_failures=streak,
         escalate=streak >= DEFER_ESCALATE_AFTER,
         detail=detail,

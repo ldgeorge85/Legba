@@ -8,16 +8,19 @@ telemetry + since routers (the SAME ``RegistryAPIDeps`` bundle +
 ``substrate_reads_api`` wiring convention):
 
   * ``GET /timeline?target_id=<desk>&days=30`` — the temporal substrate as
-    RANGED items over one window: facts (``[valid_from, valid_until)``),
-    situations (lifecycle ``[valid_from, valid_until | last_event_at)``), and
-    findings (``[produced_at, superseded_at)``). ``end=None`` is an OPEN window
+    RANGED items over one window: events (occurrence ``[time_start,
+    time_end | valid_until)``, V3/P6), facts (``[valid_from,
+    valid_until)``), situations (lifecycle ``[valid_from, valid_until |
+    last_event_at)``), and findings (``[produced_at, superseded_at)``).
+    ``end=None`` is an OPEN window
     (the row is still the current head / has no close stamp) — the client
     extends it to "now" and marks it live, never fabricating a close.
 
 There is NO existing read that carries validity windows: ``/findings`` returns
 finding points with no ``superseded_at``/``superseded_by``, and facts have no
-read route at all. So this route projects the three temporal tables' window +
-supersession columns (``facts.valid_from``/``valid_until``/``superseded_by``
+read route at all. So this route projects the temporal tables' window +
+supersession columns (``events.time_start``/``time_end``/``valid_until``
+[mig 0202, P6]; ``facts.valid_from``/``valid_until``/``superseded_by``
 [mig 0032]; ``situations.valid_from``/``valid_until``/``superseded_by``
 [mig 0040]; ``analyst_outputs.superseded_at``/``superseded_by`` [baseline]) into
 one ranged-item envelope the `system.timeline` panel brushes.
@@ -45,6 +48,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from .api import RegistryAPIDeps, require_bearer
+from ..provenance import origin as _origin
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +68,7 @@ MAX_DAYS: int = 90
 KIND_CAP: int = 300
 
 #: The ranged-item kinds this route surfaces, in stable order.
-TIMELINE_KINDS: tuple[str, ...] = ("fact", "situation", "finding")
+TIMELINE_KINDS: tuple[str, ...] = ("event", "fact", "situation", "finding")
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +85,7 @@ class TimelineItem(BaseModel):
     a current head.
     """
     id: str
-    kind: str            # 'fact' | 'situation' | 'finding'
+    kind: str            # 'event' | 'fact' | 'situation' | 'finding'
     label: str
     start: datetime
     end: datetime | None
@@ -108,8 +112,34 @@ class TimelineResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# SQL — pure window reads over the three temporal tables.
+# SQL — pure window reads over the four temporal tables.
 # ---------------------------------------------------------------------------
+
+# Events (V3/P6): the OCCURRENCE span [time_start|produced_at, time_end|
+# valid_until). A still-unfolding event (both ends NULL) surfaces end=None —
+# the open bar, never a fabricated close. The window filter keeps an event
+# whose span reaches into the window (its own end — or, for an unstamped
+# one, its start/production — landed inside it). Open-read gate: the ONE
+# P7 live rendering (open pair + live origin classes) — a backfilled event
+# can never render as live history. ``status`` carries the five-state
+# lifecycle (the badge); ``severity``/``category`` ride along for the panel.
+_EVENTS_SQL = f"""
+    SELECT e.id::text                             AS id,
+           e.title, e.lifecycle_state, e.category, e.severity,
+           COALESCE(e.time_start, e.produced_at)  AS start_at,
+           COALESCE(e.time_end, e.valid_until)    AS end_at,
+           e.superseded_by::text                  AS superseded_by,
+           e.target_id                           AS target_id,
+           count(*) OVER ()                      AS total
+      FROM events e
+     WHERE ($1::text IS NULL OR e.target_id = $1)
+       AND {_origin.live_gate_sql("e")}
+       AND COALESCE(e.time_end, e.valid_until, e.time_start, e.produced_at)
+             > now() - make_interval(days => $2)
+     ORDER BY start_at DESC, e.id DESC
+     LIMIT $3
+"""
+
 
 # Facts: validity window [COALESCE(valid_from, produced_at), valid_until).
 # A closed fact carries valid_until (set to NOW() at close, mig 0049); an open
@@ -217,6 +247,22 @@ def merge_items(*kind_lists: list[TimelineItem]) -> list[TimelineItem]:
 # ---------------------------------------------------------------------------
 
 
+def _event_item(row: Mapping[str, Any]) -> TimelineItem:
+    """One events row → the ranged item; ``status`` is the lifecycle badge."""
+    return TimelineItem(
+        id=row["id"],
+        kind="event",
+        label=row["title"],
+        start=row["start_at"],
+        end=row["end_at"],
+        status=row["lifecycle_state"],
+        severity=row["severity"],
+        category=row["category"],
+        target_id=row["target_id"],
+        superseded_by=row["superseded_by"],
+    )
+
+
 def _fact_item(row: Mapping[str, Any]) -> TimelineItem:
     return TimelineItem(
         id=row["id"],
@@ -286,20 +332,24 @@ def build_timeline_router(deps: RegistryAPIDeps) -> APIRouter:
         cap = int(KIND_CAP)
 
         async with deps.descriptor_registry.pg.acquire() as conn:
+            event_rows = await conn.fetch(_EVENTS_SQL, target_id, window, cap)
             fact_rows = await conn.fetch(_FACTS_SQL, target_id, window, cap)
             situation_rows = await conn.fetch(_SITUATIONS_SQL, target_id, window, cap)
             finding_rows = await conn.fetch(_FINDINGS_SQL, target_id, window, cap)
 
+        events = [_event_item(r) for r in event_rows]
         facts = [_fact_item(r) for r in fact_rows]
         situations = [_situation_item(r) for r in situation_rows]
         findings = [_finding_item(r) for r in finding_rows]
 
         counts = {
+            "event": _total(event_rows),
             "fact": _total(fact_rows),
             "situation": _total(situation_rows),
             "finding": _total(finding_rows),
         }
         truncated = {
+            "event": counts["event"] > len(events),
             "fact": counts["fact"] > len(facts),
             "situation": counts["situation"] > len(situations),
             "finding": counts["finding"] > len(findings),
@@ -309,7 +359,7 @@ def build_timeline_router(deps: RegistryAPIDeps) -> APIRouter:
             days=window,
             server_now=server_now,
             target_id=target_id,
-            items=merge_items(facts, situations, findings),
+            items=merge_items(events, facts, situations, findings),
             counts=counts,
             truncated=truncated,
         )

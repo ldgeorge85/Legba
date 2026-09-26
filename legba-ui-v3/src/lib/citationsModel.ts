@@ -27,18 +27,32 @@
  * signal — back-compatible: an old row with only `signal_id` reads as a signal
  * ref exactly as before.
  *
+ * ONE EXCEPTION to "ordinal N is entry N": a `region_rollup.v1` row written
+ * before the 2026-09-07 producer fix carries its citations in the SLICE order
+ * while its body numbers member sections in the ROSTER order. `extractCitations`
+ * re-maps those onto the rendered order — see {@link rollupAlignedCitations},
+ * the client half of `export_api._rollup_aligned_citations`. Every other row
+ * passes through untouched.
+ *
  * Pure, DOM-free: the card component composes these helpers.
  */
 
 /**
- * The five DESK GROUNDING block kinds (backend
+ * The DESK GROUNDING block kinds (backend
  * `provenance.kinds.GROUNDING_REF_KINDS`). A grounding citation's ordinal
  * indexes a block the desk was SHOWN — its own prior read, its trailing
  * window ledger, the open-situation register, the desk baseline, the standing
- * open questions — not a slice row. Four of the five are synthetic and carry
- * NO `ref_id` by design (minting one so a drill link resolves would be a
- * fabricated anchor); only `prior_read` has a real `analyst_outputs` id, and
- * that id is a FINDING, never a signal.
+ * open questions, the desk's open events — not a slice row. The synthetic
+ * ones carry NO `ref_id` by design (minting one so a drill link resolves
+ * would be a fabricated anchor); `prior_read` has a real `analyst_outputs`
+ * id, and that id is a FINDING, never a signal.
+ *
+ * `observation` (7g-2) is the odd one and the only one that is not about this
+ * platform: it names ONE row of a curated historical holding, with a real
+ * uuid of its own and the whole row carried on the citation (see
+ * {@link CitationObservation}). It is a grounding kind because it has no
+ * `signal_id` and is graded on its own captured text — not because it is
+ * memory.
  */
 export type GroundingKind =
   | 'prior_read'
@@ -46,6 +60,8 @@ export type GroundingKind =
   | 'situation_register'
   | 'desk_baseline'
   | 'open_questions'
+  | 'open_events'
+  | 'observation'
 
 const GROUNDING_KINDS: ReadonlySet<string> = new Set<GroundingKind>([
   'prior_read',
@@ -53,6 +69,8 @@ const GROUNDING_KINDS: ReadonlySet<string> = new Set<GroundingKind>([
   'situation_register',
   'desk_baseline',
   'open_questions',
+  'open_events',
+  'observation',
 ])
 
 /** The structural mark `unit_grounding` stamps on every grounding citation. */
@@ -65,6 +83,8 @@ const GROUNDING_LABEL: Record<GroundingKind, string> = {
   situation_register: 'situation register',
   desk_baseline: 'desk baseline',
   open_questions: 'open questions',
+  open_events: 'open events',
+  observation: 'historical observation',
 }
 
 /** Fallback titles for a grounding block whose stored entry carries none. */
@@ -74,6 +94,36 @@ const GROUNDING_TITLE: Record<GroundingKind, string> = {
   situation_register: 'Open-situation register',
   desk_baseline: 'Desk baseline',
   open_questions: 'Standing open questions',
+  open_events: "Open events on this desk's open frames",
+  observation: 'Historical observation',
+}
+
+/**
+ * The cited HISTORICAL OBSERVATION's own row, carried on the citation by the
+ * producer (`analysts.history_grounding.observation_citation`) so the chip
+ * resolves the number WITHOUT a round trip — which is what makes it legible
+ * in an exported document, where most citations are actually read.
+ *
+ * `staleTense` is the backend's rendered marker, verbatim: `(historical:
+ * valid YYYY..YYYY, recorded YYYY-MM)`. It is never re-derived here — one
+ * string, one producer, three surfaces (prompt, endnote, chip), so a past
+ * figure reads as past identically on all of them.
+ */
+export interface CitationObservation {
+  collectionId?: string
+  seriesId?: string
+  provider?: string
+  indicatorName?: string
+  subject?: string
+  value?: string
+  unit?: string
+  validFrom?: string
+  validTo?: string
+  recordTime?: string
+  sourceUrl?: string
+  sha256?: string
+  licenceClass?: string
+  staleTense?: string
 }
 
 /** The record kind a citation drills into, or the grounding block it names. */
@@ -93,6 +143,44 @@ export interface Citation {
   title?: string
   /** The cited source URL / origin, when present. */
   source?: string
+  /**
+   * The cited OUTLET ref (`signals.source_id` — "source.bbc.world") on a unit
+   * citation. Absent on a composition citation (whose `source` is the cited
+   * desk's analyst id) and on every row written before V-H1 stamped it.
+   * The masthead a reader recognises is derived from this first — see
+   * {@link citationMasthead}.
+   */
+  sourceId?: string
+  /**
+   * The cited head's own `produced_at` (D-2b), ISO-8601. Composition-only and
+   * guarded: a head with no timestamp simply carries none, so the source tag
+   * prints a masthead with no date rather than an invented one.
+   */
+  producedAt?: string
+  /**
+   * 7d — the cited signals behind THIS claim fold to ONE outlet. Written by
+   * the producer only when TRUE (`source_independence.independence_of`), so
+   * absent means "two or more independent outlets, or UNKNOWN" (a composition
+   * origin cites findings, not signals) and NEVER "cleared".
+   */
+  singleSource?: boolean
+  /**
+   * 7d — at least one outlet behind this claim was absorbed by the wire /
+   * same-publisher fold. The citation carries the BOOLEAN; the COUNT lives on
+   * the rendered record's corroboration block (see `lib/claimFold.ts`), which
+   * is computed off the identical cited-signal list, so the two cannot
+   * disagree about a block.
+   */
+  wireFolded?: boolean
+  /**
+   * True when the producer wrote a `derived_from` key that is EMPTY — the
+   * cited sub-claim records no basis at all. Distinct from an ABSENT key (a
+   * unit/legacy citation, which says nothing about basis): `basis == []` is
+   * the platform's own insufficient-evidence shape (`scorecard_banding`: "An
+   * insufficient verdict always carries ``basis=[]``"), so it is carried as
+   * its own bit rather than collapsed into `derivedFrom === undefined`.
+   */
+  emptyBasis?: boolean
   /**
    * The cited PASSAGE — a composition sub-claim's `evidence_text` or a unit
    * signal's `snippet`. The point-in-time text the citation rests on, surfaced
@@ -127,6 +215,13 @@ export interface Citation {
    * falsified 08-27 "53.6% unresolved citations" red.
    */
   resolvesAgainst?: string
+  /**
+   * 7g-2 — the cited HISTORICAL OBSERVATION's own row. Present ONLY on an
+   * `observation` citation; absent everywhere else, so it is read as
+   * "an observation when present" rather than as a field every citation must
+   * supply.
+   */
+  observation?: CitationObservation
   /**
    * @deprecated Back-compat alias for `refId`, kept so existing signal-only
    * consumers (e.g. the evidence EntityGraph) compile unchanged. Prefer
@@ -199,7 +294,10 @@ export function extractCitations(body: Record<string, unknown> | null | undefine
       // Only the prior read has a drill target, and it is an analyst_outputs
       // row — a FINDING. The other four keep an empty id so no surface can
       // mint a link out of them.
-      const groundingId = kind === 'prior_read' ? (refId ?? '') : ''
+      // 7g-2: `observation` joins `prior_read` in carrying a real id — an
+      // observations row has one, so keeping it is not a fabricated anchor.
+      const groundingId =
+        kind === 'prior_read' || kind === 'observation' ? (refId ?? '') : ''
       const cite: Citation = {
         marker,
         refId: groundingId,
@@ -207,6 +305,14 @@ export function extractCitations(body: Record<string, unknown> | null | undefine
         signalId: '', // never a signal — the deprecated alias stays empty
         title: str(o['title']) ?? GROUNDING_TITLE[kind] ?? 'Desk grounding block',
         source: undefined,
+      }
+      if (kind === 'observation') {
+        // The source URL is a REAL external target (the provider file the
+        // number was read out of), so it rides the chip's `source` slot
+        // exactly as a signal's canonical URL does.
+        cite.source = str(o['source'])
+        const obs = o['observation']
+        if (obs && typeof obs === 'object') cite.observation = readObservation(obs)
       }
       if (markerClass) cite.markerClass = markerClass
       const target = str(o['resolves_against'])
@@ -236,8 +342,126 @@ export function extractCitations(body: Record<string, unknown> | null | undefine
     const derived = o['derived_from']
     if (Array.isArray(derived) && derived.length > 0) {
       cite.derivedFrom = derived.filter((d): d is string => typeof d === 'string')
+    } else if (Array.isArray(derived)) {
+      // Present AND empty — the cited head records no basis. Carried as its
+      // own bit so "no key at all" (a unit citation) stays distinguishable
+      // from "a key that says nothing is behind this".
+      cite.emptyBasis = true
     }
+    // 7b-i — the cited SOURCE beside the claim: the outlet ref and the cited
+    // head's date, both read verbatim off the row. Guarded like every other
+    // hover-card field, so a legacy citation gains neither.
+    const sourceId = str(o['source_id'])
+    if (sourceId) cite.sourceId = sourceId
+    const producedAt = str(o['produced_at'])
+    if (producedAt) cite.producedAt = producedAt
+    // 7d — the fold stamps. Both are written by the producer ONLY when true,
+    // and both are read as "true when present", never defaulted to false: a
+    // composition origin's independence is UNKNOWN, not cleared.
+    if (o['single_source'] === true) cite.singleSource = true
+    const folded = o['wire_folded']
+    // `composition_citations` stamps the citation's key as a BOOLEAN while the
+    // record's corroboration block stamps a COUNT; a positive number here is
+    // accepted as the same statement rather than dropped on the shape.
+    if (folded === true || (typeof folded === 'number' && folded > 0)) cite.wireFolded = true
     out.push(cite)
+  }
+  return rollupAlignedCitations(body, out)
+}
+
+// ---------------------------------------------------------------------------
+// region_rollup.v1 — the historical citation-order re-map, read side
+// ---------------------------------------------------------------------------
+
+/** `data.rollup` — where a rollup row keeps its member roster. */
+const ROLLUP_PAYLOAD_KEY = 'rollup'
+/** The schema token that identifies a rollup payload (`provenance.kinds`). */
+const ROLLUP_PAYLOAD_SCHEMA = 'region_rollup.v1'
+/** `members[].lead_source` for a member whose lead block WAS carried — the
+ *  token that selects the rendered member sections, in order. */
+const ROLLUP_LEAD_CARRIED = 'carried'
+
+/** The rollup payload on either envelope level, or null. Mirrors the server's
+ *  `is_deterministic_rollup`, which accepts `data.data.rollup` and `data.rollup`
+ *  because its callers sit on both sides of that boundary. */
+function rollupPayload(
+  body: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  if (!body || typeof body !== 'object') return null
+  const inner = body['data']
+  for (const level of [inner, body]) {
+    if (!level || typeof level !== 'object') continue
+    const rollup = (level as Record<string, unknown>)[ROLLUP_PAYLOAD_KEY]
+    if (
+      rollup &&
+      typeof rollup === 'object' &&
+      (rollup as Record<string, unknown>)['schema'] === ROLLUP_PAYLOAD_SCHEMA
+    ) {
+      return rollup as Record<string, unknown>
+    }
+  }
+  return null
+}
+
+/**
+ * Re-map a `region_rollup.v1` row's citations onto the order its body RENDERS.
+ *
+ * THE HISTORY FIX, client half. Rows are append-only, so the rollup rows written
+ * between 2026-09-05T23:45Z and the 2026-09-07 producer fix carry `citations[]`
+ * in the SLICE order while their body numbers member sections in the ROSTER
+ * order — on `region_americas` the Argentina section's own `[[ref:1]]` resolved
+ * to the UNITED STATES' head. `export_api._rollup_aligned_citations` already
+ * repairs that on the EXPORT path; this is the same permutation applied where
+ * the workstation and the mobile surface actually read, so the two paths agree
+ * and a pre-fix regional read stops being mislabelled in the app.
+ *
+ * A PURE FUNCTION OF THE ROW, which is the only reason it is allowed to exist.
+ * The rendered order is not inferred and not re-derived from anything outside
+ * the row: `rollup.members[]` is the exact walk the body renders, and each
+ * carried member's `assembly_id` IS the citation's `ref_id`. So the re-map is a
+ * permutation the row itself specifies. No fetch, no clock, no flag.
+ *
+ * TOTAL OR NOTHING. Not a rollup, counts disagree, two citations share a
+ * `refId`, or a carried member has no matching citation ⇒ the list is returned
+ * UNTOUCHED. A partial re-map would mix two orderings inside one ordinal space,
+ * which is the defect itself.
+ *
+ * A no-op on every row written after the producer fix, because there the two
+ * orders are already the same permutation — one code path, no flag, and it
+ * stays correct as the old rows age out.
+ */
+export function rollupAlignedCitations(
+  body: Record<string, unknown> | null | undefined,
+  entries: Citation[],
+): Citation[] {
+  const rollup = rollupPayload(body)
+  if (!rollup) return entries
+  const members = rollup['members']
+  if (!Array.isArray(members)) return entries
+  const carried = members.filter(
+    (m): m is Record<string, unknown> =>
+      !!m &&
+      typeof m === 'object' &&
+      (m as Record<string, unknown>)['lead_source'] === ROLLUP_LEAD_CARRIED,
+  )
+  const byRef = new Map<string, Citation>()
+  for (const entry of entries) {
+    if (entry.refId && !byRef.has(entry.refId)) byRef.set(entry.refId, entry)
+  }
+  if (carried.length === 0 || carried.length !== entries.length) return entries
+  if (byRef.size !== entries.length) return entries
+
+  const out: Citation[] = []
+  const used = new Set<string>()
+  for (let i = 0; i < carried.length; i++) {
+    const ref = str(carried[i]['assembly_id']) ?? ''
+    const entry = byRef.get(ref)
+    // Each stored citation must be consumed exactly ONCE. Anything else is not
+    // a permutation of the stored list, and re-numbering a non-permutation
+    // would invent a pairing rather than recover one.
+    if (!entry || used.has(ref)) return entries
+    used.add(ref)
+    out.push({ ...entry, marker: `[[ref:${i + 1}]]` })
   }
   return out
 }
@@ -273,6 +497,35 @@ export function citationKindLabel(c: Citation): string {
   return GROUNDING_LABEL[c.refKind as GroundingKind] ?? c.refKind
 }
 
+/** Read the producer's `observation` block off a citation entry, camel-cased.
+ *  Every field is optional and absent stays absent — a missing period renders
+ *  as nothing, never as a guessed year. */
+function readObservation(raw: object): CitationObservation {
+  const o = raw as Record<string, unknown>
+  const out: CitationObservation = {}
+  const map: Array<[keyof CitationObservation, string]> = [
+    ['collectionId', 'collection_id'],
+    ['seriesId', 'series_id'],
+    ['provider', 'provider'],
+    ['indicatorName', 'indicator_name'],
+    ['subject', 'subject'],
+    ['value', 'value'],
+    ['unit', 'unit'],
+    ['validFrom', 'valid_from'],
+    ['validTo', 'valid_to'],
+    ['recordTime', 'record_time'],
+    ['sourceUrl', 'source_url'],
+    ['sha256', 'sha256'],
+    ['licenceClass', 'licence_class'],
+    ['staleTense', 'stale_tense'],
+  ]
+  for (const [key, wire] of map) {
+    const value = str(o[wire])
+    if (value) out[key] = value
+  }
+  return out
+}
+
 /**
  * Where a chip click should drill, or `null` when the citation has NO drill
  * target and a link would be a dead end.
@@ -289,7 +542,69 @@ export function citationDrill(c: Citation): { kind: 'finding' | 'signal'; id: st
   if (c.refKind === 'prior_read') return { kind: 'finding', id: c.refId }
   if (c.refKind === 'finding') return { kind: 'finding', id: c.refId }
   if (c.refKind === 'signal') return { kind: 'signal', id: c.refId }
+  // 7g-2 — an `observation` has a real id and NO resolver: there is no
+  // observations panel and none is being added, so a drill here would be a
+  // click that 404s. The chip resolves it the other way — the whole row is
+  // carried on the citation and rendered in the card — which is the drill a
+  // reader of a historical number actually wants, and the one that also works
+  // in an exported document.
   return null
+}
+
+/**
+ * The MASTHEAD beside a claim — who the cited record is, in a reader's words.
+ *
+ * Derived, in order, from what the row actually carries:
+ *   1. `source_id` — the platform's canonical OUTLET ref ("source.bbc.world")
+ *      on a unit citation. The `source.` prefix is plumbing; the rest is the
+ *      outlet ("BBC world").
+ *   2. `source` when it is NOT a URL — a composition citation's `source` is
+ *      the cited DESK's analyst id ("escalation"), which is the honest answer
+ *      to "who says this" one tier up.
+ *   3. the host of `source` when it IS a URL, `www.` stripped.
+ *
+ * `null` when the citation names none of the three — the tag then renders
+ * nothing rather than a fabricated masthead. No lookup table: a descriptor's
+ * `identity.name` ("38 North — Korea Analysis") is NOT on the row, and
+ * inventing one here is exactly the class of fabrication the reading kit
+ * exists to refuse.
+ */
+export function citationMasthead(c: Citation): string | null {
+  const outlet = c.sourceId?.trim()
+  if (outlet) {
+    const words = outlet
+      .replace(/^source[._-]/i, '')
+      .replace(/[._-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (words) return words.charAt(0).toUpperCase() + words.slice(1)
+  }
+  const src = c.source?.trim()
+  if (!src) return null
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(src)) {
+    try {
+      const host = new URL(src).hostname.replace(/^www\./i, '')
+      return host || null
+    } catch {
+      return null
+    }
+  }
+  const words = src.replace(/[._-]+/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!words) return null
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
+/**
+ * The cited record's DATE, `YYYY-MM-DD`, or `null`. Read off `produced_at`
+ * verbatim — the ISO date part only, never reformatted through a locale and
+ * never derived from anything else on the page. An unparseable or absent
+ * stamp yields `null`, and the tag prints the masthead alone.
+ */
+export function citationDate(c: Citation): string | null {
+  const raw = c.producedAt?.trim()
+  if (!raw) return null
+  const m = /^(\d{4}-\d{2}-\d{2})/.exec(raw)
+  return m ? m[1] : null
 }
 
 /** Marker → Citation lookup (last write wins on a duplicate marker). */

@@ -80,7 +80,11 @@ minting a new one (the coherence audit's core finding: ~40 organs where ~15
 archetypes would do) — no new analyst kind, no new cadence, no new registrar
 train; the SAME monthly sweep that computes the gaps proposes against them.
 
-Two origins feed one object, both EXISTING organs:
+Two origins are written HERE, both from EXISTING organs (a THIRD,
+``reference_gap``, is written by A-4's ``_reference_gap_dispatch`` through
+:func:`write_requirements` — this module's writer, not a fork of it — and is
+daily rather than monthly, so a ``collection_gap`` row and a ``reference_gap``
+row for the same desk×dimension coexist under distinct ``natural_key``s):
   * ``collection_gap`` itself — every starved desk×dimension cell (this
     module's own aggregation), evidence = the cell's own current scorecard
     row (``analyst_outputs.kind='scorecard'``) — NOT this handler's own
@@ -258,8 +262,21 @@ def _sort_key(row: Mapping[str, Any]) -> tuple[Any, str]:
     return (row.get("produced_at"), str(row.get("id")))
 
 
-def _source_classes(dimension: str) -> list[str]:
+def source_classes_for(dimension: str) -> list[str]:
+    """The doctrine map's classes for one dimension, or the documented default.
+
+    Public because A-4's ``reference_gap`` origin reads the SAME doctrine for
+    the same dimensions (:mod:`._reference_gap_dispatch`) — including the two
+    reference units outside the map (``proliferation_watch`` /
+    ``disruption_status``), which resolve here to
+    :data:`_DEFAULT_SOURCE_CLASSES` rather than dropping the row.
+    """
     return list(SOURCE_CLASSES_BY_DIMENSION.get(dimension, _DEFAULT_SOURCE_CLASSES))
+
+
+#: Back-compat alias for this module's own call sites and the tests pinned to
+#: the private name.
+_source_classes = source_classes_for
 
 
 # ---------------------------------------------------------------------------
@@ -726,16 +743,25 @@ async def _attach_candidates(conn: Any, row: Mapping[str, Any]) -> dict[str, Any
     # A NON-active candidate's own known url — a one-off web_fetch sample
     # before an operator decides whether to reactivate the full feed. Active
     # candidates are already being fetched on cadence; no fetch to suggest.
-    out["suggested_fetch_url"] = next(
+    #
+    # A row that ARRIVES with a url keeps it: A-4's `reference_gap` origin
+    # already knows the exact page the development is on (the reference model
+    # handed us the URL), which is strictly more useful to sample than a
+    # non-active feed's registered root. Neither of this module's own two
+    # origins sets the key, so for them `.get` is None and the fallback runs
+    # exactly as it always has.
+    out["suggested_fetch_url"] = row.get("suggested_fetch_url") or next(
         (c["url"] for c in candidates if c.get("state") != "active" and c.get("url")),
         None,
     )
     return out
 
 
-async def _write_requirements(
+async def write_requirements(
     pool: Any,
     rows: list[dict[str, Any]],
+    *,
+    stats: dict[str, int] | None = None,
 ) -> int:
     """Idempotently write pre-shaped (pre-candidate-match) requirement rows.
 
@@ -744,7 +770,22 @@ async def _write_requirements(
     actually being written, then inserts — ``ON CONFLICT DO NOTHING`` is the
     schema-enforced backstop against a race with a concurrent run. Returns the
     count actually written. Degrade-not-break: any failure logs + returns 0 —
-    the primary collection-requirements finding is never blocked."""
+    the primary collection-requirements finding is never blocked.
+
+    THE ONE WRITER. A-4's ``reference_gap`` origin
+    (:mod:`._reference_gap_dispatch`) calls THIS function with its own
+    pre-shaped rows rather than forking a second insert path: the
+    ``natural_key`` bulk check, ``_attach_candidates``, the ``ON CONFLICT DO
+    NOTHING`` backstop and the degrade guard are exactly what a third origin
+    needs, and a copy would be a second place for the idempotency contract to
+    rot. ``stats``, when given, is filled with ``existing`` / ``failed`` —
+    A-4's receipt has to tell "already proposed" apart from "could not write",
+    which the written-count alone cannot. Absent ``stats`` the behaviour is
+    unchanged, which is why ``collection_gap``'s own two call sites do not
+    pass it."""
+    if stats is not None:
+        stats.setdefault("existing", 0)
+        stats.setdefault("failed", 0)
     if not rows:
         return 0
     try:
@@ -759,6 +800,8 @@ async def _write_requirements(
             written = 0
             for row in rows:
                 if row["natural_key"] in existing:
+                    if stats is not None:
+                        stats["existing"] += 1
                     continue
                 full = await _attach_candidates(conn, row)
                 tag = await conn.execute(
@@ -780,10 +823,22 @@ async def _write_requirements(
                 )
                 if tag.endswith(" 1"):
                     written += 1
+                elif stats is not None:
+                    # ON CONFLICT DO NOTHING fired — a concurrent run got there
+                    # between the bulk check and this insert. Existing, not
+                    # failed: the row the caller wanted IS in the table.
+                    stats["existing"] += 1
             return written
     except Exception as exc:  # noqa: BLE001 — degrade-not-break, never blocks the finding
+        if stats is not None:
+            stats["failed"] += len(rows)
         logger.warning("collection_gap.requirements_write_failed err=%s", exc)
         return 0
+
+
+#: Back-compat alias — this module's own two call sites and the tests pinned to
+#: the private name predate A-4 promoting the writer to shared surface.
+_write_requirements = write_requirements
 
 
 async def _propose_collection_requirements(

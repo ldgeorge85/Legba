@@ -1,0 +1,86 @@
+# sources_wave_2 — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# GroundUp — Cape Town non-profit newsroom, social-justice / community-level
+# South African reporting. Closes the audit-flagged gap
+# (planning/COVERAGE_VS_SELECTION_AUDIT_2026-09-07.md item #6): the Durban
+# refugee-camp raid was found to be carried ONLY via France24 Afrique in
+# French, with English-only search under-reading a corpus that (per the
+# audit) is not actually thin there so much as unindexed in English —
+# GroundUp is exactly the outlet whose beat (informal settlements, refugee
+# and migrant communities, township-level policing) would carry this story
+# and similar ones directly in English. Verified live 2026-09-07: valid
+# RSS 2.0, title "GroundUp News", newest item same-day, oldest of 5 checked
+# items 2026-09-04, well inside 7d.
+#
+# The feed URL is GroundUp's real news RSS route
+# (https://groundup.org.za/sitenews/rss/), found via the site's own /feeds/
+# index page — the bare /feed/ path does not exist on this Django site.
+#
+# source_class: reporting. Non-profit newsroom, not a government/IGO
+# publisher — same "NGO operator is not `official`" reasoning as
+# source_studiokalangou.yaml. Credibility host groundup.org.za (seeded
+# 0.72/wire — independent investigative/community newsroom, no state
+# affiliation).
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after verifying the route
+# live on the instance.
+
+identity:
+  id: source.groundup.news
+  name: GroundUp
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: sources_wave_2
+  created: "2026-09-07T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [ZA]
+  languages: [en]
+  tags: [news, africa, south_africa, sources_wave_2]
+  source_class: reporting
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "27 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://groundup.org.za/sitenews/rss/"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming the
+    # route yields full article text (mirrors the RSSHub-lane conservative default).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

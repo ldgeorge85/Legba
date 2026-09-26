@@ -64,6 +64,7 @@ scope:
   languages: [en]
   tags: [discovery, news, template]
   source_class: analysis
+  access_class: restricted          # Wave-E — a discovery TEMPLATE, not a bound source; nothing to classify — fail-closed until a materialised child is reviewed
 
 acquisition: poll
 # No cadence: a discovery template's materialised children pull, the

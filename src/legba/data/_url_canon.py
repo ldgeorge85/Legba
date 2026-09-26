@@ -33,6 +33,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 __all__ = [
     "canonical_url",
     "normalize_wire_title",
+    "normalized_levenshtein",
     "strip_www",
     "url_embedded_date",
 ]
@@ -294,3 +295,53 @@ def url_embedded_date(url: str):
             except ValueError:
                 continue  # date-shaped but not a date (Feb 30) — keep looking
     return None
+
+
+# ---------------------------------------------------------------------------
+# NEAR-VERBATIM distance (moved here 2026-09-23 from
+# ``filters.dedupe._normalized_levenshtein``, which keeps the old private name
+# as an alias so its two call sites and its tests resolve unchanged)
+# ---------------------------------------------------------------------------
+#
+# WHY IT MOVED. The independence count at the composition floor
+# (``analysts.source_independence``) has to ask the SAME question the tier-4
+# dedupe filter asks — "is this the same dispatch under two mastheads" — and it
+# lives in ``data.analysts``, which has no import edge to ``data.filters`` and
+# should not grow one for a pure string function. This module is already the
+# place the tree keeps document IDENTITY agreements (see the banner), imports
+# nothing but the standard library, and is already imported by both sides.
+# Copying the DP into a second file would have made two near-duplicate
+# implementations of the near-duplicate test, which is its own joke.
+
+
+def normalized_levenshtein(a: str, b: str) -> float:
+    """Return Levenshtein distance / max(len(a), len(b)).
+
+    Pure Python implementation. ``rapidfuzz`` / ``python-Levenshtein``
+    aren't pinned in pyproject; for the ~100-char titles this filter
+    sees, the naive O(n*m) DP is < 50us in CPython 3.11+. If profiling
+    shows it as a hotspot at scale, swap for ``rapidfuzz`` behind a
+    feature flag.
+    """
+    if a == b:
+        return 0.0
+    if not a or not b:
+        return 1.0
+    n, m = len(a), len(b)
+    if n < m:
+        a, b = b, a
+        n, m = m, n
+    previous = list(range(m + 1))
+    for i in range(1, n + 1):
+        current = [i] + [0] * m
+        ca = a[i - 1]
+        for j in range(1, m + 1):
+            cost = 0 if ca == b[j - 1] else 1
+            current[j] = min(
+                current[j - 1] + 1,      # insertion
+                previous[j] + 1,         # deletion
+                previous[j - 1] + cost,  # substitution
+            )
+        previous = current
+    distance = previous[m]
+    return distance / float(n)

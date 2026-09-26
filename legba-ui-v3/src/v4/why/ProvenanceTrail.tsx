@@ -57,6 +57,8 @@ const SELECTABLE = new Set<SelectionKind>([
   'analyst',
   'finding',
   'situation',
+  // V3/P6 — bounded occurrences are cross-room selectable like situations.
+  'event',
 ])
 
 /** Project a lineage node to the chip contract. */
@@ -119,14 +121,29 @@ export default function ProvenanceTrail({ selection }: ProvenanceTrailProps) {
   // The self-chip for the selected row — the fallback for non-walkable kinds,
   // 404s, and empty reports.
   const selfStep: TrailStep = useMemo(() => {
+    // `report`, `journal_entry`, `absence` and `contention` are not substrate
+    // row_kinds — a report IS a finding row, a journal entry has no lineage
+    // table at all, an absence names something the substrate does not contain,
+    // and a contention (7a) names a page on the OPEN WEB — so the self-chip
+    // speaks the walk's vocabulary rather than the selection's. None of them is
+    // walkable (`isWalkable` below is false for them), so the chip is the
+    // trail: their provenance is their own proof, which the Inspector renders,
+    // not a derived_from chain that does not exist.
+    const rowKind: ProvenanceRef['kind'] =
+      selection.kind === 'report' ||
+      selection.kind === 'journal_entry' ||
+      selection.kind === 'absence' ||
+      selection.kind === 'contention'
+        ? 'finding'
+        : selection.kind
     const ref: ProvenanceRef = {
-      kind: selection.kind,
+      kind: rowKind,
       id: selection.id,
       label: selection.label ?? selection.id,
     }
     const node: LineageNode = {
       id: selection.id,
-      row_kind: selection.kind,
+      row_kind: rowKind,
       title: selection.label ?? null,
       produced_at: '',
       target_id: null,

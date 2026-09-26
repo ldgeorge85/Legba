@@ -95,9 +95,11 @@ __all__ = [
     "build_situations_block",
     "build_world_context_block",
     "collect_grounding_candidates",
+    "dispatch_scope_of",
     "finding_is_off_target",
     "harvest_class_of",
     "is_non_event_situation_name",
+    "open_question_backlog_decay_days",
     "open_question_priority_key",
     "situation_grounding_min_intensity",
     "situation_scope_for_target",
@@ -215,9 +217,46 @@ def _row_get(row: Any, key: str, default: Any = None) -> Any:
 
 # Harvest-class priority (see scripts/harvest_open_questions.py K-2a + the
 # K-2b unit-payload faucet in inline_target.convert_open_questions). Ordinal,
-# smaller = higher priority. The ordering reasons about which classes are
-# actually answerable by RE-MINING OUR OWN full-text corpus (the tool this
-# analyst has) vs. classes that need something else:
+# smaller = higher priority.
+#   * coverage_floor — R-B (RESEARCH_PROGRAM_SPEC §2.2), 2026-09-05. Ranked
+#     FIRST (2026-09-06 tune — see below). The target's own evidence keeps
+#     naming a polity NO open frame names, and it is the ONLY class provably
+#     unanswerable from our own corpus: the detector established the gap by
+#     measuring our corpus, so re-mining that same corpus is the one
+#     instrument guaranteed not to close it. It is also the only class that is
+#     DISPATCHED rather than merely harvested — a live alert already fired on
+#     it (``_research_dispatch``), naming it a gap the desk needs answered NOW
+#     — so it outranks every passively-harvested class, including
+#     ``below_floor``.
+#     TUNE (2026-09-06): originally ranked second, immediately after
+#     below_floor. The live 03:37Z corpus_researcher run picked an Aug-02
+#     ``unit_payload`` backlog row over a same-week dispatched ``IL``/
+#     Palestine coverage-floor gap — not because the class ordinal was wrong,
+#     but because ``open_question_priority_key``'s tier 1
+#     (``live_reach > 0``) is evaluated BEFORE the class ordinal, and a
+#     freshly-dispatched question always has ``live_reach == 0`` (nothing has
+#     had time to consume it yet) while an old backlog row can have
+#     accumulated real forward reach. Reordering the class dict alone cannot
+#     fix that — the AGE DECAY below does, by neutralising a STALE row's
+#     ``live_reach`` before tier 1 is computed, so a fresh coverage_floor
+#     dispatch is no longer structurally unable to win. Moving coverage_floor
+#     to ordinal 0 is the second half: once tier 1 stops being a false
+#     tie-breaker in the backlog's favour, the class ordinal is what actually
+#     decides, and it must say coverage_floor first.
+#   * reference_gap — A-4, the attention instrument's second trigger
+#     (``_reference_gap_dispatch``). An out-of-plane reference model, working
+#     from its OWN web search and never from our substrate, named a
+#     development on this desk's bounded question, and NONE of the three
+#     collection arms (url / entity / prose) found it anywhere in the desk's
+#     own slice. Like ``coverage_floor`` it is DISPATCHED rather than
+#     harvested, and provably unanswerable from our own corpus — the corpus is
+#     precisely the collection that missed it. It ranks immediately BELOW
+#     ``coverage_floor`` because the coverage floor's evidence is our own
+#     (the target's slice keeps naming the entity and no frame does — a
+#     recurrence we measured), while the reference gap's evidence is one
+#     search engine's first page read by one model: a genuine outside signal,
+#     but a thinner and more fallible one. Above every harvested class for the
+#     same reason ``coverage_floor`` is.
 #   * below_floor / fact_contention / freshness_advisory / scorecard_
 #     disagreement — each is a question about whether EXISTING evidence
 #     supports a claim; a deeper corpus read is exactly the right instrument.
@@ -226,20 +265,62 @@ def _row_get(row: Any, key: str, default: Any = None) -> Any:
 #     four harvested classes.
 #   * collection_gap — by DEFINITION a desk×dimension our sources are
 #     starved on; re-mining what we already ingested is the LEAST likely of
-#     the six to resolve it (that is R-2/R-3's job — collection requirements /
+#     the seven to resolve it (that is R-2/R-3's job — collection requirements /
 #     external retrieval). Still eligible: a plain "the corpus does not cover
 #     this" is itself a legitimate, informative finding — it just ranks last.
+#
+# The ordinals are RELATIVE, not absolute: inserting a class shifts the ones
+# below it and changes nothing about the resulting order, which is why the
+# tier-3 test asserts a sorted sequence rather than pinned integers.
 _HARVEST_CLASS_PRIORITY: dict[str, int] = {
-    "below_floor": 0,
-    "fact_contention": 1,
-    "freshness_advisory": 2,
-    "scorecard_disagreement": 3,
-    "unit_payload": 4,
-    "collection_gap": 5,
+    "coverage_floor": 0,
+    "reference_gap": 1,
+    "below_floor": 2,
+    "fact_contention": 3,
+    "freshness_advisory": 4,
+    "scorecard_disagreement": 5,
+    "unit_payload": 6,
+    "collection_gap": 7,
 }
 # A harvest class this table has never seen (schema drift / a future class) —
 # still eligible, ranked after every known class rather than crashing.
-_UNKNOWN_HARVEST_CLASS_PRIORITY = 6
+_UNKNOWN_HARVEST_CLASS_PRIORITY = 8
+
+# AGE DECAY (2026-09-06 tune). A backlog question older than this many days
+# has its ``live_reach`` DECAYED to 0 for ranking purposes ONLY — see
+# :func:`open_question_priority_key`. This is what stops a month-old
+# ``unit_payload`` row that happens to trace forward to a live product from
+# permanently outranking any freshly-DISPATCHED gap (a fresh dispatch is
+# always ``live_reach == 0`` by construction — nothing has had time to consume
+# it), which is exactly the failure the 2026-09-06 live run exposed: an
+# Aug-02 backlog row beat a same-week IL/Palestine coverage_floor dispatch.
+# The row itself is never dropped, closed, or reranked out of existence —
+# decay only removes its FALSE claim to tier-1 urgency; harvest-class,
+# salience, and (genuine backlog-age) tie-breaks still apply normally.
+# Env-overridable via ``LEGBA_OPEN_QUESTION_BACKLOG_DECAY_DAYS``; a bad/blank
+# value falls back to the default. 14 days: long enough that a question
+# genuinely still being actively consumed keeps its tier-1 weight, short
+# enough that a month-old row cannot masquerade as live-driving debt.
+_OPEN_QUESTION_BACKLOG_DECAY_DAYS: float = 14.0
+
+
+def open_question_backlog_decay_days() -> float:
+    """Age (days) past which a backlog question's ``live_reach`` decays to 0
+    for :func:`open_question_priority_key` ranking purposes.
+
+    Reads ``LEGBA_OPEN_QUESTION_BACKLOG_DECAY_DAYS`` (a float); falls back to
+    :data:`_OPEN_QUESTION_BACKLOG_DECAY_DAYS` when unset, blank, or malformed
+    (or negative — a negative window would decay everything, including
+    same-tick dispatches, which is never the intent). Never raises.
+    """
+    raw = os.getenv("LEGBA_OPEN_QUESTION_BACKLOG_DECAY_DAYS")
+    if not raw or not raw.strip():
+        return _OPEN_QUESTION_BACKLOG_DECAY_DAYS
+    try:
+        value = float(raw.strip())
+    except (TypeError, ValueError):
+        return _OPEN_QUESTION_BACKLOG_DECAY_DAYS
+    return value if value >= 0.0 else _OPEN_QUESTION_BACKLOG_DECAY_DAYS
 
 # The idempotency-marker key both the K-2a harvest script and the K-2b
 # unit-payload converter stamp into ``hypotheses.diagnostic_evidence``.
@@ -281,6 +362,50 @@ def harvest_class_of(diagnostic_evidence: Any) -> str:
     return "unknown"
 
 
+def dispatch_scope_of(diagnostic_evidence: Any) -> tuple[str | None, tuple[str, ...]]:
+    """``(target_id, geo)`` a DISPATCHED standing question carries, or
+    ``(None, ())`` for every question that carries none. Pure + DB-free.
+
+    THE TARGET CARRY (RESEARCH_PROGRAM_SPEC §1.3, §8 F-8). ``geo`` is the ONLY
+    reachability key a research signal has: ``actor_substrate_slice`` narrows a
+    desk's reactive slice on ``geo && $n::text[]`` and nothing else (verified
+    2026-09-05: all 134 head targets carry a ``sources`` array, 136 entries,
+    exactly 3 of them non-null — all on one DRAFT, un-tagged, geo-less target
+    that no desk scan reaches, so for every live desk ``source_ids`` is empty).
+    A research signal fetched without a target's geo therefore reaches NO desk,
+    ever — which is precisely why a self-selected research run is substrate-only
+    and the desk hop belongs to the DISPATCH.
+
+    The question row is where that scope has to live, because the run cannot
+    hold it: ``corpus_researcher`` is a META analyst whose ``AnalystContext
+    .target_id`` is ``None`` by construction (no ``subscription.targets`` ⇒ one
+    global sweep), so there is no run-level target to inherit. The dispatch
+    stamps ``target_id`` + ``geo`` onto the ``open_question_origin`` marker,
+    this function reads them back, and the renderer prints them into the
+    STANDING OPEN QUESTIONS block so the run investigating that question knows —
+    and can state — which desk's scope its evidence must carry.
+
+    Absent / malformed / a question nobody dispatched → ``(None, ())``, and the
+    render is byte-identical to what it was before this existed.
+    """
+    for entry in _parse_diagnostic_evidence(diagnostic_evidence):
+        if not isinstance(entry, Mapping):
+            continue
+        if entry.get("marker") != _OPEN_QUESTION_MARKER_KEY:
+            continue
+        raw_geo = entry.get("geo")
+        geo: tuple[str, ...] = ()
+        if isinstance(raw_geo, (list, tuple)):
+            geo = tuple(
+                str(g).strip() for g in raw_geo if isinstance(g, str) and g.strip()
+            )
+        target = entry.get("target_id")
+        target_id = str(target).strip() if isinstance(target, str) and target.strip() else None
+        if target_id or geo:
+            return target_id, geo
+    return None, ()
+
+
 def open_question_priority_key(
     *,
     live_reach: int,
@@ -288,32 +413,56 @@ def open_question_priority_key(
     desk_salience: float,
     age_days: float,
     question_id: str,
+    decay_days: float = _OPEN_QUESTION_BACKLOG_DECAY_DAYS,
 ) -> tuple[int, int, int, float, float, str]:
     """Deterministic sort key for standing-question priority (ASCENDING sort
     == highest priority first). Pure + DB-free — unit-testable directly.
 
-    Tiers, in order:
+    Tiers, in order (computed against ``effective_live_reach`` — see the
+    AGE DECAY note below, not the raw ``live_reach`` argument):
       1. Traces FORWARD to a live (non-superseded) product
-         (``live_reach > 0``, the ``output_consumption`` forward walk) —
-         these are the questions actually driving ``staleness_debt``;
+         (``effective_live_reach > 0``, the ``output_consumption`` forward
+         walk) — these are the questions actually driving ``staleness_debt``;
          resolving one retires live product debt, not just backlog trivia.
-      2. Among those, bigger ``live_reach`` (more live products resting on
-         it) first — the highest-leverage question to research.
+      2. Among those, bigger ``effective_live_reach`` (more live products
+         resting on it) first — the highest-leverage question to research.
       3. Harvest-class ordinal (:data:`_HARVEST_CLASS_PRIORITY`) — see that
-         table's docstring for the "answerable by re-mining our own corpus"
-         reasoning.
+         table's docstring; ``coverage_floor`` ranks FIRST (a DISPATCHED,
+         provably-corpus-unanswerable live gap outranks every passively
+         harvested class).
       4. Desk salience — the question's target desk's hottest OPEN
          situation intensity (0.0 when the question has no target_id, or its
          desk has no open situation) — a hotter desk's open question is more
          consequential to resolve first.
       5. Question age — OLDER first: the longer a question has stood
-         unresolved, the more backlog debt it represents.
+         unresolved, the more backlog debt it represents. Unaffected by the
+         AGE DECAY below — that decay only strips a stale row's tier-1/tier-2
+         claim, it does not touch this tie-break, which measures genuine
+         backlog debt among rows already tied on every higher tier.
       6. Question id — final deterministic tie-break so the ordering is
          100% reproducible (and testable) when every other key ties.
+
+    AGE DECAY (2026-09-06 tune, :data:`_OPEN_QUESTION_BACKLOG_DECAY_DAYS` /
+    :func:`open_question_backlog_decay_days`). ``live_reach`` alone made tier
+    1 a FALSE tie-breaker in the backlog's favour: a freshly-DISPATCHED
+    question (e.g. a ``coverage_floor`` alert minted this tick) is always
+    ``live_reach == 0`` — nothing has had TIME to consume it yet — while an
+    old harvested row can have accumulated genuine forward reach over weeks.
+    Tier 1 ran BEFORE the harvest-class tier, so that stale ``live_reach``
+    permanently buried every fresh dispatch regardless of class ordinal —
+    exactly what put a month-old ``unit_payload`` row ahead of a same-week
+    IL/Palestine ``coverage_floor`` gap on the live 2026-09-06 backlog. A
+    question older than ``decay_days`` has its ``live_reach`` treated as 0 for
+    tiers 1-2 ONLY (the row is never dropped, closed, or otherwise altered —
+    the raw ``live_reach`` a caller supplied is not overwritten, only the key
+    computed from it), so a stale backlog row can no longer out-tier a fresh
+    dispatch on borrowed urgency; the harvest-class ordinal (tier 3) then
+    decides, honestly.
     """
+    effective_live_reach = 0 if age_days > decay_days else live_reach
     return (
-        0 if live_reach > 0 else 1,
-        -live_reach,
+        0 if effective_live_reach > 0 else 1,
+        -effective_live_reach,
         _HARVEST_CLASS_PRIORITY.get(harvest_class, _UNKNOWN_HARVEST_CLASS_PRIORITY),
         -desk_salience,
         -age_days,
@@ -791,7 +940,7 @@ class GroundingOpenQuestion:
 
     __slots__ = (
         "id", "thesis", "harvest_class", "target_id", "produced_at",
-        "live_reach", "desk_salience",
+        "live_reach", "desk_salience", "geo",
     )
 
     def __init__(
@@ -804,6 +953,7 @@ class GroundingOpenQuestion:
         produced_at: datetime | None,
         live_reach: int,
         desk_salience: float,
+        geo: Sequence[str] = (),
     ) -> None:
         self.id = id
         self.thesis = thesis
@@ -812,6 +962,11 @@ class GroundingOpenQuestion:
         self.produced_at = produced_at
         self.live_reach = live_reach
         self.desk_salience = desk_salience
+        #: R-B — the DISPATCH scope this question carries (see
+        #: :func:`dispatch_scope_of`). Empty for every question nobody
+        #: dispatched, which is every question that existed before R-B, and
+        #: the render then omits the scope token entirely.
+        self.geo: tuple[str, ...] = tuple(str(g) for g in geo if str(g).strip())
 
     def render(self, *, tag: str, now: datetime | None = None) -> str:
         ref = now or datetime.now(timezone.utc)
@@ -825,6 +980,13 @@ class GroundingOpenQuestion:
             bits.append("opened today" if age_days == 0 else f"opened {age_days}d ago")
         if self.live_reach > 0:
             bits.append(f"live_reach={self.live_reach}")
+        # R-B — the DISPATCH scope, printed ONLY when the question carries one.
+        # This is the token an outbound-research run has to quote back so its
+        # evidence lands in the desk that asked (§1.3: geo is the only
+        # reachability key). Questions without a scope render exactly as they
+        # did before this existed.
+        if self.target_id and self.geo:
+            bits.append(f"scope={self.target_id} geo={','.join(self.geo)}")
         thesis = (self.thesis or "").strip()
         if len(thesis) > _OPEN_QUESTION_THESIS_CHAR_CAP:
             thesis = thesis[:_OPEN_QUESTION_THESIS_CHAR_CAP].rstrip() + "…"
@@ -2127,6 +2289,7 @@ class SubstrateGroundingResolver:
             return []
 
         now = datetime.now(timezone.utc)
+        decay_days = open_question_backlog_decay_days()
         ranked: list[tuple[tuple, GroundingOpenQuestion]] = []
         for r in rows:
             produced_at = r["produced_at"]
@@ -2138,6 +2301,7 @@ class SubstrateGroundingResolver:
                 )
                 age_days = max(0.0, (now - ref).total_seconds() / 86400.0)
             harvest_class = harvest_class_of(r["diagnostic_evidence"])
+            _scope_target, scope_geo = dispatch_scope_of(r["diagnostic_evidence"])
             live_reach = int(r["live_reach"] or 0)
             desk_salience = float(r["desk_salience"] or 0.0)
             key = open_question_priority_key(
@@ -2146,6 +2310,7 @@ class SubstrateGroundingResolver:
                 desk_salience=desk_salience,
                 age_days=age_days,
                 question_id=str(r["id"]),
+                decay_days=decay_days,
             )
             ranked.append((
                 key,
@@ -2157,6 +2322,12 @@ class SubstrateGroundingResolver:
                     produced_at=produced_at,
                     live_reach=live_reach,
                     desk_salience=desk_salience,
+                    # R-B — the dispatch scope rides the MARKER, not a column:
+                    # ``hypotheses`` has no geo column and the backlog SQL is a
+                    # single round trip we are not widening with a
+                    # target_descriptors join for a field the dispatch already
+                    # knew and stamped.
+                    geo=scope_geo,
                 ),
             ))
         ranked.sort(key=lambda pair: pair[0])

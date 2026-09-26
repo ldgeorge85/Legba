@@ -32,7 +32,10 @@ from typing import Any
 
 import pytest
 
+from legba.data import _frame_content
+from legba.data import _geo_routing
 from legba.data.analysts.deterministic import SUB_HANDLERS
+from legba.data.analysts.deterministic_handlers import _coverage_floor_scan
 from legba.data.analysts.deterministic_handlers import _production_deficit_scan
 from legba.data.analysts.handler_options import (
     HANDLER_OPTIONS,
@@ -73,6 +76,9 @@ _DELEGATES: dict[str, tuple[str, ...]] = {
     # the scoreboard drives forecast_acute's issue/resolve/pull writers,
     # handing them its own ``options`` verbatim
     "forecast_scoreboard": ("forecast_acute",),
+    # under LEGBA_EXTERNAL_GRADING_WIDTH the auditor's handle() hands its
+    # ``options`` verbatim to the width tick, which owns every W-2/W-9 knob
+    "standing_auditor": ("_external_audit_width",),
 }
 
 
@@ -108,6 +114,23 @@ _PREFIX_FAMILIES: dict[str, tuple[tuple[str, Any], ...]] = {
             _production_deficit_scan.OPTION_PREFIX,
             _production_deficit_scan.config_from_options,
         ),
+        (
+            _coverage_floor_scan.OPTION_PREFIX,
+            _coverage_floor_scan.config_from_options,
+        ),
+        # GEO ROUTING v2 — read by the coverage floor's routed-elsewhere
+        # receipt line, through the same typed prefix reader.
+        (
+            _geo_routing.OPTION_PREFIX,
+            _geo_routing.config_from_options,
+        ),
+    ),
+    # R1-d — the frame-content gauge's three knobs, read by the same typed
+    # prefix reader the two above use. The gauge rides ``situation_clustering``
+    # (it is the only place that knows which frames received members this run),
+    # so its family is declared against that handler.
+    "situation_clustering": (
+        (_frame_content.OPTION_PREFIX, _frame_content.config_from_options),
     ),
 }
 
@@ -423,6 +446,10 @@ def _descriptor_body(*, options: dict[str, Any] | None = None) -> dict[str, Any]
     body["identity"]["version"] = "0" * 16
     if options is not None:
         body["method"]["options"] = options
+    else:
+        # 2026-09-20: the shipped descriptor now carries an options block (the
+        # operator's page-budget lift); "no options" here means exactly that.
+        body["method"].pop("options", None)
     return body
 
 

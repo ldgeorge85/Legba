@@ -75,6 +75,24 @@ _DEFAULT_LOOKBACK_DAYS = 30
 # body (the flip rows are the product; keep the JSONB + feed row bounded).
 _MAX_FLIPS_IN_FINDING = 200
 
+#: H12 — the instrument revision the flip series below was computed under
+#: (docs/ANALYSIS.md §10.9), stamped ``data.method_version`` on every receipt.
+#: Covers ``_DEFAULT_LOOKBACK_DAYS``, the two-most-recent-runs join, the
+#: newly-introduced-id rule (a first appearance is NOT a flip) and the
+#: activation predicate. Bump it when any of them moves, so a flip-count diff
+#: across the change reads as an instrument revision, not a world change.
+METHOD_VERSION = "indicator_tracker/2026-09.1"
+
+#: K3 — the SCALE the flip series is expressed ON (see docs/ANALYSIS.md §10.9).
+#: Indicators are not a continuous measure: the scale IS the three-value status
+#: vocabulary ``triggered`` / ``not_observed`` / ``expired`` (``_STATUSES``,
+#: mirroring ``schemas.analyst.IndicatorEntry.status``) and the reading of a
+#: transition between them. ``2026-07`` is the era S3-T1/T2 opened (2026-07-02),
+#: when that vocabulary was fixed; it has not moved since. Add a value, retire
+#: one, or change what a transition MEANS and the era moves with it — every
+#: stored flip before the change is then on a different scale.
+SCALE_VERSION = "indicator_status/2026-07"
+
 
 # ---------------------------------------------------------------------------
 # Indicator extraction (shared by the live + synthetic paths)
@@ -393,6 +411,11 @@ def _build_finding(flips: list[dict[str, Any]], groups_compared: int) -> Finding
         tags=tags,
         data={
             "sub_handler": SUB_HANDLER_NAME,
+            # H12/K3 — which code produced this series, and which scale the
+            # statuses in it are read on. Both on the persisted receipt so the
+            # indicator panel can show them beside the flips.
+            "method_version": METHOD_VERSION,
+            "scale_version": SCALE_VERSION,
             "flip_count": n,
             "activation_count": a,
             "groups_compared": groups_compared,
@@ -529,4 +552,10 @@ async def handle(
     )
 
 
-__all__ = ["handle", "collect_flips", "SUB_HANDLER_NAME"]
+__all__ = [
+    "handle",
+    "collect_flips",
+    "SUB_HANDLER_NAME",
+    "METHOD_VERSION",
+    "SCALE_VERSION",
+]

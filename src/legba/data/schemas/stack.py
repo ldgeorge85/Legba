@@ -77,6 +77,19 @@ class LLMProviderConfig(BaseModel):
             "primary", ["primary", "fallback", "cheap"]
         )
     )
+    # -- router provider routing (2026-09-25) ---------------------------------
+    # Comma-separated OpenRouter provider slugs this component must NEVER be
+    # served by (the router's ``provider.ignore`` request field, e.g.
+    # ``"dekallm"``). Read by the vllm-family handler and merged into every
+    # request body; absent = the request is byte-identical to before this
+    # field existed. Why a component knob and not a code table: over 7 days
+    # (2026-09-18..24) one subprovider served 45% of the judge's 10,018 calls
+    # at an average of 108 s (p90 210 s, max 3.6 h) against 34 s on the next,
+    # and the judge's capacity is the standing constraint — which endpoint a
+    # component may be served by belongs to the component row, like its
+    # price, so a routing change is a registry PUT, not a deploy. A
+    # self-hosted vLLM never sees the field (the knob stays unset there).
+    provider_ignore: Text | None = None
     # -- spend metering (#22, 2026-08-15) -----------------------------------
     # Per-COMPONENT list price, USD per 1M tokens. The vllm-family handler
     # (every `.openai_compat` component: the self-hosted primary AND the
@@ -377,7 +390,8 @@ class SearchProviderConfig(BaseModel):
     subprovider: DropdownStatic = Field(
         default_factory=lambda: Property.Dropdown.Static.of(
             "searxng",
-            ["searxng", "json", "firecrawl", "jina", "tavily", "brave", "agent"],
+            ["searxng", "json", "firecrawl", "jina", "tavily", "brave",
+             "serper", "agent"],
         )
     )
     endpoint: Text
@@ -387,9 +401,29 @@ class SearchProviderConfig(BaseModel):
     timeout_seconds: Number = Field(
         default_factory=lambda: Property.Number.of(15, minimum=1, maximum=300)
     )
-    #: Per-call ceiling; the handler additionally clamps to MAX_RESULTS_CAP.
+    #: Per-call ceiling; the handler additionally clamps to MAX_RESULTS_CAP
+    #: (30) and to the provider's own page size where it is smaller (Brave's
+    #: ``count`` ceiling is 20). This is the OPERATOR knob: lower it to spend
+    #: less context per search, raise it to 50 for a provider that serves it.
     max_results: Number = Field(
-        default_factory=lambda: Property.Number.of(10, minimum=1, maximum=50)
+        default_factory=lambda: Property.Number.of(30, minimum=1, maximum=50)
+    )
+    #: LIST PRICE of ONE query against this provider, in USD. **Config, not a
+    #: constant**: a provider's price is a contract term that changes without
+    #: any code change, and a hardcoded number would quietly go stale while the
+    #: governor kept enforcing it.
+    #:
+    #: ``0`` (the default, and the value every self-hosted subprovider keeps)
+    #: means FREE — the rung runs with no budget consultation at all, which is
+    #: what makes adding this field byte-identical for ``search.searxng.local``.
+    #: Any value ``> 0`` marks the component METERED, and a metered rung is
+    #: gated: the ladder consults the pack governor's ``max_cost_usd_per_day``
+    #: through the day's ``action_pack_invocations`` spend BEFORE issuing the
+    #: query, refuses the rung when the cap is exhausted, and settles the true
+    #: cost onto the invocation row afterwards. A metered rung with no cost
+    #: ledger bound is REFUSED, never silently billed.
+    cost_usd_per_query: Number = Field(
+        default_factory=lambda: Property.Number.of(0, minimum=0, maximum=100)
     )
     #: Upstream engines to query (meta-search). Empty = the instance's own
     #: configured set — which engine set survives sustained automated use is an

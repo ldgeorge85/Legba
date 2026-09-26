@@ -1,0 +1,133 @@
+# Sahel coverage pass — Mali desk (country_watch_ml) — 2026-09-07. Ships DRAFT.
+#
+# See source_aib_burkina.yaml's header for the full WHY-THIS-BATCH-EXISTS note.
+# This descriptor is Malijet's — the batch's HIGH-VOLUME independent domestic
+# lane for Mali (the LeFaso.net-equivalent slot).
+#
+# Malijet (malijet.com) — a leading independent Mali news portal/aggregator,
+# sectioned (actualite-politique-au-mali, a_la_une_du_mali,
+# actualte_dans_les_regions_du_mali, actualite_sportive_au_mali,
+# actualite_internationale, ...) but exposing a single whole-site
+# `https://malijet.com/rss` feed; no per-section feed was found (checked its
+# own `<link rel="alternate">` tag on a section page — it points at the same
+# whole-site `/rss` URL).
+#
+# VERIFIED LIVE 2026-09-07 by direct fetch + feedparser: `https://malijet.com/rss`
+# -> HTTP 200, `application/rss+xml; charset=utf-8`, feedparser bozo=False,
+# 50 items, newest item 2026-09-06T23:28:31Z (same-day at fetch time), all 50
+# within the 7-day window — the highest-volume Mali-domestic-heavy candidate
+# probed. Sample Mali-domestic headlines: FAMa strikes on terrorist groups near
+# Douentza/Bandiagara and at Aguelhoc; a JNIM/EIS clash near the Burkina
+# border; storm-damage emergency response (13 dead, 355 households); a
+# tramadol/contraband seizure in Bamako; President Goïta receiving the US
+# ambassador. Keyless, `robots.txt` explicitly AI/crawler-permissive (see
+# LICENCE note).
+#
+# NOT PURE DOMESTIC — RECORDED SO IT IS NOT REDISCOVERED AS A SURPRISE:
+# roughly 60% of the sampled 50 items are Mali-domestic; the rest is genuine
+# wire/regional/international/sports filler — a Leipzig/Lavrov item on
+# Germany-Russia, a Kiev shooting, RDC/Zimbabwe/Guinée items, a Niger arms-
+# seizure item, football/basketball results. This is why `scope.geo` is left
+# EMPTY — see the geo note below (same call as source_amap_mali.yaml).
+#
+# NOT A DUPLICATE: no head row in source_descriptors points at malijet.com.
+#
+# geo: [] — DELIBERATE. `scope.geo` is publisher ORIGIN
+# (data/sources/baseline.py C2), promoted into the indexed `geo` column ONLY
+# as a post-enrichment fallback when nothing in the body geocoded. Declaring
+# [ML] would fallback-tag the observed Germany/Ukraine/RDC/Zimbabwe/Guinée/
+# Niger items as Malian on any geocode miss — the same hazard
+# source_sahel_intelligence.yaml and source_amap_mali.yaml document for their
+# own mixed-content feeds. The genuinely Mali-domestic items name Malian
+# places (Bamako, Douentza, Bandiagara, Aguelhoc, Kayes, Koutiala) and
+# geocode to ML on their own merits; the desk reaches this feed through the
+# standard auto-wire (kind `rss` + tag `news` + owner_tenant `shared`) and
+# narrows per signal on its own geo predicate.
+#
+# source_class: reporting — a privately-owned commercial news portal, not a
+# state organ. Same treatment as source_lefaso_net.yaml and
+# source_actuniger_politique.yaml: an established, widely-cited domestic
+# outlet, scored below the international wires because Mali too operates
+# under a military transitional government (Assimi Goïta) with real
+# constraints on domestic press independence — priced in honestly at
+# credibility-registration time, not here.
+#
+# LICENCE/ROBOTS POSTURE: `robots.txt` present and UNUSUALLY explicit about
+# AI/LLM crawler policy (own comment, translated: "Malijet — robots policy
+# oriented toward AI discoverability & citation. Search engines AND AI
+# assistants (index/retrieval bots) are ALLOWED... training crawlers are also
+# deliberately allowed (rare Francophone/Sahel corpus — being known to models
+# helps recommendation) — restrict only under a content-licensing
+# agreement"). `User-agent: *` block disallows only `/admin`, `/livewire`,
+# `/horizon`, `/recherche` — nothing on the feed path. Explicitly names
+# `ClaudeBot` / `Claude-SearchBot` / `Claude-User` among the allowed agents.
+# No formal machine-readable licence (CC/etc.) found, so `scope.license_class`
+# is still left UNSET per the LIC-2 honest-absence convention (this robots
+# posture is a strong openness SIGNAL, not itself a licence grant) — lands
+# ingested signals at teaser depth until an operator reviews it, but this is
+# the single best-disposed candidate in the batch for that review.
+#
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after the route is
+# re-verified live on the instance.
+
+identity:
+  id: source.malijet.news
+  name: Malijet — Mali
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: source_batch_2026_09
+  created: "2026-09-07T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  # EMPTY on purpose — the feed mixes in non-Mali wire/regional/sports filler.
+  # See the geo note.
+  geo: []
+  languages: [fr]
+  tags: [news, world, africa, sahel, mali, francophone, source_batch_2026_09]
+  source_class: reporting
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  # Hourly, staggered minute offset. High-volume feed (50 items/7d observed);
+  # the handler's conditional GET keeps an unchanged poll near-free.
+  schedule:
+    factory_kind: cron
+    raw: "33 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 60
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://malijet.com/rss"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

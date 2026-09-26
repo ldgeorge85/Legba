@@ -17,6 +17,9 @@ Covers:
   * DLQ subject pattern matches `legba.dlq.output.nats_stream.<analyst_id>`.
   * Real publish round-trip via `NatsStore` reaches a pull subscriber.
   * Real publish round-trip via `StandardDeps.nats_publish` also works.
+  * Real publish round-trip via `OutputDeps.nats` (the shape the PRODUCTION
+    dispatcher — `actor_output_emit._emit_output_bindings` — actually
+    constructs for every analyst) also works — the 2026-09-06 regression.
 """
 
 from __future__ import annotations
@@ -34,6 +37,7 @@ import pytest_asyncio
 from legba.data.config import NatsConfig
 from legba.data.nats import NatsStore
 from legba.data.outputs import nats_stream
+from legba.data.outputs._contract import OutputDeps
 from legba.data.outputs.nats_stream import (
     DEFAULT_CHANNEL,
     DLQ_SUBJECT_PREFIX,
@@ -369,6 +373,60 @@ async def test_emit_roundtrip_via_nats_publish_callable(
             pass
     # Sanity: subject derivation still produced the canonical pattern.
     assert subject == f"analyst.{analyst_id}.{DEFAULT_CHANNEL}"
+
+
+# ---------------------------------------------------------------------------
+# Real NATS round-trip — `deps.nats` (OutputDeps.NatsPublisher) path.
+#
+# THIS is the shape the production dispatcher actually builds
+# (`legba.runtime.actor_output_emit._emit_output_bindings` constructs one
+# `OutputDeps(nats=_NatsPublishAdapter(nats_publish))` for every emit-capable
+# output kind — alert / stix_bundle / webhook / this module all read
+# `deps.nats.publish_json(...)`). Before the 2026-09-06 fix,
+# `_resolve_publisher` looked ONLY for `deps.nats_publish` / `deps.nats_store`
+# — neither of which `OutputDeps` exposes — so EVERY `nats_stream` output
+# binding raised `OutputDepsError` on its first live publish (found live on
+# `corpus_researcher` + `cross_doc_corroborator`; zero
+# `output_emit.ok kind=nats_stream` had ever been logged). This is the
+# real-broker regression test for that fix.
+# ---------------------------------------------------------------------------
+
+
+async def test_emit_roundtrip_via_output_deps_nats_adapter(
+    nats_store: NatsStore, session_prefix: str
+):
+    subject_root = f"{session_prefix}_t2b"
+    stream_name = f"{session_prefix}_t2b_stream"
+    await nats_store.ensure_stream(
+        name=stream_name,
+        subjects=[f"{subject_root}.>"],
+    )
+
+    # Exactly what actor_output_emit._NatsPublishAdapter wraps: the runtime's
+    # nats_publish closure bound onto NatsStore.publish_json.
+    deps = OutputDeps(nats=nats_store)  # NatsStore itself satisfies NatsPublisher
+    subject = f"{subject_root}.findings"
+
+    await emit({"hello": "output_deps"}, subject=subject, deps=deps)
+
+    durable = f"{session_prefix}_t2b_dur"
+    psub = await nats_store.js.pull_subscribe(
+        subject=f"{subject_root}.>",
+        durable=durable,
+        stream=stream_name,
+    )
+    try:
+        msgs = await psub.fetch(1, timeout=5)
+        assert len(msgs) == 1
+        decoded = json.loads(msgs[0].data.decode("utf-8"))
+        assert decoded == {"hello": "output_deps"}
+        for m in msgs:
+            await m.ack()
+    finally:
+        try:
+            await nats_store.js.delete_stream(stream_name)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------

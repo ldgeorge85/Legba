@@ -1,0 +1,90 @@
+# sources_wave_2 — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# The Kyiv Independent — English-language Ukrainian newsroom (founded 2021 by
+# journalists who left the original Kyiv Post). Closes the audit-flagged gap
+# (planning/COVERAGE_VS_SELECTION_AUDIT_2026-09-07.md item #12): the
+# SBU-HUR shootout / Kyiv security-service politics story reached the corpus
+# thinly (14 hits, mostly Guardian/Meduza/Telegram), with neither
+# Kyiv-Independent- nor Kyiv-Post-class domestic Ukrainian-security-beat
+# coverage subscribed. Verified live 2026-09-07: valid RSS 2.0, title
+# "The Kyiv Independent", newest item same-day and item #5 in the checked
+# window ("'The war will continue' — US peace push fails to achieve deal
+# after Witkoff, Kushner's first visit to Kyiv", 2026-09-06) is the exact
+# story class the audit's Ukraine slice was thin on.
+#
+# The feed URL is NOT the bare /feed or /rss path (both 404) — it is the
+# site's dedicated news-archive RSS route, found via Feedspot's Ukraine feed
+# index and confirmed live.
+#
+# Kyiv Post (the other Ukraine outlet named in the brief) was researched and
+# is NOT shippable: every path tried (site root, /rss, /rss.xml, /feed)
+# returned HTTP 403 to this fetcher — a full-site block, not a feed-specific
+# one — and no RSS URL or RSSHub route could be found for it. Reported, not
+# registered; see the sources-wave-2 report.
+#
+# source_class: reporting. Credibility host kyivindependent.com (seeded
+# 0.72/wire — independent, internationally staffed, no state affiliation;
+# comparable tier to source_meduza.yaml / source_rferl.yaml).
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after verifying the route
+# live on the instance.
+
+identity:
+  id: source.kyivindependent.news
+  name: The Kyiv Independent
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: sources_wave_2
+  created: "2026-09-07T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [UA]
+  languages: [en]
+  tags: [news, europe, ukraine, sources_wave_2]
+  source_class: reporting
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "18 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://kyivindependent.com/news-archive/rss/"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming the
+    # route yields full article text (mirrors the RSSHub-lane conservative default).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

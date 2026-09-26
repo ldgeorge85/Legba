@@ -189,6 +189,17 @@ class Agency:
                         fields["cost_usd"] = result.cost_usd
                     if result is not None and result.units:
                         fields["units"] = result.units
+                    # F-13 — A CLEAN FAILURE'S REASON WAS RECORDED NOWHERE.
+                    # ``error`` above is set only when the handler RAISED; a
+                    # handler that returns ``ToolResult(status="failed",
+                    # error=…)`` — which is the house style for every honest
+                    # tool failure — had its reason DISCARDED. Live proof: all
+                    # 24 `web_search` failures over four days carry NULL error
+                    # on the receipt, and the cause
+                    # (`search_provider_unresolved`) was recoverable only by
+                    # reading code. One key, bounded, for every pack.
+                    if result is not None and result.status == "failed" and result.error:
+                        fields["error"] = str(result.error)[:512]
             record_tool_call(**fields)
         except Exception:  # pragma: no cover — instrumentation must never bite
             logger.debug("agency.account_tool_call failed", exc_info=True)
@@ -209,6 +220,10 @@ class Agency:
         """The hard-gate pipeline itself (see :meth:`run_pack_tool`)."""
         pack_id = pack.identity.id
         tool_name = call.tool_name
+        # V3/P4a — the invocation wall-clock (migration 0208): resolve → govern
+        # → dispatch → settle, stamped as duration_ms at EVERY settle point so
+        # the E2 latency gauge reads completed AND failed invocations alike.
+        inv_started = time.monotonic()
 
         # --- 1) RESOLVE (three-way allow-list) ---------------------------
         res = resolve_pack(
@@ -314,7 +329,10 @@ class Agency:
             logger.warning(
                 "tool.timeout pack=%s tool=%s after=%ds", pack_id, tool_name, timeout_s,
             )
-            await PackGovernorEnforcer.settle(conn, inv_id, outcome="failed")
+            await PackGovernorEnforcer.settle(
+                conn, inv_id, outcome="failed",
+                duration_ms=int((time.monotonic() - inv_started) * 1000),
+            )
             return AgencyOutcome(
                 admitted=True, pack_id=pack_id, tool_name=tool_name,
                 detail=f"handler exceeded {timeout_s}s timeout", resolution=res,
@@ -324,7 +342,10 @@ class Agency:
             )
         except Exception as exc:  # a handler crash settles the row failed
             logger.exception("tool.handler_error pack=%s tool=%s", pack_id, tool_name)
-            await PackGovernorEnforcer.settle(conn, inv_id, outcome="failed")
+            await PackGovernorEnforcer.settle(
+                conn, inv_id, outcome="failed",
+                duration_ms=int((time.monotonic() - inv_started) * 1000),
+            )
             return AgencyOutcome(
                 admitted=True, pack_id=pack_id, tool_name=tool_name,
                 detail=f"handler raised: {exc}", resolution=res,
@@ -346,6 +367,7 @@ class Agency:
             conn, inv_id, outcome=settled,
             cost_usd=result.cost_usd if result.cost_usd else None,
             units=result.units if result.units else None,
+            duration_ms=int((time.monotonic() - inv_started) * 1000),
         )
         return AgencyOutcome(
             admitted=True, pack_id=pack_id, tool_name=tool_name,

@@ -33,7 +33,10 @@ identity:
     input_type: legba.runtime.SignalList
     output_type: legba.runtime.Finding
     deps_type: legba.runtime.deps.StandardDeps
-  state: active
+  # RETIRED live — tree reconciled 2026-09-06 (was active in-tree;
+  # production_gauge.descriptor_state_drift) so a re-register from this file
+  # cannot resurrect it.
+  state: retired
   owner: fact_decay_activation
 
 subscription:

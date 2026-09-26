@@ -73,6 +73,9 @@ EXPECTED_TABLES: tuple[str, ...] = (
     # RE-LANDS the legacy `watchlist` NAME first-class (same shape as the
     # `nexuses` re-landing), so it moved here out of RETIRED_TABLES.
     "watchlist",
+    # DATA MODEL V3 / P0 (migrations 0202-0204, 2026-09-22): the event surface.
+    "events", "signal_event_links", "event_entity_links",
+    "event_edges", "situation_event_links", "event_lifecycle_events",
 )
 
 # Tables that should NOT exist (retired per L-090 §4.3 + source-first pivot
@@ -92,7 +95,10 @@ RETIRED_TABLES: tuple[str, ...] = (
     # `situation_events` left this list 2026-08-05: G-2 (mig 0184) UN-retired
     # the name for the trajectory ledger — a deliberate re-landing, same
     # pattern as `nexuses` above.
-    "events", "signal_event_links", "event_entity_links",
+    # `events` / `signal_event_links` / `event_entity_links` left this list
+    # 2026-09-22: DATA MODEL V3 / P0 (migration 0202) RE-LANDS the three names
+    # as new tables — the v1 tables were dropped at the June pivot; the same
+    # re-landing shape as `nexuses`, `watchlist` and `situation_events`.
     "goals", "watch_triggers", "discovered_urls", "users",
 )
 

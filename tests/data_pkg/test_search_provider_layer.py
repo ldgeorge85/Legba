@@ -30,6 +30,7 @@ from legba.data.registry.stack import (
 )
 from legba.data.schemas.stack import SearchProvider, SearchProviderConfig
 from legba.data.stack.search import (
+    MAX_RESULTS_CAP,
     SEARCH_HANDLERS,
     SEARCH_STACK_REF_ENV,
     GenericJsonSearchHandler,
@@ -335,10 +336,10 @@ def test_searxng_never_fabricates_extracted_text_or_a_license():
 
 
 def test_searxng_honours_the_result_limit():
-    body = {"results": [{"url": f"https://e/{i}"} for i in range(25)]}
+    body = {"results": [{"url": f"https://e/{i}"} for i in range(40)]}
     assert parse_searxng_payload(body, query="q", limit=3).count == 3
     # The package-wide cap still applies above the caller's ask.
-    assert parse_searxng_payload(body, query="q").count == 10
+    assert parse_searxng_payload(body, query="q").count == MAX_RESULTS_CAP
 
 
 # ---------------------------------------------------------------------------

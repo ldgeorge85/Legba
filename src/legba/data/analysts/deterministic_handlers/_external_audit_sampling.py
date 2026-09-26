@@ -45,6 +45,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import date
@@ -70,6 +71,61 @@ VERDICT_NOT_FOUND = "NOT_FOUND"
 #: audited and must not be counted as if it had been.
 VERDICT_UNCHECKED = "UNCHECKED"
 
+#: ONE NEW VERDICT AT WIDTH, and only one (design §0.5). Deterministic and
+#: PRE-SEARCH: the claim has no world truth-maker at all, so no search could
+#: decide it and issuing one would produce NOT_FOUND and quietly deflate the
+#: headline. ~9% of live claims are this class. Its three sub-classes live in
+#: ``_external_audit_claims.UNCHECKABLE_CLASSES``.
+#:
+#: Everything ELSE the honesty needs is carried by extending the existing
+#: ``unchecked_reason`` enum below rather than by minting more verdicts — a
+#: verdict vocabulary that grows per failure mode stops being a vocabulary.
+UNCHECKABLE_VERDICT = "UNCHECKABLE"
+
+#: Extensions to ``unchecked_reason`` for the width plane. The shipped reasons
+#: (``provider_unresolved``, ``degraded_no_results``, ``liveness_unverified``,
+#: ``timeout``) are unchanged and still arrive as free text from the search leg.
+#: These four are the ones the width plane decides in code.
+UNCHECKED_ABSENCE_LIVENESS = "absence_liveness_unverified"
+UNCHECKED_BUDGET_EXHAUSTED = "budget_exhausted"
+UNCHECKED_OUT_OF_WINDOW = "out_of_window"
+#: W-3's span check has not landed (or raised). A decisive verdict without it
+#: rests on the grader's own assertion that a page says something, which is
+#: exactly what G-2 exists to stop trusting — so it degrades here rather than
+#: publishing.
+UNCHECKED_SPAN_CHECK_UNAVAILABLE = "span_check_unavailable"
+#: F-7, the ToS posture, in the verdict vocabulary. The decisive page's own
+#: ``robots.txt`` refused the fetch (or could not be reached, which this plane
+#: reads as a refusal — see ``agency/robots.py`` on failing CLOSED), so the span
+#: was NEVER FETCHED and the verdict cannot be published. Distinct from
+#: ``span_check_unavailable`` on purpose: that one is OUR instrument missing,
+#: this one is the publisher's stated wish, and an operator reading a week of
+#: UNCHECKED rows must be able to tell "we could not check" from "we were asked
+#: not to look".
+UNCHECKED_ROBOTS_DISALLOWED = "robots_disallowed"
+#: The fetch leg was allowed and still did not return a page — a timeout, an
+#: SSRF-guard refusal, a 5xx, a tool failure. Named rather than free text
+#: because it is the one UNCHECKED class that a retry could plausibly clear,
+#: and an operator sizing that retry needs to count it separately from the two
+#: above, neither of which a retry would move.
+UNCHECKED_SPAN_FETCH_FAILED = "span_fetch_failed"
+
+#: The width plane's own CODE-DECIDED ``unchecked_reason`` set — the closed half
+#: of the column. The search leg's reasons still arrive as free text (they are
+#: the provider's own words about its own failure), and ``external_grades``
+#: leaves ``unchecked_reason`` an unconstrained ``text`` for exactly that reason
+#: (migration 0190:173 — no CHECK, unlike ``verdict`` and ``uncheckable_class``).
+#: This tuple is what a consumer strata-splits on and what the requeue script
+#: reads, so a new reason lands here or it is not a class anybody can count.
+WIDTH_UNCHECKED_REASONS: tuple[str, ...] = (
+    UNCHECKED_ABSENCE_LIVENESS,
+    UNCHECKED_BUDGET_EXHAUSTED,
+    UNCHECKED_OUT_OF_WINDOW,
+    UNCHECKED_SPAN_CHECK_UNAVAILABLE,
+    UNCHECKED_ROBOTS_DISALLOWED,
+    UNCHECKED_SPAN_FETCH_FAILED,
+)
+
 VERDICTS: frozenset[str] = frozenset(
     {
         VERDICT_SUPPORTED,
@@ -79,6 +135,10 @@ VERDICTS: frozenset[str] = frozenset(
     }
 )
 
+#: The full width vocabulary — the four above plus UNCHECKABLE. Kept as its own
+#: name so :data:`VERDICTS` stays byte-identical for every flag-off reader.
+WIDTH_VERDICTS: frozenset[str] = VERDICTS | {UNCHECKABLE_VERDICT}
+
 #: Verdicts that represent a COMPLETED external check (the heartbeat's
 #: ``claims_checked`` counts these, never UNCHECKED — an auditor whose search
 #: plane is dead must not look busy).
@@ -86,6 +146,237 @@ CHECKED_VERDICTS: frozenset[str] = frozenset(
     {VERDICT_SUPPORTED, VERDICT_CONTRADICTED, VERDICT_NOT_FOUND}
 )
 
+
+# ---------------------------------------------------------------------------
+# THE PLANE'S VOCABULARY — the stamps, the flag, the row keys
+# ---------------------------------------------------------------------------
+#
+# These live HERE rather than in the handler for the reason every other
+# extraction in this tree gives: they are a cohesive, dependency-free unit that
+# three modules now read (the handler, the width tick, the width writes), and
+# the handler was 1,492 lines against a 1,500-line gate entry — which is not a
+# budget, it is a warning. ``standing_auditor`` imports them ONE WAY and
+# re-exports them, so ``standing_auditor.CRITIQUE_TITLE_PREFIX`` and every test
+# that reaches for it resolve byte-identically.
+
+#: The ``SUB_HANDLERS`` name the runtime resolves into ``options['sub_handler']``,
+#: and the tag every row this plane writes carries.
+SUB_HANDLER_NAME = "standing_auditor"
+
+#: This plane's OWN population-split key. Deliberately NOT
+#: ``JUDGE_PIPELINE_VERSION``: external-audit verdicts and faithfulness verdicts
+#: are different evidence about different questions, and a mean across the two
+#: would describe a population that never existed. Bump this — never that — when
+#: the prompts, the verdict vocabulary or the validation below change.
+#:
+#: This is the SHIPPED 6-claim sweep's stamp and it does NOT move. Flag-off
+#: behaviour is byte-identical, which means the population it wrote yesterday is
+#: the population it writes today, under the same key.
+EXTERNAL_AUDIT_PIPELINE_VERSION = "2026-08-29/1"
+
+#: WIDTH's own stamp — a different instrument, therefore a different population.
+#: Everything a stamp is supposed to split on changes at once here: a new CLAIM
+#: SOURCE (the assembly's own byte-identified spans, replacing an LLM
+#: extraction), a new GRADER on a THIRD model family (Gemma-4-31B, not the $0
+#: core plane), a new VERDICT (``UNCHECKABLE``) with three deterministic
+#: sub-classes, a rubric with four mechanical gates, and a new row shape (one
+#: critique per READ instead of one per claim). Pooling a ``2026-08-29/1``
+#: verdict with a ``2026-09-05/1`` one would describe an instrument that never
+#: existed — the exact discipline ``judge_pipeline_version`` carries for the
+#: faithfulness plane, applied to this population from its FIRST row rather than
+#: retrofitted onto it later.
+#:
+#: The verify stamp and ``LEGBA_JUDGE_STACK_REF`` are UNTOUCHED. This instrument
+#: has always kept its own stamp family, and the correctness round's freeze on
+#: the judge route is not this train's to move.
+#:
+#: BUMPED 2026-09-06/1 — THE SPAN CHECK NOW ACTUALLY RUNS. From the width deploy
+#: (2026-09-05 ~18:00Z) to this bump the drain called W-3's ``check_span`` with
+#: keyword arguments it does not accept (``claim_text=/url=/span=`` against a
+#: positional ``claim, candidate_url, fetched_text``); every call raised
+#: ``TypeError``, the wrapper's except-branch caught it, and EVERY decisive
+#: proposal degraded to ``UNCHECKED/span_check_unavailable`` — 168 logged
+#: ``external_audit.span_check_raised`` warnings and 211 ledger rows carrying a
+#: decisive URL and span that were never checked against the page. Nothing
+#: fetched the page at all, so G-1/G-2/G-3 never evaluated once.
+#:
+#: That is exactly what a stamp is for. A ``2026-09-05/1`` SUPPORTED and a
+#: ``2026-09-06/1`` SUPPORTED are verdicts from two different instruments: the
+#: first is the grader's unverified assertion that a page says something, the
+#: second has had the page fetched (robots-gated), the span matched verbatim
+#: under the shared fold, the domain tiered and the publication date anchored in
+#: the read's own window. Pooling them would describe an instrument that never
+#: existed. The 09-05 rows keep their stamp and stay readable as what they are.
+#:
+#: The re-grade path is ``scripts/width_requeue_span_check_unavailable.py``: the
+#: ledger is APPEND-ONLY, so a re-graded claim lands as a NEW row under this
+#: stamp beside the old one (the ledger's unique key is
+#: ``(claim_key, grader_pipeline_version, grader_family)``), never as an update.
+#:
+#: The 2026-09-06 instrument, KEPT: heads-based window basis, zero grace. Rows
+#: graded before the 2026-09-07 window work — and rows graded after it under an
+#: unflipped configuration — carry this and stay poolable with each other.
+#: BUMPED 2026-09-21/1 — THE ABSENCE GATE APPLIES TO AN EMPTY, NOT TO HITS.
+#: Under 09-06/1 and 09-07/1 an absence-shaped claim was refused
+#: (UNCHECKED/absence_liveness_unverified) whenever ``supports_absence_claim``
+#: was false, and that predicate is true only for a liveness-verified EMPTY —
+#: so a search that returned HITS refused the claim before the grader saw
+#: them, on every rung (24 h measured: 104 of 104 absence claims, both rungs,
+#: including every answer the paid serper rung returned). From this stamp,
+#: only an unverified empty is refused; hits are graded under the grader's
+#: claim-shape rule. That MOVES the absence population from UNCHECKED into
+#: NOT_FOUND / CONTRADICTED / SUPPORTED — a different instrument, hence the
+#: stamp on BOTH window configurations (…/1 heads-0, …/2 evidence-or-grace).
+#: BUMPED 2026-09-21/3 — THE REFORMULATION RIDES THE PAID RUNG. Under /1 and
+#: /2 a NOT_FOUND the grader could reformulate spent the ONE second search on
+#: rung 0 again, so the declared paid rung was reachable only when the grader
+#: offered NO better query — measured live on the 12:30Z tick: 321 searches
+#: for 164 claims, zero calls to google.serper.dev. From this stamp the
+#: reformulated query is pinned to ``serp_provider_order[1]`` when a paid
+#: rung is declared (still exactly one second search, same
+#: ``EGRESS_CALLS_PER_CLAIM`` reservation, same spend brake), and a claim's
+#: verdict can rest on a different index than it could before — a different
+#: instrument, hence the stamp on BOTH window configurations
+#: (…/3 heads-0, …/4 evidence-or-grace).
+EXTERNAL_AUDIT_PIPELINE_VERSION_WIDTH_HEADS = "2026-09-21/3"
+
+#: 2026-09-07/1 — THE ADMISSIBLE WINDOW IS NO LONGER THE HEADS' OWN SPREAD.
+#: Two knobs landed against G-3 and either one, once set, makes a DIFFERENT
+#: instrument than ``2026-09-06/1``:
+#:
+#: * ``window_basis = "evidence"`` (``_external_audit_width.WINDOW_BASIS_ENV`` /
+#:   the ``window_basis`` handler option). ``read_evidence_window.oldest`` stops
+#:   being the oldest consumed HEAD's ``produced_at`` and becomes the oldest
+#:   ``signals.fetched_at`` under those heads' own ``derived_from`` lineage.
+#:   Measured 2026-09-06 on the live ledger: the 12:00Z world read's stamped
+#:   window was 3.19h wide (08:30Z-11:41Z, 33 heads) while the evidence those
+#:   heads actually rest on reaches back ~13 days. The stamped window was never
+#:   the read's admissible source window; it was the arrival spread of the
+#:   summaries. R3 §4.7's complaint — *"every declared span is 1-2 days inside a
+#:   read graded and consumed as a 14-day country read"* — is the same fact
+#:   said from the other side.
+#: * ``window_grace_hours > 0`` (``WINDOW_GRACE_HOURS_ENV`` / the
+#:   ``window_grace_hours`` handler option, landed 2026-09-06 at default 0).
+#:
+#: WHY THIS STAMP IS A FUNCTION OF THE CONFIGURATION and not a constant. An
+#: instrument stamp names THE MEASUREMENT TAKEN, not the code that could have
+#: taken it. Every other stamp in this file is constant because the code IS the
+#: instrument; here the operator's ``.env`` is part of the instrument, so a
+#: constant would put one label on two measurements. Pinning it high would
+#: relabel every heads/0 tick as something it is not (and orphan the 09-06 rows
+#: it must pool with); pinning it low would hide the flip entirely, which is the
+#: failure the 09-05 -> 09-06 lineage entry above exists to prevent. Deriving it
+#: keeps the promise the constant was making: rows that share a stamp were
+#: graded by the same instrument, and rows that do not, were not. The
+#: configuration itself rides the receipt (``width_heartbeat_block``'s
+#: ``window_basis`` / ``window_grace_hours``) so a reader can recover WHICH
+#: non-default configuration a ``2026-09-07/1`` row was taken under.
+EXTERNAL_AUDIT_PIPELINE_VERSION_WIDTH = "2026-09-21/4"   # was 2026-09-21/2 — see the 2026-09-21/3 entry above
+
+#: G-3's window BASIS vocabulary — closed, because a third spelling reaching the
+#: stamp selector would silently grade as "not heads" and stamp 09-07/1.
+#: ``heads`` (today's default): ``oldest`` is the oldest consumed head's
+#: ``produced_at``, exactly as ``composition_window.evidence_window_span``
+#: stamped it. ``evidence``: ``oldest`` is the oldest ``signals.fetched_at``
+#: reached by walking those heads' ``derived_from`` lineage down to signals.
+#: The constants live HERE rather than in ``_external_audit_width`` because the
+#: stamp keys on them and this module is that module's import ancestor.
+WINDOW_BASIS_HEADS = "heads"
+WINDOW_BASIS_EVIDENCE = "evidence"
+WINDOW_BASES: tuple[str, ...] = (WINDOW_BASIS_HEADS, WINDOW_BASIS_EVIDENCE)
+
+
+def width_pipeline_version(
+    *,
+    window_basis: str = WINDOW_BASIS_HEADS,
+    grace_before_hours: float = 0.0,
+) -> str:
+    """The WIDTH stamp for the window configuration actually in force.
+
+    :data:`EXTERNAL_AUDIT_PIPELINE_VERSION_WIDTH_HEADS` for heads/0 — the
+    instrument that has been running since the span-check repair, so today's
+    rows stay comparable with yesterday's.
+    :data:`EXTERNAL_AUDIT_PIPELINE_VERSION_WIDTH` the moment either knob
+    leaves its default, because a verdict admitted only because the window
+    was widened is not the same measurement as one admitted inside the
+    narrow window.
+
+    An UNRECOGNISED basis is treated as non-default (it stamps the WIDTH
+    constant) rather
+    than falling back to ``heads``: the resolver upstream already refuses a
+    typo and keeps the predecessor, so anything arriving here that is not
+    ``heads`` got here deliberately, and mislabelling a widened measurement as
+    the narrow one is the failure mode that costs truth.
+    """
+    try:
+        grace = float(grace_before_hours)
+    except (TypeError, ValueError):
+        grace = 0.0
+    if window_basis == WINDOW_BASIS_HEADS and grace <= 0:
+        return EXTERNAL_AUDIT_PIPELINE_VERSION_WIDTH_HEADS
+    return EXTERNAL_AUDIT_PIPELINE_VERSION_WIDTH
+
+
+#: THE GLOBAL WIDTH FLAG. Default OFF. Off ⇒ ``standing_auditor`` runs its
+#: shipped 6-claim sweep, byte-identical, pinned field-for-field by
+#: ``test_width_flag_off_is_the_shipped_sweep``. Nothing outside this analyst
+#: reads the new table or the new API block, so flag-off is a strict no-op
+#: fleet-wide: no ``external_grades`` row is written, no grader is called, no
+#: queue row is created, and the heartbeat carries exactly the keys it carried
+#: yesterday.
+WIDTH_FLAG_ENV = "LEGBA_EXTERNAL_GRADING_WIDTH"
+
+
+def width_enabled() -> bool:
+    """Is external grading at WIDTH switched on for this deployment?
+
+    Read per run rather than captured at import, so an operator flipping the
+    variable and recreating the runtime gets the new behaviour on the actor's
+    next tick — and so a test can exercise both legs in one process without
+    reloading the module.
+    """
+    return os.getenv(WIDTH_FLAG_ENV, "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def pipeline_version(
+    *,
+    window_basis: str = WINDOW_BASIS_HEADS,
+    grace_before_hours: float = 0.0,
+) -> str:
+    """The stamp this run's rows carry — the shipped one, or width's own.
+
+    Two stamps rather than one bumped stamp, because the flag is a real A/B: a
+    deployment with the flag off is running the 2026-08-29 instrument and its
+    rows must keep saying so.
+
+    With the flag ON the answer depends on the WINDOW CONFIGURATION, which the
+    caller resolves once per tick (``_external_audit_width.resolve_window_config``)
+    and passes here — see :func:`width_pipeline_version`. The defaults are
+    today's configuration, so every existing zero-argument call site keeps
+    returning exactly what it returned before.
+    """
+    if not width_enabled():
+        return EXTERNAL_AUDIT_PIPELINE_VERSION
+    return width_pipeline_version(
+        window_basis=window_basis, grace_before_hours=grace_before_hours
+    )
+
+
+#: The critique's ``data`` sub-key + the marker every consumer reads.
+EXTERNAL_AUDIT_DATA_KEY = "external_audit"
+
+#: Title prefix for every critique this plane writes. MUST NOT collide with
+#: ``'Faithfulness verify%'`` — that LIKE pin is what keeps the verify surface
+#: from ever reading one of these rows as a faithfulness verdict.
+CRITIQUE_TITLE_PREFIX = "External audit"
+
+#: The ``alert_trigger_watermarks`` (mig 0091) partition this plane owns, and
+#: the ``trigger_class`` its alert rows carry.
+ALERT_TRIGGER_CLASS = "external_audit"
+#: The single heartbeat row's key inside that partition.
+HEARTBEAT_KEY = "_heartbeat"
 
 # ---------------------------------------------------------------------------
 # Full-width bracket normalization (the 2026-06-30 trap)
@@ -512,15 +803,36 @@ def parse_verdict_reply(
 
 
 __all__ = [
+    "ALERT_TRIGGER_CLASS",
     "CHECKED_VERDICTS",
+    "CRITIQUE_TITLE_PREFIX",
+    "EXTERNAL_AUDIT_DATA_KEY",
+    "EXTERNAL_AUDIT_PIPELINE_VERSION",
+    "EXTERNAL_AUDIT_PIPELINE_VERSION_WIDTH",
+    "EXTERNAL_AUDIT_PIPELINE_VERSION_WIDTH_HEADS",
+    "HEARTBEAT_KEY",
+    "SUB_HANDLER_NAME",
+    "WIDTH_FLAG_ENV",
+    "WINDOW_BASES",
+    "WINDOW_BASIS_EVIDENCE",
+    "WINDOW_BASIS_HEADS",
     "CheckableClaim",
     "ClaimVerdict",
     "SampledHead",
+    "UNCHECKABLE_VERDICT",
+    "UNCHECKED_ABSENCE_LIVENESS",
+    "UNCHECKED_BUDGET_EXHAUSTED",
+    "UNCHECKED_OUT_OF_WINDOW",
+    "UNCHECKED_ROBOTS_DISALLOWED",
+    "UNCHECKED_SPAN_CHECK_UNAVAILABLE",
+    "UNCHECKED_SPAN_FETCH_FAILED",
     "VERDICTS",
+    "WIDTH_UNCHECKED_REASONS",
     "VERDICT_CONTRADICTED",
     "VERDICT_NOT_FOUND",
     "VERDICT_SUPPORTED",
     "VERDICT_UNCHECKED",
+    "WIDTH_VERDICTS",
     "delta_interest",
     "head_from_row",
     "is_high_severity",
@@ -531,5 +843,8 @@ __all__ = [
     "rotate_desks",
     "rotation_phase",
     "severity_rank",
+    "pipeline_version",
     "strip_json_fence",
+    "width_enabled",
+    "width_pipeline_version",
 ]

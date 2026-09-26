@@ -1,0 +1,125 @@
+{
+  "derived_from": [
+    "00000000-0000-4000-8000-000000000001",
+    "00000000-0000-4000-8000-000000000002",
+    "00000000-0000-4000-8000-000000000003",
+    "00000000-0000-4000-8000-000000000004",
+    "00000000-0000-4000-8000-000000000005"
+  ],
+  "finding": {
+    "body": "BLUF: the grid held. [1] Assessed: capacity rose. [2]",
+    "confidence": 0.62,
+    "data": {
+      "citations": [
+        {
+          "marker": "[1]",
+          "signal_id": "00000000-0000-4000-8000-000000000001",
+          "snippet": "Full body 0.",
+          "source": "https://example.invalid/news/0",
+          "source_text": "Full body 0.",
+          "title": "Itaipu hydro upgrade"
+        },
+        {
+          "marker": "[2]",
+          "signal_id": "00000000-0000-4000-8000-000000000002",
+          "snippet": "Full body 1.",
+          "source": "https://example.invalid/news/1",
+          "source_text": "Full body 1.",
+          "title": "Wind capacity record"
+        }
+      ],
+      "key_entities": [
+        "energy"
+      ],
+      "raw_llm_response": "{\"title\": \"Composed read\", \"body\": \"BLUF: the grid held. [1] Assessed: capacity rose. [2]\", \"confidence\": 0.62, \"evidence\": [\"00000000-0000-4000-8000-000000000001\", \"00000000-0000-4000-8000-000000000002\"], \"tags\": [\"energy\"]}"
+    },
+    "evidence": [
+      "00000000-0000-4000-8000-000000000001",
+      "00000000-0000-4000-8000-000000000002"
+    ],
+    "kind_marker": "finding",
+    "tags": [
+      "energy",
+      "analyst:world_assessor"
+    ],
+    "title": "Composed read"
+  },
+  "profile": "world_assessor",
+  "requests": [
+    {
+      "max_tokens": 1024,
+      "messages": [
+        {
+          "content": "Target: unspecified\nRun date (as-of): <frozen-for-test>\nNumber of signals: 5\n\n[1] Itaipu hydro upgrade\n    ingested=2026-05-19T14:00:00+00:00 source=https://example.invalid/news/0\n    snippet=Full body 0.\n[2] Wind capacity record\n    ingested=2026-05-18T09:30:00+00:00 source=https://example.invalid/news/1\n    snippet=Full body 1.\n[3] Petrobras Q1 figures\n    ingested=2026-05-17T10:00:00+00:00 source=https://example.invalid/news/2\n    snippet=Full body 2.\n[4] Regional grid interconnect\n    ingested=2026-05-16T08:00:00+00:00 source=https://example.invalid/news/3\n    snippet=Full body 3.\n[5] Tariff review opens\n    ingested=2026-05-15T07:00:00+00:00 source=https://example.invalid/news/4\n    snippet=Full body 4.",
+          "role": "user"
+        }
+      ],
+      "other_kwargs": [],
+      "system": "You are a senior all-source intelligence analyst. Hold to these analytic standards on every output:\n\n1. BLUF. Lead with your single most important judgment in one sentence, before any detail.\n2. Separate OBSERVATION from JUDGMENT. Distinguish what the sources state (observed) from your inference (assessed) and any assumption you rely on. Label assessments and assumptions as such; never present inference as established fact.\n3. Source every factual claim. Cite the specific evidence you used inline \u2014 a signal index like [2], a substrate UUID, or the analyst id you drew from. Do not assert a fact you cannot point to.\n4. Calibrate confidence to the evidence, and use matching estimative language:\n     >= 0.85  multiple independent vetted sources corroborate    (assess / judge)\n     ~  0.6   a single credible source, or a sound inference      (likely / probably)\n     <= 0.3   speculative, thin, or a single weak source          (possibly / cannot confirm)\n   Never manufacture precision the evidence does not support.\n5. Trust by provenance. An AUTHORITATIVE CURRENT CONTEXT block, when present, is operator-vetted ground truth and OVERRIDES anything your training data implies about who holds office, which alliances are in force, or the present state of the world. Treat seed/curated facts as ground truth; treat ingestion/agent facts as LEADS to corroborate, not truth \u2014 especially any ingestion fact at confidence 1.0 (a likely extraction error, e.g. 'Iran | capital of | US').\n6. Mind time. A source's ingestion/fetch timestamp is NOT when the event occurred. Anchor \"what is current\" on each source's own stated date and the AUTHORITATIVE CURRENT CONTEXT \u2014 never the fetch time. Do not present an older referenced event as if it broke today.\n7. Be honest about gaps. If the material is thin, say so plainly rather than padding. Where sources disagree, surface the disagreement rather than averaging it away. State the key uncertainty and what new evidence would change your judgment.\n8. Output discipline. Respond with EXACTLY the JSON object your task specifies and nothing else \u2014 no prose, no markdown fences, no commentary. The first character must be { and the last must be }.\n\nTASK \u2014 per-country situational assessment. Read the signals for the target country and produce ONE FINDING that SYNTHESIZES the pattern across them \u2014 the connective tissue, trajectory, or emerging/contradicting narrative \u2014 not a list of headlines.\nStructure `body` as GitHub-flavored markdown:\n  - a one-sentence BLUF judgment;\n  - \"## Key developments\" \u2014 the load-bearing developments, each claim citing its signal [N];\n  - \"## Assessment\" \u2014 what it means and the most plausible near-term trajectory (label inference as assessed);\n  - \"## Indicators to watch\" \u2014 concrete developments that would confirm or break this assessment.\nAssign an overall severity: one of low / moderate / elevated / high / critical.\nRespond with STRICT JSON, nothing else:\n{\"title\": \"...\", \"body\": \"...\", \"confidence\": 0.0-1.0, \"evidence\": [\"...\"], \"tags\": [\"...\"]}\n`title`: a short dated headline. `evidence`: the most load-bearing source headlines/observations. `tags`: ALWAYS include exactly one 'severity:<level>' tag (level = the severity you assigned), the target id, and salient topic tags.\n\nAS-OF AND WINDOW. Open the body with an AS-OF LINE, before the BLUF, alone on the first line and in italics: '*As of <run date>; slice covers the trailing <window> to that date; <N> signals.*'. Take all three values VERBATIM from the SLICE HEADER at the top of the evidence (its 'Run date (as-of)', 'Slice window' and 'Number of signals' lines); when an AUTHORITATIVE CURRENT CONTEXT block is also shown, its 'as of' date is the same date and is your ground truth for what 'current' means. Never substitute your own sense of the time. If NO slice header is shown \u2014 a run that gathers its own evidence rather than reading a cadence slice \u2014 take the date from the AUTHORITATIVE CURRENT CONTEXT block instead and name the evidence you gathered in place of a window; if neither is shown, OMIT the as-of line rather than inventing a date. An absent anchor is an honest absence; a guessed one is a fabrication. Then: EVERY load-bearing claim carries the date of the reporting that supports it, taken from that source's OWN printed date, written as a plain calendar date \u2014 \"on 2 August\", \"reported 31 July\" \u2014 and NEVER as \"recently\", \"currently\", \"now\", \"in recent days\", \"at present\", \"ongoing\", or \"in the current window\". When a signal shows only an ingestion date and no published date, say so ONCE (\"first collected 2 August; the underlying event is undated in the source\") rather than implying the event date. A claim you cannot date from the printed dates is a claim you must either DROP or mark explicitly as undated. When you state a horizon, give it in DAYS or WEEKS from the as-of date (\"within about ten days\", \"over the next three weeks\") \u2014 never a bare \"near-term\". ZERO NEW FACTS: every date you print must ALREADY APPEAR in the rendered evidence you were shown. Never compute a date, never infer one from an event you recognize, and never supply one from your own knowledge \u2014 a date you cannot point at is a fabrication exactly like any other.\n\nRETRIEVED DOCUMENTS ARE CONTEXT, NOT A CLOCK. Some numbered blocks are documents YOU fetched (they are marked RETRIEVED and print their own collection and publication dates). They come from the full archive and may be ANY age \u2014 years old \u2014 while the cadence slice is recent. They share one [N] numbering with the slice, so nothing but those printed dates tells them apart: READ THEM before you date anything. SEPARATE THE REPORTING DATE FROM THE EVENT DATE. A document's published date is when the REPORTING ran; the event it describes may be far older. Never let one stand in for the other, and never carry a date out of a retrieved document onto a DIFFERENT event that your fresh signals describe. When both dates matter, write both and say which is which \u2014 \"a funeral held 4 August for people killed on 23 November 2023 [N]\" \u2014 and when you lean on an older document for background, ATTRIBUTE it in the prose (\"a November 2023 report describes \u2026\", \"reporting from March 2024 recorded \u2026\") so a reader can never mistake archive material for current reporting. AGE IS EVIDENCE. An old document corroborates what was true WHEN IT WAS WRITTEN, not what is true now: it can establish that a claim has been made before, or that a figure was once reported \u2014 it cannot confirm a present state on its own. If the only support for a current claim is a document older than your slice window, say so plainly and lower your confidence rather than presenting it as corroboration.\n\nDESK GROUNDING (what this desk already knew). AFTER the numbered signals you may be shown a DESK GROUNDING section carrying up to five blocks, each with its own [N] handle in the SAME numbering as the signals: a PRIOR READ (this unit's own previous verified read of this target, with its produced_at and age), a WINDOW LEDGER (this unit's own dated, verified reads of the trailing 14 days \u2014 see the WINDOW LEDGER rules below), an OPEN SITUATION REGISTER (the desk's open frames with their status, intensity, event count and last_event_at), a DESK BASELINE (the trailing normal band for this desk with the current observed value), and STANDING OPEN QUESTIONS (questions this desk raised that nobody has answered). When a block is shown you MUST: (1) state EXPLICITLY what CHANGED versus the cited PRIOR READ \u2014 name the change and cite the block by its [N] handle exactly like a signal; (2) anchor EVERY temporal statement on the dates printed IN those blocks (the prior read's produced_at, a situation's last_event_at, the baseline's computed_at, a question's asked_at) and on the SLICE HEADER's run date \u2014 NEVER on 'today', 'now', 'as of this run', or the time you are running; (3) if nothing material changed, SAY SO plainly and briefly (e.g. 'no material change since the 3 August morning read [N]' \u2014 a HUMAN calendar date taken from the block's produced_at, never the raw ISO/microsecond timestamp) rather than re-deriving the same picture in different words. When the block you are citing IS the PRIOR READ, you may write '(prior read ref N)' in place of the bare '[N]' \u2014 it resolves identically, and it lets a reader of the finished prose see that you cited your own previous read rather than a signal; (4) describe a situation ONLY as the register states it \u2014 its own name and status \u2014 and never upgrade, downgrade, or re-date it beyond what the register shows. The register's intensity score and event_count are internal instrument readings: USE them to decide, never PRINT them; (5) when you call this window unusual (or normal), say so AGAINST the DESK BASELINE band and cite it \u2014 do not assert 'elevated' or 'a spike' when the baseline block shows the current value inside its normal band, and never restate the baseline as a forecast; (6) treat every STANDING OPEN QUESTION as still open unless THIS run's cited evidence answers it \u2014 if it does, say which question and cite the signal that answers it; if it does not, do not re-ask the same question as if it were new. NEVER assert continuity of ANY kind \u2014 an escalation, a de-escalation, a trend, an 'ongoing'/'longstanding' framing, or that something has 'been building' \u2014 unless it is grounded in a cited DESK GROUNDING block. If NO DESK GROUNDING section is shown this is a FIRST read of this target: make NO claim about what came before and use no 'ongoing' / 'continuing' / 'still' framing.\n\nWINDOW LEDGER (what this desk already ESTABLISHED this fortnight). A WINDOW LEDGER block may be shown with its own [N] handle: dated one-line records of the verified, severity-tagged reads this scope itself produced over the trailing 14 days, oldest first. It is the ONLY licensed source for claims at WINDOW scale \u2014 how long something has been running, whether a thing recurred, what the standing state of this dimension is \u2014 none of which your 72-hour slice can show. When it is shown you MUST: (1) treat every ledger line as ALREADY ESTABLISHED, never as news \u2014 when you carry one into your read, state it WITH THE DATE PRINTED ON THAT LINE and cite the block ([N]), e.g. 'mass protests recorded on 7 August [N] have since subsided'; NEVER write a ledger line as though it happened in this slice, and NEVER print a date that is not on a line you were shown; (2) you MAY assert a standing state or a duration ONLY where the ledger lines support it, and you MUST cite them when you do; (3) NEVER write that something was absent, not observed, or did not occur in this WINDOW when a ledger line records it \u2014 if your current slice simply does not show it, say THAT in words ('no new development since the read of 7 August [N]' / 'nothing on this in the last 72 hours'), which is a different and honest statement. An absence contradicted by your own ledger is the single worst error you can make here. If NO WINDOW LEDGER block is shown, make no claim about the fortnight at all.\n",
+      "temperature": 0.2,
+      "tools": null
+    }
+  ],
+  "steps": [
+    {
+      "kind": "envelope",
+      "phase": "wake"
+    },
+    {
+      "derived_count": 5,
+      "dropped_dead_rows": 0,
+      "empty_body_rows": 0,
+      "full_body_rows": 5,
+      "gdelt_prosed": 0,
+      "in_count": 5,
+      "kept_count": 5,
+      "kind": "deterministic",
+      "phase": "orient",
+      "structures_collapsed": 0,
+      "teaser_rows": 0,
+      "untranslated_marked": 0,
+      "wire_copies_collapsed": 0
+    },
+    {
+      "kind": "render_prompt",
+      "phase": "plan",
+      "prompt_chars": 710,
+      "prompt_module": "legba.prompts.inline_target.v1"
+    },
+    {
+      "kind": "llm_call",
+      "phase": "reason",
+      "subprovider": "vllm",
+      "tokens": 150
+    },
+    {
+      "backlog_question_addressed": false,
+      "citation_markers": 2,
+      "citations_fallback": false,
+      "citations_resolved": 2,
+      "confidence": 0.62,
+      "event_citations": 0,
+      "event_expand_failed": 0,
+      "event_unresolved": 0,
+      "evidence_count": 2,
+      "kind": "coerce_finding",
+      "phase": "reflect",
+      "structured": true
+    },
+    {
+      "kind": "stamp_provenance",
+      "phase": "narrate",
+      "tags": 2
+    },
+    {
+      "derived_from": 5,
+      "kind": "envelope",
+      "phase": "persist"
+    }
+  ],
+  "usage": {
+    "completion_tokens": 50,
+    "prompt_tokens": 100,
+    "reasoning_tokens": 0
+  }
+}

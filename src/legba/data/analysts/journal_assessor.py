@@ -40,6 +40,14 @@ WAVE 1 (plan §5 / §4.3 / §4.4 / §10 / §12). The staged arc is now full:
 READ_SLICE stays ``None`` — the default META global signal slice primes the run
 and ``get_journal_delta`` (in GATHER) tells the agent what changed since the last
 entry. The delta-priming READ_SLICE is a later refinement.
+
+T1.0 (JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09 §6): the REFLECT claim
+machinery (``_reflect_claims`` and its private helpers) moved out to
+``journal_reflect.py`` and is re-exported here unchanged. B0 (the T2.2 seam
+taken early): ``_select_journal_slice`` and its selection helpers moved to
+``journal_slice.py`` and are re-exported here unchanged; the per-row RENDER
+helpers (``_salience_tag`` / ``_untranslated_tag`` / row title/lang/payload)
+and the four ``_render_*_user_prompt`` functions stay in THIS module.
 """
 
 from __future__ import annotations
@@ -60,9 +68,55 @@ from .journal_leak_guards import (  # noqa: F401 — re-export
     _is_tool_call_leak,
     _strip_code_fence,
 )
+from .journal_reflect import (  # noqa: F401 — re-export
+    _CAPWORD_RE,
+    _FACTUAL_HINT_RE,
+    _INSTRUMENT_MARKER_RE,
+    _PERSPECTIVE_CUE_RE,
+    _REF_MARKER_RE,
+    _SELF_TERMS,
+    _SPECULATION_RE,
+    INSTRUMENT_AS_REPORT_FLAG,
+    REF_REPAIRED_FLAG,
+    ROUTINE_AS_SIGNAL_FLAG,
+    _flag_instrument_as_report,
+    _flag_routine_as_signal,
+    _instrument_span_is_worldly,
+    _reflect_claims,
+    _repair_ref_markers,
+    _span_is_factual,
+)
+from .journal_clusters import (  # noqa: F401 — re-export
+    CLUSTER_PREAMBLE,
+    cluster_first_enabled,
+    cluster_header_line,
+    coverage_roster_block,
+    journal_window,
+)
+from .journal_slice import (  # noqa: F401 — re-export
+    ROUTINE_PRODUCT_SOURCES,
+    _JOURNAL_FRESH_RESERVE,
+    _JOURNAL_RENDER_CAP,
+    _is_instrument_row,
+    _is_routine_row,
+    _labeled_journal_slice,
+    _salience_ordered,
+    _select_journal_slice,
+    _slice_recency_key,
+)
+from .journal_propose_phase import (  # noqa: F401 — re-export
+    _JOURNAL_PROPOSE_TOOL_SCHEMAS,
+    _PROPOSE_DECLINE_INSTRUCTION,
+    _PROPOSE_MAX_PER_RUN,
+    _PROPOSE_MAX_ROUNDS,
+    _PROPOSE_REF_ECHO_CAP,
+    _PROPOSE_SHAPE_DISCIPLINE,
+    _propose_phase,
+    _propose_phase_prompt,
+)
 from ..provenance.consumption import CONSUMPTION_CONTEXT_JOURNAL
 from ..provenance.kinds import OutputKind
-from ..provenance.models import JournalClaim, JournalPayload
+from ..provenance.models import JournalPayload
 from .agency.journal_propose import JOURNAL_PROPOSE_TOOLS
 from .agency.journal_read import JOURNAL_READ_TOOLS
 from .consult_on_demand import _bounded_tool_json
@@ -119,9 +173,37 @@ CHRONICLE_PROMPT_MODULE_PATH = (
 # narrates agree/split/outlier (entry_kind='lens_diff'), never merging them. All
 # five are append-only (never supersede), all ride V1 verify via the shared kind,
 # none has a publish sink.
-LENS_ANALYST_IDS: tuple[str, ...] = (
+LENS_FACULTY_ANALYST_IDS: tuple[str, ...] = (
     "lens_trend", "lens_baserate", "lens_capability", "lens_intent",
 )
+
+# VOICES LEANS (2026-09-21, planning/VOICES_LEAN_PRIORS_2026-09-21.md; operator
+# decision D-4 accepted the six priors as DRAFTS): SIX stance-typed ids on the
+# same kind, same machinery — same entry_kind='lens', same V1 verify, same
+# journal_read-only grant, same one-declared-prior-per-module rule. Where the
+# four above are typed by FUNCTION (what cognitive move the read makes), these
+# six are typed by STANCE (which way of weighing the tower the read commits to).
+# They run DAILY in the 09:00–11:30 UTC band, off the burst window.
+LENS_LEAN_ANALYST_IDS: tuple[str, ...] = (
+    "lens_left", "lens_right", "lens_centre",
+    "lens_pragmatist", "lens_militarist", "lens_isolationist",
+)
+
+#: Every lens id on this kind — faculties THEN leans. Drives entry_kind
+#: distillation, the persona-module map and the declared-prior lookup, all of
+#: which are per-id and therefore grow with the roster.
+LENS_ANALYST_IDS: tuple[str, ...] = (
+    LENS_FACULTY_ANALYST_IDS + LENS_LEAN_ANALYST_IDS
+)
+
+#: The chorus DIFF's roster — DELIBERATELY the four function-typed faculties
+#: only, NOT `LENS_ANALYST_IDS`. lens_diff's persona declares "These are four
+#: declared priors, not the space of priors" verbatim and its matrix contract is
+#: written against that four; widening the roster when the leans landed would
+#: silently re-scope an active analyst's read and its published aperture line.
+#: Adding the leans to the diff is its own change, with its own persona edit.
+LENS_DIFF_ROSTER_IDS: tuple[str, ...] = LENS_FACULTY_ANALYST_IDS
+
 # Each faculty module exports the SAME three names (LENS_SYSTEM / LENS_PRIOR_BLOCK
 # / LENS_ID), so the descriptor's prompt_module string alone selects the persona
 # — no per-faculty branch. The prior block is imported directly by run_method
@@ -201,34 +283,6 @@ READ_SLICE = None
 _NARRATE_MAX_TOOL_ROUNDS = 2
 
 
-# Inline citation marker the body carries; the UI resolves it to a chip at the
-# cited span. We also harvest the UUIDs into claims + cited_substrate_refs.
-_REF_MARKER_RE = re.compile(r"\[\[ref:([0-9a-fA-F-]{36})\]\]")
-# An explicit speculation / perspective marker the agent may use in lieu of a ref
-# on a factual-sounding span (§4.5 / §10) — kept, never stripped.
-_SPECULATION_RE = re.compile(
-    r"\[\[(?:spec|speculation|perspective|wonder|inference|unverified|instrument)\]\]",
-    re.IGNORECASE,
-)
-# The [[instrument]] marker specifically (V2): exempt like the spec family, BUT
-# guarded — an instrument span is about the SELF; one carrying world proper
-# nouns is a citation dodge (review A) and downgrades to an uncited fact claim.
-_INSTRUMENT_MARKER_RE = re.compile(r"\[\[instrument\]\]", re.IGNORECASE)
-_SELF_TERMS = frozenset({
-    "brier", "bss", "betweenness", "centrality", "triad", "triads", "graph",
-    "feed", "feeds", "source", "sources", "budget", "run", "runs", "critic",
-    "calibration", "salience", "faithfulness", "intensity", "poll", "payload",
-    "postgres", "qdrant", "nats", "legba", "instrument", "pipeline", "cadence",
-})
-_CAPWORD_RE = re.compile(r"(?<!^)(?<![.!?]\s)\b([A-Z][a-zA-Z]{2,})")
-
-
-def _instrument_span_is_worldly(span: str) -> bool:
-    """Review-A guard: an ``[[instrument]]`` span carrying >=2 mid-sentence
-    capitalized words that are NOT self-vocabulary reads as a WORLD claim
-    wearing the exemption — treat it as an uncited fact, never exempt it."""
-    hits = [w for w in _CAPWORD_RE.findall(span) if w.lower() not in _SELF_TERMS]
-    return len(hits) >= 2
 # A markdown title line ("# ...") the model may lead with.
 _TITLE_LINE_RE = re.compile(r"^\s*#+\s*(.+?)\s*$", re.MULTILINE)
 # T-4(c): a leading BOLD-ONLY line ("**Trump Signals …**") — the shape the
@@ -239,26 +293,6 @@ _TITLE_LINE_RE = re.compile(r"^\s*#+\s*(.+?)\s*$", re.MULTILINE)
 _BOLD_TITLE_RE = re.compile(r"^\s*\*\*(.+?)\*\*\s*$", re.MULTILINE)
 _MAX_TITLE_CHARS = 240
 
-# A coarse "this span asserts a fact" heuristic for the permissive REFLECT flag:
-# a span with a number, a date, a proper-noun-ish capitalized token, or a
-# declarative copula reads as factual. This is INTENTIONALLY permissive — it only
-# FLAGS (never deletes), and the tie-breaker is voice-preservation (§4.5): when in
-# doubt we treat the span as perspective and leave it alone.
-_FACTUAL_HINT_RE = re.compile(
-    r"\d|\b(?:is|are|was|were|has|have|flipped|rose|fell|went|"
-    r"quiet|spiked|dropped|increased|decreased)\b",
-    re.IGNORECASE,
-)
-# First-person wonder/inference cues mark a span as PERSPECTIVE (exempt) even if
-# it carries a factual-looking hint — the connective/wondering tissue that IS the
-# voice (the historical metaphor-ban pole we explicitly do NOT recreate).
-_PERSPECTIVE_CUE_RE = re.compile(
-    r"\b(?:I |I'm|I've|I wonder|it (?:makes|feels|seems)|"
-    r"uneasy|curious|strikes me|reminds me|maybe|perhaps|"
-    r"my sense|I suspect|I think|it worries me)\b",
-    re.IGNORECASE,
-)
-
 
 def build_prompt_module() -> Any:
     """The journal runs on the in-actor envelope, not the GEPA compile surface,
@@ -268,110 +302,6 @@ def build_prompt_module() -> Any:
     """
     from legba.prompts.journal_assessor import JOURNAL_SYSTEM
     return JOURNAL_SYSTEM
-
-
-# ---------------------------------------------------------------------------
-# Claim extraction + the permissive REFLECT citation flag (§3.6 / §4.5 / §10)
-# ---------------------------------------------------------------------------
-
-
-def _span_is_factual(text: str) -> bool:
-    """Coarse, PERMISSIVE fact-vs-perspective classifier for the REFLECT flag.
-
-    Returns True only when a span reads as a factual assertion AND carries no
-    first-person wonder/inference cue. The tie-breaker is voice-preservation
-    (§4.5): a span that hints at both fact and perspective is treated as
-    perspective (exempt) — we never want to flag the connective tissue that IS
-    the voice. This NEVER deletes anything; the worst it does is attach a
-    ``needs_citation`` marker the UI renders distinctly (§9).
-    """
-    t = text.strip()
-    if not t:
-        return False
-    if _PERSPECTIVE_CUE_RE.search(t):
-        return False
-    return bool(_FACTUAL_HINT_RE.search(t))
-
-
-def _reflect_claims(body: str) -> tuple[list[JournalClaim], list[UUID], list[str]]:
-    """Parse the body into per-claim citation bindings, FLAGGING (never stripping)
-    an uncited factual span (plan §3.6 / §4.5 / §10 — the REFLECT pass).
-
-    For each span (split on blank lines):
-      * a span with ≥1 ``[[ref:<uuid>]]`` → a ``kind='fact'`` claim bound to its
-        refs (a cited factual claim survives intact);
-      * a span with no ref but an explicit speculation marker (``[[spec]]`` …) OR
-        no factual hint → a ``kind='perspective'`` claim (wonder/inference is
-        honest without a UUID — the perspective sentence is EXEMPT);
-      * a span that reads factual but carries NO ref and NO speculation marker →
-        a ``kind='fact'`` claim with empty refs, tagged ``needs_citation`` in its
-        text (FLAGGED, never deleted — voice-preservation is the tie-breaker; the
-        UI renders it in the "unverified perspective" style, §9).
-
-    Returns ``(claims, flat_cited_refs, reflect_flags)`` where ``reflect_flags``
-    is a per-run audit list (e.g. ``["uncited_factual_span"]``) the trace records.
-    """
-    flat: list[UUID] = []
-    seen: set[UUID] = set()
-    claims: list[JournalClaim] = []
-    reflect_flags: list[str] = []
-    for span in re.split(r"\n\s*\n", body):
-        text = span.strip()
-        if not text:
-            continue
-        span_refs: list[UUID] = []
-        for m in _REF_MARKER_RE.finditer(span):
-            try:
-                u = UUID(m.group(1))
-            except ValueError:
-                continue
-            span_refs.append(u)
-            if u not in seen:
-                seen.add(u)
-                flat.append(u)
-        if span_refs:
-            # A cited factual claim — survives REFLECT intact.
-            claims.append(
-                JournalClaim(text_span=text[:8192], refs=span_refs, kind="fact")
-            )
-            continue
-        has_spec_marker = bool(_SPECULATION_RE.search(span))
-        is_instrument_marked = bool(_INSTRUMENT_MARKER_RE.search(span))
-        # Review-A guard: [[instrument]] wearing world facts is a citation
-        # dodge — strip the EXEMPTION (never the marker/text) and let the span
-        # fall through as an uncited fact claim ([needs_citation]-flagged).
-        if (
-            has_spec_marker
-            and is_instrument_marked
-            and _instrument_span_is_worldly(span)
-        ):
-            has_spec_marker = False
-            reflect_flags.append("instrument_marker_on_world_span")
-        if has_spec_marker or not _span_is_factual(text):
-            # Perspective / wonder / inference — EXEMPT (no ref required).
-            # T-4(d): an honest [[instrument]] read (a legitimate self-metric with
-            # no citable row) is a DISTINCT claim shape from ordinary perspective —
-            # it is a self-fact stated without a ref, not wonder. JournalClaim
-            # forbids extra fields (extra='forbid') and `kind` is a closed Literal,
-            # so rather than force a schema/kind change (which would ripple to the
-            # verify doc builder + the read-only journal API), we record the
-            # distinction in the reflect audit (surfaced in the run trace/summary):
-            # an 'instrument_perspective_span' entry marks that this exempt span was
-            # an instrument read, not free-text perspective. The claim itself stays
-            # kind='perspective' (the honest minimal representation).
-            if is_instrument_marked and has_spec_marker:
-                reflect_flags.append("instrument_perspective_span")
-            claims.append(
-                JournalClaim(text_span=text[:8192], refs=[], kind="perspective")
-            )
-            continue
-        # Uncited factual span: FLAG, do NOT delete (voice-preservation §4.5).
-        reflect_flags.append("uncited_factual_span")
-        flagged = f"[needs_citation] {text}"
-        claims.append(
-            JournalClaim(text_span=flagged[:8192], refs=[], kind="fact")
-        )
-    return claims, flat, reflect_flags
 
 
 # ---------------------------------------------------------------------------
@@ -443,6 +373,33 @@ def _rewrite_gathered_citations(
 _JOURNAL_VERIFY_MAX_CLAIMS = 40
 
 
+_SPAN_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _cited_sentences_only(span: str) -> str:
+    """§10 BY CONSTRUCTION — keep only the sentences of a ``fact`` span that
+    carry a ``[[ref:…]]`` marker.
+
+    The narrator labels its own claims, and its ``fact`` spans routinely
+    swallow the perspective sentence written beside the cited one (7-day census
+    2026-09-25: lens_isolationist 12 of 15 cited fact spans carried 2+
+    sentences, lens_militarist 13 of 18, lens_left 22 of 35). Every such
+    uncited sentence reached the judge inside a fact claim and was graded
+    ``judge_unsupported`` — the lens low tail (0.22 / 0.42 on 09-25) was
+    interpretation graded as fact, against the contract the prompt states
+    ("your own weighing needs no ref"). A span with no marker in any sentence
+    keeps its first sentence (the listed refs are appended as ``[N]`` by the
+    caller, as before)."""
+    text = span.strip()
+    if not text:
+        return text
+    sentences = [s for s in _SPAN_SENTENCE_SPLIT_RE.split(text) if s.strip()]
+    if len(sentences) <= 1:
+        return text
+    cited = [s for s in sentences if _REF_MARKER_RE.search(s)]
+    return " ".join(cited) if cited else sentences[0]
+
+
 def build_journal_verify_inputs(payload: Any) -> tuple[str, list[str]]:
     """V1 — build the CITED-FACT-ONLY verify document for a journal entry.
 
@@ -487,7 +444,7 @@ def build_journal_verify_inputs(payload: Any) -> tuple[str, list[str]]:
         if kept >= _JOURNAL_VERIFY_MAX_CLAIMS:
             break
         kept += 1
-        span = str(getattr(claim, "text_span", "") or "")
+        span = _cited_sentences_only(str(getattr(claim, "text_span", "") or ""))
         seen_in_span: set[str] = set()
 
         def _sub(m: "re.Match[str]") -> str:
@@ -523,80 +480,6 @@ def _derive_title(body: str, fallback: str) -> str:
     # Strip ref markers from the title so a chip syntax doesn't leak into the label.
     first = _REF_MARKER_RE.sub("", first).strip()
     return (first[:_MAX_TITLE_CHARS] or fallback)
-
-
-def _slice_recency_key(row: Mapping[str, Any]) -> str:
-    """ISO-8601 recency string for a slice row (the S-2a tertiary sort tiebreak).
-
-    Coerce to a string so recency can never hard-fail the sort under a mixed
-    tuple, and so newest sorts FIRST under ``reverse=True`` (ISO sorts
-    chronologically)."""
-    v = row.get("produced_at")
-    if v is None:
-        v = row.get("fetched_at")
-    if v is None:
-        return ""
-    if isinstance(v, str):
-        return v
-    iso = getattr(v, "isoformat", None)
-    return iso() if callable(iso) else str(v)
-
-
-_JOURNAL_RENDER_CAP = 60        # rows rendered into the priming slice
-_JOURNAL_FRESH_RESERVE = 12     # tail slots guaranteed for the FRESHEST rows
-
-
-def _salience_ordered(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """S-2a: order the priming slice by CONSEQUENCE, not recency.
-
-    Sort key = ``salience_sort_key`` = (magnitude, authority_rank), DESC — so the
-    highest-consequence signal leads and ties break to the more authoritative
-    source (the Graham tabloid-frame guard: a wire report outranks adversary
-    state_media at equal magnitude). Crucially this is a STABLE sort on the
-    salience key ALONE — NO recency tiebreak — so rows with equal (or unscored,
-    ``(-1.0, 0)``) salience keep the reader's DELIVERED order. That matters
-    because the journal's global slice is per-source DIVERSITY-CAPPED upstream
-    (``_diversify_by_source``), NOT pure ``fetched_at DESC``; a recency tiebreak
-    would collapse the unscored tail back to pure recency and re-let a firehose
-    source monopolize the window. When NOTHING is scored yet, the stable sort is
-    a no-op → the delivered (diversity) order is returned UNCHANGED."""
-    from .signal_salience import salience_sort_key
-
-    return sorted(
-        inputs, key=lambda r: salience_sort_key(r.get("salience")), reverse=True
-    )
-
-
-def _select_journal_slice(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """S-2a: pick + order the ≤``_JOURNAL_RENDER_CAP`` rows to render.
-
-    Consequence LEADS (``_salience_ordered``), but the tail is RESERVED for the
-    freshest delivered rows so a breaking event ingested AFTER the salience
-    sweep's last tick (still ``salience IS NULL`` → magnitude ``-1.0`` → sorts
-    below every scored row) is never truncated out of the narrator's window by
-    the ``[:cap]`` cut. Without this floor a window with >cap scored (many of
-    them routine, magnitude 0.1-0.3) rows would bury a fresh, unscored,
-    high-consequence signal past the cut — the recency-starvation inverse of the
-    tabloid-frame bug. The floor draws from the ALREADY diversity-capped
-    ``inputs``, so it can't re-introduce firehose monopoly. When nothing is
-    scored, or the slice fits, the plain salience order is returned unchanged."""
-    ordered = _salience_ordered(inputs)
-    from .signal_salience import magnitude_of
-
-    n_scored = sum(1 for r in inputs if magnitude_of(r.get("salience")) >= 0.0)
-    if n_scored == 0 or len(ordered) <= _JOURNAL_RENDER_CAP:
-        return ordered[:_JOURNAL_RENDER_CAP]
-    head_n = _JOURNAL_RENDER_CAP - _JOURNAL_FRESH_RESERVE
-    head = ordered[:head_n]
-    head_ids = {id(r) for r in head}
-    tail: list[dict[str, Any]] = []
-    for r in sorted(inputs, key=_slice_recency_key, reverse=True):
-        if id(r) in head_ids:
-            continue
-        tail.append(r)
-        if len(tail) >= _JOURNAL_FRESH_RESERVE:
-            break
-    return head + tail
 
 
 def _salience_tag(sal: Any) -> str:
@@ -676,13 +559,26 @@ def _untranslated_tag(row: Mapping[str, Any]) -> str:
     return ""
 
 
+# B1/B2 (T1.2/T1.4, JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09 §3/§6) — the
+# provenance-class tag for a row ``_labeled_journal_slice`` stamped
+# ``journal_label`` onto: ``'instrument'`` (event-coded substrate output,
+# never a report) or ``'routine'`` (a scheduled statistical product, a signal
+# of change only against its baseline). Rendered the same way the salience
+# tag is (a leading bracketed marker); empty for an unlabelled row.
+def _journal_label_tag(row: Mapping[str, Any]) -> str:
+    label = row.get("journal_label")
+    if label in ("instrument", "routine"):
+        return f"[{label}] "
+    return ""
+
+
 def _render_chronicle_user_prompt(inputs: list[dict[str, Any]]) -> str:
     """The chronicle tier's priming prompt — public-record disciplines instead
     of the diary's apparatus/instrument blocks. Shares the salience-ordered
     slice and the citable row rendering with the entry tier; everything the
     diary knows about itself (feed counts, instruments, dashboards) is absent
     by design — the chronicle must not know the machine."""
-    inputs = _select_journal_slice(inputs)
+    inputs = _labeled_journal_slice(inputs)
     lines = [
         "Below is the period's global signal slice, ordered by the platform's "
         "consequence magnitude (the leading '(salience 0.NN·class)' tag). This "
@@ -727,6 +623,10 @@ def _render_chronicle_user_prompt(inputs: list[dict[str, Any]]) -> str:
         "",
         "--- recent signal slice ---",
     ]
+    # T2.2: the one prompt line the cluster block needs — absent, byte-for-byte,
+    # when LEGBA_JOURNAL_CLUSTER_FIRST is off (no '▸' line can exist then).
+    if cluster_first_enabled():
+        lines += [CLUSTER_PREAMBLE, ""]
     for row in inputs[:60]:
         # T-1b: prefer the stored English title (payload.title_en); T-2b: a
         # non-EN row without a stored translation renders an [untranslated:<lang>]
@@ -735,13 +635,19 @@ def _render_chronicle_user_prompt(inputs: list[dict[str, Any]]) -> str:
         title = _row_title(row)
         if not title:
             continue
+        # T2.2: a cluster LEAD carries its group's header; every other row (and
+        # every row at all when LEGBA_JOURNAL_CLUSTER_FIRST is off) renders "".
+        header = cluster_header_line(row)
+        if header:
+            lines.append(header)
         tag = _salience_tag(row.get("salience"))
+        label_tag = _journal_label_tag(row)
         untranslated = _untranslated_tag(row)
         sid = row.get("id")
         if sid:
-            lines.append(f"- {tag}{untranslated}{title[:200]} [[ref:{sid}]]")
+            lines.append(f"- {tag}{label_tag}{untranslated}{title[:200]} [[ref:{sid}]]")
         else:
-            lines.append(f"- {tag}{untranslated}{title[:200]}")
+            lines.append(f"- {tag}{label_tag}{untranslated}{title[:200]}")
     return "\n".join(lines)
 
 
@@ -776,7 +682,7 @@ def _render_lens_user_prompt(
     the convergence guard (the two j7 hardenings). The diary apparatus blocks
     (feed denominators, instruments, apparatus-postscript) are DELIBERATELY absent
     — a faculty has no apparatus, same reasoning as the chronicle."""
-    inputs = _select_journal_slice(inputs)
+    inputs = _labeled_journal_slice(inputs)
     lines: list[str] = []
     if prior_block:
         # The declared prior FIRST — before any reading instruction (§2.3.2).
@@ -836,6 +742,10 @@ def _render_lens_user_prompt(
         "--- recent signal slice ---",
     ]
     rendered_rows = 0
+    # T2.2: the one prompt line the cluster block needs — absent, byte-for-byte,
+    # when LEGBA_JOURNAL_CLUSTER_FIRST is off (no '▸' line can exist then).
+    if cluster_first_enabled():
+        lines += [CLUSTER_PREAMBLE, ""]
     for row in inputs[:60]:
         # Prefer the stored English title; a non-EN row lacking a stored
         # translation gets an [untranslated:<lang>] marker (the attribution hazard
@@ -843,13 +753,19 @@ def _render_lens_user_prompt(
         title = _row_title(row)
         if not title:
             continue
+        # T2.2: a cluster LEAD carries its group's header; every other row (and
+        # every row at all when LEGBA_JOURNAL_CLUSTER_FIRST is off) renders "".
+        header = cluster_header_line(row)
+        if header:
+            lines.append(header)
         tag = _salience_tag(row.get("salience"))
+        label_tag = _journal_label_tag(row)
         untranslated = _untranslated_tag(row)
         sid = row.get("id")
         if sid:
-            lines.append(f"- {tag}{untranslated}{title[:200]} [[ref:{sid}]]")
+            lines.append(f"- {tag}{label_tag}{untranslated}{title[:200]} [[ref:{sid}]]")
         else:
-            lines.append(f"- {tag}{untranslated}{title[:200]}")
+            lines.append(f"- {tag}{label_tag}{untranslated}{title[:200]}")
         rendered_rows += 1
     if rendered_rows == 0:
         # E-1 (2026-07-27 sweep — the lens_capability "(empty lens read)" kill):
@@ -870,7 +786,7 @@ def _render_lens_diff_user_prompt(inputs: list[dict[str, Any]]) -> str:
     and convergence-guard disciplines live in the persona (lens_diff module) and
     the narrate seam. It has NO prior of its own — it reports the shape of the
     argument, it does not adjudicate."""
-    inputs = _select_journal_slice(inputs)
+    inputs = _labeled_journal_slice(inputs)
     lines = [
         "You are the chorus DIFF: this cycle's four faculty lens reads are your "
         "material — pull them in your investigation via get_lens_reads (their "
@@ -906,17 +822,27 @@ def _render_lens_diff_user_prompt(inputs: list[dict[str, Any]]) -> str:
         "",
         "--- recent signal slice (orientation only) ---",
     ]
+    # T2.2: the one prompt line the cluster block needs — absent, byte-for-byte,
+    # when LEGBA_JOURNAL_CLUSTER_FIRST is off (no '▸' line can exist then).
+    if cluster_first_enabled():
+        lines += [CLUSTER_PREAMBLE, ""]
     for row in inputs[:60]:
         title = _row_title(row)
         if not title:
             continue
+        # T2.2: a cluster LEAD carries its group's header; every other row (and
+        # every row at all when LEGBA_JOURNAL_CLUSTER_FIRST is off) renders "".
+        header = cluster_header_line(row)
+        if header:
+            lines.append(header)
         tag = _salience_tag(row.get("salience"))
+        label_tag = _journal_label_tag(row)
         untranslated = _untranslated_tag(row)
         sid = row.get("id")
         if sid:
-            lines.append(f"- {tag}{untranslated}{title[:200]} [[ref:{sid}]]")
+            lines.append(f"- {tag}{label_tag}{untranslated}{title[:200]} [[ref:{sid}]]")
         else:
-            lines.append(f"- {tag}{untranslated}{title[:200]}")
+            lines.append(f"- {tag}{label_tag}{untranslated}{title[:200]}")
     return "\n".join(lines)
 
 
@@ -925,6 +851,7 @@ def _render_user_prompt(
     *,
     tier: str = "entry",
     lens_prior_block: str = "",
+    coverage_roster: str = "",
 ) -> str:
     """Assemble the priming context (the META global slice) into a notebook
     prompt. Kept thin — the agent investigates the rest via GATHER.
@@ -940,14 +867,21 @@ def _render_user_prompt(
     below (feed denominators, instruments, apparatus-postscript) are the
     FIRST-PERSON tiers' contract and must never leak into those tiers. The
     ``lens_prior_block`` is resolved by the caller (run_method, §2.6) from the
-    analyst id and threaded here — NOT through ``options`` (§2.4)."""
+    analyst id and threaded here — NOT through ``options`` (§2.4).
+
+    ``coverage_roster`` (T2.2) is the pre-rendered, NON-CITABLE "Desks today"
+    block. It is threaded the same way and for the same reason: this function
+    stays a PURE function of its arguments, so the roster's one DB read lives at
+    the caller (``_fetch_coverage_roster``) and every render test keeps working
+    without a database. ``""`` — the default, and what a flag-off run always
+    passes — appends nothing."""
     if tier == "chronicle":
         return _render_chronicle_user_prompt(inputs)
     if tier == "lens":
         return _render_lens_user_prompt(inputs, prior_block=lens_prior_block)
     if tier == "lens_diff":
         return _render_lens_diff_user_prompt(inputs)
-    inputs = _select_journal_slice(inputs)
+    inputs = _labeled_journal_slice(inputs)
     # V2 (j6 review): a DETERMINISTIC denominator line computed from the slice
     # itself — the narrator gets a measured fact it cannot misread, and any
     # narrated "only N feeds" claim that contradicts it is a direct, judgeable
@@ -994,6 +928,23 @@ def _render_user_prompt(
         "score, feed-health hours, or Brier) — that is fabricated attribution "
         "and the verify judge will floor the whole entry for it. An honest "
         "[[instrument]] mark always beats a wrong ref.",
+        "",
+        # B1 (T1.2, JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09 §3 P4 / §6): a
+        # DIFFERENT use of the SAME marker — not a self-read this time, but a
+        # SUBSTRATE row the slice below tags '[instrument]' (GDELT's CAMEO
+        # pseudo-titles, an event coder's output, not a report someone wrote).
+        "SUBSTRATE INSTRUMENT ROWS — a slice row tagged '[instrument]' is the "
+        "event coder's output, not a report: it may be COUNTED ('the coder "
+        "saw 5 coercion events across four polities') but never quoted or "
+        "narrated as reporting; if you cite one, mark the sentence "
+        "[[instrument]].",
+        # B2 (T1.4, JOURNAL_CONNECTIVE_AUDIT_PROPOSAL_2026-09-09 §3 P6 / §6): a
+        # scheduled-product row (weather/seismic/hazard feed, a press-release
+        # wire) is a baseline, not a headline — the number moving IS the
+        # story only if it moved FROM something.
+        "ROUTINE PRODUCT ROWS — a slice row tagged '[routine]' is a scheduled "
+        "product; it is a signal of change only when its number departs from "
+        "baseline — say the baseline or don't draw the inference.",
         "",
         # B0-8 (MASTER_PLAN 2026-07-10) — instruments before speculation: j4
         # hypothesized "state information-denial" about a paused feed while
@@ -1100,6 +1051,10 @@ def _render_user_prompt(
         "",
         "--- recent signal slice ---",
     ]
+    # T2.2: the one prompt line the cluster block needs — absent, byte-for-byte,
+    # when LEGBA_JOURNAL_CLUSTER_FIRST is off (no '▸' line can exist then).
+    if cluster_first_enabled():
+        lines += [CLUSTER_PREAMBLE, ""]
     for row in inputs[:60]:
         # T-1b: prefer the stored English title (payload.title_en) so the narrator
         # reads English, not the raw non-Latin surface + a transliterated NER
@@ -1113,13 +1068,26 @@ def _render_user_prompt(
         # either not cite the slice or fabricate refs).
         # T-2b: a non-EN row lacking a stored translation gets an explicit
         # [untranslated:<lang>] marker so the attribution hazard is visible.
+        # T2.2: a cluster LEAD carries its group's header; every other row (and
+        # every row at all when LEGBA_JOURNAL_CLUSTER_FIRST is off) renders "".
+        header = cluster_header_line(row)
+        if header:
+            lines.append(header)
         tag = _salience_tag(row.get("salience"))
+        label_tag = _journal_label_tag(row)
         untranslated = _untranslated_tag(row)
         sid = row.get("id")
         if sid:
-            lines.append(f"- {tag}{untranslated}{title[:200]} [[ref:{sid}]]")
+            lines.append(f"- {tag}{label_tag}{untranslated}{title[:200]} [[ref:{sid}]]")
         else:
-            lines.append(f"- {tag}{untranslated}{title[:200]}")
+            lines.append(f"- {tag}{label_tag}{untranslated}{title[:200]}")
+    # T2.2 (P5, second half): the newest world read's coverage roster, trailing
+    # and CONTEXT-ONLY. The DIARY tier only — the chronicle's "no self"
+    # discipline forbids it from ever mentioning coverage or desks, and the two
+    # VOICES tiers read the tower top rather than the apparatus. Empty string
+    # (flag off, no binding, no roster in the read) appends nothing at all.
+    if coverage_roster:
+        lines.append(coverage_roster)
     return "\n".join(lines)
 
 
@@ -1370,15 +1338,22 @@ async def _field_notes(
     base_prompt: str,
     analyst_id: str | None,
     steps: list[dict[str, Any]],
+    instruction: str | None = None,
 ) -> tuple[str, dict[str, int]]:
     """The §4.3 seam: an in-persona LLM step that rewrites the gathered context
     into rich, cited field notes (dropping raw tool JSON). Returns
     ``(field_notes_text, usage)``. Degrade-not-drop: an LLM error here falls back
     to the gathered context verbatim so NARRATE still has the material.
+
+    ``instruction`` (Program 5) lets a SIBLING KIND on this seam supply its own
+    handoff text instead of the per-tier map lookup — the ``inquiry`` kind reuses
+    this function rather than copying it, and its voice belongs in its own
+    module. ``None`` (every journal tier) keeps the map lookup byte-identical.
     """
-    instruction = _FIELD_NOTES_INSTRUCTION_FOR.get(
-        _entry_kind_for_analyst(analyst_id), _FIELD_NOTES_INSTRUCTION
-    )
+    if instruction is None:
+        instruction = _FIELD_NOTES_INSTRUCTION_FOR.get(
+            _entry_kind_for_analyst(analyst_id), _FIELD_NOTES_INSTRUCTION
+        )
     prompt = base_prompt + instruction
     try:
         # PER-PHASE LLM SPLIT (§4.1): the VOICE seam runs on the narrate handler
@@ -1543,240 +1518,6 @@ _CONSOLIDATION_SHAPE_RETRY_INSTRUCTION = (
 )
 
 
-# ---------------------------------------------------------------------------
-# PROPOSE (§7 Wave 4) — the phase the propose pack never had (W1-C)
-# ---------------------------------------------------------------------------
-# THE DEFECT THIS FIXES (engine-review p5, 2026-08-02): ``journal_propose`` was
-# granted to two analysts, registered active, bound end-to-end by dapr_host +
-# the actor's ``_gather_write_bindings_for_target`` META self-allow, and
-# catalogued in the GATHER prompt since 0875b7d — with **0 invocations EVER**.
-# Live proof at diagnosis (read-only psql): ``action_pack_invocations`` carried
-# only journal_read/substrate_read/escalate_finding; ``governor_events`` had
-# not ONE row for the pack under any decision — so the model never named a
-# propose tool and got blocked, it never named one at all; ``journal_proposals``
-# = 0; no journal trace mentions "propose". The wiring was never the problem.
-#
-# THE CAUSE IS PHASE PLACEMENT, and it cuts both ways:
-#   * Propose was offered ONLY in GATHER — a phase framed "Before you write the
-#     entry you may FIRST query the substrate … Do not write the entry yet". At
-#     GATHER the model has read nothing and formed no judgment, so it has
-#     nothing to propose; we asked before the reasoning happened.
-#   * At NARRATE — the one phase where it HAS reasoned and would know "that
-#     leader fact is stale" — propose is absent from the catalog,
-#     ``_narrate_with_tools`` dispatches ``JOURNAL_READ_TOOLS`` and nothing
-#     else, and propose-shaped JSON is caught by
-#     :func:`_guard_against_tool_call_leak` as a LEAK: hard "prose only" retry,
-#     then :class:`NarrateToolCallLeakError` — a FAILED run. The model was
-#     structurally punished for proposing at the only moment it could.
-#
-# So: a third phase, AFTER the body is final and REFLECT has bound its
-# citations, showing the model its own entry + resolved refs + the pack's
-# guidance, and asking the question no other phase asks — with a cheap no.
-#
-# THE INVARIANT IS UNCHANGED (§7.5): a propose_* call writes ONE ``pending``
-# ``journal_proposals`` row and nothing else. This adds a *moment*, never a
-# permission — every call still goes through ``binding.run_tool`` →
-# ``Agency.run_pack_tool`` → resolve ∩ allow ∩ applicability → governor → the
-# ``action_pack_invocations`` ledger, on the actor's per-run WritebackContext.
-# The journal SUGGESTS; a human CAUSES.
-
-#: Turns the PROPOSE phase may spend. Each is one LLM call that names a propose
-#: tool or declines; a decline (or anything unparsable) ends the phase. Small by
-#: intent — a coda, not a second ReAct loop.
-_PROPOSE_MAX_ROUNDS = 3
-
-#: Hard ceiling on proposals ONE run may queue. The pack governor's 60/hour is
-#: the fleet-wide bound; this is the per-entry one. "Do NOT propose lightly"
-#: (the pack's own rule) needs an enforcer that is not a sentence in a prompt.
-_PROPOSE_MAX_PER_RUN = 2
-
-#: Cap on refs echoed into the propose prompt as the legal warrant vocabulary.
-_PROPOSE_REF_ECHO_CAP = 25
-
-_PROPOSE_DECLINE_INSTRUCTION = (
-    "\n\nIf nothing further warrants a proposal, reply with exactly: "
-    '{"propose": false}'
-)
-
-
-def _propose_phase_prompt(
-    *, body: str, cited_refs: list[UUID], write_fragments: Any,
-) -> str:
-    """Build the PROPOSE turn's user prompt: the entry just written, the pack's
-    operator-authored guidance, the tool schemas, and the legal warrant
-    vocabulary — this entry's OWN resolved refs. The pack rule is "cite only
-    UUIDs your read tools returned"; handing the model exactly those is the
-    anti-fabrication anchor."""
-    lines = [
-        "YOU HAVE JUST WRITTEN THIS ENTRY:",
-        "",
-        body.strip(),
-        "",
-        "Now — and only now, having reasoned it through — consider whether "
-        "anything in it warrants a PROPOSAL. A proposal is a suggestion "
-        "queued for a human to review; it changes NOTHING by itself, and it "
-        "is never a fact write.",
-    ]
-    frags = [str(f).strip() for f in (write_fragments or []) if str(f).strip()]
-    if frags:
-        lines.append("")
-        lines.extend(frags)
-    lines += ["", "Available proposal tools:"] + [
-        "  - " + _JOURNAL_PROPOSE_TOOL_SCHEMAS.get(
-            name, f"{name}(...) — journal propose tool (see persona)."
-        )
-        for name in JOURNAL_PROPOSE_TOOLS
-    ]
-    if cited_refs:
-        lines += ["", (
-            "Refs this entry actually resolved (the ONLY UUIDs you may put in "
-            "cited_substrate_refs — never invent one): "
-            + ", ".join(str(r) for r in cited_refs[:_PROPOSE_REF_ECHO_CAP])
-        )]
-    lines += ["", (
-        "Reply with EITHER a single strict-JSON tool call — "
-        '{"tool": "<name>", "args": {"rationale": "...", "diff": {...}, '
-        '"cited_substrate_refs": ["..."]}} — OR, if nothing warrants one, '
-        'exactly {"propose": false}. Most entries warrant nothing; declining '
-        "is the normal answer and costs you nothing."
-    )]
-    return "\n".join(lines)
-
-
-async def _propose_phase(
-    deps: InlineTargetDeps,
-    *,
-    body: str,
-    cited_refs: list[UUID],
-    analyst_id: str | None,
-    tool_bindings: Mapping[str, Any],
-    write_fragments: Any,
-    steps: list[dict[str, Any]],
-) -> dict[str, int]:
-    """Offer the journal_propose pack at the ONE moment the model has a formed
-    judgment: right after its entry is final and its citations are bound.
-
-    Every admitted call runs through the pack's OWN per-run binding out of
-    ``options['gather_tool_bindings']`` — the object the actor built via
-    ``_gather_write_bindings_for_target`` (META self-allow + WritebackContext),
-    the same one GATHER routes write tools through. No second dispatch path, no
-    hand-built allow: an unbound propose tool is a LOUD no-op, never an
-    ungoverned write. DEGRADE-NOT-DROP throughout — an LLM error, unparsable
-    reply, or blocked/failing tool must never fail a run whose entry is already
-    written. Returns the phase's token usage for the caller to fold.
-    """
-    usage_total = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0}
-    from .inline_target import _extract_json
-
-    messages: list[Mapping[str, Any]] = [
-        {
-            "role": "user",
-            "content": _propose_phase_prompt(
-                body=body, cited_refs=cited_refs, write_fragments=write_fragments
-            ),
-        }
-    ]
-    queued = 0
-    for round_idx in range(_PROPOSE_MAX_ROUNDS):
-        try:
-            content, usage = await _reason_via_llm(
-                deps.llm,
-                user_prompt="",
-                max_tokens=deps.max_tokens,
-                temperature=deps.temperature,
-                system_prompt=deps.system_prompt,
-                messages=messages,
-            )
-        except Exception as exc:  # degrade-not-drop — the entry is already written
-            logger.warning(
-                "journal_assessor.propose.llm_failed analyst_id=%s round=%d err=%s",
-                analyst_id, round_idx + 1, exc,
-            )
-            steps.append({"phase": "propose", "kind": "llm_error", "round": round_idx + 1})
-            break
-        for k in usage_total:
-            usage_total[k] += usage.get(k, 0)
-        parsed = _extract_json(content or "")
-        tool_name = str(parsed.get("tool")) if isinstance(parsed, dict) else ""
-        if tool_name not in JOURNAL_PROPOSE_TOOLS:
-            # The normal, expected ending: nothing warranted a proposal (or the
-            # model said something that is not a proposal, which means the same).
-            steps.append({
-                "phase": "propose",
-                "kind": "declined",
-                "round": round_idx + 1,
-                "queued": queued,
-            })
-            break
-        binding = tool_bindings.get(tool_name)
-        if binding is None:
-            # Granted-and-catalogued but unbound: the pack was shown and cannot
-            # be called. Loud, because it means the host/actor binding legs
-            # disagree with the prompt surface — the exact silent-bypass shape
-            # this whole phase exists to stop being invisible.
-            logger.warning(
-                "journal_assessor.propose.unbound analyst_id=%s tool=%s — the "
-                "propose catalog was shown but no binding was wired for it",
-                analyst_id, tool_name,
-            )
-            steps.append({
-                "phase": "propose", "kind": "unbound", "tool": tool_name,
-                "round": round_idx + 1,
-            })
-            break
-        tool_args = parsed.get("args") or {}
-        if not isinstance(tool_args, Mapping):
-            tool_args = {}
-        admitted = False
-        detail: str = ""
-        try:
-            outcome = await binding.run_tool(tool_name, dict(tool_args))
-            admitted = bool(outcome.admitted)
-            if not admitted:
-                detail = f"blocked: {outcome.block_cause}"
-            elif outcome.tool_result is None or outcome.tool_result.status == "failed":
-                admitted = False
-                detail = (
-                    f"failed: {outcome.tool_result.error}"
-                    if outcome.tool_result is not None
-                    else "failed: tool produced no result"
-                )
-        except Exception as exc:  # degrade-not-drop
-            detail = f"failed: {exc!s}"
-        steps.append({
-            "phase": "propose",
-            "kind": "tool_call",
-            "round": round_idx + 1,
-            "tool": tool_name,
-            "admitted": admitted,
-            **({"detail": detail} if detail else {}),
-        })
-        if admitted:
-            queued += 1
-            logger.info(
-                "journal_assessor.propose.queued analyst_id=%s tool=%s queued=%d "
-                "(pending human review — no live write)",
-                analyst_id, tool_name, queued,
-            )
-        if queued >= _PROPOSE_MAX_PER_RUN:
-            steps.append({"phase": "propose", "kind": "per_run_cap", "queued": queued})
-            break
-        messages = messages + [
-            {"role": "assistant", "content": content or ""},
-            {
-                "role": "tool",
-                "name": tool_name,
-                "content": json.dumps(
-                    {"queued": admitted, "detail": detail or "pending human review"}
-                ),
-            },
-            {"role": "user", "content": _PROPOSE_DECLINE_INSTRUCTION.strip()},
-        ]
-    else:
-        steps.append({"phase": "propose", "kind": "rounds_exhausted", "queued": queued})
-    return usage_total
-
-
 async def _narrate_with_tools(
     deps: InlineTargetDeps,
     *,
@@ -1784,6 +1525,8 @@ async def _narrate_with_tools(
     binding: Any,
     analyst_id: str | None,
     steps: list[dict[str, Any]],
+    instruction: str | None = None,
+    tool_names: tuple[str, ...] | None = None,
 ) -> tuple[str, dict[str, int]]:
     """Run the narrate stage with tools LIVE (§4.4). The agent writes the entry;
     if it emits a tool call instead, we run it (through the SAME governed
@@ -1794,12 +1537,21 @@ async def _narrate_with_tools(
     entry body first clears :func:`_guard_against_tool_call_leak` (task #236)
     — a completion that IS a legitimate, recognized tool call never reaches
     that guard; it is executed instead. Returns ``(entry_body, usage)``.
+
+    ``instruction`` / ``tool_names`` (Program 5) let a SIBLING KIND on this seam
+    supply its own narrate text and its own mid-entry tool surface — the
+    ``inquiry`` kind narrates in its own voice over the substrate_read tools its
+    binding actually owns. ``None`` (every journal tier) keeps the per-tier map
+    lookup and ``JOURNAL_READ_TOOLS`` byte-identical.
     """
     from .inline_target import _extract_json
 
     usage_total = {"prompt_tokens": 0, "completion_tokens": 0, "reasoning_tokens": 0}
-    narrate_instruction = _NARRATE_INSTRUCTION_FOR.get(
-        _entry_kind_for_analyst(analyst_id), _NARRATE_INSTRUCTION
+    live_tools = JOURNAL_READ_TOOLS if tool_names is None else tool_names
+    narrate_instruction = instruction if instruction is not None else (
+        _NARRATE_INSTRUCTION_FOR.get(
+            _entry_kind_for_analyst(analyst_id), _NARRATE_INSTRUCTION
+        )
     )
     messages: list[Mapping[str, Any]] = [
         {"role": "user", "content": field_notes + narrate_instruction}
@@ -1831,7 +1583,7 @@ async def _narrate_with_tools(
         tool_name = str(parsed.get("tool")) if isinstance(parsed, dict) else ""
         if (
             binding is not None
-            and tool_name in JOURNAL_READ_TOOLS
+            and tool_name in live_tools
             and round_idx < _NARRATE_MAX_TOOL_ROUNDS - 1
         ):
             tool_args = parsed.get("args") or {}
@@ -2213,19 +1965,25 @@ def _lens_diff_roster_from_reads(reads: list[dict[str, Any]]) -> dict[str, Any]:
     ``analyst_ids_seen`` (of the 4 v1 faculties) + ``analyst_ids_missing`` so
     NARRATE can be honest about an absent faculty rather than silently thinning
     the matrix. ``topics`` is left EMPTY — the LLM fills the topic alignment into
-    the prose body; v1 does not cluster deterministically."""
+    the prose body; v1 does not cluster deterministically.
+
+    The roster is ``LENS_DIFF_ROSTER_IDS`` — the four FUNCTION-typed faculties —
+    NOT every lens id on the kind. The 2026-09-21 stance-typed leans ride the
+    same kind but are outside this matrix by design: the diff's persona declares
+    a four-prior aperture verbatim, so a lean row read here would be counted
+    against a contract that never mentioned it."""
     latest: dict[str, dict[str, Any]] = {}
     for r in reads or []:
         if not isinstance(r, Mapping):
             continue
         aid = r.get("analyst_id")
-        if not isinstance(aid, str) or aid not in LENS_ANALYST_IDS:
+        if not isinstance(aid, str) or aid not in LENS_DIFF_ROSTER_IDS:
             continue
         prev = latest.get(aid)
         if prev is None or _slice_recency_key(r) > _slice_recency_key(prev):
             latest[aid] = dict(r)
-    seen = [aid for aid in LENS_ANALYST_IDS if aid in latest]
-    missing = [aid for aid in LENS_ANALYST_IDS if aid not in latest]
+    seen = [aid for aid in LENS_DIFF_ROSTER_IDS if aid in latest]
+    missing = [aid for aid in LENS_DIFF_ROSTER_IDS if aid not in latest]
     return {
         "topics": [],  # NARRATE aligns topics into the prose body (§3.3)
         "analyst_ids_seen": seen,
@@ -2379,23 +2137,23 @@ def _apparatus_lead_flag(body: str) -> list[str]:
 _JOURNAL_READ_TOOL_SCHEMAS: dict[str, str] = {
     "list_findings": (
         "list_findings([target_id], [analyst_id], [severity], [since_hours], "
-        "[include_superseded], [limit]) — the platform's own prior LIVE "
+        "[include_superseded], [believed_as_of], [limit]) — the platform's own prior LIVE "
         "findings/assessments; cite the output_id."
     ),
     "query_facts": (
-        "query_facts([subject], [predicate], [value], [limit]) — the current "
-        "temporal fact store."
+        "query_facts([subject], [predicate], [value], [limit], [as_of]) — the current "
+        "temporal fact store; as_of reads the facts that held on that date."
     ),
     "query_nexuses": (
-        "query_nexuses([subject], [object], [rel_type], [polarity], [limit]) "
-        "— open signed/typed relationships."
+        "query_nexuses([subject], [object], [rel_type], [polarity], [limit], "
+        "[as_of]) — open signed/typed relationships."
     ),
     "list_situations": (
-        "list_situations([status], [target_id], [since_hours], [limit]) — "
-        "ongoing first-class situation frames."
+        "list_situations([status], [target_id], [since_hours], [as_of], "
+        "[limit]) — ongoing first-class situation frames."
     ),
     "get_timeline": (
-        "get_timeline(subject, [limit]) — time-ordered facts ∪ signals for "
+        "get_timeline(subject, [limit], [since], [until]) — time-ordered facts ∪ signals for "
         "one subject."
     ),
     # B-8: the producer list is DERIVED, never typed here. On 2026-08-03 this
@@ -2458,26 +2216,6 @@ _JOURNAL_READ_TOOL_SCHEMAS: dict[str, str] = {
     ),
 }
 
-_JOURNAL_PROPOSE_TOOL_SCHEMAS: dict[str, str] = {
-    "propose_correction": (
-        "propose_correction(rationale, diff, [cited_substrate_refs]) — "
-        "propose a correction (a stale fact to supersede / an entity merge / "
-        "a situation fix). Queues ONE journal_proposals row; NEVER a live "
-        "write."
-    ),
-    "propose_change": (
-        "propose_change(rationale, diff, [cited_substrate_refs]) — propose a "
-        "descriptor/config change. Queues ONE journal_proposals row; NEVER a "
-        "live write."
-    ),
-    "propose_self_revision": (
-        "propose_self_revision(rationale, diff, [cited_substrate_refs]) — "
-        "propose a diff to YOUR OWN system prompt (the highest-scrutiny "
-        "class — protected sections auto-reject at accept time). Queues ONE "
-        "journal_proposals row; NEVER a direct self-edit."
-    ),
-}
-
 
 def _journal_gather_catalog(*, granted_propose: bool) -> str:
     """Build the journal-family GATHER tool catalog FROM the granted pack
@@ -2512,6 +2250,7 @@ def _journal_gather_catalog(*, granted_propose: bool) -> str:
                     name, f"{name}(...) — journal propose tool (see persona)."
                 )
             )
+        lines += ["", _PROPOSE_SHAPE_DISCIPLINE]
     lines.append(
         "\nProtocol:\n"
         '  - To query, reply with strict JSON: {"tool": "<name>", "args": {...}}\n'
@@ -2520,6 +2259,35 @@ def _journal_gather_catalog(*, granted_propose: bool) -> str:
         "gathering."
     )
     return "\n".join(lines) + "\n"
+
+
+async def _fetch_coverage_roster(binding: Any) -> str:
+    """The newest world read's coverage roster as a NON-CITABLE prompt block.
+
+    ``list_findings`` and NOT ``get_assessments``: both are in the journal's own
+    read pack and both return the world composition, but ``get_assessments``
+    truncates ``body`` at 2,000 characters while the ``## Coverage`` section of a
+    live world read begins near character 2,900 — the roster is simply not in
+    that payload. ``list_findings`` returns the body whole.
+
+    Fail-soft in EVERY direction (gate block, tool failure, malformed payload, a
+    read with no roster section): returns ``""`` and the window renders exactly
+    as it would have. A context block is never worth failing a journal run for,
+    and the roster is context by construction — it is rendered with no
+    ``[[ref:]]`` at all, so nothing downstream can cite it.
+    """
+    try:
+        outcome = await binding.run_tool(
+            "list_findings", {"analyst_id": "world_assessor", "limit": 1}
+        )
+        if not outcome.admitted or outcome.tool_result is None:
+            return ""
+        rows = (outcome.tool_result.output or {}).get("rows") or []
+        body = rows[0].get("body") if rows else ""
+        return coverage_roster_block(body if isinstance(body, str) else "")
+    except Exception as exc:  # noqa: BLE001 — context never fails the run
+        logger.warning("journal_assessor.coverage_roster.failed err=%s", exc)
+        return ""
 
 
 async def run_method(
@@ -2581,9 +2349,23 @@ async def run_method(
     # the analyst id via the persona module — NOT threaded through options ("" for
     # every non-faculty tier, incl. the diff pass which has no prior of its own).
     lens_prior_block = _lens_prior_block_for(analyst_id)
+    # T2.2 (P5): the governed READ behind the context-only roster. Resolved here
+    # (the binding is the same object GATHER routes through, hoisted from its
+    # old assignment below) because the render is pure and must stay so. Costs
+    # one governed ``list_findings`` call, and only when the flag is on AND this
+    # is the diary tier AND a binding exists — otherwise "" and no call at all.
+    active_binding = options.get("agency_binding") or deps.agency_binding
+    coverage_roster = ""
+    if cluster_first_enabled() and entry_kind == "entry" and active_binding:
+        coverage_roster = await _fetch_coverage_roster(active_binding)
+        if coverage_roster:
+            steps.append({"phase": "plan", "kind": "coverage_roster"})
     user_prompt = (
         _render_user_prompt(
-            inputs, tier=entry_kind, lens_prior_block=lens_prior_block
+            inputs,
+            tier=entry_kind,
+            lens_prior_block=lens_prior_block,
+            coverage_roster=coverage_roster,
         )
         + memory_orientation
     )
@@ -2620,7 +2402,8 @@ async def run_method(
             steps.append({"phase": "ground", "kind": "inject_preamble"})
 
     # --- GATHER (deep ReAct over the journal_read pack — §5 the whole animal) ---
-    active_binding = options.get("agency_binding") or deps.agency_binding
+    # ``active_binding`` was resolved above (T2.2 hoist) — same expression, same
+    # object, one assignment.
     # The journal's OWN instrument tool names are NOT in inline_target's
     # _GATHER_READ_TOOLS, so we pass them via ``extra_read_tools`` — they are then
     # recognized AND routed through the journal_read binding (§4.9).
@@ -2807,6 +2590,28 @@ async def run_method(
             "rewritten": _v4_rewritten,
         })
 
+    # --- B5 (ref-repair) — a hand-copied [[ref:<uuid>]] typo, BEFORE reflect ---
+    # The writer copies UUIDs from its gathered window by hand and
+    # occasionally transcribes one hex digit wrong (the dde520d3 police-
+    # civilian span's ref, one digit off the real GDELT row — the T1.3
+    # reader lane's live finding). Repair against the SAME window rows the
+    # narrator was actually shown this run (_select_journal_slice's ids) —
+    # a UNIQUE Hamming-distance<=2 match; ambiguous or too-far is left
+    # untouched (flag-never-strip: the ref is never dropped, the reader
+    # renders an unresolved ref honestly rather than this guessing wrong).
+    # T2.2: ``journal_window`` — the SAME selector the render used this run (the
+    # cluster block when the flag is on, ``_select_journal_slice`` when it is
+    # not). "The window rows the narrator was actually shown" has to keep
+    # meaning that, or the repair would score against a window nobody saw.
+    _window_ref_ids = {
+        str(_r["id"]) for _r in journal_window(inputs) if _r.get("id") is not None
+    }
+    body, _ref_repairs = _repair_ref_markers(body, gathered_ref_ids=_window_ref_ids)
+    if _ref_repairs:
+        steps.append({
+            "phase": "reflect", "kind": "ref_repaired", "repairs": _ref_repairs,
+        })
+
     # --- REFLECT (§10) — permissive per-claim citation flag (flag, don't strip) ---
     claims, cited_refs, reflect_flags = _reflect_claims(body)
     steps.append({
@@ -2860,6 +2665,31 @@ async def run_method(
             honesty_flags.append(_flag)
             steps.append({"phase": "honesty", "kind": "apparatus_lead"})
 
+    # B1 (T1.2) / B2 (T1.4) — DETERMINISTIC provenance honesty flags. Built
+    # from the SAME labelled slice the render prompt showed this run
+    # (_labeled_journal_slice is idempotent — it mutates the same row dicts
+    # the render call already touched, so this never re-derives a different
+    # labelling than what the narrator actually saw).
+    _ref_labels = {
+        str(_r["id"]): _r["journal_label"]
+        for _r in _labeled_journal_slice(inputs)
+        if _r.get("id") is not None and _r.get("journal_label")
+    }
+    for _flag in _flag_instrument_as_report(claims, _ref_labels):
+        if _flag not in honesty_flags:
+            honesty_flags.append(_flag)
+            steps.append({"phase": "honesty", "kind": "instrument_as_report"})
+    for _flag in _flag_routine_as_signal(claims, _ref_labels):
+        if _flag not in honesty_flags:
+            honesty_flags.append(_flag)
+            steps.append({"phase": "honesty", "kind": "routine_as_signal"})
+    # B5 — a repaired ref is a HONEST correction, not a silent one: the flag
+    # tells a reader/auditor the citation they're looking at was hand-fixed.
+    if _ref_repairs:
+        if REF_REPAIRED_FLAG not in honesty_flags:
+            honesty_flags.append(REF_REPAIRED_FLAG)
+            steps.append({"phase": "honesty", "kind": "ref_repaired"})
+
     # --- VOICES LV-1 data column (§2.9 / §3.3) — per-tier metadata -----------
     # lens → {"lens_id": <analyst_id>}; lens_diff → {"matrix": {roster}} computed
     # deterministically from get_lens_reads; every other tier → {} (unchanged).
@@ -2873,6 +2703,11 @@ async def run_method(
         row_data = {"matrix": await _compute_lens_diff_matrix(
             active_binding, steps=steps
         )}
+    # B5 — the repair pairs ride the SAME free-form data column every other
+    # per-row metadata uses (VOICES' lens_id/matrix above); additive on top
+    # of whatever the tier already set, never clobbers it.
+    if _ref_repairs:
+        row_data = {**row_data, "ref_repairs": _ref_repairs}
 
     title = _derive_title(
         body,
@@ -2913,17 +2748,18 @@ async def run_method(
     steps.append({"phase": "persist", "kind": "envelope", "derived_from": 0})
 
     # KW-1 forward-consumption index (migration 0106): the journal's
-    # consumption point is its RENDERED slice — ``_select_journal_slice`` is
+    # consumption point is its RENDERED slice — ``journal_window`` is
     # what every tier's renderer actually put in front of the narrator (a
-    # deterministic pure function of ``inputs``, so re-applying it here yields
-    # exactly the set the render used). Stamped as ``consumed_edges``; the
+    # deterministic pure function of ``inputs`` and the T2.2 flag, so re-applying
+    # it here yields exactly the set the render used). Stamped as
+    # ``consumed_edges``; the
     # runtime materializes them into ``output_consumption`` alongside the
     # journal row write (context='journal_slice'), best-effort. This is a
     # SIDECAR index, deliberately NOT ``derived_from`` — the journal stays the
     # off-chain node (§3.5); the forward index is how "this entry read row F"
     # survives without putting the journal on the lineage chain.
     consumed_edges: list[tuple[UUID, str]] = []
-    for _row in _select_journal_slice(inputs):
+    for _row in journal_window(inputs):
         _rid = _row.get("id")
         if _rid is None:
             continue
@@ -2956,8 +2792,11 @@ __all__ = [
     "CONSOLIDATOR_PROMPT_MODULE_PATH",
     "CHRONICLE_ANALYST_ID",
     "CHRONICLE_PROMPT_MODULE_PATH",
-    # VOICES LV-1 — the faculty-lens tier.
+    # VOICES LV-1 — the faculty-lens tier; VOICES LEANS — the stance-typed six.
     "LENS_ANALYST_IDS",
+    "LENS_FACULTY_ANALYST_IDS",
+    "LENS_LEAN_ANALYST_IDS",
+    "LENS_DIFF_ROSTER_IDS",
     "LENS_PROMPT_MODULE_PATHS",
     "LENS_DIFF_ANALYST_ID",
     "LENS_DIFF_PROMPT_MODULE_PATH",

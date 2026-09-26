@@ -25,6 +25,11 @@ export type PanelKind =
   | 'target.graph'
   | 'target.timeline'
   | 'target.claims'
+  // P-A — the desk brief READ AS A PAGE. `POST /v3/export` has composed a desk
+  // brief since 7b-iii and the print document has laid it out since k1; both
+  // hand the reader a FILE. This is the same composed document as a surface,
+  // organised by the desk's bounded units.
+  | 'target.desk_brief_page'
   // Per-analyst (A1–A5)
   | 'analyst.runs'
   | 'analyst.outputs'
@@ -66,6 +71,12 @@ export type PanelKind =
   // boot-seeded; it stays registered + hidden (registry.ts HIDDEN_KINDS) so a
   // saved layout holding it keeps rendering, and ⌘K can still open it.
   | 'system.wall_movers'
+  // The Report/Journal NAVIGATOR (WORKSTATION_V2_FLOW_DESIGN §4) — the landing's
+  // left rail. It lists the day's PRODUCTS (world read + Assessment, regional
+  // rollups, country desks, thematic lanes, journal), not panels; clicking a row
+  // sets the global SCOPE, which every following surface subscribes to. No new
+  // endpoint: every section is a `/findings?analyst_id=…` the reader already made.
+  | 'system.navigator'
   // Entity knowledge-graph (UI-3 — source-first analogue of v2's entity KG)
   | 'system.entities'
   // K-G4 — the graph WALK: anchored ego expansion over the reified
@@ -124,6 +135,20 @@ export type PanelKind =
   // The three eval boards that had live routes and no reader:
   // `/v3/eval/desk_baselines`, `/band_trajectory`, `/analyst_runtime`.
   | 'system.eval_boards'
+  // THE DIVERGENCE MAP (7b-v) — `/v3/layers/divergence`. Program 6 L2's reader
+  // surface: the six source layers per country with their aperture
+  // declaration, and the three layer-to-layer gaps with the z against each
+  // pair's own rolling baseline. The one checking surface the next-arc capture
+  // named that had no reader at all.
+  | 'system.layer_divergence'
+  // CROSS-FRAMING (wave P lane B) — one claim against the units that touch it.
+  // The FIRST kind outside the five existing families, and deliberately so: it
+  // is scoped to a CLAIM rather than to a target, an analyst or the system, so
+  // filing it under `system.` would have described a reading about the world as
+  // a piece of plumbing. Its five sections ride five routes the UI already
+  // calls — `/findings`, `/v3/contentions`, `/v3/absence`,
+  // `/v3/layers/divergence`, `/journal?kind=lens` — and it adds none.
+  | 'analysis.cross_framing'
   // THE READ SCOREBOARD (D2e) — `/read-events/rollup`. The only panel that
   // measures the OPERATOR rather than the engine: reads today / this week and
   // the morning-read day count the 90-day oracle wager is graded on.
@@ -132,6 +157,9 @@ export type PanelKind =
   //   (v4.case Casework Board DELETED in S7-T2 — shelved, no pin board reachable)
   | 'v4.map'
   | 'v4.assessment'
+  // The composition-demotion reading surface (D-4): the quoted record, its
+  // evidence map, its published selection and the fenced Assessment channel.
+  | 'v4.morning_read'
   // Mission-control default-layout surfaces (S7-T2): the KPI glance strip and
   // the global banded Timeline lanes — self-fetching singletons.
   | 'v4.kpi'

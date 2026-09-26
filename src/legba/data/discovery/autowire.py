@@ -138,11 +138,28 @@ async def auto_wire_discovered_source(
 
     # Import the W2 matcher lazily (runtime package; avoids a data→runtime
     # import at module load).
-    from ...runtime.subscription.sourceref import resolve_source_refs
+    from ...runtime.subscription.sourceref import _load_source_heads, resolve_source_refs
     from ..schemas.source import SourceRef
 
     targets = await _load_targets_with_selectors(conn)
     wired: list[str] = []
+    if not targets:
+        return wired
+
+    # Fetch the source-head set ONCE for the whole sweep. resolve_source_refs
+    # is written as a per-target primitive (its other caller,
+    # SubscriptionEngine.register_target, resolves one target at a time) and
+    # re-fetches + re-parses every head source_descriptors row on every call.
+    # Called once per target here that is an O(targets * sources) cost —
+    # measured at ~3.5 minutes end-to-end against the shared pivot test DB's
+    # accumulated volume (1826 selector-bearing targets x 2257 head sources,
+    # 2026-09-24), long enough to trip an external timeout mid-sweep and have
+    # the exception swallowed by the outer try/except in
+    # source_materializer.py, silently returning auto_wired_targets=[] (the
+    # TestSourceDiscoveryWithAutoWire order-dependent failure). The sweep is
+    # read-only over source_descriptors — no writer in this loop mutates it —
+    # so a single snapshot for the whole pass is equivalent, not just faster.
+    preloaded_heads = await _load_source_heads(_SingleSourcePool(conn))
 
     for tgt in targets:
         target_id = tgt["descriptor_id"]
@@ -171,6 +188,7 @@ async def auto_wire_discovered_source(
             target_id=target_id,
             target_tenant=target_tenant,
             source_refs=selector_refs,
+            preloaded_heads=preloaded_heads,
         )
         if not any(b.source_id == source_id and b.via_selector for b in bindings):
             continue

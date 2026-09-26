@@ -225,7 +225,7 @@ async def test_region_read_slice_resolves_members_and_reads_head_set():
     assert sp[2] == _MENA_MEMBERS
 
     # (3) verify-floor gate + head-fold + meta-inclusive (country reads are meta).
-    assert "JOIN LATERAL" in sq
+    assert "JOIN v ON v.fid = f.id::text" in sq   # H17 fold, INNER
     assert "Faithfulness verify%" in sq
     assert "f.superseded_by IS NULL" in sq
     assert "DISTINCT ON (f.analyst_id, f.target_id)" in sq

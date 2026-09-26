@@ -24,6 +24,7 @@ scope:
   languages: [en]
   tags: [news, state_media, china, asia, wave_a]
   source_class: state_media
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
 
 acquisition: poll
 

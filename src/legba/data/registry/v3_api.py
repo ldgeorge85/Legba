@@ -35,6 +35,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from .. import correctness_axis
+from ..provenance import external_truth as _external_truth
 from ..schemas import AnalystDescriptor
 from . import source_freshness
 from .api import RegistryAPIDeps, require_bearer
@@ -232,6 +233,13 @@ class UnitCorrectnessBoard(BaseModel):
     scored_at: str | None = None
     labeling: dict[str, Any] = Field(default_factory=dict)
     honesty_note: str
+    # W-6 — the STANDING external-truth block (design §3.3). Additive, and on
+    # THIS route rather than its own because /eval/correctness is the only
+    # surface in the tree that already puts a judge-independent number beside
+    # faithfulness under a non-pooling contract. The model and every line of its
+    # arithmetic live in ``provenance.external_truth``; the route only reads and
+    # attaches, so the strata contract is testable without FastAPI.
+    external_truth: _external_truth.ExternalTruthBoard | None = None
 
 
 class CalibrationScoreboard(BaseModel):
@@ -317,6 +325,12 @@ class DeskBaselineRow(BaseModel):
     spillover_current: float
     features: dict[str, Any] = Field(default_factory=dict)
     computed_at: str | None = None
+    # H12/K3 — the instrument revision and the SCALE the counts above are read
+    # on (``desk_baseline.METHOD_VERSION`` / ``SCALE_VERSION``, migration 0219),
+    # projected verbatim. ``None`` on a row written before the stamps existed —
+    # the panel renders that as "unstamped", never as a version.
+    method_version: str | None = None
+    scale_version: str | None = None
 
 
 class DeskBaselineBoard(BaseModel):
@@ -381,6 +395,10 @@ class CountryScorecard(BaseModel):
     disagreements: list[ScorecardDisagreement] = Field(default_factory=list)
     banding_semantics: str | None = None
     damping_semantics: str | None = None
+    # H12 — the banding instrument revision the card was computed under
+    # (``data.method_version``), projected verbatim; ``None`` on a card written
+    # before the stamp existed.
+    method_version: str | None = None
 
 
 class ConsumerLagRow(BaseModel):
@@ -1854,6 +1872,11 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                 ))
             except Exception:  # noqa: BLE001
                 weeks = []
+            # W-6: three aggregates over ``external_grades`` (mig 0190, written
+            # by the standing auditor's own train). The accessor is honest-null
+            # by construction — a table that does not exist yet is "not measured
+            # yet", not a 500 — so this route is correct before the ledger lands.
+            truth = await _external_truth.read_external_truth(conn, days=7)
 
         by_unit, fleet = correctness_axis.score_by_unit(op_rows)
 
@@ -1915,6 +1938,7 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
             fleet=_row("__fleet__", fleet) if op_rows else None,
             units=rows,
             scored_at=scored_at,
+            external_truth=_external_truth.compose_board(truth),
             labeling={
                 "weeks": [
                     {
@@ -1979,7 +2003,7 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
             "       center_median, robust_sigma, band_low, band_high, current, "
             "       deviation, deviation_sigma, min_current_floor, sample_days, "
             "       active_days, insufficient_history, spillover_current, "
-            "       features, computed_at "
+            "       features, computed_at, method_version, scale_version "
             "  FROM public.desk_baselines "
             f"  {where} "
             "ORDER BY (deviation <> 'within') DESC, "
@@ -2002,6 +2026,12 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                 except (ValueError, TypeError):
                     return None
             return raw
+
+        def _opt_str(raw: Any) -> str | None:
+            """A version stamp, verbatim, or None. An empty string is absence
+            too — the panel must render "unstamped", never a blank chip that
+            reads as a version nobody can name."""
+            return str(raw) if raw else None
 
         out: list[DeskBaselineRow] = []
         counts = {"total": 0, "above": 0, "below": 0, "insufficient_history": 0}
@@ -2048,6 +2078,13 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                             str(ca) if ca is not None else None
                         )
                     ),
+                    # H12/K3 — verbatim or None; never defaulted to a version.
+                    # ``.get`` rather than ``[]`` for the same reason
+                    # ``forecasts_due`` uses it on ``resolution_test``: a row
+                    # read through a pre-0219 connection has no such column,
+                    # and one missing stamp must not 500 the whole board.
+                    method_version=_opt_str(r.get("method_version")),
+                    scale_version=_opt_str(r.get("scale_version")),
                 )
             )
         return DeskBaselineBoard(
@@ -2138,6 +2175,9 @@ def build_v3_router(deps: RegistryAPIDeps) -> APIRouter:
                     # the stamp existed (no re-deriving, no guessed value).
                     banding_semantics=bands.get("banding_semantics"),
                     damping_semantics=bands.get("damping_semantics"),
+                    # H12 — the row-level instrument stamp (a sibling of
+                    # ``bands``, not inside it): ``data.data.method_version``.
+                    method_version=(data.get("data") or {}).get("method_version"),
                 )
             )
 

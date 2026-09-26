@@ -154,6 +154,25 @@ class ToolContext:
     #: analyst, so a run with several empty searches costs one upstream query.
     #: Injected only by tests and by a caller that needs an isolated budget.
     search_liveness: Any | None = None
+    #: R-C — the rungs BELOW rung 0 of the search provider ladder, as an ordered
+    #: list of ``(handler, SearchRoute)`` pairs resolved from the ``web_search``
+    #: ToolSpec's optional ``config.fallback_providers``. ``None`` / empty (the
+    #: shipped state) means there is NO ladder: ``web_search`` runs exactly the
+    #: single-provider path it always did, byte-identically. A rung whose
+    #: component could not be built binds ``(None, route)`` so the tool can say
+    #: WHICH declared rung was unavailable instead of silently having fewer.
+    search_fallbacks: list[Any] | None = None
+    #: R-C — a :class:`~.search_cost.SearchCostLedger` reading the day's
+    #: ``action_pack_invocations`` spend. Required before a METERED rung
+    #: (``config.cost_usd_per_query`` > 0) may issue a query; ``None`` means a
+    #: paid rung is REFUSED rather than billed blind. Irrelevant to every free
+    #: rung, which is why the shipped searxng-only path never touches it.
+    search_cost_ledger: Any | None = None
+    #: Budget account the paid-rung spend is read against — the same account
+    #: the governor bills, so the pre-spend check and the post-call ledger row
+    #: close over one number. Defaults to the pack's own budget account when
+    #: unset (see ``web_tools``).
+    search_budget_account: str = ""
 
 
 ToolHandler = Callable[[ToolCall, ActionPack, ToolContext], Awaitable[ToolResult]]
@@ -582,8 +601,10 @@ def default_tool_registry() -> ToolRegistry:
     # Local import — substrate_read / web_tools / write_tools import
     # ToolResult/ToolContext from this module, so a module-level import here
     # would be a cycle.
+    from .inquiry_state import register_inquiry_state_tools
     from .journal_propose import register_journal_propose_tools
     from .journal_read import register_journal_read_tools
+    from .research_tools import register_research_tools
     from .substrate_read import register_substrate_read_tools
     from .web_tools import register_web_access_tools
     from .write_tools import register_write_tools
@@ -603,8 +624,18 @@ def default_tool_registry() -> ToolRegistry:
     # dispatch resolves the name; it RUNS only when the journal grants the
     # journal_propose pack AND a per-run ctx.writeback is wired.
     register_journal_propose_tools(r)
+    # Program 5 lane 1 — the inquiry kind's own continuity ledger (§3): three
+    # tools, each scoped to the calling descriptor (inquiry_state.py:scope_fence).
+    # Registered here so the agency dispatch resolves the names; they RUN only
+    # when a granted+allowed inquiry descriptor's per-run ctx.writeback is wired.
+    register_inquiry_state_tools(r)
     register_web_access_tools(r)
     register_write_tools(r)
+    # R-A — the `research` pack's single tool. It is BOTH a web-egress tool and
+    # a substrate WRITE tool (it lands one signals row per kept hit), so it
+    # needs a bound ctx.search AND a per-run ctx.writeback; with either missing
+    # it returns a loud `failed` naming the gap rather than a silent no-op.
+    register_research_tools(r)
     return r
 
 

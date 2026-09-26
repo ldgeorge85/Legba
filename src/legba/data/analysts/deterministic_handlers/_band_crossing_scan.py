@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """``band_crossing`` trigger-class internals (P1-3 trigger 1) — the FIRST of
-:mod:`.alert_trigger_scan`'s eight trigger classes, extracted (module-size
+:mod:`.alert_trigger_scan`'s nine trigger classes, extracted (module-size
 gate) the same way triggers 5-8 already are (:mod:`._watchlist_scan`,
 :mod:`.geo_convergence_scan`, :mod:`._production_deficit_scan`,
 :mod:`._situation_escalation_scan`).

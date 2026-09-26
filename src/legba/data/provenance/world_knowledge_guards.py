@@ -47,6 +47,7 @@ import unicodedata
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from .origin import origin_class_clause
 from .absence_slice import (
     _COUNTRY_TOKENS,
     _TARGET_SLUG_TO_COUNTRY,
@@ -59,6 +60,12 @@ if TYPE_CHECKING:  # pragma: no cover — annotations only
     from .verify import UnsupportedSpan
 
 logger = logging.getLogger(__name__)
+
+#: P7/7g-1 — the origin-class leg on the officeholder probe (SEAMS #57
+#: sweep). The guard asks "who holds this office NOW"; an imported historical
+#: officeholder row would make every correct current claim read as a
+#: contradiction of the past.
+_LIVE_FACTS = origin_class_clause("")
 
 
 def _verify():
@@ -347,11 +354,12 @@ def _person_name_tokens(name: str) -> set[str]:
     return out
 
 
-_CURRENT_OFFICEHOLDER_SQL = """
+_CURRENT_OFFICEHOLDER_SQL = f"""
     SELECT lower(predicate) AS predicate, subject, value
       FROM facts
      WHERE superseded_by IS NULL
        AND valid_until IS NULL
+       AND {_LIVE_FACTS}
        AND (
              (lower(subject) = ANY($1::text[])
               AND lower(predicate) = ANY($2::text[]))

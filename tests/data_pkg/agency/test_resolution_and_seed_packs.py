@@ -41,7 +41,14 @@ _SEED_PACKS = [
       # Palette expansion — finished-intelligence reads (consult + GATHER) +
       # navigation readers (consult-only, but still pack-governed).
       "list_findings", "list_situations", "query_predictions",
-      "list_targets", "list_sources"]),
+      # V3/P3 — the decision-time belief register.
+      "belief_as_of",
+      # V3/P6 — the bounded-occurrence readers.
+      "query_events", "inspect_event",
+      "list_targets", "list_sources",
+      # 7g-2 — the COLLECTION series reads. History, not now: the only tools
+      # in this pack that read `observations`.
+      "series_history", "series_compare"]),
     ("action_pack_escalate.yaml", "escalate_finding", ["escalate"]),
     # S6: external evidence + operator-gated write-back packs.
     ("action_pack_web_access.yaml", "web_access", ["web_fetch", "web_search"]),

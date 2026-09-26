@@ -326,6 +326,40 @@ def test_a_fleet_of_draft_promotions_never_pages():
     assert len(gauge.evidence["expected_promotions"]) == 20
 
 
+def test_tree_draft_or_active_over_live_retired_is_diverged_not_hazard_or_promotion():
+    """The 2026-09-06 reconciliation case: a `retired` LIVE head is not in
+    ``_LIVE_RUNNING``, so it can trip neither the draft->live promotion clause
+    (that needs live running) nor the tree-retired hazard clause (that needs
+    the TREE to say retired). It falls through to ordinary divergence —
+    visible, not paging. Measured live 2026-08-05..09-06: nine descriptors
+    (country_assessor, country_critic, country_predictor,
+    geo_convergence_scan, hypothesis_lifecycle, meta_synthesizer,
+    cross_correlator, fact_decay, source.ucdp.ged) were tree draft/active
+    while the live head had since been retired — the tree's word for a
+    descriptor an operator had already killed was still "not dead yet"."""
+    manifest = {
+        "analyst:tree_draft_live_retired": {"state": "draft"},
+        "analyst:tree_active_live_retired": {"state": "active"},
+    }
+    gauge = descriptor_state_gauge(
+        [
+            _srow("analyst", "tree_draft_live_retired", "retired"),
+            _srow("analyst", "tree_active_live_retired", "retired"),
+        ],
+        manifest,
+        now=NOW,
+        cfg=CFG,
+    )
+    assert gauge.evidence["deactivation_hazard"] == []
+    assert gauge.evidence["expected_promotions"] == []
+    assert sorted(gauge.evidence["diverged"]) == [
+        "analyst:tree_active_live_retired tree=active live=retired",
+        "analyst:tree_draft_live_retired tree=draft live=retired",
+    ]
+    assert gauge.state == "ok"
+    assert gauge.pages is False
+
+
 def test_family_scoping_prevents_a_name_collision():
     """A source and an analyst may share a bare id; the manifest is keyed
     ``<family>:<id>`` so one can never be graded against the other's state."""

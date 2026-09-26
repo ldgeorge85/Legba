@@ -1,0 +1,58 @@
+# Graph Projector analyst descriptor — DATA MODEL V3 / P4b.
+#
+# A `deterministic`-kind META analyst that whole-rebuilds `graph_arcs` — the
+# disposable, plane-tagged, cross-layer graph projection — from every source
+# table (spec §4.1), then swaps it in atomically and stamps graph_arcs_meta
+# (projected_at / arc_count / source_counts / build_seconds — the E4 trigger
+# reading and the S-1 parity surface).
+#
+# There is NO incremental path and there never will be: a structure only ever
+# built by SELECT can be stale, never wrong.
+#
+# state: draft — the handler still no-ops while LEGBA_GRAPH_PROJECTION is off.
+# Registration/activation is a separate operator step, deliberately not part
+# of the P4b commit.
+
+identity:
+  id: graph_projector
+  name: Graph Projector
+  schema_uri: legba/analyst/1.0.0
+  version: "0000000000000000"        # registry stamps the content hash
+  kind: deterministic
+  type_signature:
+    input_type: legba.runtime.SignalList
+    output_type: legba.runtime.Finding
+    deps_type: legba.runtime.deps.StandardDeps
+  state: draft
+  owner: data_model_v3_p4b
+
+subscription:
+  # META sweep: the handler reads the whole substrate directly through
+  # deps.pg_pool and does not consume a per-target materialized slice.
+  other_analysts: []
+  substrate:
+    direct_queries: true
+
+mapping:
+  fields: []
+  schema_drift_policy: warn_and_continue
+
+method:
+  kind: deterministic
+  impl: legba.data.analysts.deterministic:run_method
+  sub_handler: graph_projector
+  budget_tokens_per_day: 0
+  options:
+    # First-activation probe: build + count graph_arcs_new, report the
+    # receipt, skip the swap and the meta write. Set false for production.
+    dry_run: false
+
+cadence:
+  # Hourly at :07 — clear of the event-clustering tick (:14/:34/:54), the
+  # reconciler (:19/:39/:59) and situation_tracker (:41). Staleness beyond
+  # LEGBA_GRAPH_PROJECTION_MAX_AGE_SECONDS (default 7200s) refuses readers.
+  fallback_schedule: "7 * * * *"
+  cooldown_seconds: 3000
+
+# The projection is a side-write; the run summary is TRACE_ONLY.
+outputs: []

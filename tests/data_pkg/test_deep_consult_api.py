@@ -185,6 +185,33 @@ def test_submit_model_core_threads_override(monkeypatch):
     )
 
 
+def test_submit_model_fable_threads_override(monkeypatch):
+    """F1 model picker: model='fable' threads the Claude Fable 5.1 component id
+    the same way 'core' does — the Deep Consult UI shares the same
+    CONSULT_MODEL_OPTIONS dropdown as chat, so this Literal must accept it."""
+    envelope = {
+        "outcome": "success",
+        "mode": "deep_consult",
+        "task_id": "deep_consult.global.abcd1234",
+        "status": "running",
+        "run_id": "abcd1234-0000-0000-0000-000000000000",
+    }
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(deep_api.httpx, "AsyncClient", _stub_dapr(envelope, captured))
+
+    app = _build_app(_StatusPg(None))
+    client = TestClient(app)
+    r = client.post(
+        "/api/v1/deep_consult",
+        json={"question": "q", "model": "fable"},
+    )
+    assert r.status_code == 202, r.text
+    assert (
+        captured["body"]["inputs"][0]["llm_component_override"]
+        == "llm.anthropic.fable_5_1"
+    )
+
+
 def test_submit_model_invalid_422(monkeypatch):
     envelope: dict[str, Any] = {}
     monkeypatch.setattr(deep_api.httpx, "AsyncClient", _stub_dapr(envelope, {}))

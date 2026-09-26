@@ -67,6 +67,13 @@ class ConsultTurnOut(BaseModel):
     cited_refs: list[Any] = Field(default_factory=list)
     finding_id: str | None = None
     created_at: str | None = None
+    # Recovery address + state (migration 0195). Without these a turn re-seeded
+    # from History could not be re-synthesised: the panel had no id to POST to
+    # and no way to tell a finished answer from a cut one, which is exactly the
+    # state the ~$10 c8a0105c turn is in. ``request_id`` is NULL on every turn
+    # written before 0195 — the panel then addresses the turn by its own id.
+    request_id: str | None = None
+    synthesis_status: str = "complete"
 
 
 class ConsultSessionDetail(BaseModel):

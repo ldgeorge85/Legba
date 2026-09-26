@@ -49,6 +49,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+import textwrap
+from collections import namedtuple
 from pathlib import Path
 
 import pytest
@@ -266,3 +268,173 @@ def test_probe_broken_and_container_unreachable_stay_distinct(tmp_path: Path):
     )
     assert "reason=container_unreachable" in log_b, log_b
     assert "probe_broken" not in log_b, log_b
+
+
+# ---------------------------------------------------------------------------
+# check_disk_usage (added 2026-09-05) — root-filesystem gauge, WARN >=85%,
+# CRITICAL >=92%. OpenSearch's own flood-stage watermark is 95% and silently
+# forces indices read-only there once crossed — the 2026-09-05 event this
+# check exists to give an operator runway ahead of.
+# ---------------------------------------------------------------------------
+
+_DiskUsage = namedtuple("usage", "total used free")
+
+
+def _extract_disk_probe() -> str:
+    """Pull the disk-usage python heredoc OUT of the live script, the same
+    way _extract_embedded_probe() does for the completion probe — traversing
+    the real binding path rather than a re-implementation."""
+    src = SCRIPT.read_text(encoding="utf-8")
+    m = re.search(r"<<'DISKPY'[^\n]*\n(.*?)\nDISKPY\n", src, re.S)
+    assert m is not None, "host_llm_heartbeat.sh's disk-usage heredoc went missing or was re-shaped"
+    return m.group(1)
+
+
+def test_disk_probe_prints_pct_used_total_with_monkeypatched_disk_usage(monkeypatch, capsys):
+    """Drives the REAL disk-probe body (extracted from the live script) with
+    shutil.disk_usage monkeypatched to a fixed 93.0% — hermetic, no real
+    filesystem state required to hit a specific percentage."""
+    monkeypatch.setattr(
+        shutil, "disk_usage", lambda path="/": _DiskUsage(total=1000, used=930, free=70)
+    )
+    src = _extract_disk_probe()
+    exec(compile(src, "<disk_probe>", "exec"), {"__name__": "__main__"})
+    out = capsys.readouterr().out.strip()
+    pct, used, total = out.split()
+    assert pct == "93.0"
+    assert used == "930"
+    assert total == "1000"
+
+
+def _sourceable_heartbeat_lib() -> str:
+    """Everything above the `# --- main` dispatch marker — function/variable
+    definitions only, safe to source with no side effects (same technique as
+    test_host_log_collector_budget.py's _sourceable_lib())."""
+    lines = SCRIPT.read_text(encoding="utf-8").splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.startswith("# --- main"):
+            return "".join(lines[:i])
+    raise AssertionError("`# --- main` marker not found in host_llm_heartbeat.sh")
+
+
+_STUB_PYTHON3 = r"""#!/usr/bin/env bash
+cat > /dev/null   # drain the heredoc from stdin so the caller never blocks
+echo "${STUB_DISK_OUT:-50.0 500 1000}"
+"""
+
+
+def _run_check_disk_usage(tmp_path: Path, *, stub_out: str, extra_env: dict | None = None):
+    """Source the real check_disk_usage() (and its helpers) out of the live
+    script, override `page` to record calls instead of hitting ntfy, stub
+    python3 on PATH to return a fixed pct/used/total, and call the real
+    function. Returns (log_text, page_calls_text)."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    py_stub = bin_dir / "python3"
+    py_stub.write_text(_STUB_PYTHON3, encoding="utf-8")
+    py_stub.chmod(0o755)
+
+    lib_path = tmp_path / "lib.sh"
+    lib_path.write_text(_sourceable_heartbeat_lib(), encoding="utf-8")
+    log_path = tmp_path / "watchdog.log"
+    page_log = tmp_path / "page.log"
+    cooldown = tmp_path / "disk.cooldown"
+
+    body = textwrap.dedent(
+        f"""
+        source {lib_path}
+        page() {{ printf '%s\\n' "PAGE $*" >> {page_log}; }}
+        check_disk_usage
+        """
+    )
+    script_path = tmp_path / "test_body.sh"
+    script_path.write_text(f"#!/usr/bin/env bash\nset -u\n{body}\n", encoding="utf-8")
+    script_path.chmod(0o755)
+
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+        "LOG": str(log_path),
+        "DISK_COOLDOWN_STAMP": str(cooldown),
+        "STUB_DISK_OUT": stub_out,
+        **(extra_env or {}),
+    }
+    proc = subprocess.run(
+        ["bash", str(script_path)], env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, f"stdout={proc.stdout!r}\nstderr={proc.stderr!r}"
+    log_text = log_path.read_text(encoding="utf-8") if log_path.is_file() else ""
+    page_text = page_log.read_text(encoding="utf-8") if page_log.is_file() else ""
+    return log_text, page_text
+
+
+def test_check_disk_usage_below_warn_stays_quiet(tmp_path: Path):
+    log, page_calls = _run_check_disk_usage(tmp_path, stub_out="60.0 600 1000")
+    assert "disk.usage pct=60.0%" in log, log
+    assert "WARN" not in log, log
+    assert "FIRE" not in log, log
+    assert page_calls == "", page_calls
+
+
+def test_check_disk_usage_warn_logs_but_does_not_page(tmp_path: Path):
+    """87% is above the 85% WARN floor but below the 92% CRITICAL ceiling —
+    must log a WARN line and must NOT call page()."""
+    log, page_calls = _run_check_disk_usage(tmp_path, stub_out="87.0 870 1000")
+    assert "WARN disk usage 87.0% >= WARN 85%" in log, log
+    assert "FIRE" not in log, log
+    assert page_calls == "", page_calls
+
+
+def test_check_disk_usage_critical_pages_via_existing_mechanism(tmp_path: Path):
+    """93% is above the 92% CRITICAL threshold — must page via the script's
+    existing `page()` mechanism (the same one check_completion/check_longctx
+    use) and mention the OpenSearch flood-stage risk in the page body."""
+    log, page_calls = _run_check_disk_usage(tmp_path, stub_out="93.0 930 1000")
+    assert "FIRE disk usage 93.0% >= CRITICAL 92%" in log, log
+    assert page_calls != "", "CRITICAL disk usage must call the existing page() mechanism"
+    assert "disk CRITICAL 93.0%" in page_calls, page_calls
+    assert "flood-stage" in page_calls, page_calls
+
+
+def test_check_disk_usage_critical_respects_cooldown(tmp_path: Path):
+    """A second CRITICAL tick inside the cooldown window must not page again
+    — the same cooldown idiom every other check in this script already uses."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    py_stub = bin_dir / "python3"
+    py_stub.write_text(_STUB_PYTHON3, encoding="utf-8")
+    py_stub.chmod(0o755)
+
+    lib_path = tmp_path / "lib.sh"
+    lib_path.write_text(_sourceable_heartbeat_lib(), encoding="utf-8")
+    log_path = tmp_path / "watchdog.log"
+    page_log = tmp_path / "page.log"
+    cooldown = tmp_path / "disk.cooldown"
+
+    body = textwrap.dedent(
+        f"""
+        source {lib_path}
+        page() {{ printf '%s\\n' "PAGE $*" >> {page_log}; }}
+        check_disk_usage
+        check_disk_usage
+        """
+    )
+    script_path = tmp_path / "test_body.sh"
+    script_path.write_text(f"#!/usr/bin/env bash\nset -u\n{body}\n", encoding="utf-8")
+    script_path.chmod(0o755)
+
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+        "LOG": str(log_path),
+        "DISK_COOLDOWN_STAMP": str(cooldown),
+        "STUB_DISK_OUT": "93.0 930 1000",
+    }
+    proc = subprocess.run(
+        ["bash", str(script_path)], env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, f"stdout={proc.stdout!r}\nstderr={proc.stderr!r}"
+    page_calls = page_log.read_text(encoding="utf-8") if page_log.is_file() else ""
+    assert len(page_calls.strip().splitlines()) == 1, (
+        f"a second CRITICAL tick inside the cooldown window must not page again: {page_calls!r}"
+    )

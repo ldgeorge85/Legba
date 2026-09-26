@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildScorecards,
+  externalTruthLabel,
+  fmtRate,
+  orderedStrata,
+  EXTERNAL_TRUTH_STRATA,
+  type ExternalTruthPopulation,
   calibrationBanner,
   critScoreTrend,
   scoreBand,
@@ -24,6 +29,13 @@ import {
   orderedBandHorizons,
   bandRateLabel,
   bandCalibrationEmpty,
+  bandCalibrationState,
+  bandOutcomeRows,
+  bandShareLabel,
+  bandSliceHorizon,
+  bandSliceRows,
+  BAND_OUTCOME_MEANING,
+  BAND_OUTCOME_ORDER,
   type ScorecardRow,
   type UnitCorrectnessRow,
   type ConsumerLagRow,
@@ -324,6 +336,119 @@ describe('bandCalibrationEmpty', () => {
 
   it('available with graded claims is not empty', () => {
     expect(bandCalibrationEmpty(bandCalibration({ claims_total: 12 }))).toBe(false)
+  })
+})
+
+describe('bandCalibrationState', () => {
+  it('separates "no finding at all" from "a finding that logged nothing"', () => {
+    // No tracker finding — there is not even an as-of to show.
+    expect(bandCalibrationState(null)).toBe('unavailable')
+    expect(bandCalibrationState(undefined)).toBe('unavailable')
+    expect(bandCalibrationState(bandCalibration({ available: false }))).toBe('unavailable')
+    // A finding exists (so there IS an as-of), it just claimed nothing.
+    expect(bandCalibrationState(bandCalibration({ claims_total: 0 }))).toBe('no-claims')
+    expect(bandCalibrationState(bandCalibration({ claims_total: null }))).toBe('no-claims')
+    expect(bandCalibrationState(bandCalibration({ claims_total: 12 }))).toBe('graded')
+  })
+
+  it('agrees with bandCalibrationEmpty on the union of the two absences', () => {
+    for (const s of [
+      null,
+      bandCalibration({ available: false }),
+      bandCalibration({ claims_total: 0 }),
+      bandCalibration({ claims_total: 12 }),
+    ]) {
+      expect(bandCalibrationEmpty(s)).toBe(bandCalibrationState(s) !== 'graded')
+    }
+  })
+})
+
+describe('bandOutcomeRows', () => {
+  it('orders the closed vocabulary the resolver does, and shares over RESOLVED', () => {
+    const h = horizon({
+      resolved: 12,
+      outcomes: { reverted: 2, held: 6, unresolvable: 1, worsened: 2, insufficient: 1 },
+    })
+    const rows = bandOutcomeRows(h)
+    expect(rows.map((r) => r.outcome)).toEqual([
+      'held',
+      'worsened',
+      'reverted',
+      'insufficient',
+      'unresolvable',
+    ])
+    expect(rows[0]).toMatchObject({ n: 6, share: 0.5, scored: true })
+    // The two abstains are reported but held OUT of the rate denominator.
+    expect(rows.find((r) => r.outcome === 'insufficient')!.scored).toBe(false)
+    expect(rows.find((r) => r.outcome === 'unresolvable')!.scored).toBe(false)
+  })
+
+  it('an outcome that never occurred is absent, not a zero row', () => {
+    const rows = bandOutcomeRows(horizon({ resolved: 6, outcomes: { held: 6 } }))
+    expect(rows.map((r) => r.outcome)).toEqual(['held'])
+  })
+
+  it('nothing resolved → no rows at all (never six zeroes)', () => {
+    expect(bandOutcomeRows(horizon({ resolved: 0, outcomes: {} }))).toEqual([])
+  })
+
+  it('a zero resolved denominator yields a null share, never a fabricated 0%', () => {
+    // Defensive: counts present but `resolved` not yet advanced.
+    const rows = bandOutcomeRows(horizon({ resolved: 0, outcomes: { held: 3 } }))
+    expect(rows[0].share).toBeNull()
+    expect(bandShareLabel(rows[0].share)).toBe('—')
+  })
+
+  it('an outcome this build does not know sorts after the known vocabulary', () => {
+    const rows = bandOutcomeRows(
+      horizon({ resolved: 4, outcomes: { zzz_future: 1, held: 2, aaa_future: 1 } }),
+    )
+    expect(rows.map((r) => r.outcome)).toEqual(['held', 'aaa_future', 'zzz_future'])
+    // Unknown outcomes are not silently counted into the rate denominator.
+    expect(rows.find((r) => r.outcome === 'zzz_future')!.scored).toBe(false)
+  })
+
+  it('every outcome in the closed vocabulary carries a meaning for its hover', () => {
+    for (const o of BAND_OUTCOME_ORDER) {
+      expect(BAND_OUTCOME_MEANING[o]).toBeTruthy()
+    }
+  })
+})
+
+describe('bandShareLabel', () => {
+  it('rounds a share to a percentage, and renders an absence as the dash', () => {
+    expect(bandShareLabel(0.5)).toBe('50%')
+    expect(bandShareLabel(1 / 6)).toBe('17%')
+    expect(bandShareLabel(0)).toBe('0%')
+    expect(bandShareLabel(null)).toBe('—')
+  })
+})
+
+describe('bandSliceHorizon', () => {
+  it('narrows by shape, so the numeric `claims` key can never read as a block', () => {
+    const slice = { claims: 27, '14d': horizon() }
+    expect(bandSliceHorizon(slice, '14d')).toMatchObject({ scored: 10 })
+    expect(bandSliceHorizon(slice, 'claims')).toBeNull()
+  })
+
+  it('a horizon the slice never carried reads null, not a zeroed block', () => {
+    expect(bandSliceHorizon({ claims: 3, '14d': horizon() }, '28d')).toBeNull()
+  })
+})
+
+describe('bandSliceRows', () => {
+  it('most claims first, ties by key', () => {
+    const rows = bandSliceRows({
+      improvement: { claims: 21, '14d': horizon() },
+      deterioration: { claims: 27, '14d': horizon() },
+      other: { claims: 21, '14d': horizon() },
+    })
+    expect(rows.map((r) => r.key)).toEqual(['deterioration', 'improvement', 'other'])
+    expect(rows[0].claims).toBe(27)
+  })
+
+  it('an empty map yields no rows — the panel renders that as an absence', () => {
+    expect(bandSliceRows({})).toEqual([])
   })
 })
 
@@ -679,5 +804,75 @@ describe('correctnessLabel', () => {
     expect(correctnessLabel(null)).toBe('unmeasured')
     expect(correctnessLabel(undefined)).toBe('unmeasured')
     expect(correctnessLabel(row({ display: '' }))).toBe('unmeasured')
+  })
+})
+
+// ── W-6 · standing external truth ────────────────────────────────────────────
+
+describe('externalTruthLabel / fmtRate / orderedStrata', () => {
+  const pop = (over: Partial<ExternalTruthPopulation> = {}): ExternalTruthPopulation => ({
+    population: 'assembly_span',
+    label: 'the record (desk sentences, quoted)',
+    display: 'the record (desk sentences, quoted) 0.71 (n=1,148 decided of 3,290 searched; decided rate 0.35)',
+    accuracy: 0.7125,
+    supported: 818,
+    contradicted: 330,
+    not_found: 2142,
+    n_decided: 1148,
+    n_searched: 3290,
+    n_unchecked: 1799,
+    n_uncheckable: 343,
+    decided_rate: 0.349,
+    sufficient: true,
+    min_decided: 10,
+    strata: { regime: { assembly: {} as never }, retrieval_origin: {} },
+    instrument: { overlap_raw: 0.79, overlap_n: 329, band: 'contingent', instrument_limited: false },
+    search: {},
+    sampled: {},
+    ...over,
+  })
+
+  it('renders the SERVER-composed display verbatim — the n travels with the rate', () => {
+    // The tiny-n contract lives in ONE place, server-side. A UI that recomposes
+    // a ratio out of its evidence is a second implementation of the honesty rule.
+    expect(externalTruthLabel(pop())).toContain('n=1,148 decided')
+    expect(externalTruthLabel(pop())).toContain('decided rate 0.35')
+  })
+
+  it('WITHHOLDS the number when the graders disagreed — a sentence, not a flag', () => {
+    // R3's stop rule, made continuous: a well-powered rate from two raters who
+    // disagree is not a better number, it is a better-disguised one.
+    const limited = externalTruthLabel(
+      pop({ instrument: { overlap_raw: 0.7451, overlap_n: 329, band: 'instrument_limited', instrument_limited: true } }),
+    )
+    expect(limited).toContain('did not agree with each other often enough')
+    expect(limited).toContain('overlap 0.75')
+    expect(limited).not.toContain('0.71')
+  })
+
+  it('names the fraction when the day was sampled', () => {
+    expect(externalTruthLabel(pop({ sampled: { sample_fraction: 0.4 } }))).toContain(
+      '40% sample',
+    )
+  })
+
+  it('says so when nothing has been graded', () => {
+    expect(externalTruthLabel(null)).toBe('not graded against the world yet')
+  })
+
+  it('fmtRate never renders a missing number as 0.00', () => {
+    expect(fmtRate(null)).toBe('—')
+    expect(fmtRate(undefined)).toBe('—')
+    expect(fmtRate(0)).toBe('0.00')
+    expect(fmtRate(0.7125, 4)).toBe('0.7125')
+  })
+
+  it('orderedStrata keeps every named stratum, empty ones included', () => {
+    // retrieval_origin is NULL on every live signal today. An EMPTY stratum is a
+    // measurement ("nothing in it"), not an omission ("not measured here").
+    const axes = orderedStrata(pop()).map(([axis]) => axis)
+    expect(axes).toEqual([...EXTERNAL_TRUTH_STRATA])
+    const origin = orderedStrata(pop()).find(([axis]) => axis === 'retrieval_origin')
+    expect(origin?.[1]).toEqual([])
   })
 })

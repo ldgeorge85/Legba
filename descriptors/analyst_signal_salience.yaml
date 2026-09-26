@@ -69,7 +69,7 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     max_tokens: 1400           # one batched score array per ~12 signals
-    temperature: 0.0           # deterministic scoring
+    temperature: 1.0           # deterministic scoring
     # --- kind-specific options (read by _build_signal_salience) --------------
     score_mode: apply             # LIVE (flipped 2026-07-13 after the dry-run proof:
                                   # 300 examined / 300 scored / 0 degraded on gpt-oss,
@@ -80,7 +80,7 @@ method:
     batch_size: 12                # signals per LLM scoring call
     window_hours: 96              # bound to a recent window (backfill 72h + margin,
                                   # then forward); capacity >> inflow keeps it full
-  budget_tokens_per_day: 4000000
+  budget_tokens_per_day: 0
   retry:
     budget:
       strategy: pause_until_next_window

@@ -15,7 +15,7 @@ chain terminates in OUR verifiable copy:
     archived by this handler (bounded, moat-serving; the per-source depth
     lane is a separate concern).
   * **Fetch.** Original bytes over the SSRF egress guard
-    (:func:`legba.data.sources._egress.guarded_async_client` — same guard as
+    (:func:`legba.data.sources._egress.fetch_client` — same guard as
     every source fetcher; an egress-blocked URL is terminal, it can never
     become fetchable). Streaming with a hard size cap; per-host politeness
     delay; bounded fetch budget per run; honest counters for every skip class.
@@ -223,6 +223,16 @@ Output ``data`` keys (the cadence receipt the operator reads):
                               Always 0 at the shipped default. Shares the
                               sidecar STATUS with the R-3b skip (closed CHECK
                               vocabulary) but never its counter.
+    blocked_by_challenge
+                        int — (a′) pages an anti-bot CHALLENGE stood in front
+                              of: a Cloudflare / DataDome interstitial body
+                              (:func:`_challenge_detect.detect_challenge_page`,
+                              recorded as ``blocked_challenge`` — the bytes are
+                              still archived), or an edge 401/403/429 (recorded
+                              as ``failed`` so it stays retryable). Before this
+                              counter existed a 5–13 kB interstitial landed as
+                              a thin extraction and read as *the web had
+                              nothing*; that false absence is the defect.
     web_origin_examined int — candidates carrying a web retrieval origin
     skipped_size        int — objects over the size cap (recorded)
     fetch_failed        int — fetch/store failures this run (attempt-counted)
@@ -245,6 +255,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from ... import critic_fold
 from ...archive import (
     ARCHIVE_ROOT_ENV,
     CAS_PREFIX,
@@ -256,7 +267,17 @@ from ...archive import (
 from ...opensearch import signal_license_class
 from ...provenance.models import FindingPayload
 from ...retrieval_origin import is_web_retrieved, resolve_retrieval_origin
-from ...sources._egress import EgressBlockedError, guarded_async_client
+from ...sources._egress import (
+    EgressBlockedError,
+    fetch_client,
+    guarded_async_client,
+)
+from ._challenge_detect import (
+    BLOCKED_BY_CHALLENGE,
+    challenge_from_status,
+    detect_challenge_page,
+    detect_challenge_text,
+)
 from ....runtime.analyst_method import AnalystMethodResult
 
 logger = logging.getLogger(__name__)
@@ -291,6 +312,16 @@ UNREVIEWED_LICENSE_CLASSES: frozenset[str] = frozenset({"unknown"})
 #: from ``skipped_license`` on purpose: that one means "a REVIEWED class forbade
 #: retention", this one means "we never reviewed this domain".
 STATUS_SKIPPED_LICENSE_UNREVIEWED = "skipped_license_unreviewed"
+
+#: (a′) The sidecar status for a page that an anti-bot CHALLENGE stood in
+#: front of (migration 0196). Distinct from ``failed`` on purpose: ``failed``
+#: is "we could not fetch it", this one is "a publisher's edge refused us and
+#: said so in an interstitial". Before this existed, a 5–13 kB Cloudflare /
+#: DataDome page landed as a thin extraction and read downstream as *the web
+#: had nothing* — the false-absence defect FETCH_REVIEW §2 names as bigger
+#: than the 403 itself. The BYTES are still archived (they are the evidence of
+#: the block); only the derived-text upgrade is withheld.
+STATUS_BLOCKED_CHALLENGE = "blocked_challenge"
 
 #: ``options.web_origin_license_gate`` values.
 WEB_ORIGIN_GATE_FAIL_CLOSED = "fail_closed"
@@ -338,25 +369,19 @@ _TEXTUAL_CONTENT_TYPES = ("text/html", "application/xhtml", "text/plain", "appli
 # terminal rows (archived / skipped_* / attempt-exhausted failures) so every
 # run's budget goes to NEW work; signals.object_ref IS NULL is the primary
 # idempotency gate (stamped on success → the row leaves this scan forever).
-_SELECT_CANDIDATES_SQL = """
-    WITH cited AS (
-        SELECT DISTINCT d.sid
+_SELECT_CANDIDATES_SQL = f"""
+    WITH f AS MATERIALIZED (
+        SELECT f.id, f.confidence, f.derived_from
           FROM analyst_outputs f
-          JOIN LATERAL (
-              SELECT (cr.data->>'overall_score')::real AS faithfulness_score
-                FROM analyst_outputs cr
-               WHERE cr.kind = 'critique'
-                 AND cr.data->>'analyzed_output_id' = f.id::text
-                 AND cr.data->>'overall_score' IS NOT NULL
-                 AND cr.title LIKE 'Faithfulness verify%'
-               ORDER BY cr.produced_at DESC, cr.id DESC
-               LIMIT 1
-          ) v ON TRUE
-          CROSS JOIN LATERAL unnest(f.derived_from) AS d(sid)
          WHERE f.kind = 'finding'
            AND f.superseded_by IS NULL
            AND f.produced_at > now() - make_interval(hours => $1)
-           AND LEAST(f.confidence, v.faithfulness_score) >= $2
+    ), {critic_fold.faithfulness_score_cte()}, cited AS (
+        SELECT DISTINCT d.sid
+          FROM f
+          JOIN v ON v.fid = f.id::text
+          CROSS JOIN LATERAL unnest(f.derived_from) AS d(sid)
+         WHERE LEAST(f.confidence, v.faithfulness_score) >= $2
     )
     SELECT s.id, s.source_id, s.canonical_url, s.media_ref, s.payload,
            s.raw_provenance, s.retention_class,
@@ -657,6 +682,14 @@ def _match_wall_pattern(text: str) -> str | None:
          cookie-notice footer), not the whole "extraction";
       2. it contains one of the curated patterns (case-insensitive).
     """
+    # (a′) THE CHALLENGE TIER RUNS FIRST AND IS NOT LENGTH-GATED. The 500-char
+    # cap below was measured against ≤500-char no-JS fallback pages and does
+    # not reach a modern interstitial (AP 5 507 B, ToI 12 604 B — FETCH_REVIEW
+    # §2). ``detect_challenge_text`` carries its discrimination in conjunctive
+    # RULES instead of in a character count.
+    challenge = detect_challenge_text(text)
+    if challenge is not None:
+        return challenge
     if len(text) > _WALL_MAX_CHARS:
         return None
     lowered = text.lower()
@@ -775,6 +808,11 @@ def _zero_counters() -> dict[str, int]:
         "media_failed": 0,
         "text_extracted": 0,
         "text_extract_failed": 0,
+        # (a′) The page WAS an anti-bot challenge/interstitial (or the edge
+        # answered 401/403/429). Counted separately from every "failure" above
+        # so a receipt can distinguish "a publisher blocked us" from "the web
+        # had nothing" — the whole point of the detector.
+        BLOCKED_BY_CHALLENGE: 0,
         # V-E1 — distinct from text_extract_failed: Trafilatura DID return
         # text, but it matched the JS-wall/bot-check/redirect deny list.
         "text_extract_rejected_boilerplate": 0,
@@ -951,6 +989,31 @@ async def _archive_one(
             last_error=f"egress blocked: {exc}",
         )
         return
+    except httpx.HTTPStatusError as exc:
+        # (a′) A publisher's edge answered. 401/403/429 IS a block — say so.
+        # The status stays ``failed`` (retryable, attempt-capped) rather than
+        # ``blocked_challenge``: the refusal may well clear if an operator
+        # turns LEGBA_FETCH_IMPERSONATE on, and a terminal status would freeze
+        # the row out of that re-attempt.
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        tell = challenge_from_status(status_code)
+        counters["fetch_failed"] += 1
+        if tell is not None:
+            counters[BLOCKED_BY_CHALLENGE] += 1
+            logger.warning(
+                "evidence_archiver.%s host=%s tell=%s",
+                BLOCKED_BY_CHALLENGE, urlsplit(url).hostname, tell,
+            )
+        await _record(
+            pool, signal_id=signal_id, status="failed",
+            attempts=attempts, fetched_url=url, license_class=license_class,
+            retrieval_origin=retrieval_origin,
+            last_error=(
+                f"{BLOCKED_BY_CHALLENGE}: {tell} — {exc}" if tell is not None
+                else repr(exc)
+            ),
+        )
+        return
     except Exception as exc:
         counters["fetch_failed"] += 1
         await _record(
@@ -976,6 +1039,31 @@ async def _archive_one(
         counters["already_present"] += 1
     else:
         counters["bytes_stored"] += len(body)
+
+    # ---- (a′) was this 200 actually a CHALLENGE PAGE? -------------------
+    # Runs on the RAW body, because the sharpest tells (DataDome's
+    # ``var dd={'rt'…``, Cloudflare's ``/cdn-cgi/challenge-platform``) never
+    # survive main-text extraction. The bytes stay archived — they ARE the
+    # evidence that we were blocked — but the row says ``blocked_challenge``
+    # instead of ``archived``, and no derived text is written.
+    challenge_tell = detect_challenge_page(body, content_type, encoding)
+    if challenge_tell is not None:
+        counters[BLOCKED_BY_CHALLENGE] += 1
+        logger.warning(
+            "evidence_archiver.%s host=%s tell=%s bytes=%d",
+            BLOCKED_BY_CHALLENGE, urlsplit(url).hostname, challenge_tell, len(body),
+        )
+        await _record(
+            pool, signal_id=signal_id, status=STATUS_BLOCKED_CHALLENGE,
+            attempts=attempts, object_ref=object_ref, sha256=digest,
+            size_bytes=len(body), content_type=content_type, fetched_url=url,
+            license_class=license_class, retrieval_origin=retrieval_origin,
+            text_extracted=False,
+            last_error=f"{BLOCKED_BY_CHALLENGE}: {challenge_tell}",
+        )
+        async with pool.acquire() as conn:
+            await conn.execute(_STAMP_SIGNAL_SQL, signal_id, object_ref, None, None)
+        return
 
     # ---- bonus text extraction (bytes are the archive either way) ----
     archived_text: str | None = None
@@ -1121,7 +1209,12 @@ async def _sweep(pool: Any, options: Mapping[str, Any]) -> dict[str, int]:
 
     politeness = _HostPoliteness(per_host_delay)
     started = time.monotonic()
-    async with guarded_async_client(
+    async with fetch_client(
+        # ``guarded=`` hands ``fetch_client`` THIS module's own
+        # ``guarded_async_client``, so the flag-off path is the exact call
+        # this site made before, through the exact name the existing e2e
+        # suites monkeypatch. See _egress.fetch_client's docstring.
+        guarded=guarded_async_client,
         timeout=timeout_s,
         follow_redirects=True,
         headers={"User-Agent": _USER_AGENT},
@@ -1158,6 +1251,10 @@ def _build_finding(counters: Mapping[str, int]) -> FindingPayload:
         title += (
             f", {counters['skipped_license_unknown']} unknown-licence-skipped"
         )
+    # (a′) Same discipline: appended ONLY when a block actually happened, so a
+    # clean run's title is unchanged character for character.
+    if counters.get(BLOCKED_BY_CHALLENGE, 0):
+        title += f", {counters[BLOCKED_BY_CHALLENGE]} challenge-blocked"
     body = "\n".join(f"{k}={v}" for k, v in counters.items())
     tags = ["deterministic", "evidence_archiver"]
     if counters.get("archived", 0):
@@ -1166,6 +1263,8 @@ def _build_finding(counters: Mapping[str, int]) -> FindingPayload:
         tags.append("web_origin_license_unreviewed")
     if counters.get("skipped_license_unknown", 0):
         tags.append("unknown_license_fail_closed")
+    if counters.get(BLOCKED_BY_CHALLENGE, 0):
+        tags.append(BLOCKED_BY_CHALLENGE)
     return FindingPayload(
         title=title[:2048],
         body=body[:65536],
@@ -1207,6 +1306,7 @@ __all__ = [
     "ARCHIVE_ROOT_ENV",
     "DEFAULT_ARCHIVE_ROOT",
     "FORBID_RETENTION_CLASSES",
+    "STATUS_BLOCKED_CHALLENGE",
     "STATUS_SKIPPED_LICENSE_UNREVIEWED",
     "UNREVIEWED_LICENSE_CLASSES",
     "WEB_ORIGIN_GATE_FAIL_CLOSED",

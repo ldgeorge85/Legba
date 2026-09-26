@@ -364,7 +364,12 @@ def _endpoint(deps):
     return route.endpoint
 
 
-def _row(desk, metric, deviation, *, current, sigma, geo='["US"]', thin=False):
+def _row(
+    desk, metric, deviation, *, current, sigma, geo='["US"]', thin=False,
+    stamped=True,
+):
+    # K3 — `stamped=False` is the pre-0219 row: the columns are there but NULL,
+    # which the panel renders as "unstamped", never as a version.
     return {
         "desk_id": desk,
         "metric": metric,
@@ -386,6 +391,8 @@ def _row(desk, metric, deviation, *, current, sigma, geo='["US"]', thin=False):
         "spillover_current": 3.0,
         "features": {"lag_1": 1.0, "neighbor_count": 2},
         "computed_at": datetime(2026, 7, 24, tzinfo=timezone.utc),
+        "method_version": db.METHOD_VERSION if stamped else None,
+        "scale_version": db.SCALE_VERSION if stamped else None,
     }
 
 
@@ -409,7 +416,10 @@ def test_desk_baseline_board_absent_defaults():
 async def test_eval_desk_baselines_projects_rows_and_counts():
     conn = _FakeConn(rows=[
         _row("country_g20_us", db.METRIC_SIGNAL_VOLUME, "above", current=40, sigma=8.0),
-        _row("country_g20_ca", db.METRIC_HIGH_SEV_FINDINGS, "within", current=0, sigma=0.0, thin=True),
+        _row(
+            "country_g20_ca", db.METRIC_HIGH_SEV_FINDINGS, "within",
+            current=0, sigma=0.0, thin=True, stamped=False,
+        ),
     ])
     board = await _endpoint(_fake_deps(conn))(principal="t")
     assert board.available is True
@@ -423,9 +433,16 @@ async def test_eval_desk_baselines_projects_rows_and_counts():
     assert first.deviation == "above"
     assert first.geo == ["US"]                 # jsonb str parsed
     assert first.features["neighbor_count"] == 2
+    # H12/K3 — the stamps ride the projection verbatim, and a pre-0219 row
+    # comes back None rather than back-labelled with the current version.
+    assert first.method_version == db.METHOD_VERSION
+    assert first.scale_version == db.SCALE_VERSION
+    assert board.rows[1].method_version is None
+    assert board.rows[1].scale_version is None
     # The SQL orders most-deviating first (surfaced honestly).
     sql = conn.queries[0][0]
     assert "deviation <> 'within'" in sql and "abs(deviation_sigma) DESC" in sql
+    assert "method_version, scale_version" in sql
 
 
 async def test_eval_desk_baselines_filters_build_where():

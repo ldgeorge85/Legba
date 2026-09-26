@@ -250,6 +250,69 @@ async def test_inline_target_builds() -> None:
 
 
 @pytest.mark.asyncio
+async def test_inline_target_llm_planner_preserves_base_deps_nats_publish() -> None:
+    """Regression / root-cause guard for the 2026-09-06 corpus_researcher
+    nats_stream defect.
+
+    ``corpus_researcher`` (descriptors/analyst_corpus_researcher.yaml) is
+    ``identity.kind: inline_target`` + ``method.kind: llm_planner`` — the
+    exact shape built here. Its live output-emit failed with ``deps must
+    expose either nats_publish ... or nats_store``, which looked at first
+    like a deps-BUILDER gap (a kind branch constructing a fresh
+    ``StandardDeps``/``InlineTargetDeps`` without the ``nats_publish``
+    closure the desk analysts get). This test builds this analyst's run
+    method through the REAL builder — not a hand-made stand-in — with a
+    marker ``nats_publish`` closure on the input ``StandardDeps``, and
+    proves the builder passes ``deps`` through UNCHANGED: ``_build_inline_target``
+    only ever reads off it (LLM resolve, budget) and returns a *separate*
+    ``InlineTargetDeps`` (``kind_deps``) for the run leg — the base
+    ``StandardDeps`` the actor later reads at ``deps_bundle.deps.nats_publish``
+    for the OUTPUT-EMIT dispatch (dapr_actors.py:3739 / 3703) is the same
+    object, same closure, never stripped. So the deps-builder path was never
+    the defect; the actual cause is downstream, in
+    ``legba.data.outputs.nats_stream._resolve_publisher`` not recognizing the
+    ``OutputDeps.nats`` shape the runtime dispatcher
+    (``legba.runtime.actor_output_emit._emit_output_bindings``) actually
+    passes it — see ``test_output_nats_stream_coercion.py``'s
+    ``test_emit_output_bindings_nats_stream_reaches_real_publish_via_output_deps``
+    for the fix's regression test.
+    """
+    async def _marker_nats_publish(subject: str, payload: bytes) -> None:
+        raise AssertionError(
+            "not meant to be invoked in this test — only identity matters"
+        )
+
+    deps = StandardDeps(
+        pg_pool=object(),  # type: ignore[arg-type]
+        nats_publish=_marker_nats_publish,
+        secrets_resolve=_stub_secrets,
+    )
+    descriptor = _llm_descriptor(AnalystKind.INLINE_TARGET, method_kind="llm_planner")
+    assert descriptor.method.kind == "llm_planner"
+    llm = _StubLLMHandler()
+    factory = AsyncMock(return_value=llm)
+
+    run_method, kind_deps, _output_kind, _receipt_chain, _read_slice = (
+        await build_analyst_run_method(
+            descriptor,
+            deps=deps,
+            registry_client=RegistryHTTPClient(base_url="http://invalid"),
+            pg_pool=object(),  # type: ignore[arg-type]
+            llm_handler_factory=factory,
+        )
+    )
+
+    # The base StandardDeps.nats_publish the actor reads for output-emit
+    # survives byte-identical (same object, not a copy, not None).
+    assert deps.nats_publish is _marker_nats_publish
+    assert deps.nats_publish is not None
+    # kind_deps (InlineTargetDeps) is a DIFFERENT bundle for the run leg —
+    # confirms the two are not conflated.
+    assert isinstance(run_method._deps, InlineTargetDeps)
+    assert kind_deps is None
+
+
+@pytest.mark.asyncio
 async def test_cross_target_raw_builds() -> None:
     descriptor = _llm_descriptor(AnalystKind.CROSS_TARGET_RAW)
     llm = _StubLLMHandler()

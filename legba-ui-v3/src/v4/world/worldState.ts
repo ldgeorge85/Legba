@@ -6,7 +6,7 @@
 import { create } from 'zustand'
 import type { Severity, WorldSignal, WorldFinding } from './types'
 
-export type WorldLayer = 'signals' | 'findings' | 'situations' | 'entities'
+export type WorldLayer = 'signals' | 'findings' | 'situations' | 'entities' | 'events'
 
 export interface DrawerState {
   open: boolean
@@ -83,6 +83,17 @@ interface WorldState {
   /** Layer visibility (the Windy-style switcher). */
   layers: Record<WorldLayer, boolean>
   toggleLayer: (l: WorldLayer) => void
+  /**
+   * Set the visible layers WHOLESALE — every layer named is on, every other is
+   * off. The mission switcher's half of the layer contract
+   * (`lib/applyMission.ts`): a mission declares the layers its job needs, and
+   * toggling them one at a time would leave the previous mission's extras lit.
+   *
+   * An EMPTY list is refused rather than honoured: `layers: []` on a mission
+   * means "this mission makes no layer claim", and blanking the map is not the
+   * same statement. The caller checks too; this is the second guard.
+   */
+  setLayers: (on: readonly WorldLayer[]) => void
 
   /** Plot filters (severity floor + source/country) and their option lists. */
   filters: WorldFilters
@@ -127,9 +138,18 @@ export const useWorldState = create<WorldState>((set) => ({
   setPlaying: (playing) => set({ playing }),
   setSpeed: (speed) => set({ speed }),
 
-  layers: { signals: true, findings: true, situations: true, entities: false },
+  layers: { signals: true, findings: true, situations: true, entities: false, events: true },
   toggleLayer: (l) =>
     set((s) => ({ layers: { ...s.layers, [l]: !s.layers[l] } })),
+  setLayers: (on) =>
+    set((s) => {
+      if (on.length === 0) return s
+      const next = {} as Record<WorldLayer, boolean>
+      for (const key of Object.keys(s.layers) as WorldLayer[]) {
+        next[key] = on.includes(key)
+      }
+      return { layers: next }
+    }),
 
   filters: { minSeverity: null, source: null, country: null },
   setFilter: (k, v) => set((s) => ({ filters: { ...s.filters, [k]: v } })),

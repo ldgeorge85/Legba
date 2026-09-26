@@ -43,6 +43,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from ... import critic_fold
+
 logger = logging.getLogger(__name__)
 
 TRIGGER_CLASS: str = "situation_escalation"
@@ -80,39 +82,45 @@ DEFAULT_FLOOR = 0.50
 #: watermark is pure history after this.
 _WATERMARK_PRUNE_DAYS = 30
 
-_ESCALATIONS_SQL = """
-    SELECT e.id            AS event_id,
-           e.situation_id  AS situation_id,
-           e.occurred_at   AS occurred_at,
-           e.why           AS why,
-           e.state_from    AS state_from,
-           e.state_to      AS state_to,
-           e.derived_from  AS derived_from,
-           e.source_output_id AS source_output_id,
-           s.name          AS situation_name,
-           s.target_id     AS target_id,
-           s.intensity_score AS intensity_score,
-           s.event_count   AS event_count,
-           LEAST(u.confidence, v.faithfulness_score) AS effective_confidence,
+#
+# H17 — SET-BASED. The ledger window + the intensity floor bound the outer CTE,
+# and ONE `DISTINCT ON` pass reads the SOURCE claims' critiques through the
+# expression index. The INNER join to `v` is the same "the delta claim was
+# graded" gate the INNER lateral was.
+_ESCALATIONS_SQL = f"""
+    WITH e AS MATERIALIZED (
+        SELECT e.id            AS event_id,
+               e.situation_id  AS situation_id,
+               e.occurred_at   AS occurred_at,
+               e.why           AS why,
+               e.state_from    AS state_from,
+               e.state_to      AS state_to,
+               e.derived_from  AS derived_from,
+               e.source_output_id AS source_output_id,
+               e.created_at    AS created_at,
+               s.name          AS situation_name,
+               s.target_id     AS target_id,
+               s.intensity_score AS intensity_score,
+               s.event_count   AS event_count,
+               u.confidence    AS confidence
+          FROM situation_events e
+          JOIN situations s ON s.id = e.situation_id
+          JOIN analyst_outputs u ON u.id = e.source_output_id
+         WHERE e.delta = 'escalates'
+           AND e.created_at > $1
+           AND s.intensity_score >= $2
+    ), {critic_fold.faithfulness_score_cte(
+        ids_sql="SELECT source_output_id::text FROM e",
+    )}
+    SELECT e.event_id, e.situation_id, e.occurred_at, e.why,
+           e.state_from, e.state_to, e.derived_from, e.source_output_id,
+           e.situation_name, e.target_id, e.intensity_score, e.event_count,
+           LEAST(e.confidence, v.faithfulness_score) AS effective_confidence,
            v.faithfulness_score AS faithfulness_score
-      FROM situation_events e
-      JOIN situations s ON s.id = e.situation_id
-      JOIN analyst_outputs u ON u.id = e.source_output_id
-      JOIN LATERAL (
-          SELECT (cr.data->>'overall_score')::real AS faithfulness_score
-            FROM analyst_outputs cr
-           WHERE cr.kind = 'critique'
-             AND cr.data->>'analyzed_output_id' = u.id::text
-             AND cr.data->>'overall_score' IS NOT NULL
-             AND cr.title LIKE 'Faithfulness verify%'
-           ORDER BY cr.produced_at DESC, cr.id DESC
-           LIMIT 1
-      ) v ON TRUE
-     WHERE e.delta = 'escalates'
-       AND e.created_at > $1
-       AND s.intensity_score >= $2
-       AND LEAST(u.confidence, v.faithfulness_score) >= $3
-     ORDER BY e.created_at DESC, e.id DESC
+      FROM e
+      JOIN v ON v.fid = e.source_output_id::text
+     WHERE LEAST(e.confidence, v.faithfulness_score) >= $3
+     ORDER BY e.created_at DESC, e.event_id DESC
      LIMIT $4
 """
 

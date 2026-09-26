@@ -90,7 +90,7 @@ method:
       raw: llm.primary.openai_compat
       expected_family: llm_provider
     max_tokens: 1600           # one batched verdict array per ~4 situations
-    temperature: 0.0           # deterministic adjudication
+    temperature: 1.0           # deterministic adjudication
     # --- kind-specific options (read by _build_situation_tracker) ------------
     # REGISTER-1f (2026-08-29) — the tick's TOTAL adjudication budget, and the
     # ONE option here with an ENV OVERRIDE ABOVE IT:
@@ -122,7 +122,7 @@ method:
     floor: 0.50                # the house consumption floor on cited evidence
     dormancy_days: 14          # quiet horizon before a dormancy checkpoint row
     snippet_chars: 700         # per-item body excerpt in the prompt
-  budget_tokens_per_day: 2000000
+  budget_tokens_per_day: 0
   retry:
     budget:
       strategy: pause_until_next_window

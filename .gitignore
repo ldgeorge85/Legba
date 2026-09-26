@@ -68,3 +68,6 @@ seeds/*.yaml
 !seeds/*.example.yaml
 scripts/backfill/seed_data.sql
 scripts/seed_data.py
+
+# External-agent worktrees (docs/V3_IMPLEMENTATION_PLAN.md §0) — never tracked
+.worktrees/

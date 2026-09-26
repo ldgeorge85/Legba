@@ -94,11 +94,37 @@ async def test_propose_writes_only_a_journal_proposals_row(
 ):
     """THE GATING ASSERTION. Each propose_* call lands EXACTLY ONE pending
     journal_proposals row and writes ZERO live substrate rows + ZERO descriptor
-    mutations."""
+    mutations.
+
+    H10 (make proposals applicable by construction): a supersede_fact
+    correction now lands 'pending' only when it is GROUNDED — an open fact for
+    the same (subject, predicate) already in the substrate, plus a
+    cited_substrate_refs entry that resolves to a real substrate row. This test
+    proves the HAPPY path (a grounded proposal of each kind still writes only
+    a journal_proposals row); the ungrounded / free-form cases that now archive
+    instead of landing 'pending' are tests/journal_w4/test_propose_shape_gate.py.
+    """
     # Pre-state: every forbidden table is empty (the conftest truncates).
     before = {t: await _count(pg_pool, t) for t in _FORBIDDEN_LIVE_TABLES}
     assert all(v == 0 for v in before.values())
     assert await _count(pg_pool, "journal_proposals") == 0
+
+    if expected_kind == "correction":
+        # Ground the supersede_fact diff: an OPEN fact for the same
+        # (subject, predicate), cited by its own real id.
+        async with pg_pool.acquire() as conn:
+            fact_row = await conn.fetchrow(
+                "INSERT INTO facts (subject, predicate, value, confidence, "
+                "source_type, schema_uri) VALUES ($1, $2, $3, 0.9, 'seed', "
+                "'iglu:legba/fact/jsonschema/1-0-0') RETURNING id",
+                diff["subject"], diff["predicate"], diff["stale_value"],
+            )
+        cited_refs = [str(fact_row["id"])]
+    else:
+        cited_refs = [str(uuid4())]
+    # The delta baseline AFTER the (correction-only) seed above — the seed
+    # itself is not what this test is proving zero-live-write about.
+    before_call = {t: await _count(pg_pool, t) for t in _FORBIDDEN_LIVE_TABLES}
 
     ctx = _ctx_with_writeback(pg_pool)
     call = ToolCall(
@@ -107,7 +133,7 @@ async def test_propose_writes_only_a_journal_proposals_row(
         args={
             "rationale": "I noticed this from my own run health and it warrants a fix.",
             "diff": diff,
-            "cited_substrate_refs": [str(uuid4())],
+            "cited_substrate_refs": cited_refs,
         },
         requested_by="analyst::journal_assessor",
     )
@@ -137,9 +163,9 @@ async def test_propose_writes_only_a_journal_proposals_row(
 
     # THE SAFETY CLAIM: NOT ONE live substrate row was written by the propose call.
     after = {t: await _count(pg_pool, t) for t in _FORBIDDEN_LIVE_TABLES}
-    assert after == before, (
+    assert after == before_call, (
         f"propose_{expected_kind} wrote a LIVE substrate row — the off-chain / "
-        f"suggested-not-caused invariant is BROKEN. before={before} after={after}"
+        f"suggested-not-caused invariant is BROKEN. before={before_call} after={after}"
     )
 
 

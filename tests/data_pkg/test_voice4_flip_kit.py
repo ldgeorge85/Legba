@@ -40,11 +40,13 @@ from _flip_common import (  # noqa: E402
     HELD_UNIT,
     INTENDED_SHA256,
     LATER_CONTRACT_PARAGRAPHS,
+    LATER_TITLE_HINTS,
     MA2_DATE_FORMAT_SENTENCE,
     TITLE_AMENDMENT_SENTENCE,
     UNITS,
     d6_base,
     norm,
+    pre_title_frame_fix,
     sha,
     structural_diff,
 )
@@ -155,8 +157,19 @@ def test_the_peel_removes_the_later_paragraphs_and_nothing_else(unit: str) -> No
     text plus the removed paragraphs accounts for every byte of the original
     minus their separators. Without this, ``d6_base`` could quietly start
     removing something the pin was supposed to be checking.
+
+    TITLE-FRAME-FIX (2026-09-01, post-flip): ``d6_base`` now peels TWO trains,
+    and the second one changed a LINE rather than appending a paragraph — see
+    ``LATER_TITLE_HINTS``. The paragraph accounting below is therefore taken
+    against the title-hint-rolled-back prompt, exactly as the BEFORE side is
+    normalized in ``test_only_the_prompt_changed_against_the_pre_flip_descriptor``
+    for the three post-flip drifts it absorbs. This keeps THIS test measuring
+    what it was written to measure — that the PARAGRAPH peel is a clean
+    paragraph removal — instead of being weakened to ignore length. The line
+    swap gets its own byte accounting in the test below, so neither peel is
+    unpoliced.
     """
-    full, base = _prompt(unit), d6_base(_prompt(unit))
+    full, base = pre_title_frame_fix(_prompt(unit)), d6_base(_prompt(unit))
     later = {norm(p) for p in LATER_CONTRACT_PARAGRAPHS}
     for para in LATER_CONTRACT_PARAGRAPHS:
         assert norm(para) in norm(full), f"{unit}: later paragraph missing from tree"
@@ -170,6 +183,63 @@ def test_the_peel_removes_the_later_paragraphs_and_nothing_else(unit: str) -> No
     # paragraph — shows up as an inequality here rather than as a digest that
     # someone re-pins.
     assert len(full) == len(base) + sum(len(p) + 2 for p in dropped), unit
+
+
+@pytest.mark.parametrize("unit", ALL_DESKS)
+def test_the_title_hint_rollback_is_exactly_one_line_per_desk(unit: str) -> None:
+    """TITLE-FRAME-FIX's peel is a ONE-LINE swap, and it is on every desk.
+
+    The counterpart to the paragraph accounting above, for the line-shaped
+    train. Three claims, because a line swap has more ways to go wrong than a
+    paragraph drop:
+
+    * the TREE carries the new hint and NOT the D6 one (the train landed, and
+      the response schema did not end up with two ``"title"`` examples in it);
+    * the ROLLED-BACK text carries the D6 hint and not the new one (the peel
+      actually reverses it);
+    * the length delta is EXACTLY the one line's delta — so the rollback cannot
+      quietly start restoring anything else while the digests stay green.
+    """
+    d6_line, new_line = LATER_TITLE_HINTS[unit]
+    tree = _prompt(unit)
+    rolled = pre_title_frame_fix(tree)
+
+    assert tree.count(new_line) == 1, f"{unit}: tree lacks the TITLE-FRAME-FIX hint"
+    assert d6_line not in tree, f"{unit}: tree still carries the D6 hint"
+    assert rolled.count(d6_line) == 1, f"{unit}: rollback did not restore the D6 hint"
+    assert new_line not in rolled, f"{unit}: rollback left the new hint behind"
+    assert len(tree) - len(rolled) == len(new_line) - len(d6_line), unit
+
+
+def test_the_title_hint_rollback_refuses_an_ambiguous_prompt() -> None:
+    """The discriminator: a prompt carrying BOTH lines is a REFUSAL, not a swap.
+
+    Without this the rollback's failure mode would be silent — a descriptor that
+    somehow grew a second ``"title"`` example would still hash green, because
+    the first swap would land and the stray line would look like draft bytes.
+    """
+    d6_line, new_line = LATER_TITLE_HINTS["escalation"]
+    with pytest.raises(ValueError, match="BOTH"):
+        pre_title_frame_fix(f"prefix {new_line} middle {d6_line} suffix")
+
+
+def test_a_reworded_title_hint_breaks_the_digest() -> None:
+    """The proof that the peel did not defang the pin it rides on.
+
+    ``d6_base`` now rewrites bytes before hashing, so the obvious worry is that
+    it has become a laundering channel: reword the hint again tomorrow and the
+    digest stays green. It does not — the rollback keys on the EXACT new line,
+    so a further edit is not recognised, is not rolled back, and moves the
+    digest. Asserted against a corrupted copy rather than by trusting the
+    reasoning.
+    """
+    _, new_line = LATER_TITLE_HINTS["escalation"]
+    tree = _prompt("escalation")
+    assert sha(d6_base(tree)) == INTENDED_SHA256["escalation"]
+
+    corrupted = tree.replace(new_line, new_line.replace("who is doing what", "X"), 1)
+    assert corrupted != tree
+    assert sha(d6_base(corrupted)) != INTENDED_SHA256["escalation"]
 
 
 @pytest.mark.parametrize("unit", UNITS)
@@ -428,4 +498,17 @@ def test_only_the_prompt_changed_against_the_pre_flip_descriptor(unit: str) -> N
     _pre_flip_opts = before.get("method", {}).get("options")
     if isinstance(_pre_flip_opts, dict) and _pre_flip_opts.get("judge_sample_rate") == 0.10:
         _pre_flip_opts["judge_sample_rate"] = 1.0
+    # F-3 (2026-09-03, post-flip): method.bounded_question is a wholly NEW field
+    # — the desk's bounded question, previously implicit only in system_prompt's
+    # own "BOUNDED QUESTION —" section, made explicit so the assembly's block
+    # header can render it (DEMOTION_D1_SPEC §7 F-3). Unlike the three
+    # carve-outs above (which normalize an already-landed VALUE change), this
+    # normalizes the field's very PRESENCE: the pre-flip descriptor never had
+    # it, so copy the tree's landed value onto the before side to keep this
+    # pin asserting "nothing ELSE moved" rather than being weakened to ignore
+    # the field. The content of the value is asserted by
+    # test_bounded_question_descriptor.py, not by this pin.
+    _after_bq = after.get("method", {}).get("bounded_question")
+    if "bounded_question" not in before.get("method", {}) and _after_bq is not None:
+        before["method"]["bounded_question"] = _after_bq
     assert before == after

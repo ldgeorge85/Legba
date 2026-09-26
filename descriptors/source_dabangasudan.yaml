@@ -1,0 +1,83 @@
+# sources_wave_2 — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# Radio Dabanga — Netherlands-based exile Sudanese broadcaster/newsroom with
+# a dedicated Darfur/Kordofan ground-reporting network (comparable
+# provenance to source_meduza.yaml's exile-Russian-outlet role for the RU
+# desk). Closes the audit-flagged gap
+# (planning/COVERAGE_VS_SELECTION_AUDIT_2026-09-07.md item #5): the Kalogi
+# strikes (114 killed) have ZERO documents anywhere in the corpus despite
+# subscribed AA/Al Jazeera carrying 30/23 Sudan items in 14d — a
+# feed-section gap the audit names Radio Dabanga (plus Sudan Tribune, Sudan
+# War Monitor, OHCHR/UN News) as the direct remedy for. Verified live
+# 2026-09-07: valid RSS 2.0, title "Dabanga Radio TV Online", newest item
+# same-day, and item #2 of the checked window ("Int'l coalition condemns
+# attack on WFP aid convoy in Kordofan, Sudan", 2026-09-06) is South-Kordofan
+# ground reporting of exactly the kind the audit found the corpus missing
+# around Kalogi.
+#
+# source_class: reporting. Credibility host dabangasudan.org (seeded
+# 0.68/wire — independent exile newsroom with a Sudan stringer network, no
+# state affiliation).
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after verifying the route
+# live on the instance.
+
+identity:
+  id: source.dabanga.sudan
+  name: Radio Dabanga
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: sources_wave_2
+  created: "2026-09-07T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [SD]
+  languages: [en]
+  tags: [news, africa, sudan, sources_wave_2]
+  source_class: reporting
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "41 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.dabangasudan.org/en/rss"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming the
+    # route yields full article text (mirrors the RSSHub-lane conservative default).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

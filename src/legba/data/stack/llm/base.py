@@ -64,7 +64,12 @@ from ...registry.health import HealthState, StackComponentHealth
 # R11 per-run receipt accounting. ``legba.data.run_accounting`` is stdlib-only
 # and its package ``__init__`` imports nothing, so this costs no import weight
 # and cannot cycle back into the stack plane. No account bound → no-op.
-from ...run_accounting import prompt_digest, record_llm_call, record_prompt_rendered
+from ...run_accounting import (
+    COMPLETION_TEXT_FIELD,
+    prompt_digest,
+    record_llm_call,
+    record_prompt_rendered,
+)
 from ...schemas.stack import LLMProviderConfig
 
 logger = logging.getLogger(__name__)
@@ -201,11 +206,25 @@ class RuntimeContextLike(HandlerContext, Protocol):
 
 
 class TransientLLMFailure(Exception):
-    """5xx / network / 429. Runtime retries per descriptor.method.retries."""
+    """5xx / network / 429. Runtime retries per descriptor.method.retries.
 
-    def __init__(self, message: str, *, status: int | None = None):
+    ``retry_after`` (2026-09-08, additive + optional) is the provider's own
+    ``Retry-After`` header in seconds, when it sent one. Carried so a caller
+    that retries ABOVE this layer — the verify judge's transport shim — can obey
+    the provider's instruction instead of guessing a backoff; ``None`` whenever
+    no header was sent, which is every pre-existing raise site.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        retry_after: float | None = None,
+    ):
         super().__init__(message)
         self.status = status
+        self.retry_after = retry_after
 
 
 class BudgetExhausted(Exception):
@@ -219,6 +238,141 @@ class HardLLMFailure(Exception):
         super().__init__(message)
         self.status = status
         self.body = body
+
+
+class RouterStatus(int):
+    """An UPSTREAM provider status that arrived inside a router's 2xx envelope.
+
+    An OpenRouter-style router commits its response headers before it knows
+    whether the upstream provider will serve, so an upstream failure comes back
+    as **HTTP 200** with the real status buried in the body::
+
+        {"id": ..., "error": {"message": "Upstream error from Nvidia: Service
+         temporarily overloaded", "code": 502}}
+
+    There is no single number that describes that call: 200 is what the socket
+    said and 502 is what happened. This carries both. It IS the inner code for
+    every numeric purpose (``int(status) == 502``, ``status >= 500``, and the
+    receipt's ``http_status`` field serializes as a plain ``502``), and it
+    STRINGIFIES as ``"200/502"`` -- the token
+    :mod:`legba.data.provenance.judge_transport` already stamps onto the verify
+    row, where it reads *the router answered 200 and named a 502 inside*. That
+    shim classifies a raised call with ``str(exc.status)``, so returning the
+    compound form here is what lets it keep writing the same receipts now that
+    this layer raises instead of handing it a hollow success.
+    """
+
+    router_status: int
+
+    def __new__(cls, inner: int, *, router: int = 200) -> "RouterStatus":
+        self = super().__new__(cls, inner)
+        self.router_status = int(router)
+        return self
+
+    def __str__(self) -> str:
+        return f"{self.router_status}/{int(self)}"
+
+
+def _envelope_code(err: Mapping[str, Any]) -> int | None:
+    """The upstream HTTP status named inside an error envelope, if any."""
+    for key in ("code", "status", "status_code"):
+        try:
+            code = int(err[key])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 100 <= code < 600:
+            return code
+    return None
+
+
+def _envelope_retry_after(err: Mapping[str, Any]) -> float | None:
+    """``Retry-After`` as the router echoed it under ``error.metadata.headers``."""
+    meta = err.get("metadata")
+    headers = meta.get("headers") if isinstance(meta, Mapping) else None
+    if not isinstance(headers, Mapping):
+        return None
+    for key in ("Retry-After", "retry-after"):
+        try:
+            seconds = float(headers[key])
+        except (KeyError, TypeError, ValueError):
+            continue
+        # A zero or negative instruction is not an instruction — falling through
+        # to the schedule beats turning the backoff into a busy loop.
+        return seconds if seconds > 0 else None
+    return None
+
+
+def _has_usable_choice(data: Mapping[str, Any]) -> bool:
+    """Did the body carry generated output, whatever else it also carried?
+
+    The guard on everything below: a partial generation is NOT discarded. Where
+    a provider fails mid-request OpenRouter can return the prefix it did produce
+    alongside a per-choice ``error``; that response is degraded, not absent, and
+    turning it into an exception would throw away tokens already generated and
+    already billed. Only a body with nothing usable in it is a transport
+    failure.
+    """
+    for choice in data.get("choices") or []:
+        if not isinstance(choice, Mapping):
+            continue
+        message = choice.get("message")
+        if isinstance(message, Mapping):
+            content = message.get("content")
+            if isinstance(content, str) and content.strip():
+                return True
+            if message.get("tool_calls"):
+                return True
+        text = choice.get("text")  # legacy /completions shape
+        if isinstance(text, str) and text.strip():
+            return True
+    return False
+
+
+def _router_error(data: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """The provider-error envelope in a 2xx body, or ``None`` if there is none.
+
+    Two documented OpenRouter shapes, and BOTH are only an error when the body
+    has no usable output (see :func:`_has_usable_choice`):
+
+    * **top-level** ``{"error": {"code", "message", "metadata"}}`` with no
+      ``choices`` -- the request never reached generation. This is the live
+      shape: 626 calls on the judge route since 2026-09-06.
+    * **per-choice** ``choices[0].error`` with ``finish_reason: "error"`` -- the
+      provider dropped mid-request. Documented, and unobserved here so far.
+
+    OpenRouter's own docs say the HTTP status matches ``error.code``; that holds
+    for errors it raises about the REQUEST (bad key, no credits) and does not
+    hold for an upstream provider's failure, which arrives on a committed 200.
+    Live probe: 8 requests, 2 came back ``HTTP=200 keys=['error','id']
+    code=502``. So this check is on the BODY and never on the status line.
+    """
+    if _has_usable_choice(data):
+        return None
+    err = data.get("error")
+    if isinstance(err, Mapping):
+        return err
+    for choice in data.get("choices") or []:
+        if isinstance(choice, Mapping) and isinstance(choice.get("error"), Mapping):
+            return choice["error"]
+    return None
+
+
+def _inner_code_is_retryable(code: int | None) -> bool:
+    """Is an upstream code inside a 2xx envelope worth another attempt?
+
+    ``429`` and every ``5xx``; an unnamed code is retried too (an envelope with
+    no parseable status is an unexplained upstream failure, not a verdict about
+    the request). Every other ``4xx`` is a configuration answer -- a model the
+    router will not serve, a rejected key -- that a second identical request
+    cannot change.
+
+    Deliberately WIDER than the ``{429, 500, 502, 503, 529}`` status-line set
+    below, which enumerates what a ROUTER emits; an inner code is an arbitrary
+    upstream status and a 504 or a 520 is as transient as a 502. It is exactly
+    ``judge_transport.status_is_retryable``'s rule for the same tokens, so the
+    two layers can never disagree about whether one failure deserves a retry.
+    """
+    return code is None or code == 429 or code >= 500
 
 
 #: R11 — how a raised call classifies in the ``analyst_traces.llm_calls``
@@ -688,7 +842,23 @@ class LLMProviderHandler:
                 fields["error"] = type(exc).__name__
                 http_status = getattr(exc, "status", None)
                 if isinstance(http_status, int):
-                    fields["http_status"] = http_status
+                    # ``int()`` deliberately: a ``RouterStatus`` IS an int, but
+                    # storing the subclass would leave a live object in the
+                    # receipt dict. The value written is the INNER code (502) --
+                    # the thing that actually failed -- so every existing reader
+                    # of ``http_status`` keeps reading one comparable number.
+                    fields["http_status"] = int(http_status)
+                router_status = getattr(http_status, "router_status", None)
+                if isinstance(router_status, int):
+                    # ADDITIVE, and sparse. ``llm_calls`` is an untyped JSONB
+                    # array built from ``**fields`` (``run_accounting.py:343``)
+                    # with no pydantic model and no DDL over its element shape,
+                    # so a new key needs no migration and no registry rebuild.
+                    # Recorded ONLY when a router wrapped the failure, so its
+                    # PRESENCE is the evidence -- every direct-provider receipt
+                    # stays byte-identical, and ``router_status=200`` beside
+                    # ``http_status=502`` is the whole finding in two fields.
+                    fields["router_status"] = router_status
             else:
                 fields["status"] = "success"
                 if response is not None:
@@ -702,6 +872,19 @@ class LLMProviderHandler:
                         finish_reason=response.finish_reason,
                         tool_call_count=len(response.tool_calls),
                     )
+                    # WHAT THE MODEL SAID (2026-09-09). Every other field on
+                    # this receipt describes the CALL; none described the
+                    # ANSWER, so an output-contract failure — the model
+                    # returned something no reader could use — left the one
+                    # artefact that explains it nowhere on disk. Three
+                    # consecutive live corpus_researcher hard fails carried the
+                    # identical error string and no way to tell an empty body
+                    # from a protocol object from a fenced envelope. Bounded +
+                    # marked by ``clip_completion_text``; recorded only when
+                    # the model returned text, so a pure tool-call turn's
+                    # receipt is unchanged.
+                    if response.content:
+                        fields[COMPLETION_TEXT_FIELD] = response.content
                     # UPSTREAM SERVING PROVIDER (2026-08-16). `model` and
                     # `subprovider` name what we ASKED for and which handler
                     # class asked — neither names who actually served it. A
@@ -795,9 +978,9 @@ class LLMProviderHandler:
                     continue
                 raise TransientLLMFailure(f"network error: {exc}") from exc
 
+            retry_after = response.headers.get("retry-after")
             if response.status_code in retryable and attempt < max_retries:
                 # Honor `retry-after` if set.
-                retry_after = response.headers.get("retry-after")
                 wait_s = int(retry_after) if retry_after and retry_after.isdigit() else 2 ** attempt
                 await asyncio.sleep(wait_s)
                 continue
@@ -809,6 +992,14 @@ class LLMProviderHandler:
                     raise TransientLLMFailure(
                         f"{self.subprovider} {response.status_code}: {body[:300]}",
                         status=response.status_code,
+                        # Carried, not consumed: this layer has exhausted its own
+                        # retries by the time it raises, so the header is only
+                        # useful to a caller retrying above it.
+                        retry_after=(
+                            float(retry_after)
+                            if retry_after and retry_after.isdigit()
+                            else None
+                        ),
                     )
                 raise HardLLMFailure(
                     f"{self.subprovider} {response.status_code}: {body[:300]}",
@@ -816,11 +1007,63 @@ class LLMProviderHandler:
                 )
 
             try:
-                return response.json()
+                data = response.json()
             except ValueError as exc:
                 raise HardLLMFailure(
                     f"{self.subprovider} returned non-JSON body: {response.text[:200]}",
                 ) from exc
+
+            # ROUTER-WRAPPED PROVIDER ERROR (2026-09-08). Everything above this
+            # line switches on ``response.status_code``, and for two days that
+            # was the wrong question. A router answers 200 the moment it commits
+            # headers, so an upstream overload arrives as a SUCCESS carrying a
+            # 502 in its body and no ``choices`` -- the loop never fired, and
+            # ``_account_call`` wrote ``status="success"`` 626 times over a
+            # grader outage that a fidelity replay, not a gauge, eventually
+            # found. The predicate is the SAME one; only the place it reads the
+            # status from is new.
+            err = _router_error(data)
+            if err is None:
+                return data
+            code = _envelope_code(err)
+            envelope_retry_after = _envelope_retry_after(err)
+            detail = str(err.get("message") or err)[:300]
+            if _inner_code_is_retryable(code):
+                if attempt < max_retries:
+                    wait_s = envelope_retry_after
+                    if wait_s is None and retry_after and retry_after.isdigit():
+                        wait_s = float(retry_after)
+                    await asyncio.sleep(
+                        wait_s if wait_s is not None else 2 ** attempt
+                    )
+                    continue
+                raise TransientLLMFailure(
+                    f"{self.subprovider} {response.status_code}/{code or 'error'}"
+                    f" (router-wrapped): {detail}",
+                    # ``RouterStatus`` so the receipt records the inner 502 while
+                    # ``str(exc.status)`` still reads "200/502" for the judge
+                    # transport shim. Only when the router NAMED a code -- a
+                    # fabricated number would be worse than an absent one.
+                    status=(
+                        RouterStatus(code, router=response.status_code)
+                        if code is not None else None
+                    ),
+                    retry_after=(
+                        envelope_retry_after
+                        if envelope_retry_after is not None
+                        else (
+                            float(retry_after)
+                            if retry_after and retry_after.isdigit()
+                            else None
+                        )
+                    ),
+                )
+            raise HardLLMFailure(
+                f"{self.subprovider} {response.status_code}/{code}"
+                f" (router-wrapped): {detail}",
+                status=RouterStatus(code, router=response.status_code),
+                body=self._safe_body(response)[:1000],
+            )
 
         raise last_exc or TransientLLMFailure("call failed after retries")
 

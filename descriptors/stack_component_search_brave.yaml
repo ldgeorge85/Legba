@@ -1,0 +1,160 @@
+# R-C — KEYED stack component: search.brave.paid (kind: search_provider).
+#
+# The PAID rung of the search provider ladder. `search.searxng.local` stays
+# rung 0 (free, self-hosted, $0/query, live); this component is the rung the
+# `web_access` pack's `web_search` ToolSpec falls to when rung 0 DEGRADES —
+# the failure the searxng handler documents (upstream engines CAPTCHA /
+# rate-limit / ban the instance and the response is still HTTP 200 with a
+# short or empty results[]). Brave is a first-party index, not a metasearch,
+# so it does not share SearXNG's ban surface; that independence is the whole
+# reason paying for it buys anything, and the reason the shape is a LADDER
+# rather than a swap.
+#
+# Handler: src/legba/data/stack/search/brave.py (BraveSearchHandler, subprovider
+# "brave", config schema SearchProviderConfig). Both Brave corpora are reachable
+# from this one component: the configured endpoint is the WEB corpus, and the
+# handler derives the NEWS sibling (/res/v1/news/search) by path swap. Register
+# a second component id with `categories: [news]` to pin one to news.
+#
+# ⚠ THIS FILE IS THE REVIEWABLE HOME OF THE COMPONENT BODY, and it is the ONLY
+# one: scripts/bringup_register_stack.py LOADS this YAML rather than carrying a
+# second copy of the config, so the tree and the registrar cannot drift.
+#
+# KEYED — activation gating (the S-2 convention, applied to a stack component):
+#   * state is DRAFT. Nothing resolves a draft component into a live handler,
+#     so this file is committable while the account does not exist yet.
+#   * config.api_key is a VAULT REF (a vault id, never the plaintext). The
+#     handler resolves it through the credential resolver at bind time. An
+#     ABSENT, UNRESOLVABLE or EMPTY key is a SearchProviderUnresolved that says
+#     "NO query was issued" — never a silent empty result set, because an
+#     empty result set is what an analyst reads as "no reporting on X exists".
+#   * The health checker enforces the same thing at rest: a `brave` component
+#     with no api_key is UNHEALTHY, not merely keyless (health.py
+#     KEY_REQUIRED_SEARCH_SUBPROVIDERS). Without that branch it would report
+#     HEALTHY, because TCP to api.search.brave.com:443 succeeds from anywhere.
+#
+# ⚠ METERED. cost_usd_per_query is a LIST PRICE, in config rather than in code
+# because a provider's price is a contract term that moves without a code
+# change. It is the number the ladder charges against the `web_access` pack's
+# governor `max_cost_usd_per_day` BEFORE issuing a query, and the number it
+# settles onto `action_pack_invocations.cost_usd` after. VERIFY IT against
+# https://brave.com/search/api/ pricing before trusting a burn figure — the
+# 0.005 below is the Data-for-Search list price as understood at authoring time
+# and is NOT a measured value.
+#
+#   Two queries can be billed for one web_search call: the search itself, plus
+#   the liveness CONTROL PROBE that runs when a search comes back empty. The
+#   ladder counts both (web_tools `_RungOutcome.queries`), so the settled cost
+#   is what was actually spent rather than half of it.
+#
+# ⚠ NO EGRESS ALLOWLIST ENTRY IS NEEDED, and adding one would teach a false
+# model. `LEGBA_EGRESS_ALLOW_HOSTS` exists to permit RFC-1918 compose sidecars
+# (`searxng`, `rsshub`) that the SSRF guard would otherwise refuse;
+# api.search.brave.com is a PUBLIC host and is already permitted. The control
+# that IS needed — and that the SSRF guard structurally cannot provide — is the
+# credential fence in the handler: `allowed_endpoint_hosts` pins the endpoint
+# host, so a mis-pointed or tampered `endpoint` cannot ship the paid
+# subscription token to some other public host.
+#
+# OPERATOR FLIP (to go live) — all four steps, in order:
+#   1. Store the key:
+#        set LEGBA_BRAVE_SEARCH_API_KEY=<token> in .env, then
+#        python3 scripts/bringup_vault_load.py
+#      (or POST {registry}/api/v1/registry/vault/secrets
+#           {"secret_id": "search.brave.api_key", "plaintext": "<token>"})
+#   2. Register the component:
+#        python3 scripts/bringup_register_stack.py
+#   3. Declare a spend ceiling on the pack. The ladder REFUSES a metered rung
+#      when the pack has no `governor.max_cost_usd_per_day` — an unenforced
+#      spend cap on a metered external API is an open tab, not a permissive
+#      default. PUT the web_access pack with, e.g.:
+#        governor: {budget_account: web_access, max_cost_usd_per_day: 2.00, ...}
+#   4. Add the rung to the ladder — PUT the web_access pack's web_search
+#      ToolSpec config with:
+#        fallback_providers:
+#          - {factory_kind: stack_ref, raw: search.brave.paid}
+#      Until this step the component is registered and INERT: rung 0 is the
+#      only rung, and web_search behaves byte-identically to today.
+#   5. Transition draft -> active:
+#        POST {registry}/api/v1/registry/stack/search.brave.paid/transition
+#             {"to_state": "configured"}   then   {"to_state": "active"}
+#
+# Verify after the flip:
+#   POST {registry}/api/v1/registry/stack/search.brave.paid/healthcheck
+#   -> state must be HEALTHY with extra.key_declared true and
+#      extra.cost_usd_per_query 0.005. UNHEALTHY with a "requires an api_key"
+#      detail means step 1 did not land.
+
+id: search.brave.paid
+name: Brave Search API (paid discovery rung)
+schema_uri: legba/stack/search_provider/1.0.0
+# Placeholder — the registry stamps the content hash at register time.
+version: "0000000000000000"
+state: draft
+owner: lewis@local
+
+config:
+  subprovider:
+    factory_kind: dropdown_static
+    raw: brave
+    options: [searxng, json, firecrawl, jina, tavily, brave, agent]
+
+  # The WEB corpus. The handler derives /res/v1/news/search from this by path
+  # swap, and refuses any host other than api.search.brave.com.
+  endpoint:
+    factory_kind: text
+    raw: https://api.search.brave.com/res/v1/web/search
+
+  # VAULT REF, never the plaintext. Loaded from LEGBA_BRAVE_SEARCH_API_KEY by
+  # scripts/bringup_vault_load.py.
+  api_key:
+    factory_kind: secret
+    raw: search.brave.api_key
+
+  timeout_seconds:
+    factory_kind: number
+    raw: 15
+
+  # 20 — Brave's OWN ceiling on `count` for the web corpus, which is what
+  # makes this provider-correct rather than a copy of the package cap. The
+  # package caps every caller at MAX_RESULTS_CAP (30, raised from 10 after a
+  # census measured the free rung answering ~28 per query); asking Brave for
+  # more than 20 is a 422, so the handler clamps to BRAVE_MAX_COUNT and this
+  # knob says the true page size instead of a number the wire would reject.
+  max_results:
+    factory_kind: number
+    raw: 20
+
+  # LIST PRICE per query. VERIFY at brave.com/search/api/ before trusting it.
+  cost_usd_per_query:
+    factory_kind: number
+    raw: 0.005
+
+  # Not a metasearch — there is no upstream engine set to name. Empty.
+  engines:
+    factory_kind: list
+    item_kind: text
+    raw: []
+
+  # Selects the corpus this component defaults to. Empty / [general] = the WEB
+  # corpus; [news] pins it to /res/v1/news/search.
+  categories:
+    factory_kind: list
+    item_kind: text
+    raw: []
+
+  # Empty = Brave's own default (no language pin). Sent as `search_lang`.
+  language:
+    factory_kind: text
+    raw: ""
+
+  # Generic-JSON knobs. UNUSED by this subprovider — the Brave handler knows
+  # both of its own body shapes (web nests hits under `web.results`, news puts
+  # them at top-level `results`) and picks by the `type` marker Brave stamps.
+  # Present at their schema defaults so the stored body round-trips.
+  results_key:
+    factory_kind: text
+    raw: results
+  query_param:
+    factory_kind: text
+    raw: q

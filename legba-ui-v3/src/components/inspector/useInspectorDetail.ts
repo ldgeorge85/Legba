@@ -19,8 +19,25 @@
  *   - analyst  → GET /registry/descriptors/analyst/{id} (analyst descriptor)
  */
 import { useQuery } from '@tanstack/react-query'
-import { apiGet, ApiError } from '@/lib/api'
+import {
+  contentionFences,
+  contentionPages,
+  decisiveRef,
+  type ContentionsResponse,
+} from '@/lib/contentionsModel'
+import { apiGet, ApiError, fetchJournalEntry } from '@/lib/api'
 import type { LineageReport } from '@/lib/graphModel'
+import {
+  ABSENCE_KIND_LABEL,
+  absenceExtent,
+  absenceHeadline,
+  matchAbsence,
+  matchAbsenceSubject,
+  notMeasuredReason,
+  parseAbsenceId,
+  type AbsenceKind,
+  type AbsenceResponse,
+} from '@/lib/absenceModel'
 import type { Selection, SelectionKind } from '@/state/selection'
 
 /** A forward/related reference rendered as a RecordLink in the Inspector. */
@@ -50,7 +67,7 @@ export interface InspectorDetail {
 }
 
 /** Selection kinds whose detail comes from the lineage walk. */
-const WALKABLE = new Set<SelectionKind>(['finding', 'situation', 'signal'])
+const WALKABLE = new Set<SelectionKind>(['finding', 'situation', 'signal', 'event'])
 
 function str(v: unknown): string | undefined {
   return typeof v === 'string' && v.length > 0 ? v : undefined
@@ -312,14 +329,255 @@ function rowKindToSelection(rowKind: string): SelectionKind {
   }
 }
 
+/**
+ * A REPORT is a `kind='finding'` row (design §0), so it resolves through the
+ * same lineage walk — but `/lineage/report/<id>` is not a table, so the walk
+ * kind is pinned to `finding` here rather than read off `sel.kind`.
+ */
+function resolveReport(sel: Selection): Promise<InspectorDetail> {
+  return resolveWalkable({ ...sel, instanceKey: sel.instanceKey ?? 'finding' })
+}
+
+/**
+ * A journal entry / consolidation — `GET /journal/{id}` (decision 6). Before
+ * this existed the Journal could not put its rows in the shared selection at
+ * all, so it carried a parallel reader stack keyed on a component-local
+ * `selectedRowId`.
+ */
+async function resolveJournalEntry(sel: Selection): Promise<InspectorDetail> {
+  const entry = (await fetchJournalEntry(sel.id)) as unknown as Record<string, unknown>
+  return {
+    kind: 'journal_entry',
+    id: sel.id,
+    label: str(entry.title) ?? sel.label ?? sel.id,
+    core: {
+      kind: str(entry.kind) ?? undefined,
+      produced_at: str(entry.created_at) ?? str(entry.produced_at) ?? undefined,
+    },
+    body: entry,
+    refs: [],
+    related: [],
+  }
+}
+
+/** The absence kinds a bounded UNIT can be classed under by the route. */
+const UNIT_KINDS: AbsenceKind[] = ['not_collected', 'source_stale']
+
+/**
+ * The `proof.ref_kind`s that resolve to a real Inspector selection. The ROUTE
+ * says what a ref is; this maps only the two that have a resolver, so a
+ * scorecard row or a map_version is shown as text instead of as a link that
+ * would 404.
+ */
+const REF_KIND_TO_SELECTION: Record<string, SelectionKind> = {
+  finding: 'finding',
+  source: 'source',
+}
+
+/**
+ * A TYPED ABSENCE (7b/k5) — the selection whose record does not exist.
+ *
+ * The id encodes `scope|kind|subject`; the detail comes from
+ * `GET /v3/absence?scope=` and is the matching item's PROOF. Three honest
+ * outcomes, never a blank:
+ *
+ *   * a match → the reason, the extent, and `proof.what_was_checked /
+ *     checked_at / ref`, with `ref` offered as a RecordLink when the kind's ref
+ *     is a substrate row (a silent unit's latest read, an audit row's read);
+ *   * the kind was NOT MEASURED for this desk → the route's own sentence
+ *     saying so, so "not checked" never reads as "nothing absent";
+ *   * read cleanly, no item → "no typed absence is recorded for this subject",
+ *     which is a real answer about a desk whose gap has since closed.
+ */
+async function resolveAbsence(sel: Selection): Promise<InspectorDetail> {
+  const parsed = parseAbsenceId(sel.id)
+  if (!parsed) return rawDetail(sel)
+  const { scope, kind, subject } = parsed
+  const resp = await apiGet<AbsenceResponse>(
+    `/v3/absence?scope=${encodeURIComponent(scope)}`,
+  )
+  // A silent unit is `not_collected` or `source_stale` depending on whether it
+  // ever ran, and that is the ROUTE's call — so a unit drill matches on the
+  // subject across the unit kinds rather than asserting a classification the
+  // clicked cell does not own. Every other kind is addressed exactly.
+  const item = UNIT_KINDS.includes(kind)
+    ? matchAbsenceSubject(resp, subject, UNIT_KINDS)
+    : matchAbsence(resp, kind, subject)
+  const label = sel.label ?? `${subject} — ${ABSENCE_KIND_LABEL[kind]}`
+  const core: Record<string, unknown> = { subject, scope, read_at: resp.read_at }
+  if (!item) {
+    // Two different answers, and the panel must never collapse them: the kind
+    // was not CHECKED for this desk, or it was checked and this subject is not
+    // absent. A blank would say the first when the second is true.
+    const why = notMeasuredReason(resp, kind)
+    core.absence_kind = ABSENCE_KIND_LABEL[kind]
+    core.state = why ? 'not measured' : 'no typed absence recorded'
+    return {
+      kind: 'absence',
+      id: sel.id,
+      label,
+      core,
+      body: {
+        reason: why
+          ? `not measured for this desk: ${why}`
+          : 'no typed absence is recorded for this subject as of the read above',
+        proof: null,
+      },
+      refs: [],
+      related: [],
+    }
+  }
+  core.absence_kind = ABSENCE_KIND_LABEL[item.kind]
+  core.extent = absenceExtent(item)
+  // The one line that says when this was established and whether anyone has
+  // looked since — a stale item reads "last known absence, not re-checked"
+  // rather than passing for a current one.
+  core.measured = absenceHeadline(item)
+  if (item.stale) core.stale = true
+  return {
+    kind: 'absence',
+    id: sel.id,
+    label,
+    core,
+    body: {
+      reason: item.reason,
+      what_was_checked: item.proof.what_was_checked,
+      checked_at: item.proof.checked_at,
+      ref: item.proof.ref,
+      since: item.since,
+      window: item.window,
+      as_of: item.as_of,
+      as_of_basis: item.as_of_basis,
+      expires_at: item.expires_at,
+      review: item.review ?? null,
+      stale: item.stale,
+    },
+    // A silent unit's ref is its latest read, an audited claim's is the read
+    // that published it, a silent source's is the source — so the proof stays
+    // one click from the record it was measured against wherever a resolver
+    // exists. A scorecard card or a map_version has none and is shown as text
+    // in the body, never as a link that would 404.
+    refs:
+      item.proof.ref && item.proof.ref_kind && REF_KIND_TO_SELECTION[item.proof.ref_kind]
+        ? [
+            {
+              kind: REF_KIND_TO_SELECTION[item.proof.ref_kind],
+              id: item.proof.ref,
+              relation: 'what was checked',
+            },
+          ]
+        : [],
+    related: [],
+  }
+}
+
+
+/**
+ * A CONTENTION (7a) — the retrieval that went looking for the claim's opposite.
+ *
+ * The id is the claim key; the detail comes from
+ * `GET /v3/contentions?claim_id=` and is the RECORD, not a judgement:
+ *
+ *   * `core` states what was asked and on which rung, how many words the
+ *     counter-query carried that the claim did not (the pass's own
+ *     paraphrase-quality number), THE FOUR FENCES' readings for the decisive
+ *     page, and whether the record is still live;
+ *   * `body` carries the hedged statement, the page's quoted sentence, its
+ *     URL, the date the PAGE states (absent when it states none — never
+ *     today's), the hash of the bytes this platform holds, and EVERY page the
+ *     pass fetched with the fence readings that admitted or refused it;
+ *   * `refs` links the read the claim was published in, so the claim is one
+ *     click back.
+ *
+ * THE FENCES ARE PART OF THE ANSWER, not a footnote to it (migration 0222).
+ * "A page we hold states the opposite" is only worth reading because a
+ * reference host could not have said it, an undated page could not have said
+ * it, an off-subject sentence could not have said it, and one page alone would
+ * have been a qualification — so `independent_pages` reads as "N of 2
+ * independent pages" with what falling short of the bar meant, and a reading
+ * nobody took reads as `not measured` rather than as 0.
+ *
+ * NOTHING HERE ADJUDICATES, and the detail says so in words rather than
+ * leaving a reader to infer it: `contested` is a fact about a retrieval, and
+ * which side is right is a judgement this platform does not make here.
+ */
+async function resolveContention(sel: Selection): Promise<InspectorDetail> {
+  const resp = await apiGet<ContentionsResponse>(
+    `/v3/contentions?claim_id=${encodeURIComponent(sel.id)}`,
+  )
+  const row = (resp?.contentions ?? [])[0] ?? null
+  const label = sel.label ?? 'contested by retrieval'
+  if (!row) {
+    // Read cleanly, no row. A real answer about a claim whose record has since
+    // been superseded or pruned — never a blank.
+    return {
+      kind: 'contention',
+      id: sel.id,
+      label,
+      core: { state: 'no contention record for this claim' },
+      body: { note: resp?.note ?? '' },
+      refs: [],
+      related: [],
+    }
+  }
+  const ref = decisiveRef(row)
+  return {
+    kind: 'contention',
+    id: sel.id,
+    label,
+    core: {
+      stance: row.stance,
+      derivation:
+        row.derivation === 'negation'
+          ? 'negation (uncalibrated — read the page)'
+          : row.derivation,
+      counter_query: row.query,
+      query_source: row.query_source,
+      new_words_vs_the_claim: row.query_novel_tokens,
+      rung: row.rung,
+      // The four fences, each a reading or `not measured` — never 0.
+      ...contentionFences(row),
+      retrieved_at: row.retrieved_at,
+      state: row.live ? 'live' : 'expired, not re-checked',
+    },
+    body: {
+      claim: row.claim_text,
+      statement: row.statement,
+      quote: ref?.quote ?? '',
+      counter_url: ref?.url ?? '',
+      // The page's OWN date. Absent renders as absence — the fetch leg
+      // discovers a date and never invents one.
+      published_at: ref?.published_at ?? 'no publication date stated',
+      sha256: ref?.sha256 ?? '',
+      pages_read: row.refs.length,
+      // EVERY page, not just the decisive one: a bar of two independent outlets
+      // cannot be checked against a single row, and "three of these four were
+      // encyclopedia entries" is a thing the count alone does not say.
+      pages: contentionPages(row),
+      linked_corpus_rows: row.linked_signals,
+      note: resp?.note ?? '',
+    },
+    refs: row.finding_id
+      ? [{ kind: 'finding', id: row.finding_id, relation: 'the read that published this claim' }]
+      : [],
+    related: [],
+  }
+}
+
 const RESOLVERS: Record<SelectionKind, (sel: Selection) => Promise<InspectorDetail>> = {
   finding: resolveWalkable,
   situation: resolveWalkable,
   signal: resolveWalkable,
+  // V3/P6 — `event` is walkable (a first-class root kind in _TABLES_BY_KIND).
+  event: resolveWalkable,
   entity: resolveEntity,
   source: resolveSource,
   target: resolveTarget,
   analyst: resolveAnalyst,
+  report: resolveReport,
+  journal_entry: resolveJournalEntry,
+  absence: resolveAbsence,
+  contention: resolveContention,
 }
 
 async function resolveDetail(sel: Selection): Promise<InspectorDetail> {

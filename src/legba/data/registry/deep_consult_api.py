@@ -43,10 +43,15 @@ from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
+from ..pinned_context import (
+    MAX_PINNED_RECORDS,
+    MAX_PINNED_TOTAL_CHARS,
+    pinned_context_chars,
+)
 from . import consult_persistence
-from .consult_api import resolve_consult_model_override
+from .consult_api import PinnedRef, resolve_consult_model_override
 from .api import RegistryAPIDeps, require_bearer
 from .descriptor import Family
 from .errors import DescriptorNotFound
@@ -80,9 +85,36 @@ class DeepConsultRequest(BaseModel):
     emit_hypotheses: bool = True
     # F1 model picker — which registered LLM plane runs the deep workflow's
     # plan/analyze stages. None / absent ⇒ "opus" (the billed Anthropic Opus
-    # plane, the default). "core" routes to the free self-hosted core plane.
-    # Mapped friendly→component id server-side off the SAME allowlist as chat.
-    model: Literal["opus", "core"] | None = None
+    # plane, the default). "fable" routes to the billed Anthropic Claude
+    # Fable 5.1 plane; "core" routes to the free self-hosted core plane.
+    # Mapped friendly→component id server-side off the SAME allowlist as chat
+    # (``resolve_consult_model_override`` / ``CONSULT_MODEL_ALLOWLIST`` in
+    # ``consult_api.py``) — this Literal must stay a superset-free mirror of
+    # that allowlist's keys, since the Deep Consult UI shares the SAME
+    # `CONSULT_MODEL_OPTIONS` dropdown as chat (`lib/api.ts`): an option this
+    # Literal doesn't accept would 422 the moment it's picked here.
+    model: Literal["opus", "fable", "core"] | None = None
+    # Records the operator pinned to the conversation — the SAME field name,
+    # caps and entry shape the chat front door takes (``consult_api.PinnedRef``)
+    # so a Chat→Deep handoff carries the operator's context instead of
+    # dropping it on the floor. Absent / [] ⇒ no ``pinned_context`` key on the
+    # actor's input row, keeping a pre-pin client's submit byte-identical.
+    pinned_context: list[PinnedRef] = Field(
+        default_factory=list, max_length=MAX_PINNED_RECORDS,
+    )
+
+    @model_validator(mode="after")
+    def _bounded_pinned_context(self) -> DeepConsultRequest:
+        """Cap the pin set's TOTAL size — the twin of ``ConsultRequest``'s."""
+        used = pinned_context_chars(
+            [p.model_dump() for p in self.pinned_context],
+        )
+        if used > MAX_PINNED_TOTAL_CHARS:
+            raise ValueError(
+                f"pinned_context is {used} chars; the cap is "
+                f"{MAX_PINNED_TOTAL_CHARS}"
+            )
+        return self
 
 
 class DeepConsultSubmitResponse(BaseModel):
@@ -190,6 +222,9 @@ def build_deep_consult_router(deps: RegistryAPIDeps) -> APIRouter:
         }
         if llm_component_override is not None:
             first_input["llm_component_override"] = llm_component_override
+        pinned_context = [p.model_dump() for p in body.pinned_context]
+        if pinned_context:
+            first_input["pinned_context"] = pinned_context
         invoke_body = {
             "trigger_kind": "method",
             "inputs": [first_input],
@@ -201,8 +236,9 @@ def build_deep_consult_router(deps: RegistryAPIDeps) -> APIRouter:
 
         logger.info(
             "deep_consult.submit actor_id=%s descriptor_version=%s run_id=%s "
-            "question_len=%d",
+            "question_len=%d pinned_context=%d pinned_chars=%d",
             actor_id, row.version[:16], run_id, len(body.question),
+            len(pinned_context), pinned_context_chars(pinned_context),
         )
 
         # 2. PUT to the dapr sidecar. The actor schedules the workflow and

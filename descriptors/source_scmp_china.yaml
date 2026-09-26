@@ -1,0 +1,94 @@
+# sources_wave_2 — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# South China Morning Post — China section. Closes the audit-flagged gap
+# (planning/COVERAGE_VS_SELECTION_AUDIT_2026-09-07.md item #7): China's
+# sanctions confrontation, the rare-earth shipment halts, and the Meta/Manus
+# block had only 1 corpus hit (via oilprice) with "no wire-class China
+# coverage beyond CGTN/state media" — the audit's own registry-status note
+# lists SCMP explicitly among the outlets not registered. Verified live
+# 2026-09-07: valid RSS 2.0 at https://www.scmp.com/rss/4/feed/ (the bare
+# https://www.scmp.com/rss/4/feed 301-redirects to an http canonical URL;
+# the trailing-slash https form serves directly with no redirect), title
+# "China - South China Morning Post", newest item same-day; items are
+# exactly the wire-class China coverage the gap named
+# (PLA/Lop Nur, China-Central Asia rail bypassing Russia, US-China
+# relations), en, well inside 7d.
+#
+# Reuters (the other candidate named in the brief) was NOT researched
+# further here — per the brief's own framing it is unavailable (no public,
+# keyless RSS; Reuters retired open RSS years ago and gates syndication
+# behind commercial licensing). Say so, not shipped.
+#
+# source_class: reporting, NOT state_media. SCMP is Hong-Kong-based and
+# Alibaba-owned, but is editorially distinct from PRC state broadcasters
+# (CGTN/Xinhua/Global Times/People's Daily/CCTV/China Daily/China News) —
+# the house rule reserves state_media for that named set on the CN desk
+# (source_cgtn_world.yaml), the same wire-vs-state-outlet split already
+# applied to France 24 / RFE-RL / NHK / ABC Australia (state-funded or
+# state-adjacent ownership, editorially conventional -> reporting).
+# Credibility host scmp.com (seeded 0.68/wire — commercial English-language
+# China-desk wire, state_affiliation False; flag for operator review given
+# the ownership structure).
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after verifying the route
+# live on the instance.
+
+identity:
+  id: source.scmp.china
+  name: South China Morning Post — China
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: sources_wave_2
+  created: "2026-09-07T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: [CN]
+  languages: [en]
+  tags: [news, asia, china, sources_wave_2]
+  source_class: reporting
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "47 * * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://www.scmp.com/rss/4/feed/"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming the
+    # route yields full article text (mirrors the RSSHub-lane conservative default).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 86400
+  delivery: lossy
+
+subscription_policy: open

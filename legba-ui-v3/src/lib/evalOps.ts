@@ -243,6 +243,153 @@ export function bandCalibrationEmpty(section: BandCalibrationSection | null | un
   return !section.claims_total || section.claims_total <= 0
 }
 
+/**
+ * The two DIFFERENT absences this section can be in, kept apart because they
+ * mean different things to an operator (the `sourceHealth` rule-3 idiom):
+ *
+ *   * `unavailable` — no `band_calibration_tracker` finding exists at all.
+ *     Nothing has been measured, and there is no `produced_at` to show.
+ *   * `no-claims`   — a finding exists (so there IS an as-of) but it logged
+ *     zero claims: the tracker ran and found no band transitions to claim.
+ *   * `graded`      — claims exist; render the section.
+ *
+ * `bandCalibrationEmpty` collapses the first two into one boolean for callers
+ * that only need "is there anything to draw"; this keeps them separable.
+ */
+export type BandCalibrationState = 'unavailable' | 'no-claims' | 'graded'
+
+export function bandCalibrationState(
+  section: BandCalibrationSection | null | undefined,
+): BandCalibrationState {
+  if (!section || !section.available) return 'unavailable'
+  if (!section.claims_total || section.claims_total <= 0) return 'no-claims'
+  return 'graded'
+}
+
+/** The closed outcome vocabulary, in the resolver's own order (see
+ *  `band_calibration_tracker`'s module banner: the three CONFIRMING outcomes,
+ *  the reverting one, then the two honest abstains). */
+export const BAND_OUTCOME_ORDER = [
+  'held',
+  'worsened',
+  'improved',
+  'reverted',
+  'insufficient',
+  'unresolvable',
+] as const
+
+/** The outcomes that enter the persistence/reversal denominator. `insufficient`
+ *  and `unresolvable` are reported but EXCLUDED from both rates — they are
+ *  honest abstains (coverage lost / no later card), not graded outcomes. */
+const BAND_OUTCOME_SCORED: ReadonlySet<string> = new Set([
+  'held',
+  'worsened',
+  'improved',
+  'reverted',
+])
+
+/** One line of the tracker's own definition per outcome, for the row's hover.
+ *  Verbatim in substance from `band_calibration_tracker`'s "Resolution spec"
+ *  banner — never a second, drifting gloss. */
+export const BAND_OUTCOME_MEANING: Record<string, string> = {
+  held: 'the band at the horizon equals the claimed band — the transition held exactly',
+  worsened:
+    'a deterioration claim whose band moved FURTHER up the ladder — confirmed and extended',
+  improved:
+    'an improvement claim whose band moved further DOWN the ladder — confirmed and extended',
+  reverted: 'the band moved back AGAINST the claimed direction',
+  insufficient:
+    'the band at the horizon read insufficient-evidence — coverage lost, neither ' +
+    'confirms nor reverts (excluded from both rates)',
+  unresolvable:
+    'no later scorecard row exists inside the horizon, or the band read off-ladder — ' +
+    'an honest abstain, never a fabricated outcome (excluded from both rates)',
+}
+
+export interface BandOutcomeRow {
+  outcome: string
+  /** how many resolved claims landed on this outcome */
+  n: number
+  /** share of the horizon's RESOLVED claims, or null when nothing resolved */
+  share: number | null
+  /** false for the two abstains — they are excluded from the rate denominator */
+  scored: boolean
+}
+
+/**
+ * One horizon's `outcomes` count map as ordered display rows, each with its
+ * share of that horizon's RESOLVED claims (the denominator the counts sum to).
+ * A zero `resolved` yields `share: null` on every row — an honest absence, not
+ * a fabricated 0%. Outcomes the server adds later sort after the known
+ * vocabulary rather than vanishing.
+ */
+export function bandOutcomeRows(horizon: BandCalibrationHorizon): BandOutcomeRow[] {
+  const counts = horizon.outcomes ?? {}
+  const known = (BAND_OUTCOME_ORDER as readonly string[]).filter((o) => o in counts)
+  const extras = Object.keys(counts)
+    .filter((o) => !(BAND_OUTCOME_ORDER as readonly string[]).includes(o))
+    .sort()
+  const denom = horizon.resolved
+  return [...known, ...extras].map((outcome) => ({
+    outcome,
+    n: counts[outcome],
+    share: denom > 0 ? counts[outcome] / denom : null,
+    scored: BAND_OUTCOME_SCORED.has(outcome),
+  }))
+}
+
+/**
+ * Pull one horizon block out of a `by_direction` / `by_dimension` slice. The
+ * slice's index signature mixes the numeric `claims` count in with the horizon
+ * blocks, so this narrows by SHAPE rather than trusting the key — a slice that
+ * simply never carried that horizon reads `null`, never a zeroed block.
+ */
+export function bandSliceHorizon(
+  slice: BandCalibrationSlice,
+  label: string,
+): BandCalibrationHorizon | null {
+  const v = slice[label]
+  if (v == null || typeof v === 'number') return null
+  return v
+}
+
+export interface BandSliceRow {
+  key: string
+  claims: number
+  slice: BandCalibrationSlice
+}
+
+/**
+ * A `by_direction` / `by_dimension` map as ordered display rows — most claims
+ * first (the slice with the most evidence is the one worth reading), ties by
+ * key. An empty map yields an empty list, which the panel renders as an
+ * absence rather than as a table of zeroes.
+ */
+export function bandSliceRows(slices: Record<string, BandCalibrationSlice>): BandSliceRow[] {
+  return Object.entries(slices)
+    .map(([key, slice]) => ({
+      key,
+      claims: typeof slice.claims === 'number' ? slice.claims : 0,
+      slice,
+    }))
+    .sort((a, b) => b.claims - a.claims || a.key.localeCompare(b.key))
+}
+
+/**
+ * The statement the `no_brier` flag stands for, spelled out. The flag is hard
+ * `true` on every finding the tracker writes; rendering it as a bare boolean —
+ * or not at all — would drop the only thing it exists to say.
+ */
+export const BAND_NO_BRIER_STATEMENT =
+  'No Brier score, Brier skill score or forecast-skill claim exists (or can ' +
+  'exist) for this harness: bands are ordinal risk categories, not probabilities.'
+
+/** A share of resolved claims as a percentage, or the honest absence marker
+ *  when nothing resolved at this horizon (never a fabricated 0%). */
+export function bandShareLabel(share: number | null): string {
+  return share == null ? '—' : `${Math.round(share * 100)}%`
+}
+
 export type AcuteTag = 'ready' | 'accumulating' | 'degenerate'
 
 export interface CalibrationBanner {
@@ -739,6 +886,135 @@ export interface UnitCorrectnessBoard {
   scored_at: string | null
   labeling: { weeks?: Array<{ week: string; sampled: number; labeled: number }>; weeks_pinned?: number }
   honesty_note: string
+  /** W-6 — the STANDING external-truth block. `null` until the ledger lands. */
+  external_truth?: ExternalTruthBoard | null
+}
+
+// ── W-6 · standing external truth (design §3.3) ──────────────────────────────
+
+/**
+ * One scored cell: a population total, or one stratum value inside it.
+ *
+ * `accuracy` is `null` below the server's n floor and the n's stay — that is the
+ * whole tiny-n contract, and the reason nothing here is rendered as a bare
+ * ratio. `decided_rate` is how much of the read the instrument actually reached;
+ * it travels on every surface the accuracy travels on, because an accuracy of
+ * 1.00 over two decided claims and one over four hundred are not the same
+ * object.
+ */
+export interface ExternalTruthCell {
+  accuracy: number | null
+  supported: number
+  contradicted: number
+  not_found: number
+  n_decided: number
+  n_searched: number
+  n_unchecked: number
+  n_uncheckable: number
+  decided_rate: number | null
+  sufficient: boolean
+  min_decided: number
+}
+
+/** One of the three populations, with its strata and its instrument health. */
+export interface ExternalTruthPopulation extends ExternalTruthCell {
+  population: string
+  label: string
+  /** Server-composed, rendered verbatim — the mix and the n travel with it. */
+  display: string
+  strata: Record<string, Record<string, ExternalTruthCell>>
+  instrument: {
+    overlap_raw?: number | null
+    overlap_n?: number
+    band?: string | null
+    instrument_limited?: boolean
+    graders?: string[]
+    pipeline_version?: string | null
+  }
+  search: {
+    provider_mix?: Record<string, number>
+    degraded_share?: number | null
+    liveness_verified_share?: number | null
+    n?: number
+  }
+  sampled: { sample_fraction?: number | null; reason?: string | null }
+}
+
+/**
+ * `GET /v3/eval/correctness` → `external_truth`.
+ *
+ * There is deliberately NO top-level accuracy: the three populations are never
+ * summed, and the headline is the PAIR — record and voice, each with its own n
+ * (F-12). A single number over both would pool two different acts of authorship.
+ */
+export interface ExternalTruthBoard {
+  available: boolean
+  window: { days?: number }
+  populations: ExternalTruthPopulation[]
+  headline: {
+    record?: { accuracy: number | null; n_decided: number; display?: string }
+    voice?: { accuracy: number | null; n_decided: number; display?: string }
+    note?: string
+  }
+  honesty_note: string
+}
+
+/**
+ * The one sentence an external-truth population is allowed to render.
+ *
+ * A number NEVER travels alone here. When the graders did not agree with each
+ * other often enough this week the number is not shown at all — a sentence
+ * replaces it — because a well-powered rate from two raters who disagree is not
+ * a better number, it is a better-disguised one (R3's stop rule, made
+ * continuous).
+ */
+export function externalTruthLabel(pop: ExternalTruthPopulation | null | undefined): string {
+  if (!pop) return 'not graded against the world yet'
+  if (pop.instrument?.instrument_limited === true) {
+    return (
+      `${pop.label} — the graders did not agree with each other often enough this week ` +
+      `for this number to be reported (overlap ${fmtRate(pop.instrument.overlap_raw)}, ` +
+      `n=${pop.instrument.overlap_n ?? 0})`
+    )
+  }
+  const frac = pop.sampled?.sample_fraction
+  const sampledNote =
+    typeof frac === 'number' && frac < 1
+      ? ` — graded on a ${(frac * 100).toFixed(0)}% sample of the week's claims`
+      : ''
+  return `${pop.display || pop.label}${sampledNote}`
+}
+
+/** A rate, or an em dash. Never `0.00` standing in for "not measured". */
+export function fmtRate(value: number | null | undefined, digits = 2): string {
+  return typeof value === 'number' ? value.toFixed(digits) : '—'
+}
+
+/**
+ * The strata a population carries, in the design's own order, skipping the ones
+ * with no cells. An EMPTY stratum is a real state — `retrieval_origin` is empty
+ * on every live row today because the column is NULL fleet-wide — and it is
+ * rendered as "no rows yet", never omitted silently.
+ */
+export const EXTERNAL_TRUTH_STRATA = [
+  'regime',
+  'retrieval_origin',
+  'severity',
+  'claim_shape',
+  'tier',
+  'source_tier',
+] as const
+
+export function orderedStrata(
+  pop: ExternalTruthPopulation,
+): Array<[string, Array<[string, ExternalTruthCell]>]> {
+  return EXTERNAL_TRUTH_STRATA.map((axis) => {
+    const cells = pop.strata?.[axis] ?? {}
+    return [axis, Object.keys(cells).sort().map((k) => [k, cells[k]] as [string, ExternalTruthCell])] as [
+      string,
+      Array<[string, ExternalTruthCell]>,
+    ]
+  })
 }
 
 /**
@@ -842,6 +1118,39 @@ export interface CountryScorecard {
   floors: Record<string, number>
   dimensions: Record<string, DimensionBand>
   composition: CompositionNode
+  /** H12 — the banding instrument revision this card was computed under
+   *  (`data.method_version`); absent on cards written before the stamp. */
+  method_version?: string | null
+}
+
+/**
+ * The bounded unit dimensions a scorecard cards, in display order. There are
+ * six; any further extra still renders (and exports) after these — see
+ * {@link orderedDimensions}. Lives here rather than in the Eval Scorecard
+ * panel because the panel's render order and the CSV export's row order are
+ * the SAME order, and there is one definition of it.
+ */
+export const DIMENSION_ORDER = [
+  'leadership_transition',
+  'energy_security',
+  'escalation',
+  'narrative_coordination',
+  'internal_stability',
+  'military_posture',
+] as const
+
+/** Order a scorecard's dimensions: the known units first, then any extras. */
+export function orderedDimensions(
+  dims: Record<string, DimensionBand>,
+): Array<[string, DimensionBand]> {
+  const known = DIMENSION_ORDER.filter((u) => u in dims).map(
+    (u) => [u, dims[u]] as [string, DimensionBand],
+  )
+  const extras = Object.keys(dims)
+    .filter((u) => !(DIMENSION_ORDER as readonly string[]).includes(u))
+    .sort()
+    .map((u) => [u, dims[u]] as [string, DimensionBand])
+  return [...known, ...extras]
 }
 
 /** Coarse severity tone for a band pill. Insufficient is its own honest tone. */

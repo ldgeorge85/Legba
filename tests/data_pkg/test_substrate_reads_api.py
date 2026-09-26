@@ -181,6 +181,7 @@ async def _insert_finding(
     analyst_id: str | None = "test_analyst",
     produced_at: datetime | None = None,
     schema_uri: str = "iglu:legba/finding/jsonschema/1-0-0",
+    data: dict[str, Any] | None = None,
 ) -> UUID:
     row_id = uuid4()
     ts = produced_at or datetime.now(timezone.utc)
@@ -198,7 +199,7 @@ async def _insert_finding(
             )
             """,
             row_id, title, body, confidence, severity,
-            json.dumps({}), target_id, analyst_id,
+            json.dumps(data if data is not None else {}), target_id, analyst_id,
             ts, [], schema_uri,
         )
     return row_id
@@ -580,6 +581,174 @@ def test_hydrate_finding_structural_verified_badge_flip():
         _row("geo_convergence_scan", structural_verified="false", structural_score=0.0)
     )
     assert off.effective_confidence == 1.0
+
+
+# ---------------------------------------------------------------------------
+# `findings_projection` (7b-v leaf) — pure, no DB. Pins the judgment weight's
+# citation key set so the route (`_hydrate_finding_judgment`) and the leaf
+# cannot drift apart.
+# ---------------------------------------------------------------------------
+
+
+def test_findings_projection_judgment_fields_pinned():
+    """The exact key set — no more, no less — every judgment-weight citation
+    carries. If this test moves, `CitationJudgmentEntry` (substrate_reads_api)
+    and `JudgmentFindingRow`/checkedBand's fixture (morningReadBands.test.ts)
+    must move with it."""
+    from legba.data.findings_projection import JUDGMENT_FIELDS
+
+    assert JUDGMENT_FIELDS == {
+        "ordinal", "source", "source_id", "produced_at",
+        "single_source", "wire_folded", "marker_class",
+    }
+
+
+def test_findings_projection_reduces_to_pinned_keys_only():
+    """A richly-populated stored citation entry (evidence_text, title, tier,
+    derived_from, effective_confidence, ref_id — the bulk of what makes a
+    finding's `data` heavy) reduces to EXACTLY `JUDGMENT_FIELDS`, values
+    carried through untouched."""
+    from legba.data.findings_projection import JUDGMENT_FIELDS, project_citations
+
+    rich_entry = {
+        "marker": "[[ref:1]]",
+        "ordinal": 1,
+        "ref_id": "11111111-1111-1111-1111-111111111111",
+        "ref_kind": "finding",
+        "tier": "periphery",
+        "source": "security_desk",
+        "source_id": "src_reuters",
+        "target_id": "country_g20_br",
+        "title": "Border incident escalates",
+        "produced_at": "2026-09-24T07:00:00Z",
+        "evidence_text": "a full paragraph of quoted prose" * 20,
+        "effective_confidence": 0.81,
+        "derived_from": ["22222222-2222-2222-2222-222222222222"],
+        "single_source": True,
+        "wire_folded": True,
+        "marker_class": None,
+    }
+    [reduced] = project_citations([rich_entry])
+    assert set(reduced.keys()) == JUDGMENT_FIELDS
+    assert reduced["ordinal"] == 1
+    assert reduced["source"] == "security_desk"
+    assert reduced["source_id"] == "src_reuters"
+    assert reduced["produced_at"] == "2026-09-24T07:00:00Z"
+    assert reduced["single_source"] is True
+    assert reduced["wire_folded"] is True
+    assert reduced["marker_class"] is None
+    for shed in ("evidence_text", "title", "tier", "derived_from",
+                 "effective_confidence", "ref_id", "target_id", "marker"):
+        assert shed not in reduced
+
+
+def test_findings_projection_absent_leaves_default_never_fabricate():
+    """A minimal signal citation (no single_source/wire_folded/marker_class
+    stamped — the common case) reduces with honest defaults, never a
+    fabricated `True`."""
+    from legba.data.findings_projection import project_citations
+
+    [reduced] = project_citations([{"ordinal": 2, "signal_id": "sig-1"}])
+    assert reduced == {
+        "ordinal": 2, "source": None, "source_id": None, "produced_at": None,
+        "single_source": False, "wire_folded": False, "marker_class": None,
+    }
+
+
+def test_findings_projection_handles_string_and_malformed_input():
+    """`citations_raw` arrives as whatever the pool handed back — a decoded
+    list (the common case), a raw JSON string (a codec-less connection), or
+    absent — and a non-mapping entry (never a citation this reduction
+    fabricates a shape for) is skipped rather than raising."""
+    from legba.data.findings_projection import project_citations
+
+    assert project_citations(None) == []
+    assert project_citations("not json") == []
+    assert project_citations({"not": "a list"}) == []
+    assert project_citations([{"ordinal": 1}, "bogus-entry", 42]) == [
+        {
+            "ordinal": 1, "source": None, "source_id": None,
+            "produced_at": None, "single_source": False,
+            "wire_folded": False, "marker_class": None,
+        },
+    ]
+    import json
+    as_string = json.dumps([{"ordinal": 3, "source": "wire"}])
+    assert project_citations(as_string)[0]["ordinal"] == 3
+    assert project_citations(as_string)[0]["source"] == "wire"
+
+
+def test_findings_projection_ordinal_never_string_coerced():
+    """An ordinal is `None` unless it is genuinely an `int` — never guessed
+    from a string, mirroring `export_api._ordinal`."""
+    from legba.data.findings_projection import project_citations
+
+    [reduced] = project_citations([{"ordinal": "1"}])
+    assert reduced["ordinal"] is None
+
+
+def test_hydrate_finding_judgment_shape():
+    """`_hydrate_finding_judgment` maps a `fields=judgment` SQL row to
+    `FindingJudgmentRow` — the verify block WHOLE, citations reduced, and
+    NEVER a `data`/`derived_from`/`body` key on the model at all."""
+    from legba.data.registry.substrate_reads_api import (
+        FindingJudgmentRow,
+        _hydrate_finding_judgment,
+    )
+
+    now = datetime.now(timezone.utc)
+    row = {
+        "id": uuid4(), "kind": "finding", "title": "Brazil energy import spike",
+        "analyst_id": "world_assessor", "analyst_version": "3",
+        "target_id": "country_g20_br", "target_version": "7",
+        "produced_at": now, "severity": "high", "confidence": 0.81,
+        "schema_uri": "iglu:legba/finding/jsonschema/1-0-0",
+        "verification": json.dumps({
+            "faithfulness_score": 0.62, "judge_status": "llm",
+            "unsupported_spans": [
+                {"text": "Troop numbers doubled.", "reason": "no_citation", "markers": []},
+            ],
+        }),
+        "citations_raw": json.dumps([
+            {"ordinal": 1, "source": "security_desk", "single_source": True,
+             "evidence_text": "shed on the wire"},
+        ]),
+    }
+    out = _hydrate_finding_judgment(row)
+    assert isinstance(out, FindingJudgmentRow)
+    assert out.id == str(row["id"])
+    assert out.title == "Brazil energy import spike"
+    assert out.analyst_version == "3"
+    assert out.target_version == "7"
+    assert out.verification["faithfulness_score"] == pytest.approx(0.62, abs=1e-4)
+    assert out.verification["unsupported_spans"][0]["text"] == "Troop numbers doubled."
+    assert len(out.citations) == 1
+    assert out.citations[0].ordinal == 1
+    assert out.citations[0].source == "security_desk"
+    assert out.citations[0].single_source is True
+    dumped = out.model_dump()
+    for absent in ("data", "derived_from", "body", "critic_score",
+                   "effective_confidence", "verify_exempt", "below_floor"):
+        assert absent not in dumped
+
+
+def test_hydrate_finding_judgment_legacy_row_has_null_verification_empty_citations():
+    """A pre-assembly / unverified / uncited row → `verification` is `null`
+    (never fabricated) and `citations` is `[]` (never guessed)."""
+    from legba.data.registry.substrate_reads_api import _hydrate_finding_judgment
+
+    now = datetime.now(timezone.utc)
+    row = {
+        "id": uuid4(), "kind": "finding", "title": "legacy read",
+        "analyst_id": None, "analyst_version": None,
+        "target_id": None, "target_version": None,
+        "produced_at": now, "severity": None, "confidence": 0.5,
+        "schema_uri": "iglu:legba/finding/jsonschema/1-0-0",
+        "verification": None, "citations_raw": None,
+    }
+    out = _hydrate_finding_judgment(row)
+    assert out.verification is None
+    assert out.citations == []
 
 
 @pytest.mark.integration
@@ -1510,6 +1679,132 @@ async def test_signals_filter_language(
 
 
 # ---------------------------------------------------------------------------
+# Wave-E — access_class_in (SEAMS #59). Opt-in only: absent is byte-identical
+# to today's behaviour, present narrows by the row's own access_class
+# (signals) or by a linked signal's access_class (findings, single-hop over
+# derived_from). Nothing here proves enforcement — there is none yet.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_signals_access_class_in_filters_and_is_byte_identical_absent(
+    substrate_app, client: AsyncClient,
+):
+    _, _, pg_store = substrate_app
+    src = _unique_source_id("sig-access")
+    licensed_id = await _insert_signal(pg_store, source_id=src, title="licensed one")
+    restricted_id = await _insert_signal(pg_store, source_id=src, title="restricted one")
+    async with pg_store.acquire() as conn:
+        await conn.execute(
+            "UPDATE signals SET access_class = 'licensed_commercial' WHERE id = $1",
+            licensed_id,
+        )
+        await conn.execute(
+            "UPDATE signals SET access_class = 'restricted' WHERE id = $1",
+            restricted_id,
+        )
+
+    # Absent — BOTH rows: the pre-Wave-E behaviour, unchanged.
+    r_absent = await client.get("/api/v1/signals", params={"source_id": src})
+    assert r_absent.status_code == 200
+    ids_absent = {row["id"] for row in r_absent.json()["data"]}
+    assert ids_absent == {str(licensed_id), str(restricted_id)}
+
+    # Present — narrows to the requested class only.
+    r_filtered = await client.get(
+        "/api/v1/signals",
+        params={"source_id": src, "access_class_in": "licensed_commercial"},
+    )
+    assert r_filtered.status_code == 200
+    ids_filtered = [row["id"] for row in r_filtered.json()["data"]]
+    assert ids_filtered == [str(licensed_id)]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_signals_access_class_in_unknown_value_400(
+    client: AsyncClient,
+):
+    r = await client.get(
+        "/api/v1/signals", params={"access_class_in": "nonsense"},
+    )
+    assert r.status_code == 400
+    assert "nonsense" in r.json()["detail"]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_access_class_in_filters_and_is_byte_identical_absent(
+    substrate_app, client: AsyncClient,
+):
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("finding-access")
+    src = _unique_source_id("finding-access-sig")
+    sig_id = await _insert_signal(pg_store, source_id=src)
+    finding_id, other_id = uuid4(), uuid4()
+    async with pg_store.acquire() as conn:
+        await conn.execute(
+            "UPDATE signals SET access_class = 'internal' WHERE id = $1", sig_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO analyst_outputs (
+                id, kind, title, body, confidence, severity, data,
+                target_id, target_version, analyst_id, analyst_version,
+                produced_at, derived_from, schema_uri, run_id
+            ) VALUES (
+                $1, 'finding', 'derived from internal signal', '', 0.7,
+                'medium', '{}'::jsonb, $2, NULL, 'test_analyst', NULL,
+                now(), $3::uuid[], 'iglu:legba/finding/jsonschema/1-0-0', NULL
+            )
+            """,
+            finding_id, tid, [sig_id],
+        )
+        await conn.execute(
+            """
+            INSERT INTO analyst_outputs (
+                id, kind, title, body, confidence, severity, data,
+                target_id, target_version, analyst_id, analyst_version,
+                produced_at, derived_from, schema_uri, run_id
+            ) VALUES (
+                $1, 'finding', 'no linked signals', '', 0.7,
+                'medium', '{}'::jsonb, $2, NULL, 'test_analyst', NULL,
+                now(), '{}'::uuid[], 'iglu:legba/finding/jsonschema/1-0-0', NULL
+            )
+            """,
+            other_id, tid,
+        )
+
+    # Absent — both findings: the pre-Wave-E behaviour, unchanged.
+    r_absent = await client.get("/api/v1/findings", params={"target_id": tid})
+    assert r_absent.status_code == 200
+    ids_absent = {row["id"] for row in r_absent.json()["data"]}
+    assert ids_absent == {str(finding_id), str(other_id)}
+
+    # Present — only the finding whose derived_from signal matches.
+    r_filtered = await client.get(
+        "/api/v1/findings",
+        params={"target_id": tid, "access_class_in": "internal"},
+    )
+    assert r_filtered.status_code == 200
+    ids_filtered = [row["id"] for row in r_filtered.json()["data"]]
+    assert ids_filtered == [str(finding_id)]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_access_class_in_unknown_value_400(
+    client: AsyncClient,
+):
+    r = await client.get(
+        "/api/v1/findings", params={"access_class_in": "nonsense"},
+    )
+    assert r.status_code == 400
+    assert "nonsense" in r.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
 # Contention read API (Holes-B Wave 5, #101) — hydration shape unit tests.
 #
 # The end-to-end HTTP coverage needs the 0055 fact_contention sidecar in the
@@ -1622,3 +1917,754 @@ def test_hydrate_contention_abstained_group_has_null_winner():
     assert out.surfaced_value is None
     # No surfaced winner anywhere — an honest "disputed, unresolved".
     assert not any(v.surfaced_winner for v in out.values)
+
+
+# ---------------------------------------------------------------------------
+# `/findings?fields=summary` — the list-view weight (build report
+# "findings fields=summary"). Default (no `fields`) is the pre-existing,
+# UNTOUCHED code path (`_hydrate_finding` / `FindingsPage`); this section
+# proves it stays byte-identical, proves the new `FindingsSummaryPage` shape,
+# the 422 on an unknown `fields` value, and the size win the whole feature
+# exists for.
+# ---------------------------------------------------------------------------
+
+
+_SUMMARY_ASSEMBLY_DATA: dict[str, Any] = {
+    "data": {
+        "assembly": {
+            "schema": "assembly.v1",
+            "regime": "assembly",
+            "tier": "world",
+            "lead": {"kind": "earned_single", "block_ordinals": [1]},
+            "drops": {
+                "counts": {
+                    "shown": 5,
+                    "carried": 3,
+                    "shown_not_carried": 2,
+                    "candidates": 5,
+                    "not_selected": 2,
+                    "trimmed": 0,
+                    "below_floor": 0,
+                    "no_head": 0,
+                    "invisible_heads": None,
+                },
+            },
+            # Full block content — deliberately NOT in the summary projection
+            # (this is exactly the weight `fields=summary` exists to shed).
+            "blocks": [
+                {"ordinal": 1, "finding_id": "x", "desk": "d", "spans": []},
+            ],
+        },
+    },
+}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_default_omits_fields_stays_full_shape(
+    substrate_app, client: AsyncClient,
+):
+    """GOLDEN — no `fields` param is the pre-existing, UNTOUCHED code path.
+
+    Every field the full `FindingRow` shape has ever carried is still present
+    (including the RAW double-nested `data.data.assembly` this test's fixture
+    writes), and none of the new summary-only field names leak onto it — the
+    two branches share nothing but the WHERE-clause builder and the cursor
+    codec.
+    """
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("summary-golden")
+    fid = await _insert_finding(
+        pg_store,
+        title="World read, 2026-09-06",
+        body="Full composed prose the summary weight never carries.",
+        confidence=0.81,
+        severity="high",
+        target_id=tid,
+        analyst_id="world_assessor",
+        data=_SUMMARY_ASSEMBLY_DATA,
+    )
+    await _insert_critique(
+        pg_store,
+        analyzed_output_id=fid,
+        overall_score=0.9,
+        data_extra={"verification": {"faithfulness_score": 0.9, "score_state": "scored"}},
+    )
+
+    r = await client.get("/api/v1/findings", params={"target_id": tid})
+    assert r.status_code == 200, r.text
+    row = r.json()["data"][0]
+
+    # Every pre-existing field, present and correct.
+    assert set(row.keys()) == {
+        "id", "kind", "title", "body", "confidence", "severity", "data",
+        "target_id", "target_version", "analyst_id", "analyst_version",
+        "produced_at", "derived_from", "schema_uri", "run_id", "created_at",
+        "critic_score", "effective_confidence", "verification",
+        "verify_exempt", "below_floor",
+    }
+    assert row["body"] == "Full composed prose the summary weight never carries."
+    assert row["data"] == _SUMMARY_ASSEMBLY_DATA
+    assert row["verification"]["faithfulness_score"] == pytest.approx(0.9, abs=1e-4)
+    assert row["verification"]["score_state"] == "scored"
+    # min(confidence=0.81, critic_score=0.9) — no demotion (already the lower).
+    assert row["effective_confidence"] == pytest.approx(0.81, abs=1e-4)
+    # No cross-contamination from the summary hydration path.
+    for leaked in (
+        "assembly_tier", "assembly_regime", "assembly_lead_kind",
+        "drops_counts", "verification_faithfulness_score",
+        "verification_score_state",
+    ):
+        assert leaked not in row
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_summary_shape(substrate_app, client: AsyncClient):
+    """`fields=summary` returns exactly the nine base columns plus the six
+    assembly/verification/drops leaves — never `body`, the raw `data` blob,
+    `derived_from`, `critic_score`/`effective_confidence`, or the full
+    `verification` block (`claim_verdicts`/`unsupported_spans` and friends)."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("summary-shape")
+    fid = await _insert_finding(
+        pg_store,
+        title="World read, 2026-09-06",
+        body="Full composed prose the summary weight never carries.",
+        confidence=0.81,
+        severity="high",
+        target_id=tid,
+        analyst_id="world_assessor",
+        data=_SUMMARY_ASSEMBLY_DATA,
+    )
+    await _insert_critique(
+        pg_store,
+        analyzed_output_id=fid,
+        overall_score=0.9,
+        data_extra={
+            "verification": {
+                "faithfulness_score": 0.9,
+                "score_state": "scored",
+                "checkable_claims": 4,
+                "supported_claims": 4,
+                "unsupported_spans": [],
+                "claim_verdicts": [],
+            },
+        },
+    )
+
+    r = await client.get(
+        "/api/v1/findings", params={"target_id": tid, "fields": "summary"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert set(body.keys()) == {"data", "next_cursor"}
+    assert body["next_cursor"] is None
+    assert len(body["data"]) == 1
+    row = body["data"][0]
+
+    assert set(row.keys()) == {
+        "id", "analyst_id", "target_id", "kind", "title", "created_at",
+        "produced_at", "severity", "confidence",
+        "assembly_tier", "assembly_regime", "assembly_lead_kind",
+        "drops_counts", "verification_faithfulness_score",
+        "verification_score_state",
+    }
+    assert row["id"] == str(fid)
+    assert row["analyst_id"] == "world_assessor"
+    assert row["target_id"] == tid
+    assert row["kind"] == "finding"
+    assert row["title"] == "World read, 2026-09-06"
+    assert row["severity"] == "high"
+    assert row["confidence"] == pytest.approx(0.81, abs=1e-4)
+    assert row["assembly_tier"] == "world"
+    assert row["assembly_regime"] == "assembly"
+    assert row["assembly_lead_kind"] == "earned_single"
+    assert row["drops_counts"] == {
+        "shown": 5, "carried": 3, "shown_not_carried": 2, "candidates": 5,
+        "not_selected": 2, "trimmed": 0, "below_floor": 0, "no_head": 0,
+        "invisible_heads": None,
+    }
+    assert row["verification_faithfulness_score"] == pytest.approx(0.9, abs=1e-4)
+    assert row["verification_score_state"] == "scored"
+    datetime.fromisoformat(row["produced_at"])
+    datetime.fromisoformat(row["created_at"])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_summary_legacy_row_has_null_leaves(
+    substrate_app, client: AsyncClient,
+):
+    """A pre-assembly / unverified row → every leaf is `null`, never
+    fabricated — the same honesty rule `_hydrate_finding` follows."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("summary-legacy")
+    fid = await _insert_finding(
+        pg_store, title="legacy composed read", target_id=tid,
+    )
+
+    r = await client.get(
+        "/api/v1/findings", params={"target_id": tid, "fields": "summary"},
+    )
+    assert r.status_code == 200, r.text
+    row = r.json()["data"][0]
+    assert row["id"] == str(fid)
+    assert row["assembly_tier"] is None
+    assert row["assembly_regime"] is None
+    assert row["assembly_lead_kind"] is None
+    assert row["drops_counts"] is None
+    assert row["verification_faithfulness_score"] is None
+    assert row["verification_score_state"] is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_summary_faithfulness_object_fallback_not_per_key(
+    substrate_app, client: AsyncClient,
+):
+    """The SQL's `coalesce(c.verification, s.structural_verification)` must be
+    OBJECT-level, matching `_hydrate_finding`'s Python fallback — not a
+    per-key coalesce. A finding can carry a faithfulness block whose
+    `faithfulness_score` is legitimately `null` (Q-1's `unassessable` state)
+    while ALSO carrying an (unrelated, contrived-for-this-test) structural
+    critique with a real score. A per-key coalesce would leak the structural
+    number into a row the faithfulness pass explicitly marked unassessable;
+    the object-level form must not.
+    """
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("summary-unassessable")
+    fid = await _insert_finding(pg_store, title="zero-claim critique", target_id=tid)
+    await _insert_critique(
+        pg_store,
+        analyzed_output_id=fid,
+        overall_score=1.0,
+        data_extra={
+            "verification": {"faithfulness_score": None, "score_state": "unassessable"},
+        },
+    )
+    # A structural critique that would leak a wrong score under a per-key
+    # coalesce — the finding never routes through the structural verify path
+    # in production, but the SQL must not depend on that being true.
+    await _insert_critique(
+        pg_store,
+        analyzed_output_id=fid,
+        overall_score=0.77,
+        title="Structural verify (score 0.77)",
+        data_extra={
+            "verification": {"faithfulness_score": 0.77, "score_state": "scored"},
+        },
+    )
+
+    r = await client.get(
+        "/api/v1/findings", params={"target_id": tid, "fields": "summary"},
+    )
+    assert r.status_code == 200, r.text
+    row = r.json()["data"][0]
+    assert row["verification_faithfulness_score"] is None
+    assert row["verification_score_state"] == "unassessable"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_fields_unknown_value_422(client: AsyncClient):
+    """An unknown `fields` value 422s (this route's own spec) — unlike
+    `journal_api.py`'s hand-rolled `_validate_fields`, which 400s; the two
+    routes deliberately disagree here."""
+    r = await client.get("/api/v1/findings", params={"fields": "bogus"})
+    assert r.status_code == 422
+    r = await client.get("/api/v1/findings", params={"fields": "full"})
+    assert r.status_code == 422  # "full" is not a valid value on THIS route — only the default (omitted) is full weight.
+    # Both real spellings still work.
+    r = await client.get("/api/v1/findings")
+    assert r.status_code == 200
+    r = await client.get("/api/v1/findings", params={"fields": "summary"})
+    assert r.status_code == 200
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_summary_pagination_walks_cursor(
+    substrate_app, client: AsyncClient,
+):
+    """Pagination/cursor mechanics are unchanged under `fields=summary` — the
+    WHERE-clause builder and the `(produced_at, id)` cursor codec are SHARED
+    with the default branch."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("summary-page")
+    now = datetime.now(timezone.utc)
+    inserted: list[str] = []
+    for i in range(7):
+        rid = await _insert_finding(
+            pg_store, title=f"f-{i}", target_id=tid,
+            produced_at=now - timedelta(seconds=i),
+        )
+        inserted.append(str(rid))
+
+    seen: list[str] = []
+    cursor: str | None = None
+    page_count = 0
+    while True:
+        params: dict[str, Any] = {"limit": 3, "target_id": tid, "fields": "summary"}
+        if cursor:
+            params["cursor"] = cursor
+        r = await client.get("/api/v1/findings", params=params)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        page_count += 1
+        seen.extend(row["id"] for row in body["data"])
+        cursor = body["next_cursor"]
+        if cursor is None:
+            break
+        assert page_count < 10
+
+    assert page_count == 3
+    assert seen == inserted
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_summary_row_under_2kb(substrate_app, client: AsyncClient):
+    """The size assertion the build report requires: a summary row for a
+    REALISTIC heavy assembly read (many blocks, long quoted spans, a
+    claim-verdict ledger) stays under 2 KB, while the SAME row at full weight
+    is many times larger."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("summary-size")
+
+    long_span = "A " + ("quoted desk sentence with real prose content. " * 40)
+    heavy_data = {
+        "data": {
+            "assembly": {
+                "schema": "assembly.v1",
+                "regime": "assembly",
+                "tier": "world",
+                "lead": {"kind": "co_leads", "block_ordinals": [1, 2]},
+                "drops": {
+                    "counts": {
+                        "shown": 40, "carried": 12, "shown_not_carried": 28,
+                        "candidates": 40, "not_selected": 28, "trimmed": 0,
+                        "below_floor": 0, "no_head": 0, "invisible_heads": None,
+                    },
+                },
+                "blocks": [
+                    {
+                        "ordinal": n,
+                        "finding_id": f"finding-{n}",
+                        "desk": f"desk_{n}",
+                        "target_id": f"country_{n}",
+                        "target_name": f"Country {n}",
+                        "spans": [
+                            {"role": "bluf", "text": long_span, "markers": ["[1]"]},
+                            {"role": "body", "text": long_span, "markers": ["[2]"]},
+                        ],
+                        "signals": [
+                            {"marker": "[1]", "title": long_span[:200], "url": "https://example.test/a"},
+                        ],
+                    }
+                    for n in range(1, 13)
+                ],
+            },
+        },
+    }
+    heavy_verification = {
+        "verification": {
+            "faithfulness_score": 0.87,
+            "score_state": "scored",
+            "checkable_claims": 24,
+            "supported_claims": 21,
+            "unsupported_spans": [
+                {"text": long_span, "reason": "no_citation", "markers": []}
+                for _ in range(6)
+            ],
+            "claim_verdicts": [
+                {"text": long_span, "verdict": "supported", "kind": "fact"}
+                for _ in range(24)
+            ],
+        },
+    }
+    fid = await _insert_finding(
+        pg_store,
+        title="Heavy world read",
+        body="\n\n".join([long_span] * 20),
+        confidence=0.81,
+        target_id=tid,
+        analyst_id="world_assessor",
+        data=heavy_data,
+    )
+    await _insert_critique(
+        pg_store, analyzed_output_id=fid, overall_score=0.87,
+        data_extra=heavy_verification,
+    )
+
+    r_full = await client.get("/api/v1/findings", params={"target_id": tid})
+    assert r_full.status_code == 200, r_full.text
+    full_row_bytes = len(json.dumps(r_full.json()["data"][0]).encode("utf-8"))
+
+    r_summary = await client.get(
+        "/api/v1/findings", params={"target_id": tid, "fields": "summary"},
+    )
+    assert r_summary.status_code == 200, r_summary.text
+    summary_row_bytes = len(json.dumps(r_summary.json()["data"][0]).encode("utf-8"))
+
+    assert full_row_bytes > 10_000, (
+        f"fixture not heavy enough to prove the point: {full_row_bytes} bytes"
+    )
+    assert summary_row_bytes < 2048, f"summary row is {summary_row_bytes} bytes"
+
+
+# ---------------------------------------------------------------------------
+# `/findings?fields=judgment` (7b-v) — the Morning Read CHECKED band's weight.
+# The verify verdict WHOLE (`unsupported_spans` included — the one thing
+# `fields=summary` drops and this band exists to read) plus citations reduced
+# to `findings_projection.JUDGMENT_FIELDS` — never `data`, `derived_from`, or
+# `body`.
+# ---------------------------------------------------------------------------
+
+
+_JUDGMENT_ASSEMBLY_DATA: dict[str, Any] = {
+    "data": {
+        "assembly": {
+            "schema": "assembly.v1",
+            "regime": "assembly",
+            "tier": "world",
+            "lead": {"kind": "earned_single", "block_ordinals": [1]},
+            "blocks": [
+                {"ordinal": 1, "finding_id": "x", "desk": "d", "spans": []},
+            ],
+        },
+        # Nested storage shape (the live one — provenance.writes double-nests
+        # a payload's own `data` field, see `export_api._citation_list`'s
+        # docstring). `fields=judgment` must resolve this WITHOUT ever
+        # sending the sibling `assembly` key above.
+        "citations": [
+            {
+                "marker": "[[ref:1]]", "ordinal": 1, "ref_id": "finding-x",
+                "ref_kind": "finding", "source": "security_desk",
+                "source_id": None, "title": "Border incident escalates",
+                "produced_at": "2026-09-24T07:00:00Z",
+                "evidence_text": "a full quoted paragraph" * 10,
+                "single_source": True,
+            },
+        ],
+    },
+}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_judgment_shape(substrate_app, client: AsyncClient):
+    """`fields=judgment` returns exactly the eleven scalar/verify/citations
+    leaves the brief names — never `body`, the raw `data` blob,
+    `derived_from`, `critic_score`/`effective_confidence`, or
+    `verify_exempt`/`below_floor`."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("judgment-shape")
+    fid = await _insert_finding(
+        pg_store,
+        title="Brazil energy import spike",
+        body="Full composed prose the judgment weight never carries.",
+        confidence=0.81,
+        severity="high",
+        target_id=tid,
+        analyst_id="world_assessor",
+        data=_JUDGMENT_ASSEMBLY_DATA,
+    )
+    await _insert_critique(
+        pg_store,
+        analyzed_output_id=fid,
+        overall_score=0.9,
+        data_extra={
+            "verification": {
+                "faithfulness_score": 0.62,
+                "judge_status": "llm",
+                "checkable_claims": 5,
+                "supported_claims": 3,
+                "unsupported_spans": [
+                    {"text": "Troop numbers doubled overnight.", "reason": "no_citation", "markers": []},
+                ],
+            },
+        },
+    )
+
+    r = await client.get(
+        "/api/v1/findings", params={"target_id": tid, "fields": "judgment"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert set(body.keys()) == {"data", "next_cursor"}
+    assert len(body["data"]) == 1
+    row = body["data"][0]
+
+    assert set(row.keys()) == {
+        "id", "kind", "title", "analyst_id", "analyst_version",
+        "target_id", "target_version", "produced_at", "severity",
+        "confidence", "schema_uri", "verification", "citations",
+    }
+    assert row["id"] == str(fid)
+    assert row["kind"] == "finding"
+    assert row["title"] == "Brazil energy import spike"
+    assert row["analyst_id"] == "world_assessor"
+    assert row["target_id"] == tid
+    assert row["severity"] == "high"
+    assert row["confidence"] == pytest.approx(0.81, abs=1e-4)
+    datetime.fromisoformat(row["produced_at"])
+
+    # The verify block WHOLE — `unsupported_spans` included, the exact leaf
+    # `fields=summary` drops and this band exists to read.
+    assert row["verification"]["faithfulness_score"] == pytest.approx(0.62, abs=1e-4)
+    assert row["verification"]["judge_status"] == "llm"
+    assert len(row["verification"]["unsupported_spans"]) == 1
+    assert row["verification"]["unsupported_spans"][0]["text"] == (
+        "Troop numbers doubled overnight."
+    )
+
+    # The citation, reduced to the judgment key set only.
+    assert len(row["citations"]) == 1
+    citation = row["citations"][0]
+    assert set(citation.keys()) == {
+        "ordinal", "source", "source_id", "produced_at",
+        "single_source", "wire_folded", "marker_class",
+    }
+    assert citation["ordinal"] == 1
+    assert citation["source"] == "security_desk"
+    assert citation["produced_at"] == "2026-09-24T07:00:00Z"
+    assert citation["single_source"] is True
+    assert citation["wire_folded"] is False
+    for shed in ("evidence_text", "title", "ref_id", "ref_kind", "marker"):
+        assert shed not in citation
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_judgment_flat_citations_fallback(
+    substrate_app, client: AsyncClient,
+):
+    """A row whose `data.citations` is FLAT (no nested `data.data` key —
+    the pre-`inline_target` double-nesting shape) still resolves — the SQL's
+    `coalesce` falls through exactly like `export_api._citation_list`."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("judgment-flat")
+    fid = await _insert_finding(
+        pg_store,
+        title="flat-shape citations",
+        target_id=tid,
+        data={"citations": [{"ordinal": 5, "source": "flat_source"}]},
+    )
+    r = await client.get(
+        "/api/v1/findings", params={"target_id": tid, "fields": "judgment"},
+    )
+    assert r.status_code == 200, r.text
+    row = r.json()["data"][0]
+    assert row["id"] == str(fid)
+    assert row["citations"] == [{
+        "ordinal": 5, "source": "flat_source", "source_id": None,
+        "produced_at": None, "single_source": False, "wire_folded": False,
+        "marker_class": None,
+    }]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_judgment_legacy_row_has_null_verification_empty_citations(
+    substrate_app, client: AsyncClient,
+):
+    """A pre-assembly / unverified / uncited row → `verification` is `null`
+    and `citations` is `[]` — the same honesty rule every other weight on
+    this route follows."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("judgment-legacy")
+    fid = await _insert_finding(pg_store, title="legacy composed read", target_id=tid)
+
+    r = await client.get(
+        "/api/v1/findings", params={"target_id": tid, "fields": "judgment"},
+    )
+    assert r.status_code == 200, r.text
+    row = r.json()["data"][0]
+    assert row["id"] == str(fid)
+    assert row["verification"] is None
+    assert row["citations"] == []
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_judgment_faithfulness_object_fallback_not_per_key(
+    substrate_app, client: AsyncClient,
+):
+    """Same OBJECT-level `coalesce(faithfulness, structural)` fallback the
+    other weights use — a finding with a legitimately `unassessable`
+    faithfulness block never leaks an unrelated structural score."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("judgment-unassessable")
+    fid = await _insert_finding(pg_store, title="zero-claim critique", target_id=tid)
+    await _insert_critique(
+        pg_store, analyzed_output_id=fid, overall_score=1.0,
+        data_extra={"verification": {"faithfulness_score": None, "score_state": "unassessable"}},
+    )
+    await _insert_critique(
+        pg_store, analyzed_output_id=fid, overall_score=0.77,
+        title="Structural verify (score 0.77)",
+        data_extra={"verification": {"faithfulness_score": 0.77, "score_state": "scored"}},
+    )
+
+    r = await client.get(
+        "/api/v1/findings", params={"target_id": tid, "fields": "judgment"},
+    )
+    assert r.status_code == 200, r.text
+    row = r.json()["data"][0]
+    assert row["verification"]["faithfulness_score"] is None
+    assert row["verification"]["score_state"] == "unassessable"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_judgment_unknown_value_still_422s(client: AsyncClient):
+    """`fields=judgment` is a real spelling alongside `summary`; an unknown
+    value still 422s — the route's 422-not-400 spec is unaffected."""
+    r = await client.get("/api/v1/findings", params={"fields": "judgment"})
+    assert r.status_code == 200
+    r = await client.get("/api/v1/findings", params={"fields": "bogus"})
+    assert r.status_code == 422
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_judgment_pagination_walks_cursor(
+    substrate_app, client: AsyncClient,
+):
+    """Pagination/cursor mechanics are unchanged under `fields=judgment` — the
+    WHERE-clause builder and the `(produced_at, id)` cursor codec are SHARED
+    with the default and `fields=summary` branches."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("judgment-page")
+    now = datetime.now(timezone.utc)
+    inserted: list[str] = []
+    for i in range(7):
+        rid = await _insert_finding(
+            pg_store, title=f"f-{i}", target_id=tid,
+            produced_at=now - timedelta(seconds=i),
+        )
+        inserted.append(str(rid))
+
+    seen: list[str] = []
+    cursor: str | None = None
+    page_count = 0
+    while True:
+        params: dict[str, Any] = {"target_id": tid, "limit": 3, "fields": "judgment"}
+        if cursor is not None:
+            params["cursor"] = cursor
+        r = await client.get("/api/v1/findings", params=params)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        seen.extend(row["id"] for row in body["data"])
+        page_count += 1
+        cursor = body["next_cursor"]
+        if cursor is None:
+            break
+        assert page_count < 10, "cursor never terminated"
+    assert page_count == 3
+    assert seen == inserted
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_findings_judgment_row_far_smaller_than_default(
+    substrate_app, client: AsyncClient,
+):
+    """The size assertion the build report requires: a judgment row for a
+    REALISTIC heavy assembly read (many blocks, long quoted spans, a
+    citations array) stays a small fraction of the SAME row at default
+    weight — the byte win `fields=judgment` exists for."""
+    _, _, pg_store = substrate_app
+    tid = _unique_target_id("judgment-size")
+
+    long_span = "A " + ("quoted desk sentence with real prose content. " * 40)
+    heavy_data = {
+        "data": {
+            "assembly": {
+                "schema": "assembly.v1", "regime": "assembly", "tier": "world",
+                "lead": {"kind": "co_leads", "block_ordinals": [1, 2]},
+                "blocks": [
+                    {
+                        "ordinal": n, "finding_id": f"finding-{n}",
+                        "desk": f"desk_{n}", "target_id": f"country_{n}",
+                        "target_name": f"Country {n}",
+                        "spans": [
+                            {"role": "bluf", "text": long_span, "markers": ["[1]"]},
+                            {"role": "body", "text": long_span, "markers": ["[2]"]},
+                        ],
+                        "signals": [
+                            {"marker": "[1]", "title": long_span[:200], "url": "https://example.test/a"},
+                        ],
+                    }
+                    for n in range(1, 13)
+                ],
+            },
+            "citations": [
+                {
+                    "marker": f"[[ref:{n}]]", "ordinal": n, "ref_id": f"finding-{n}",
+                    "ref_kind": "finding", "source": f"desk_{n}",
+                    "title": f"Country {n} read", "produced_at": "2026-09-24T07:00:00Z",
+                    "evidence_text": long_span, "single_source": bool(n % 2),
+                }
+                for n in range(1, 13)
+            ],
+        },
+    }
+    heavy_verification = {
+        "verification": {
+            "faithfulness_score": 0.87, "score_state": "scored",
+            "checkable_claims": 24, "supported_claims": 21,
+            "unsupported_spans": [
+                {"text": long_span, "reason": "no_citation", "markers": []}
+                for _ in range(6)
+            ],
+            "claim_verdicts": [
+                {"text": long_span, "verdict": "supported", "kind": "fact"}
+                for _ in range(24)
+            ],
+        },
+    }
+    fid = await _insert_finding(
+        pg_store,
+        title="Heavy world read",
+        body="\n\n".join([long_span] * 20),
+        confidence=0.81,
+        target_id=tid,
+        analyst_id="world_assessor",
+        data=heavy_data,
+    )
+    await _insert_critique(
+        pg_store, analyzed_output_id=fid, overall_score=0.87,
+        data_extra=heavy_verification,
+    )
+
+    r_full = await client.get("/api/v1/findings", params={"target_id": tid})
+    assert r_full.status_code == 200, r_full.text
+    full_row_bytes = len(json.dumps(r_full.json()["data"][0]).encode("utf-8"))
+
+    r_judgment = await client.get(
+        "/api/v1/findings", params={"target_id": tid, "fields": "judgment"},
+    )
+    assert r_judgment.status_code == 200, r_judgment.text
+    judgment_row_bytes = len(json.dumps(r_judgment.json()["data"][0]).encode("utf-8"))
+    judgment_row = r_judgment.json()["data"][0]
+
+    # The verify block (with its 6 unsupported spans + 24 claim verdicts) DOES
+    # carry through whole — the judgment weight is not "small at any cost",
+    # it sheds `data`/`derived_from`/`body`, never the verdict this band reads.
+    assert len(judgment_row["verification"]["unsupported_spans"]) == 6
+    assert len(judgment_row["citations"]) == 12
+
+    assert full_row_bytes > 10_000, (
+        f"fixture not heavy enough to prove the point: {full_row_bytes} bytes"
+    )
+    assert judgment_row_bytes < full_row_bytes * 0.5, (
+        f"judgment row ({judgment_row_bytes}B) is not meaningfully smaller "
+        f"than the full row ({full_row_bytes}B)"
+    )
+    print(
+        f"\n[fields=judgment size] full={full_row_bytes}B "
+        f"judgment={judgment_row_bytes}B "
+        f"ratio={judgment_row_bytes / full_row_bytes:.2f}",
+    )

@@ -33,8 +33,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
 import type { PanelRegistration } from '@/types'
 import type { RegistryEvent } from '@/lib/ws'
-import { selectRow, useSelection } from '@/state/selection'
+import { useSelection } from '@/state/selection'
 import { resetFeedView, useFeedView } from '@/state/feedView'
+import { resetScope, useScope } from '@/state/scope'
+import { scopeFromTarget } from '@/lib/scopeFromReport'
 
 /**
  * jsdom implements no layout, so `scrollTop` is a permanent 0 and the feed's
@@ -216,6 +218,7 @@ beforeEach(() => {
   sessionStorage.clear()
   resetFeedView()
   useSelection.getState().clear()
+  resetScope()
   window.location.hash = ''
   capturedOnEvent = null
   closeSpy.mockClear()
@@ -618,32 +621,44 @@ describe('Live Feed — operator-owned filters (defect 2)', () => {
   })
 })
 
-describe('Live Feed — selecting is not filtering (defect 3)', () => {
-  it('a sidebar desk click seeds a visible, removable desk chip', async () => {
-    stubFetch()
+describe('Live Feed — SCOPE filters, FOCUS highlights (defect 3, redone)', () => {
+  // A desk click reaches the feed as SCOPE now, not as a chip smuggled into the
+  // feed's own store (`seedDeskFilter`, deleted). The shell performs the
+  // translation once (`lib/scopeFromReport.installDeskScopeBridge`), so these
+  // tests set the scope the shell would set, which is the panel's real input.
+  const scopeToBrazil = () =>
+    act(() => useScope.getState().setScope(scopeFromTarget('brazil', 'Brazil')))
+
+  it('a desk scope renders a visible, removable pinned chip and filters the query', async () => {
+    const fetchMock = stubFetch()
     render(wrap(feed()))
     await waitFor(() => expect(screen.getByTestId('finding-f-crit')).toBeInTheDocument())
-    expect(screen.queryByTestId('feed-chip-target-brazil')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('feed-scope-chip')).not.toBeInTheDocument()
 
-    // EXACTLY what components/Sidebar.tsx fires for a desk row.
-    act(() => selectRow('target', 'brazil', 'Brazil', { origin: 'desks' }))
+    scopeToBrazil()
 
-    await waitFor(() => expect(screen.getByTestId('feed-chip-target-brazil')).toBeInTheDocument())
-    expect(screen.getByTestId('feed-facet-desk')).toHaveValue('brazil')
+    await waitFor(() => expect(screen.getByTestId('feed-scope-chip')).toBeInTheDocument())
+    expect(screen.getByTestId('feed-scope-chip')).toHaveTextContent('Brazil')
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('target_id=brazil'))).toBe(true),
+    )
 
-    // …and it is the operator's to remove — nothing about a seeded chip is special.
-    fireEvent.click(screen.getByTestId('feed-chip-remove-target-brazil'))
-    await waitFor(() => expect(screen.queryByTestId('feed-chip-target-brazil')).not.toBeInTheDocument())
+    // …and it is the operator's to remove. An ambient filter they cannot see or
+    // clear is the failure `seedDeskFilter` existed to avoid; this keeps the
+    // promise while moving it onto the store that means it.
+    fireEvent.click(screen.getByTestId('feed-scope-clear'))
+    await waitFor(() => expect(screen.queryByTestId('feed-scope-chip')).not.toBeInTheDocument())
+    expect(useScope.getState().scope).toBeNull()
   })
 
-  it('clicking a row moves the selection but never the desk filter, the rows, or the scroll', async () => {
+  it('clicking a row moves FOCUS but never the scope, the rows, or the scroll', async () => {
     const fetchMock = stubFetch()
     render(wrap(feed()))
     await waitFor(() => expect(screen.getByTestId('finding-f-crit')).toBeInTheDocument())
 
-    act(() => selectRow('target', 'brazil', 'Brazil', { origin: 'desks' }))
-    await waitFor(() => expect(screen.getByTestId('feed-chip-target-brazil')).toBeInTheDocument())
-    // Let the seeded desk settle into the server-side query before we measure.
+    scopeToBrazil()
+    await waitFor(() => expect(screen.getByTestId('feed-scope-chip')).toBeInTheDocument())
+    // Let the scope settle into the server-side query before we measure.
     await waitFor(() =>
       expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('target_id=brazil'))).toBe(
         true,
@@ -658,12 +673,34 @@ describe('Live Feed — selecting is not filtering (defect 3)', () => {
     // The Inspector gets the row…
     await waitFor(() => expect(useSelection.getState().selection?.id).toBe('f-crit'))
     expect(useSelection.getState().selection?.kind).toBe('finding')
-    // …and the feed keeps its desk filter, its place, its rows, and issues no
-    // refetch. This is the regression the operator reported.
-    expect(screen.getByTestId('feed-chip-target-brazil')).toBeInTheDocument()
+    // …and the feed keeps its scope, its place, its rows, and issues no refetch.
+    // THIS is the property the scope/focus split exists for: it now holds by
+    // construction (a `finding` selection cannot reach the scope store at all)
+    // rather than by the panel declining to follow.
+    expect(screen.getByTestId('feed-scope-chip')).toBeInTheDocument()
+    expect(useScope.getState().scope?.id).toBe('brazil')
     expect(list.scrollTop).toBe(180)
     expect(screen.getByTestId('finding-f-crit')).toBe(critNodeBefore)
     expect(fetchMock.mock.calls.length).toBe(callsBefore)
+  })
+
+  it('a hand-typed target chip WINS over the scope (a visible filter is never overridden)', async () => {
+    // Scope says one desk, the operator types another. The chip is the one they
+    // can see and edit, so it takes the query; an ambient filter silently
+    // overriding an explicit one is how the operator loses trust in the bar.
+    const fetchMock = stubFetch()
+    render(wrap(feed()))
+    await waitFor(() => expect(screen.getByTestId('finding-f-crit')).toBeInTheDocument())
+
+    act(() => useScope.getState().setScope(scopeFromTarget('chile', 'Chile')))
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('target_id=chile'))).toBe(true),
+    )
+
+    act(() => useFeedView.getState().setFacet('target', 'brazil'))
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('target_id=brazil'))).toBe(true),
+    )
   })
 
   it('highlights the inspected row in place', async () => {

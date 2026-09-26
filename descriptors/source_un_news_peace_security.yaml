@@ -1,0 +1,77 @@
+# sources_wave_2 — draft SourceDescriptor. Ships DRAFT (operator activates).
+#
+# UN News — Peace and Security topic feed (news.un.org). The escalation-desk
+# analogue of source_un_press.yaml (Security Council meetings coverage) but
+# in wire-story form rather than meeting summaries — carries Secretariat and
+# Secretary-General statements on active conflicts (Ukraine, Sudan, Gaza/
+# Lebanon) as they are issued. Verified live 2026-09-07: valid RSS 2.0, title
+# "UN News - Global perspective Human stories", newest item same-day
+# ("New reservoir offers innovative solution to South Sudan cattle beef" —
+# not this desk's angle, but "Repeated attacks on humanitarian warehouses put
+# vital medical aid at risk in Ukraine: WHO" 2026-09-04 is), well inside 7d.
+#
+# source_class: official. Credibility host un.org (seeded 0.88/gov,
+# state_affiliation True — matches source_un_press.yaml's existing seed).
+# state: draft — bulk registration creates NO live actor; activation
+# (draft -> configured -> active) is the operator's after verifying the route
+# live on the instance.
+
+identity:
+  id: source.un_news.peace_security
+  name: UN News — Peace and Security
+  kind: rss
+  schema_uri: legba/source/1.0.0
+  version: "0000000000000000"        # placeholder — registry stamps content hash
+  abstraction_level: L1
+  state: draft
+  owner: sources_wave_2
+  created: "2026-09-07T00:00:00Z"
+
+scope:
+  owner_tenant: shared
+  geo: []
+  languages: [en]
+  tags: [gov, diplomacy, escalation, global, sources_wave_2]
+  source_class: official
+  access_class: public          # Wave-E — free no-auth feed, no separate reuse agreement
+
+acquisition: poll
+
+cadence:
+  schedule:
+    factory_kind: cron
+    raw: "15 1-23/6 * * *"
+  cooldown_seconds: 60
+  jitter_seconds: 30
+
+config:
+  url:
+    factory_kind: text
+    raw: "https://news.un.org/feed/subscribe/en/news/topic/peace-and-security/feed/rss.xml"
+
+pipeline:
+  ingestion_filters:
+    - kind: dedupe_tier_1            # URL-canonical hash
+      config: {}
+    - kind: dedupe_tier_2            # SHA-256 content hash
+      config: {}
+  enrichment:
+    # language_detect FIRST so ner_multilingual uses the detected language.
+    # No fact_extractor on the draft: the operator adds it after confirming the
+    # route yields full article text (mirrors the RSSHub-lane conservative default).
+    - kind: language_detect
+      config: {}
+    - kind: ner_multilingual
+      config: {}
+    - kind: geocode
+      config: {}
+  media: reference
+
+deps: {}
+
+output:
+  retention: interest
+  max_age_seconds: 604800
+  delivery: lossy
+
+subscription_policy: open
