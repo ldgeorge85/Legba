@@ -1,42 +1,27 @@
 #!/usr/bin/env bash
-# vLLM saturation watch — FOR THE MODELS HOST (ai1), container edition.
-# Task #21 (headroom visibility, plan §7 M-d): the OTHER half of the vLLM
-# alarm family. models_host_vllm_watchdog.sh answers "is it ALIVE?"; this
-# answers "is it DROWNING?" — the question that must go red BEFORE the
-# operator raises analyst budgets (~100K plan) onto a box with no headroom.
+# vLLM saturation watch, for the models host. models_host_vllm_watchdog.sh
+# answers "is the server alive?"; this answers "is it saturated?".
 #
-# WHAT IT READS (names confirmed against the live /metrics, 2026-08-15;
-# vLLM v1 engine serving gpt-oss-120b, labels {engine,model_name} summed over):
+# What it reads (vLLM v1 /metrics, labels summed):
 #   vllm:num_requests_running          gauge    in-batch requests
-#   vllm:num_requests_waiting          gauge    queued requests (THE headroom read)
+#   vllm:num_requests_waiting          gauge    queued requests
 #   vllm:kv_cache_usage_perc           gauge    1.0 == 100%
 #   vllm:num_preemptions_total         counter  requests evicted mid-generation
-#   vllm:time_to_first_token_seconds   histogram (p95 computed over the
-#                                      inter-sample bucket DELTA, not lifetime)
+#   vllm:time_to_first_token_seconds   histogram (p95 over the inter-sample delta)
 #
-# WHEN IT PAGES (and why these three):
-#   1. waiting > WAITING_BAR across STREAK_N consecutive samples — a queue
-#      that survives three ticks is sustained saturation, not a burst.
-#   2. kv_cache_usage_perc > KV_BAR — the cache is the hard wall; past ~0.90
-#      the scheduler starts preempting and TTFT falls off a cliff.
-#   3. ANY increase in num_preemptions_total — the headroom-UNSAFE signal.
-#      One preemption means the box already ran out; budgets must not rise.
-# TTFT p95 never pages by itself (a slow box is context, not an incident);
-# it rides every log line and page body so the page arrives with the number.
+# When it pages:
+#   1. waiting > WAITING_BAR across STREAK_N consecutive samples;
+#   2. kv_cache_usage_perc > KV_BAR;
+#   3. any increase in num_preemptions_total.
+# TTFT p95 never pages by itself; it rides every log line and page body.
 #
-# ALERT-ONLY by design: saturation is remediated by the OPERATOR (pause an
-# analyst, hold a budget raise), never by restarting anything. This script
-# touches nothing but its own state file and log.
+# Alert-only: it touches nothing but its own state file and log.
 #
-# INSTALL (operator, on ai1 — see deploy/cron.d/ai1-vllm-saturation-watch):
-#   1. scp scripts/host_ai1_saturation_watch.sh ai1:/usr/local/bin/ && chmod +x
-#   2. scp deploy/cron.d/ai1-vllm-saturation-watch ai1:/etc/cron.d/ (mode 0644)
-#   3. put NTFY_URL=<topic url> in /etc/vllm-saturation.env — NOTE: as of
-#      2026-08-15 /etc/vllm-watchdog.env on ai1 carries NO NTFY_URL, so the
-#      existing watchdog's pages are silent no-ops; this watch needs the URL
-#      or it degrades to log-only exactly the same way.
+# Install: see deploy/cron.d/models-host-saturation-watch. Pages need NTFY_URL
+# in /etc/vllm-saturation.env (or /etc/vllm-watchdog.env); without it the watch
+# logs only.
 # Disable during maintenance: touch /etc/vllm-saturation.disabled
-# Verify it is running: stat -c %y /tmp/vllm_saturation.healthy
+# Check it is running: stat -c %y /tmp/vllm_saturation.healthy
 set -u
 VLLM_CONTAINER="${VLLM_CONTAINER:-vllm-rtx-1}"
 METRICS_URL="${METRICS_URL:-http://127.0.0.1:8000/metrics}"

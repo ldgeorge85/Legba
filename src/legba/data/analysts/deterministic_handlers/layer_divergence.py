@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """``layer_divergence`` sub-handler — Program 6 L2, the divergence-baseline unit.
 
-THE THESIS (docs/DIRECTION.md, "The layered source fan-out"; docs/DATA_SOURCES.md).
+THE THESIS (docs/DATA_SOURCES.md, source layers).
 Per target country the platform ingests the same stack of source LAYERS, and
 the finding is the CHANGE in that country's own layer-to-layer divergence —
 never the raw gap, which every country has. A country whose official layer has

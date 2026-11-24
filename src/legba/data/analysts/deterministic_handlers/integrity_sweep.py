@@ -3,7 +3,7 @@
 """``integrity_sweep`` sub-handler — events-free referential-integrity sweep.
 
 The re-homed successor to the pre-pivot ``integrity_verification`` handler
-(deleted in review 2.4, see ``docs/DIRECTION.md`` §9). That handler ran eight
+(deleted in review 2.4). That handler ran eight
 checks, but its FIRST check anchored on the dropped ``events`` table, so in
 production the whole sweep raised, the error was swallowed, and it emitted a
 zeroed "no issues" finding — fake success (the exact no-stub-rule violation).

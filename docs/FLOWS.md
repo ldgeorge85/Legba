@@ -5,7 +5,7 @@
 
 How data moves through Legba: the whole pipeline in one pass, then the walkthroughs, each a numbered
 step list naming the table, stream or route the step touches. For the mechanisms themselves see
-`ANALYSIS.md` and `ACQUISITION.md`; for the tables see `DATA_MODEL.md`; for values see `TUNABLES.md`.
+`ANALYSIS.md` and `DATA_SOURCES.md`; for the tables see `DATA_MODEL.md`; for values see `TUNABLES.md`.
 Where this overview and a detailed flow disagree, the detailed flow wins.
 
 **Contents:** [The whole pipeline](#the-whole-pipeline) · [1 A signal](#1-a-signal) ·
@@ -43,7 +43,7 @@ SOURCE ─► canonical SIGNAL ─► predicate fan-out ─► the (analyst, tar
 
 **Source to canonical signal.** A source actor pulls raw entries on a cadence and runs the per-source
 baseline **once** over each, producing a single canonical, target-agnostic signal. The baseline is
-deterministic and runs synchronously before fan-out. Flow 1; `ACQUISITION.md` §1–§3.
+deterministic and runs synchronously before fan-out. Flow 1; `DATA_SOURCES.md`.
 
 **Signal to predicate fan-out.** The written signal is published immediately to a coarse subject. Each
 desk has one aggregated durable pull consumer bound to the union of its subscription subjects; delivery
@@ -59,8 +59,7 @@ typed output validated against its kind's model, routed by the universal write p
 
 ### One fire, two doors
 
-The cadence cycle and the reactive trigger plane are not two systems — they are two ways the same pair
-becomes eligible to fire.
+The cadence cycle and the reactive trigger plane are two ways the same pair becomes eligible to fire.
 
 - **Cadence door.** On activation the primary actor registers a single reminder; on each tick it
   resolves the matched desks and fans them to worker actors. This is the floor — a quiet desk is still
@@ -158,7 +157,7 @@ invokes the kind, writes the typed output, extends the receipt chain, emits bind
    composition reads other analysts' verified findings, the default reads the recent signal window
    honouring the subscription's time window and narrowing by the desk's source refs and geo scope, so
    each desk reads its own slice rather than the global pool. *(tables: `signals`, `analyst_outputs`)*
-8. **Budget pre-call.** The run is projected against the per-analyst and fleet-wide caps, yielding
+8. **Budget pre-call.** The run is projected against the per-analyst and global caps, yielding
    proceed, throttle or exhausted; an exhausted outcome records a demotion audit and a strategy.
    *(tables: `budget_ledger`, `global_budget_envelope`, `budget_demotion_events`)*
 9. **Invoke the kind.** The deps-builder resolved the kind, its model handler and its deps bundle at bind
@@ -175,7 +174,7 @@ invokes the kind, writes the typed output, extends the receipt chain, emits bind
 13. **Publish and emit.** The write helper publishes the output envelope on a per-analyst channel, then
     dispatches the descriptor's output-kind bindings best-effort. *(table: `alert_sink_deliveries` for
     the alert binding)*
-14. **Optional escalation.** For findings, the escalation gate reads the first-class severity column and
+14. **Optional escalation.** For findings, the escalation gate reads the severity column and
     the **post-verify** folded confidence against the pack's gates, resolves the desk's allowed packs,
     and runs the tool through the agency pipeline. *(tables: `action_pack_invocations`,
     `governor_events`)*
@@ -234,12 +233,12 @@ arithmetically; and the world tier reads the country records directly.
    carrying that head's own lead span byte-for-byte under an ordinal, joined by a closed connective
    vocabulary, with no model call at all. Supersession keeps one live head per desk. *(table:
    `analyst_outputs`, `kind='finding'`)*
-2. **The honest empty slice.** A desk whose units produced no verify-passed sub-claim yields an empty
-   slice and an explicit nothing-to-synthesize row rather than an invented read. Lineage is stamped from
+2. **The empty slice.** A desk whose units produced no verify-passed sub-claim yields an empty
+   slice and an explicit nothing-to-synthesize row. Lineage is stamped from
    the contributing unit ids, so the record back-walks one hop to the units and two to their signals.
 3. **The correctness gate and the periphery.** A unit whose latest correctness row is missing, weak or
    single-family is *quoted* rather than composed over — marked into the same periphery tier the
-   tiered-evidence flag uses, so there is one partition in the tree rather than two that can disagree.
+   tiered-evidence flag uses, so the tree has one partition.
    Consumption is stamped as it is decided. *(tables: `unit_correctness`, `output_consumption`)*
 4. **The desk voice.** A second descriptor on the same kind reads exactly one record row, selected by its
    spine marker and its own target filter, and writes interpretive prose beside it. Its lineage must be
@@ -251,7 +250,7 @@ arithmetically; and the world tier reads the country records directly.
    records, and emits an arithmetic rollup that carries each member's blocks byte-identically — origin
    still pointing at the desk head that wrote the sentence. No prose, so no faithfulness critique is
    written and none is faked; instead it declares its own arithmetic as structural claims, which the
-   structural profile re-derives. A member with no record is named rather than dropped.
+   structural profile re-derives. A member with no record is named in the rollup.
 6. **The world tier.** The world record declares no subscription targets, so it is one global run. It
    reads the **country** records directly — because a rollup carries no faithfulness verdict and could
    never pass a floor-gated inner join — plus the thematic composition as its one legal cited
@@ -279,9 +278,9 @@ desk from high-precision admission rules over already-verified claims in a rolli
 3. **Movement does not move a band.** The delta tag rides beside the band and no rule reads it, because
    letting movement move a band would decay a steady standing state a rung a cycle. Each verdict stamps
    its banding semantics so cards written under different contracts stay comparable.
-4. **Insufficient evidence is a first-class outcome.** A dimension with no qualifying claim reads
+4. **Insufficient evidence is a recorded outcome.** A dimension with no qualifying claim reads
    insufficient with an empty-but-explicit basis and a machine reason; a desk with none at all still
-   emits an all-insufficient row, so the read route returns exactly one honest card per active desk.
+   emits an all-insufficient row, so the read route returns exactly one card per active desk.
 5. **Basis alignment.** Where the card would abstain beside a record that consumed a verified head for
    that desk, it resolves the record's lineage and bands the newest of those rows that passes the same
    unchanged guards — or abstains naming the consumed ids and the refusing rule. No guard is relaxed.
@@ -308,7 +307,7 @@ value changed, and writes through the same contract the analyst path uses.
    descriptor additionally drops a triple whose subject or value is entirely spelled-out quantities,
    which is the slice a synthesised confidence cannot be floored against.
 4. **Resolve event time** through the same cursor precedence the source actor uses, always timezone-aware.
-   A null validity start fails loud rather than collapsing to an epoch sentinel.
+   A null validity start fails loud.
 5. **Supersede, then upsert.** The prior open fact for the same subject and predicate whose **value
    differs** is closed — a same-value re-assert closes nothing — and the new open fact inserts on the
    open-only triple index, lifting confidence to the maximum and unioning lineage. This is the same write
@@ -321,7 +320,7 @@ value changed, and writes through the same contract the analyst path uses.
 ## 7. Nexus reification
 
 One sentence: the reifier sweeps co-mentioned entity pairs, has a small model type each as a canonical
-relation with a signed polarity, side-writes a first-class nexus per typed pair, and the deterministic
+relation with a signed polarity, side-writes a nexus row per typed pair, and the deterministic
 graph handlers then refine over the now-signed graph.
 
 1. **One global sweep.** A meta analyst, so one run per tick; it side-writes nexus rows on its own
@@ -351,7 +350,7 @@ evidence-by-hypothesis matrix with diagnosticity weighting, and side-writes one 
 
 1. **One global sweep**, side-writing hypothesis rows and returning a finding summary.
 2. **Read the focal topics and current evidence.** Recent situations by intensity, not filtered on
-   status — that gate is what starved the earlier lifecycle leg. Evidence assembles from linked findings,
+   status. Evidence assembles from linked findings,
    **current** facts under the open-row gate, and open signed nexuses overlapping the topic's entities;
    each item's id is a real substrate id, so lineage resolves. *(tables: `situations`, `analyst_outputs`,
    `facts`, `nexuses`)*
@@ -365,7 +364,7 @@ evidence-by-hypothesis matrix with diagnosticity weighting, and side-writes one 
    hypotheses, so evidence consistent with every hypothesis weighs nothing. The evidence base is scoped
    to the topic's resolved-entity set by exact membership rather than a substring match.
 5. **Balance and transitions.** The per-hypothesis balance sums the diagnosticity-weighted sign of each
-   diagnostic cell, rounded to an integer so it is robust to confidence gaming; passing the threshold in
+   diagnostic cell, rounded to an integer so a small change in one confidence cannot flip it; passing the threshold in
    either direction transitions the status.
 6. **Write one row per hypothesis**, reusing the existing table: the thesis and counter-thesis as hot
    columns, the supporting and refuting id sets, the balance, the status, and the full matrix in the
@@ -393,8 +392,8 @@ upsert no-op.
    key — the exact contract the resolution handler uses — so a seeded entity and a live mention of the
    same name fold to one row. *(table: `entity_profiles`)*
 5. **Write facts and nexuses**, each stamped with its source type and batch id, through the same
-   provenance writers the analyst path uses. A per-record failure is logged and skipped rather than
-   aborting the batch; a re-import lands on the open-only upsert and leaves the marker untouched.
+   provenance writers the analyst path uses. A per-record failure is logged and skipped, and the batch
+   continues; a re-import lands on the open-only upsert and leaves the marker untouched.
 6. **The curated adapter** maps each leader to a country-subject office fact keyed on the **country**,
    which is the supersession-correct shape: when a leader changes, the new fact closes the prior
    officeholder rather than leaving two open current rows.
@@ -426,8 +425,8 @@ way **out**. They are different mechanisms.
 3. **Collect candidates deterministically**, with no database read — the desk's own geography first, then
    the slice's top entities, de-duplicated, length-capped and junk-filtered.
 4. **Resolve current facts and nexuses.** The query takes any candidate as subject under the
-   current-facts gate — not superseded, and either open-ended or not yet expired — the same
-   temporal-honesty gate the rest of the plane uses, ordered to prefer seeded and curated provenance so
+   current-facts gate (not superseded, and either open-ended or not yet expired), the same
+   gate the rest of the plane uses, ordered to prefer seeded and curated provenance so
    ground truth outranks a machine-extracted live fact, capped by the descriptor. Unreadable identifier
    values are excluded **in the query** so the budget is spent only on renderable facts, with a code
    backstop. A small leftover budget folds in current signed nexuses. *(tables: `facts`, `nexuses`)*
@@ -454,11 +453,11 @@ provenance chain, never a member of it.
 
 1. **One global run.** No subscription targets. The tier is the descriptor: the run selects its entry
    kind purely from its own analyst id, with no mode flag.
-2. **The staged arc** runs plan, gather, field notes, narrate, reflect, honesty, with the persona
+2. **The staged arc** runs plan, gather, field notes, narrate, reflect and `honesty`, with the persona
    re-loaded every phase. Gather is a bounded ReAct loop over the granted read pack; field notes is an
    in-voice cited handoff; narrate writes with tools still live under a small round cap. Reflect flags
-   per-claim citations permissively, and honesty forces the flags **deterministically from substrate
-   metrics** rather than from the agent's self-report.
+   per-claim citations permissively, and the `honesty` step then sets the flags from substrate
+   metrics (the calibration readouts), not from the agent's own report.
 3. **The off-chain write.** The run returns its payload with an empty lineage array, and the writer
    routes it to the dedicated table rather than the generic output table. The entry kind is the row
    discriminator; per-claim bindings live in the claims column and the flat cited-reference array — the
@@ -504,7 +503,7 @@ written, or persists a finding the endpoint reads back.
    *(tables: `analyst_outputs`, `consult_sessions`, `consult_turns`)*
 
 **A deep consult** (detached): the endpoint invokes the actor, which **schedules** a durable workflow and
-returns a task id in under a second rather than blocking.
+returns a task id in under a second without blocking.
 
 1. **Submit.** The endpoint resolves the head, builds the actor id, mints a run id, and invokes under a
    short timeout because the actor returns immediately; the success envelope must carry the task id.
@@ -514,7 +513,7 @@ returns a task id in under a second rather than blocking.
    of the reserved separator, and schedules without awaiting the result.
 3. **The workflow** chains plan, acquire, analyze, synthesize, each a retried activity whose output is
    the next stage's input; a failed plan short-circuits to an empty result.
-4. **The stages reuse existing primitives** rather than forking them: acquire runs the plan's tool calls
+4. **The stages reuse existing primitives**: acquire runs the plan's tool calls
    against the **same** read-only substrate port as the consult, analyze runs under the same budget
    plane, and synthesize reuses the provenance writers verbatim.
 5. **Poll for status.** The endpoint parses the run fragment out of the instance id and selects the
@@ -559,18 +558,20 @@ deep consult stays.
 ## 14. Correctness and the external audit
 
 **The reference, then the grade.** The builder and the grader are separate analysts on purpose: a grader
-that could build its own reference could close the loop on itself. `REFERENCE_BUILDER.md` and
-`CORRECTNESS_GRADER.md` carry each in full.
+that could build its own reference could close the loop on itself. `GRADING.md` covers both.
 
 1. **The builder** takes one due desk per tick, ordered by cadence and backoff, and researches the window
    through the governed web pack under its own fences and wall clocks. It writes exactly one row — the
    developments across the banded dimensions, with a verified-span rate and a thin-dimension list.
    *(table: `unit_references`)*
-2. **The grader** resolves the reference current at its as-of stamp; absent one it writes an explicit
-   no-reference or stale-reference outcome and grades nothing. It segments the desk heads and the record
+2. **The grader** (off by default; `LEGBA_CORRECTNESS_GRADER_ENABLED`) resolves the reference
+   current at its as-of stamp; absent one it writes an explicit no-reference or stale-reference
+   outcome and grades nothing. It segments the desk heads and the record
    above them with the **shipped judge segmenter**, so the claim population is the same one the judge
    sees, and mints one packet per unit under a leak scan.
-3. **Three families vote** — one free, two paid and gated in series by a daily spend ceiling and by a
+3. **Up to three model families vote.** The first runs on the core plane. The second and third are
+   gated in series by a daily spend ceiling (`LEGBA_GRADER_DAILY_CEILING_USD`, default `0`, so by
+   default only the first votes and each claim is marked `single_family`) and by a
    calibration interlock that refuses to publish unless a passing calibration row matches the rubric hash
    and covers every model the run will use. Verdicts adjudicate by majority; a split is recorded as a
    split. *(tables: `unit_correctness`, `unit_correctness_claims`, `grader_calibrations`)*
@@ -586,7 +587,7 @@ that could build its own reference could close the loop on itself. `REFERENCE_BU
 6. **Drain** in a total order by severity, lead position, tier and key, within per-tick and per-day
    ceilings; exhausting a budget degrades to a hash-gated sampled mode whose fraction is stamped
    everywhere the numbers appear.
-7. **Search, then grade.** The free rung runs every claim's primary query; a metered rung is reached only
+7. **Search, then grade.** The unmetered first rung runs every claim's primary query; a metered rung is reached only
    by explicit escalation, at most once per claim, and a refusal returns a reason rather than an empty
    result. An absence-shaped claim needs a *verified* empty — one where a live control probe proved the
    engine set was answering — or it is written unchecked with a liveness reason, never not-found and
@@ -621,7 +622,7 @@ that bears on what was left open — without ever letting a machine rewrite a se
    product still live it also lands a review flag, and the run reports a staleness debt. Optional model
    legs can only subtract. *(tables: `bearing_edges`, `review_flags`)*
 5. **Nothing closes a flag.** There is no code path that closes a review flag, writes correction content,
-   or recomposes anything — true by construction of what the handler can write. The staleness debt is a
+   or recomposes anything; the handler has no write path for any of them. The staleness debt is a
    flags-found, match-unverified count, and its route carries a hard-false verified field so no reader
    mistakes it for a settled number. *(route: `GET /api/v1/v3/system/staleness-debt`)*
 6. **Gaps become objects.** In parallel and reading none of the above, the gap analyst drains the

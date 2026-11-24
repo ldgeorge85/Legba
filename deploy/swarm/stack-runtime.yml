@@ -254,7 +254,7 @@ services:
     deploy:
       replicas: 1   # >1 requires per-replica sidecars + LEGBA_REPLICA_COUNT/
                     # LEGBA_LEADER_ELECTION knobs (docker-compose.replicas.yml
-                    # pattern) — and is gated by DIRECTION.md §6 regardless.
+                    # pattern).
       placement:
         constraints: ["node.labels.legba.role == runtime"]
       restart_policy:

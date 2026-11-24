@@ -8,7 +8,7 @@
 #
 # Image stays minimal: no compiler toolchain in the runtime layer.
 # Per docs/AI_MODELS.md the registry never imports torch / spacy /
-# sentence-transformers / scipy — those were retired in L-205. The
+# sentence-transformers / scipy — those were removed. The
 # heavy dapr / dspy / temporalio deps live in sibling images
 # (Dockerfile.runtime, Dockerfile.temporal-worker) — the registry does
 # not need them.
@@ -82,7 +82,7 @@ RUN pip install --prefix=/install \
         # specific GAP existing at all. ~10 MB, no transitive deps.
         # docker/Dockerfile.runtime carries the same pin — bump in lockstep.
         "pycountry>=24.6" \
-        # feedparser + networkx (W9-F11, roll 80): the descriptor REFERENCE
+        # feedparser + networkx : the descriptor REFERENCE
         # CHECK (data/registry/descriptor_refs.load_palettes) imports the
         # source-kind and analyst-kind registries — the rss kind imports
         # feedparser and the graph_mining / structural_balance handlers import
@@ -102,7 +102,7 @@ COPY pyproject.toml /build/pyproject.toml
 COPY src /build/src
 RUN pip install --prefix=/install --no-deps /build
 
-# W9 SPLIT-2 — the selected profile's prompt package, copied into
+# The selected profile's prompt package, copied into
 # site-packages beside `legba` and imported at build. The registry needs it as
 # much as the runtime: registration resolves every analyst descriptor's
 # method.prompt_module (descriptor_refs) and refuses a dead one on a binding
@@ -153,7 +153,7 @@ ENV LEGBA_REGISTRY_API_HOST=0.0.0.0 \
 
 EXPOSE 8090
 
-# Healthcheck: readiness probe (resilience-observability W-1b §4). Hits the
+# Healthcheck: readiness probe . Hits the
 # unauthenticated /api/v1/registry/healthz route, which pings Postgres
 # (SELECT 1) + NATS (is_connected) and answers 503 when either substrate
 # dependency is down. `curl -f` treats the 503 as failure, so the container

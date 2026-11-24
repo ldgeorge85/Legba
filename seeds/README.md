@@ -1,13 +1,10 @@
-# Seeds — the knowledge-base seeding layer
+# Seeds
 
-Legba ships the seed **machinery** but **no curated seed data**. The adapters,
-the driver, and the CLI are all in-repo; the operator-curated YAML datasets that
-were previously bundled here are **not part of the public project** and are no
-longer tracked (per operator, 2026-07-09). A fresh instance therefore boots with
-an **empty knowledge base** unless you provide your own seed files in this
-directory.
+For admins who want an instance to start with some background knowledge. Legba ships the seed
+adapters, the driver and the CLI, but no seed data. A fresh instance boots with an empty knowledge
+base unless you put your own seed files in this directory.
 
-To seed real starting knowledge you supply your own files here — start from the
+To seed starting knowledge, supply your own files here. Start from the
 format examples, which are the only data files this directory ships:
 [`world_baseline.example.yaml`](world_baseline.example.yaml),
 [`source_ratings.example.yaml`](source_ratings.example.yaml) and
@@ -16,10 +13,10 @@ format examples, which are the only data files this directory ships:
 ## What a seed does
 
 A seed adapter writes to the **knowledge layer** (`facts` / `nexuses` /
-`entity_profiles`) — as opposed to a streaming `source` handler, which writes
-raw `signals`. Seed rows are temporally honest: every fact/nexus carries a real
+`entity_profiles`). A streaming `source` handler, by contrast, writes
+raw `signals`. Every seeded fact and nexus carries a real
 `valid_from` (and an optional `valid_until`), and re-importing is idempotent (the
-driver upserts — no duplicate open triples on a re-run).
+driver upserts, so a re-run adds no duplicate open triples).
 
 ## The adapters (the machinery, all shipped)
 
@@ -45,10 +42,10 @@ Supporting code, also shipped:
   format.
 - `scripts/seed.py` — the CLI (`--list`, `--source`, `--dry-run`).
 
-The two offline curated adapters (`world_baseline`, `sipri_arms_transfers`)
-**gracefully degrade**: if their YAML file is absent, `fetch()` logs a WARNING
-and returns nothing (0 rows) instead of crashing — so a fresh public `--seed`
-run is a clean no-op.
+The two offline adapters (`world_baseline`, `sipri_arms_transfers`)
+degrade quietly: if their YAML file is absent, `fetch()` logs a WARNING
+and returns nothing (0 rows) instead of crashing — so `--seed` without your
+files does nothing.
 
 ## The `world_baseline` YAML format
 
@@ -102,10 +99,9 @@ Or as part of a full stack deploy:
 deploy/deploy.sh --seed
 ```
 
-`--seed` runs the curated-YAML adapters (`world_baseline`,
-`sipri_arms_transfers`) before the runtime boots. Because the adapters degrade
-gracefully, `--seed` is a **no-op** if you have not provided the seed files —
-the instance simply boots with an empty knowledge base.
+`--seed` runs the profile's seed adapters (for the geopolitics profile, `world_baseline` and
+`sipri_arms_transfers`) before the runtime boots. Without your seed files it does nothing, and the
+instance boots with an empty knowledge base.
 
 ## Source ratings (assurance ledger catalog seed)
 
@@ -127,7 +123,7 @@ python scripts/seed_source_ratings.py
 Format (with inline field comments):
 [`source_ratings.example.yaml`](source_ratings.example.yaml) — the example
 sources in it are FAKE. Same graceful degrade: a missing file is a warn +
-no-op. Ratings are display/weighting metadata only — they never touch the
+no-op. Ratings are display and weighting metadata only; they never touch the
 faithfulness score.
 
 ## Exemplar shelf (curated pattern-thread index)
@@ -138,7 +134,7 @@ the curated index of pattern-threads. A pattern-thread is a *warning problem*
 critical-indicator change rather than on cadence. The shelf says which warning
 problems exist, at what stage, and how ids that have left it still resolve.
 
-It writes **nothing** to the substrate — no facts, no nexuses, no ratings — so
+It writes nothing to the substrate (no facts, nexuses or ratings), so
 it is not a `SeedSource` adapter and there is no `scripts/seed_*.py` for it. It
 is read in-process:
 
@@ -156,7 +152,7 @@ patterns in it are FAKE. Same graceful degrade: a missing file is a warn plus
 an empty shelf that offers nothing (it never invents patterns). A file that is
 *present but malformed* raises `ExemplarShelfError` instead of half-loading.
 
-**The one rule the loader exists to enforce:** a pattern removed from the
+**The loader's rule:** a pattern removed from the
 active shelf must stay **resolvable** and must **never be offered**. Curation
 removes patterns two ways — *merged* (the id joins the survivor's `aliases` and
 its `merged_from`, normally with a `variants` entry carrying the framing and

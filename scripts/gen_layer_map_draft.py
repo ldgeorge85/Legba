@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The RETAG GENERATOR — a first-draft ``layer_map`` for one country, derived
 from what the existing ``descriptors/source_*.yaml`` already declare
-(Program 6 L0, docs/DIRECTION.md "The layered source fan-out").
+(see the source layers in docs/DATA_SOURCES.md).
 
 WHAT THIS IS. A proposal, never a load. It prints (or writes) a
 ``layer_map_<cc>.yaml`` shaped exactly like
@@ -31,9 +31,9 @@ THE RULES (in application order — see :func:`derive_layer`):
      own regional edition is geo-scoped to this country: an agency dispatch
      is never this country's domestic masthead;
   4. ``scope.source_class == "state_media"`` scoped to this country reads as
-     ``official`` — the state's own voice (docs/DIRECTION.md: "the same
+     ``official`` — the state's own voice (the same
      channel is independent commentary in one country and the state's voice
-     in another"); state media NOT scoped to this country is skipped here
+     in another); state media NOT scoped to this country is skipped here
      (ambiguous which state it speaks for — the operator's call, not a
      default);
   5. ``scope.source_class == "official"`` scoped to this country reads as

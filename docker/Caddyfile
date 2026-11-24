@@ -5,7 +5,7 @@
 # Two-layer auth (2026-06-01):
 #   1. Browser-prompt perimeter gate via caddy basic_auth.  Lewis
 #      types the password once per session; browser caches.
-#   2. Registry bearer-token gate (OP-1, `LEGBA_REGISTRY_API_TOKEN`).
+#   2. Registry bearer-token gate (`LEGBA_REGISTRY_API_TOKEN`).
 #      Caddy injects the bearer for upstream after basic_auth
 #      validates, so the SPA never needs to know the token.  This
 #      avoids the SPA's `Authorization: Bearer ...` colliding with
@@ -34,7 +34,7 @@
 #   `import basic_auth_perimeter` lines AND the mode-A bearer injection) makes
 #   the cookie the only way in for a browser — the operator's call.
 #
-# SIGN-IN SWITCH (A-1, 2026-11-14): `LEGBA_AUTH_SIGNIN` picks mode A's
+# SIGN-IN SWITCH: `LEGBA_AUTH_SIGNIN` picks mode A's
 #   upstream through the `mode_a_*_{$LEGBA_AUTH_SIGNIN:0}` snippets below.
 #   Unset, empty or 0 (the default): mode A injects the admin bearer, exactly
 #   as above. 1: mode A injects NOTHING and strips the perimeter header, so a
@@ -127,11 +127,11 @@
 	import mode_a_plain_0
 }
 
-# THE INSTALLABLE PHONE APP (P-1, 2026-11-14) — `/m/` as a web app installed
+# THE INSTALLABLE PHONE APP — `/m/` as a web app installed
 #   from the browser (Android first, iPhone second), with NO third-party push.
 #   Behind the SIGN-IN SWITCH: with it off (unset, empty or 0) the `_0` / `_`
 #   snippets below are EMPTY and the adapted config is identical to the
-#   config before this lane (`caddy adapt` proof in the lane report). With it
+#   config before this change (checked with `caddy adapt`). With it
 #   on (1):
 #   - BOOTSTRAP OUTSIDE THE PERIMETER. The manifest, the service worker
 #     script and the icons answer without the perimeter password: browsers
@@ -150,7 +150,7 @@
 #     (its directory): it never controls the desktop at `/`.
 #   Dropping the perimeter for the phone path entirely (documents and API on
 #   the session cookie alone — the phone plan's option 1, the arrangement the
-#   research supports for iOS standalone) is lane P-2, on the owner's word.
+#   research supports for iOS standalone) is not built.
 (phone_app_0) {
 }
 (phone_app_) {
@@ -198,7 +198,7 @@
 	# WebSocket event stream. (The earlier note here claimed the bypass was
 	# safe because "only requests through this caddy get the bearer" — which
 	# is exactly the problem: every external request comes through this caddy.)
-	# 2026-10-08 (adversarial review P1, W11-F22): the perimeter applies here
+	# The perimeter applies here
 	# too. Without it any external upgrade through this caddy received the
 	# injected admin bearer and a 101 — the whole event bus, unauthenticated.
 	# Browsers attach the realm's cached Basic credentials to the WS upgrade
@@ -226,7 +226,7 @@
 	# browser's cached basic_auth flows through cleanly.  `header_up`
 	# then replaces the Basic with the registry's bearer.
 	#
-	# Active upstream health (resilience-observability W-1b §4): Caddy polls
+	# Active upstream health : Caddy polls
 	# the unauthenticated readiness probe (Postgres + NATS ping). When the
 	# registry can't serve its substrate, /healthz answers 503, Caddy marks
 	# the upstream down and fails requests fast instead of hanging on a
@@ -285,7 +285,7 @@
 		redir * /m/ 308
 	}
 
-	# P-1 — the installable phone app's bootstrap files and cache headers
+	# The installable phone app's bootstrap files and cache headers
 	# (THE INSTALLABLE PHONE APP above; nothing at all with the switch off).
 	import phone_app_{$LEGBA_AUTH_SIGNIN:0}
 
@@ -326,7 +326,7 @@
 	}
 }
 
-# ntfy alert push (E-4/P1-2) — the local ntfy server exposed under its own
+# ntfy alert push: the local ntfy server exposed under its own
 # subdomain so the operator's browser / the ntfy phone app can subscribe from
 # anywhere. Same basic_auth perimeter as the console (the ntfy app supports
 # per-server user/password — use the same credential). WebSocket + long-poll

@@ -213,8 +213,8 @@ def test_cadence_window_and_narrow_shape():
 
 
 def test_lifecycle_records_both_analysts_active():
-    # activated at roll 82 (docs/BRINGUP.md "The cyber desk reader"): the rows
-    # say active so a fresh instance comes up the way the reference host runs
+    # the overlay rows say active (docs/RUNBOOK.md "The descriptor walker"), so
+    # a fresh instance of the example profile comes up with both analysts on
     text = lifecycle_text(_DESC)
     for aid in ("cyber_watch", "kev_digest"):
         assert f"| analyst | {aid} | active | draft |" in text

@@ -63,5 +63,5 @@ Everything above this section is a live SELECT against the registry DB. The foll
 
 - UI panel maturity (live/preview/hidden) — see `docs/RELEASE_STATE_MATRIX.md` (generated from `registry.ts`, a separate generator).
 - Declared-not-built seams and known limitations — see `docs/SEAMS.md`.
-- Roadmap / planned work (e.g. a dedicated cross-family verify judge) — see `docs/STATUS.md` and `docs/DESIGN.md`.
+- Roadmap / planned work (e.g. a dedicated cross-family verify judge) — see `docs/STATUS.md` and `docs/SEAMS.md`.
 

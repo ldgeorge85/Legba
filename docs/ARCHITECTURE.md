@@ -2,10 +2,10 @@
      SPDX-License-Identifier: AGPL-3.0-or-later -->
 # Architecture
 
-What Legba is made of, and why each piece has the shape it has. This document
-owns the mechanisms. Names, tables and values live in the reference tier
-(`CODE_MAP.md`, `DATA_MODEL.md`, `GLOSSARY.md`, `TUNABLES.md`); procedures live
-in `RUNBOOK.md`; the not-built list is `SEAMS.md`.
+For a reader who wants to know what Legba is made of and how the pieces fit.
+Names, tables and values are in `CODE_MAP.md`, `DATA_MODEL.md`, `GLOSSARY.md`
+and `TUNABLES.md`; procedures are in `RUNBOOK.md`; the not-built list is
+`SEAMS.md`.
 
 **Contents:**
 [1 The shape](#1-the-shape) ·
@@ -54,7 +54,7 @@ about the world once, enriches it once in a target-agnostic way, and publishes
 it once into a shared pool. A `Signal` therefore carries no `target_id` —
 interpretation is target-owned and lives only on derived analyst outputs
 (`data/sources/_contract.py`; the field set is `extra="forbid"`, so a new
-structured fact is declared on the model rather than smuggled into `payload`).
+structured fact is declared on the model, not added to `payload`).
 
 Four properties fall out of that one inversion:
 
@@ -95,7 +95,7 @@ unless the person running the instance turns them on: `searxng` (search),
 bring-up order, the tiered deploy (`scripts/rolling_deploy.sh`) and the nightly
 test suite (`scripts/host_nightly_suite.sh`).
 
-**No model runs inside a Legba container.** The language models, the embedding
+No model runs inside a Legba container. The language models, the embedding
 model and the baseline NLP models are served out of process on model-serving
 hosts and reached over HTTP through stack components resolved from the registry.
 That is what makes the model layer swappable by descriptor rather than by
@@ -143,7 +143,7 @@ the same shape (`COLLECTIONS.md`):
 | **action pack** | a capability bundle: tools, prompt fragments, rules, channels, a governor, an applicability predicate |
 | **stack component** | a substrate or model endpoint: one of nine kinds (`llm_provider`, `embedding`, `nlp_service`, `search_provider`, `vector_store`, `nats`, `postgres`, `redis`, `proxy_pool`), with credentials held by reference |
 
-Four properties are what make the model load-bearing rather than decorative.
+The model rests on four properties.
 
 **Content-hashed identity.** A descriptor's `version` is the hash of its body,
 so "is this the same descriptor as before?" needs no hand-managed version
@@ -155,8 +155,8 @@ content hash, while the schema version stays stable for months.
 "validated, components bound, ready but not running" step, because registering a
 descriptor and running it are different decisions. A new descriptor that needs
 a person's verification ships `state: draft`; bulk registration of drafts creates
-no actor at all, so breadth can be registered in one wave and activated one
-measured desk at a time.
+no actor at all, so many descriptors can be registered at once and activated one
+desk at a time.
 
 **An audit trail that cannot be skipped.** Every mutation appends an
 Ed25519-signed, hash-chained row to `descriptor_audit_log` in the same
@@ -170,11 +170,10 @@ version carries the same principal in `written_by`.
 did not land. A half-registered descriptor is the failure this forecloses.
 
 State changes publish on `descriptor.<action>.<family>.<id>`, which the runtime's
-reconcile loop consumes (§12). Register, configure, activate — no redeploy for a
-content change. The pattern is the familiar one from Kubernetes custom resources
-and Prometheus scrape configs; what is distinctive is that the **cognitive**
-layer is descriptors too, so the declarative composition runs all the way up to
-the reasoning.
+reconcile loop consumes (§12). Register, configure, activate: a content change
+needs no redeploy. The pattern is the one Kubernetes custom resources and
+Prometheus scrape configs use, and it covers the analysts too, so the reasoning
+layer is configured the same way as the sources.
 
 Descriptor config fields use named property factories (`schemas/properties.py`)
 — `Property.Secret`, `Property.StackRef`, `Property.Cron`, `Property.Dropdown`
@@ -209,17 +208,17 @@ temporal `facts` stamped with the signal's event time, and entity rows with
 their links back to the spans that produced them.
 
 Ingest dedupe runs here too, in two cheap deterministic tiers — canonical-URL
-hash, then content hash — and it **links rather than collapses**: a duplicate
+hash, then content hash. It **links duplicates and deletes nothing**: a duplicate
 raw row is kept and pointed at its canonical through `signal_aliases` and
-`canonical_signal_id`. Nothing is deleted, because a dedupe decision that
-deletes evidence cannot be revisited when the rule changes.
+`canonical_signal_id`, so a dedupe decision can be revisited when the rule
+changes.
 
 The signal is then published once to a deliberately coarse NATS subject,
 `legba.signals.<tenant>.<source>.<modality>.<event_class>`. Subject tokens
 cannot contain dots, so a source id is flattened before it becomes one.
 
 The whole ordering — and the substrate write contract, the per-poll outcome
-ledger, the source catalog and the breadth lanes — is `ACQUISITION.md`.
+ledger and the source catalog — is `DATA_SOURCES.md`.
 
 ## 5. Fan-out and triggering — match many
 
@@ -231,9 +230,10 @@ need an explicit opt-in. The policy lives on the source because the source owns
 who may read it.
 
 The subscription engine resolves each active desk's references into authorised
-bindings and binds **one aggregated JetStream consumer per desk**, subject-filtered
-to that desk's coarse axes. Binding one consumer per desk rather than one per
-(desk, source) pair is what keeps the consumer count linear in desks.
+bindings and binds **one aggregated JetStream consumer per desk**,
+subject-filtered to that desk's coarse axes. Binding one consumer per desk
+rather than one per (desk, source) pair is what keeps the consumer count linear
+in desks.
 
 Matching is two-stage:
 
@@ -298,7 +298,7 @@ per-kind and per-handler reference.
 
 ## 7. The tower — the record and the voice
 
-The product is the composed, verified chain, not any single analyst. It reads
+The tower is the composed, verified chain of analyst outputs. It reads
 bottom-up. The tower below is described as the geopolitical example instance
 builds it; the mechanisms are the platform's, the unit and tier names are the
 example's.
@@ -313,9 +313,9 @@ is tag-scoped to a subset of desks; and one (disruption status) is scoped off th
 country plane entirely, to thematic supply-chain and flow desks on a shorter
 window.
 
-That last unit is the proof that **the tag predicate, not the country plane, is
-the fan-out primitive**: a whole new desk family costs a set of target
-descriptors and one selector, with no new analyst kind and no new code path.
+That last unit shows that fan-out runs on the tag predicate: a whole new desk
+family costs a set of target descriptors and one selector, with no new analyst
+kind and no new code path.
 Adding a subject is the same move: register a target descriptor and the whole
 spine picks it up by predicate.
 
@@ -326,14 +326,12 @@ deterministic title. The interpretive read is then written as its own analyst
 row, from that assembly and from nothing else, with `derived_from` fenced to the
 single assembly it read.
 
-The reason is measured rather than stylistic: free-text composition grades, on
-two independent external rounds, at roughly half the accuracy of its
-pre-committed bar, and the failure it makes possible is laundering — a
-qualifier a desk attaches to a claim disappearing at the layer above it, so the
-composition reads more confident than any read it rests on. A quotation cannot launder a
-qualifier, and a voice that cites exactly one row can be graded against that
-row. The regime rides one flag, read in one place, so the cascade cannot be
-half-flipped; the code default is off and the reference deployment runs it on.
+Free-text composition can launder a qualifier: a qualifier a desk attaches to
+a claim disappears at the layer above it, so the composition reads more
+confident than any read it rests on. A quotation cannot drop a qualifier, and a
+voice that cites exactly one row can be graded against that row. The regime
+rides one flag, `LEGBA_COMPOSITION_ASSEMBLY`, read in one place, so the cascade
+cannot be half-flipped. The code default is off.
 
 The tiers, in order:
 
@@ -351,8 +349,7 @@ Two disciplines hold across every tier. A composition's read slice admits only
 verify-passed sub-claims — an inner join on the faithfulness critique — so an
 unverified sub-claim is structurally unable to enter. And an empty slice yields
 an explicit zero-confidence "no source findings to synthesize" read stamped with
-its desk, so a desk that produced nothing is *named as a gap* rather than
-silently missing.
+its desk, so a desk that produced nothing shows up as a named gap.
 
 Supersession keeps one live head per desk per analyst; prior heads are kept, not
 deleted.
@@ -364,16 +361,15 @@ falsifiable prior, plus a pass that narrates where the faculty reads agree and
 split without merging them into a consensus voice. These read the verified tower
 top, assert no new fact, and are faithfulness-verified like everything else.
 
-**The journal is off-chain, and that is the one exception in the whole
-provenance model.** A journal row is a perspective *over* the chain, never a
-node *in* it: it carries an always-empty `derived_from`, and `journal_entries`
-is deliberately absent from the lineage catalog, so a lineage walk from any
-fact, situation or finding can never surface it. Its citations are an up-only
-reference. The invariant is held twice — by a gating test and by the grant
-layer, since neither pack the journal holds can write a fact. Everything the
-journal wants to change outside its own entries goes to a human-gated proposal
-queue: it can write its own next breath but cannot rewrite its own rules without
-a person accepting the change.
+The journal is off-chain, the one exception in the provenance model. A journal
+row is a perspective *over* the chain, never a node *in* it: it carries an
+always-empty `derived_from`, and `journal_entries` is deliberately absent from
+the lineage catalog, so a lineage walk from any fact, situation or finding can
+never surface it. Its citations are an up-only reference. The invariant is held
+twice — by a gating test and by the grant layer, since neither pack the journal
+holds can write a fact. Everything the journal wants to change outside its own
+entries goes to a human-gated proposal queue: it can write its own entries but
+cannot change its own rules without a person accepting the change.
 
 ## 8. Outputs and provenance
 
@@ -389,7 +385,7 @@ Every typed output goes through one wrapper, `write_analyst_output`:
 
 1. Look up the kind's table, payload model, schema URI and subject.
 2. Validate the payload. A validation error routes to `output_dead_letter`
-   rather than aborting the run — an invalid output never half-lands.
+   and the run continues; an invalid output never half-lands.
 3. Build the universal provenance: `produced_at`, `derived_from` as a UUID
    array, the schema URI, the run id.
 4. Insert. `situation`, `hypothesis`, `fact`, `nexus`, `event` and `journal`
@@ -401,8 +397,7 @@ Every typed output goes through one wrapper, `write_analyst_output`:
 5. Publish to `analyst.<analyst_id>.<channel>`, best-effort — a broker hiccup
    must not lose a write, so the insert is the source of truth.
 
-Having exactly one write path is the point: a second one would be a second place
-for provenance to be forgotten.
+There is no second write path, so no output can skip the provenance step.
 
 After the row lands, the actor advances a per-analyst **receipt chain** — a
 SHA-256 hash chain over the canonical JSON of each run, threading intermediate
@@ -445,16 +440,17 @@ deterministic citation-presence floor checks each fact-asserting claim in the
 prose against the resolved citation bridge; a claim with no marker, or a marker
 resolving to no real row, is an unsupported span, and the score is the fraction
 of checkable claims that are supported. An LLM judge then refines the per-claim
-verdicts, resolved through its own repointable route so what judges a read can
-be a different model family from what wrote it. The pass is soft-fail: with the
+verdicts. The judge resolves through its own route; by default that is the
+same endpoint as the analyst that wrote the read, and an admin can point it at a
+different model (§11). The pass is soft-fail: with the
 judge unreachable the result degrades to the deterministic floor, stamped as
 such and published under a ceiling, never a fabricated number.
 
 The verdict is persisted as a critique, and the fold
 `effective_confidence = min(confidence, faithfulness_score)` is applied at read
 time. Verification never hard-deletes a finding — a low score gates a visible
-low-confidence tier. That is the honest shape: the system can tell you a claim
-is not supported by what it cites; it cannot tell you the claim is false.
+low-confidence tier. A low score says a claim is not supported by what it
+cites; it does not say the claim is false.
 
 Two rules make the number comparable over time. Every critique stamps the judge
 route and a pipeline version, so verdict populations from different judges or
@@ -469,20 +465,19 @@ internally immaculate and factually wrong. The correctness grader scores a
 unit's claims against an independent **reference** for that desk and window,
 reporting two shares that are unreadable apart: correctness over the claims the
 reference bears on, and coverage over everything the unit said. References are
-built by a separate job, on owned hardware, blind to the substrate — a grader
+built by a separate job, blind to the substrate — a grader
 that could build its own reference could close the loop on itself.
-`CORRECTNESS_GRADER.md` and `REFERENCE_BUILDER.md` own this pair.
+`GRADING.md` covers both.
 
-**The external audit — does the open web contradict us?** A standing auditor
-samples the world read and a rotated subset of desk reads, extracts checkable
-claims, and checks each against live external search through the governed web
-pack, recording supported, contradicted, not-found or unchecked. Three design
-points carry its weight: it writes a heartbeat on every run *including a run
-that audits nothing*, because "there was nothing to contradict" and "the auditor
-is dead" must not look alike from outside; it refuses to spend a core-plane call
-at all when it has no search binding, rather than auditing against nothing; and
-its verdicts carry their own pipeline stamp, separate from the judge's, because
-two instruments measuring different things must never pool.
+**The external audit — does the open web contradict a claim?** A standing
+auditor samples the world read and a rotated subset of desk reads, extracts
+checkable claims, and checks each against live external search through the
+governed web pack, recording supported, contradicted, not-found or unchecked. It
+writes a heartbeat on every run *including a run that audits nothing*, because
+"there was nothing to contradict" and "the auditor is dead" must not look alike
+from outside; it makes no core-plane call at all when it has no search binding;
+and its verdicts carry their own pipeline stamp, separate from the judge's,
+because two instruments measuring different things must never pool.
 
 Around those three sit the calibration surfaces: a per-unit skill scoreboard, a
 Brier score over hypotheses resolved exogenously, band calibration over the
@@ -490,12 +485,12 @@ scorecard's own claims, the platform's own acute hazard calls, and the
 **forecast ledger** (`LEDGER.md`): sealed questions that each name what resolves
 them and when, every issuer's probability on each, a resolver that proposes an
 outcome from the evidence for a person to confirm, and a scorecard kept against
-the world by date. Every one of them is honest-null where unmeasured and
-publishes a no-skill result rather than hiding it. A forecast exists **only** as
+the world by date. Each reports null where nothing was measured and publishes
+a no-skill result when that is the result. A forecast exists **only** as
 a ledger row, never as a free-text claim, and a degenerate probability vector
 abstains rather than producing a number.
 
-One structural cost is worth stating: because every stamp partitions, a readout
+Because every stamp partitions, a readout
 that needs resolved outcomes can be starved when the stamp lifetime is shorter
 than the resolution horizon. A registry lets a reader pool consecutive stamps
 for a metric family only when the lineage affirmatively declares the family
@@ -525,43 +520,36 @@ are gated off by default and what a denied call leaves behind.
 One consequence of that model shows up in external retrieval. Search is a stack
 component family like any other, with a provider ladder that escalates only on
 degradation, never on preference, and a metered rung that refuses to run when no
-spend cap is declared or no cost ledger is bound — an unenforced cap on a
-metered external API is an open tab, not a permissive default. And because a
-search that quietly returns zero results reads downstream exactly like "nothing
-exists", the plane separates statuses: an empty whose engine liveness was never
+spend cap is declared or no cost ledger is bound. Because a search that
+quietly returns zero results reads downstream exactly like "nothing exists",
+the plane separates statuses: an empty whose engine liveness was never
 measured is *unknown* and may not support an absence claim; an empty verified
 against a live control probe licenses only a scoped sentence naming the query
 and the time; a degraded empty is returned as a tool **failure**, because
-returning it as a successful zero-result search would be technically accurate
-and practically a lie.
+a successful zero-result search would mislead every reader downstream.
 
 ## 11. The model planes, and who pays
 
 Three roles of model, resolved through stack components:
 
-- **The core analyst plane** — a self-hosted model on owned hardware, at no
-  marginal cost, which runs every scheduled analyst: the units, the tower, the
-  voices, the journal and lens tier, the deterministic-plus-LLM handlers.
-- **The judge and grader planes** — the faithfulness judge, the external-audit
-  grader and its second rater. These are the paid calls, and they are paid
-  because a judge that shares a writer's blind spots is not an independent
-  check.
+- **The core analyst plane** — your main chat endpoint, which runs every
+  scheduled analyst: the units, the tower, the voices, the journal and lens
+  tier, the deterministic-plus-LLM handlers.
+- **The judge and grader routes** — the faithfulness judge, the correctness
+  grader, the external-audit grader and its second rater. Each resolves through
+  its own route. By default the faithfulness judge resolves to the same
+  endpoint as the analyst it judges; setting `LEGBA_JUDGE_STACK_REF` points
+  every judge call at another registered model.
 - **The consult plane** — the on-demand consult and deep-consult kinds run on
-  the core plane by default; a person may explicitly pick a billed hosted model
-  for one request, and the hosted models serve nothing else.
+  the core plane by default; a person may pick another allowlisted model for one
+  request.
 
-Two conventions hold on the core plane and are checked at the gate: a descriptor
-carries `budget_tokens_per_day: 0`, and an LLM route carries `temperature: 1.0`.
-The budget is zero because metering a plane that costs nothing only creates a
-way for work to stop; the temperature is fixed because a sampled default is one
-more unmeasured variable between a prompt change and its score. The self-hosted
-handler also sends no `max_tokens` unless a caller opts in — the server serves
-its own budget, and a ceiling applied from outside truncates a read rather than
-saving anything.
+The shipped descriptors carry `budget_tokens_per_day: 0` (no per-analyst token
+cap), and their LLM routes carry `temperature: 1.0`. The core-plane handler
+sends no `max_tokens` unless a caller opts in, so the server applies its own
+limit.
 
-`TUNABLES.md` §0 is the money map: every path that can spend, which component
-and model it resolves, which plane pays, and what it costs today. It is the one
-place those numbers live.
+`AI_MODELS.md` covers the model roles and how to register an endpoint.
 
 ## 12. The actor runtime
 
@@ -603,9 +591,9 @@ are a pair and neither alone is sufficient: a deadline on the reconciler's
 per-actor heal, which bounds what one wedged actor costs the queue, and bounded
 I/O *inside* the turn, which is what actually lets the turn complete and release
 the queue behind it. A breaker converts repeated timeouts into skip-and-retry
-with a cooloff and logs the skip, so a wedged actor is loud rather than
-invisible. Every bound is environment-overridable and falls back to its default
-on an unset or malformed value, so a typo cannot silently disable one.
+with a cooloff and logs the skip, so a wedged actor shows up in the logs. Every
+bound is environment-overridable and falls back to its default on an unset or
+malformed value, so a typo cannot silently disable one.
 
 **Failure semantics.** In-flight exceptions classify as transient, budget or
 hard. Transient retries with backoff; budget pauses or demotes for the rest of
@@ -616,16 +604,14 @@ global envelope.
 **Durable jobs.** Work that is too long for a turn runs as a Dapr Workflow on the
 same sidecar, registered by function name on one runtime: the deep-consult
 workflow (plan, acquire, analyze, synthesize) and the optimizer's prompt-evolution
-loop. The optimizer is mothballed — its descriptors are paused and its entry
-point refuses loud rather than running, because the one compile it completed
-landed below its promotion bar — while the worker, the code and the tests stay,
-since the worker also hosts the live deep-consult workflow. The orchestrator
-body is strictly deterministic — no wall clock, no
-randomness, no I/O — with all non-determinism pushed into activities, which is
-the replay contract. A request returns a task id immediately and the caller polls
-for the persisted result. The one sharp edge: a workflow instance id must not
-contain `::`, because activity result parsing splits on it — worker actor ids
-use `::` and workflow ids must not.
+loop. The optimizer is switched off: its descriptors are paused and its entry
+point refuses to run. The worker, the code and the tests stay, since the worker
+also hosts the deep-consult workflow. The orchestrator body is strictly
+deterministic (no wall clock, no randomness, no I/O), with all non-determinism
+pushed into activities, which is the replay contract. A request returns a task
+id immediately and the caller polls for the persisted result. A workflow
+instance id must not contain `::`, because activity result parsing splits on it;
+worker actor ids use `::`, workflow ids must not.
 
 A separate NATS work-queue with competing-consumer workers backs bounded,
 interchangeable jobs such as media extraction. A completed job lands a derived
@@ -634,12 +620,12 @@ reasoning needs it.
 
 ## 13. How it scales, and where it stops
 
-The scaling story is the same inversion told three ways.
+Scaling follows from the same separation of observation and interpretation.
 
 - **Many analysts on one shared substrate.** Adding a country, a sector or a
   whole domain is registering descriptors into a running instance, not deploying
-  another instance. Cross-desk reasoning is free, because the substrate is
-  shared by definition.
+  another instance. Cross-desk reasoning needs no extra plumbing, because the
+  substrate is shared.
 - **Shared sources, not per-desk binding.** N desks over one feed is one poll,
   one enrichment, one stored signal, fanned out by predicate.
 - **The right execution shape per workload.** Addressable, mostly-idle,
@@ -648,18 +634,17 @@ The scaling story is the same inversion told three ways.
   work-queue worker pool, scaling by workers. No serialised actor is ever a
   throughput bottleneck — that work is a job.
 
-Cadence-batching is the move that makes the economics work: analysts run on a
-schedule, not per signal, so model cost is decoupled from the ingest firehose.
-The real ceiling is model throughput, which is exactly why the heavy graph work
-is deterministic Python.
+Analysts run on a schedule, not per signal, so model cost does not grow with
+ingest volume. The real ceiling is model throughput, which is why the heavy
+graph work is deterministic Python.
 
-Three single-node truths are deliberate and stated so nobody meets them in an
-incident: JetStream streams are single-replica; `signals` is one unpartitioned
-table with a retention sweep that ships disabled; and the trigger accumulator's
-read-modify-write assumes one replica per pair, so two replicas can interleave
-and lose a pending-count increment — which costs a *late* fire, never a lost
-signal, since the cadence ticker still sweeps dirty pairs. The reconcile loop
-and the discovery informer are singletons gated by a leader lease.
+Three single-node limits are deliberate: JetStream streams are single-replica;
+`signals` is one unpartitioned table with a retention sweep that ships disabled;
+and the trigger accumulator's read-modify-write assumes one replica per pair, so
+two replicas can interleave and lose a pending-count increment — which costs a
+*late* fire, never a lost signal, since the cadence ticker still sweeps dirty
+pairs. The reconcile loop and the discovery informer are singletons gated by a
+leader lease.
 
 ## 14. The perimeter
 
@@ -692,26 +677,24 @@ Acquisition-plane tenancy is real and enforced at match time: the column is
 indexed on `signals`, pinned on the row, the subject and the published envelope
 from one source of truth, pushed into the subscription SQL and re-checked in the
 residual matcher. Analysis-plane tenancy is not built — `analyst_outputs` carries
-no tenant column, so enforcing against it would be theatre. `DIRECTION.md` holds
-the ordering that would change this.
+no tenant column, so there is nothing to enforce against.
 
 ## 15. What is not built
 
-Anything not built is a **declared seam that fails loud** — never a silent
-no-op, never a fabricated default. `SEAMS.md` is the single registry, and it is
-mechanically enforced: a test scans the whole source tree for stub markers and
-fails unless each hit is the bare abstract-method idiom or listed in the
-machine-readable allowlist in that file. There is no per-line escape.
+Anything not built is a **declared seam** that fails loud when called.
+`SEAMS.md` is the single registry, and a test enforces it: it scans the whole
+source tree for stub markers and fails unless each hit is the bare
+abstract-method idiom or listed in the machine-readable allowlist in that file.
+There is no per-line escape.
 
-The architecturally significant seams today are media extraction behind a
-service that ships refusing rather than fabricating, the subscribe acquisition
+The larger seams are media extraction (the service ships and refuses every
+request), the subscribe acquisition
 mode's further transports (the mode and its first transport are built, behind a
 switch that is off), the cheap-model budget demotion path (which today equals an
 audited pause), the correcting half of the standing-question watcher, the held
 record's promotion, contradiction and expiry rules, and retention sweeps that
-ship disabled. `STATUS.md`
-is the companion page for the other direction: capabilities that *are* built,
-with their honest limits.
+ship disabled. `STATUS.md` lists the capabilities that are built and their
+limits.
 
 ## 16. Read next
 
@@ -721,7 +704,7 @@ with their honest limits.
 - `DATA_MODEL.md` — the tables, by plane, including who writes each, citations
   as rows, the held record, events, the temporal surface and the graph
   projection.
-- `DESIGN.md` — the implementation rules new code follows.
+- `../CONTRIBUTING.md` — the implementation rules new code follows.
 - `AGENCY_GATING_MODEL.md` · `AI_MODELS.md` · `TUNABLES.md` · `SEAMS.md` ·
   `STATUS.md`.
 - `RUNBOOK.md` — bring-up, health, and what to do when something is wrong.

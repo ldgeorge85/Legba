@@ -1,5 +1,5 @@
 # Program 6 L2 — Layer Divergence analyst descriptor (the divergence-baseline
-# unit; docs/DATA_SOURCES.md, docs/DIRECTION.md "The layered source fan-out").
+# unit; docs/DATA_SOURCES.md, source layers).
 #
 # THE THESIS. Per target country the platform ingests the same stack of source
 # LAYERS, and the finding is the CHANGE in that country's own layer-to-layer

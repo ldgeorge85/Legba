@@ -74,7 +74,7 @@ method:
   # Validated against handler_options.ANALYST_KIND_OPTIONS['relationship_reifier'];
   # anything rejected lands on the run trace rather than failing silently.
   #
-  # THE ARITHMETIC (docs/history/TYPING_BAKEOFF.md §5, §7.5). Cadence is
+  # THE ARITHMETIC (from the typing measurement). Cadence is
   # unchanged at twice daily, so per-run × 2 = per-day:
   #
   #   candidates typed/day   600 × 2                = 1,200

@@ -12,7 +12,7 @@ The exhaustion path:
      until the budget window resets — no production resolver wires a
      fallback model, and silently proceeding (or silently pausing) was
      the G5 finding. Real cheap-model fallback demotion is a declared
-     seam (docs/SEAMS.md / docs/DIRECTION.md).
+     seam (docs/SEAMS.md).
   3. The demotion-flag helpers (``_set_analyst_demoted`` /
      ``_is_actor_demoted``) and the fallback dispatch machinery remain —
      they are the seam's landing zone and stay covered here.

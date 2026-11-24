@@ -32,7 +32,7 @@ A build forced this way is STILL INERT unless the operator has flipped
 does nothing at all.
 
   # the next target the cadence would take (oldest ATTEMPT first, NULLS first,
-  # retry backoff honoured — see docs/REFERENCE_BUILDER.md "Which due target")
+  # retry backoff honoured — see docs/GRADING.md "Retries")
   PYTHONPATH=src python3 scripts/reference_build_now.py
 
   # one named target, bypassing the cadence

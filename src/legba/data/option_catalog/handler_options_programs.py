@@ -993,7 +993,7 @@ INQUIRY_KIND_OPTIONS: tuple[OptionSpec, ...] = (
 # min_independent_sources. They are separate levers on purpose — the bar controls
 # WHICH edges may enter the graph, the cap controls HOW MANY get typed, and the
 # bake-off is explicit that the bar is not a yield optimiser and must not be sold
-# as one (docs/history/TYPING_BAKEOFF.md §6.5).
+# as one.
 RELATIONSHIP_REIFIER_OPTIONS: tuple[OptionSpec, ...] = (
     _pos_int(
         "max_candidates",

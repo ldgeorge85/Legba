@@ -250,7 +250,7 @@ constants:
   # roster also covers. The reference builder builds each tagged subject a
   # reference over the units scoped to the tag (disruption_status here), and
   # the correctness grader grades it — the supply-chain lanes and flows are
-  # graded desks. docs/CORRECTNESS_GRADER.md "The roster".
+  # graded desks. docs/GRADING.md "The roster".
   reference_subject_tags: [supply_chain]
 
 # The profile's read-time view (VIEW-1): the declared shape the projector

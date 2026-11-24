@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Minimal SearXNG settings for the local external-retrieval (R-3) plane.
+# Minimal SearXNG settings for the local external-retrieval plane.
 #
 # THE ONE LOAD-BEARING LINE is `search.formats: [html, json]` — JSON output is
 # OFF in SearXNG's stock settings, and without it every programmatic query
@@ -24,7 +24,7 @@
 # engine name; leaving the entry in was a harmless startup warning, not a
 # failure, but dead config is still noise).
 #
-# S2 SEARCH HYGIENE 2026-09-16 (Program 2 track S2): every key added below
+# SEARCH HYGIENE: every key added below
 # was confirmed against the image's own shipped template
 # (`/usr/local/searxng/searx/settings.yml` and `settings_defaults.py` inside
 # `searxng/searxng:latest`, read via `docker compose exec searxng cat ...`)
@@ -134,7 +134,7 @@ outgoing:
 # majors rank away, which is the point for OSINT.
 #
 # Engines that need an operator API key (Brave Search API, Google Programmable
-# Search) are NOT configured here — those are an operator decision and, being
+# Search) are NOT configured here — those are your decision and, being
 # licensed rather than scraped, are the ToS-cleanest way to restore the banned
 # names. See planning/SEARCH_PROVIDER_REVIEW_2026-07-28.md.
 #
@@ -164,12 +164,12 @@ outgoing:
 # licensed endpoint, different engine wiring than what ships here) — that is
 # the operator item this comment names; it is not a config change.
 engines:
-  # 2026-10-08 (SW-3, lane B5's census): reuters failed ≈ 100 % of 3,030 searches over 3 days
+  # 2026-10-08 (search-health census): reuters failed ≈ 100 % of 3,030 searches over 3 days
   # (HTTP error / suspended) and 8,930 failures in searxng's own 7-day log — every search paid
   # its timeout. Disabled until the engine answers again; re-enable with a measured week.
   - name: reuters
     disabled: true
-  # 2026-09-20 operator hygiene: three engines that fail on every query and only make noise
+  # hygiene: three engines that fail on every query and only make noise
   # (bing news: parser error on 2026.9.16; google news: CAPTCHA-suspended; wikidata: 429 too many requests).
   - name: bing news
     disabled: true
@@ -235,7 +235,7 @@ engines:
   - name: tagesschau
     disabled: false
     timeout: 6.0
-  # 2026-10-12 (SW-3, second pass — the B5 search-health measure, 7 d): ansa answered 0 of 670
+  # 2026-10-12 (search-health measure, 7 d): ansa answered 0 of 670
   # searches (361 errored: HTTP error / suspended) and brave.news was SUSPENDED for
   # 'too many requests' on 361 of 670 — one unresponsive engine marks a search degraded,
   # so 92 % of NOT_FOUND grades ran degraded. Both off until a measured week says otherwise.
@@ -244,7 +244,7 @@ engines:
     timeout: 6.0
   - name: brave.news
     disabled: true
-  # 2026-10-16 (SW-3, third pass — the B5 measure, 24 h): wikinews and wikipedia SUSPENDED by the
+  # 2026-10-16 (search-health measure, 24 h): wikinews and wikipedia SUSPENDED by the
   # upstream for 'too many requests' on 256 of 256 searches (0 answered), abcnyheter suspended on
   # 201 of 256 (27 answered); with the threshold at one unresponsive engine every search read
   # degraded again (100 %). bing and duckduckgo answered 248 / 232. Off until a measured week.

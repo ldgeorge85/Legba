@@ -2,30 +2,27 @@
 SPDX-FileCopyrightText: 2026 Lewis George
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
-# legba-media — hosted media-extraction service
+# legba-media
 
-The deployable sibling of `legba-models`. It serves the HTTP contract the Legba
+For someone wiring media extraction. `legba-media` is the media-extraction service. It serves the HTTP contract the Legba
 runtime's media client (`src/legba/runtime/jobs/media_client.py`) POSTs to when
 `LEGBA_MEDIA_API_URL` is set: Whisper transcription, VLM captioning, OCR, and
 object detection for the `process_media` job loop.
 
-## D2 posture: PREP, not PROVISION
+## What ships
 
-Per the locked operator decision **D2** the
-*deploy + test path* is built but the *live model endpoint is held as the stated
-seam* (`docs/SEAMS.md` #1). Concretely:
+The deploy and test path is built; the model endpoint is a declared seam
+(`docs/SEAMS.md` #1):
 
-- The shipped service is **CPU-only and tiny** — `fastapi` + `uvicorn` + `pydantic`.
-  It deploys + health-checks on any box, no GPU.
+- The shipped service is CPU-only and small (`fastapi`, `uvicorn`, `pydantic`).
+  It deploys and answers health checks on any machine.
 - With **no model backend wired** it serves the seam: `GET /health` reports
-  `status: "seam"`, and every extraction endpoint returns **HTTP 503** with the
-  reason. It **never** returns a fabricated transcript/caption — a synthetic
-  result landing in the shared signal pool is exactly the provenance-poison
-  A-2/G3 removed on the client side, and this service upholds the same invariant
-  server-side.
-- Wiring a real model is a contained edit (`app/main.load_backends()`), and
-  flips that kind from 503 to a real extraction with no other change — the HTTP
-  contract already matches the runtime client.
+  `status: "seam"`, and every extraction endpoint returns HTTP 503 with the
+  reason. It never returns a made-up transcript or caption: a synthetic
+  result would land in the shared signal pool as if it were evidence.
+- Wiring a real model is an edit to `app/main.load_backends()`; that kind then
+  answers with a real extraction. The HTTP contract already matches the runtime
+  client.
 
 ## HTTP contract
 
@@ -64,14 +61,14 @@ docker compose --profile runtime --profile media up -d legba-media
 # the runtime then resolves the media endpoint and process_media stops refusing
 ```
 
-No GPU needed for the seam service; it will return 503 on extraction until a
-backend is wired, which keeps `process_media` honestly refusing (no stub rows).
+No GPU is needed for the service as shipped. It returns 503 on every extraction
+until a backend is wired, so `process_media` refuses and writes no rows.
 
-### B) Standalone on the GPU/model host (alongside legba-models)
+### B) Standalone on a model host
 
 ```bash
 cp .env.example .env        # edit if wiring a real backend
-docker compose up -d        # this directory's compose; joins the `fastchat` net
+docker compose up -d        # this directory's compose; joins the external `fastchat` network
 ```
 
 Front it with Caddy (same pattern as `legba-models`) and point the runtime's
@@ -90,12 +87,10 @@ Then:
 3. set `LEGBA_MEDIA_BACKENDS=transcribe,caption,...` to the kinds you wired,
 4. swap the Dockerfile base for the CUDA image + uncomment the GPU
    `deploy.resources` stanza in `docker-compose.yml`,
-5. retire the media seam (`docs/SEAMS.md` #1 / #13) per the
-   `media-extraction` Wave-2 plan once the live loop is proven.
+5. retire the media seam (`docs/SEAMS.md` #1 / #13) once the live loop is proven.
 
 `LEGBA_MEDIA_BACKENDS` is validated at startup: listing a kind with no wired
-backend makes the service **refuse to start** (fail-loud), so you never serve a
-503 you believe is live.
+backend makes the service refuse to start.
 
 ## Test
 

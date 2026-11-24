@@ -6,7 +6,7 @@ serves it at `/tiles/basemap.pmtiles` via HTTP **range requests**: clients fetch
 only the byte-ranges of tiles currently in view, never the whole file. Until the
 file is present, the map falls back to the external demotiles style (flagged).
 
-## Getting a reduced-zoom world build (single-digit GB — our use is world→country→city)
+## Getting a reduced-zoom world build (single-digit GB; enough for world, country and city zoom)
 
 Install the `pmtiles` CLI (https://github.com/protomaps/go-pmtiles), then either:
 

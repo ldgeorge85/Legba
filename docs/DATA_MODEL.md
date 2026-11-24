@@ -115,7 +115,7 @@ token, so a person's write names `shared:admin-token`: the credential, never a g
 | `signals` | the canonical observation pool: one row per observation, target-agnostic, with the baseline's enrichment in indexed columns. Carries `origin_class` + `collection_id` (the provenance vocabulary, [below](#origin-class-and-the-history-firewall)) and a nullable `data jsonb` whose `classifications` key is the bound form of `signals.tags` ([Classifications](#classifications--dataclassifications)); NULL means never classified | **append-only** insert, then **mutate-in-place** for enrichment, the intra-source re-serve `last_seen_at` bump, the archiver's `object_ref` and `retention_class` stamp, and a later entity-merge repoint of `canonical_signal_id`. The one substrate table that is not strictly append-only |
 | `signal_aliases` | the cross-source duplicate link: a duplicate is linked to its canonical, never collapsed | **append-only** |
 | `source_poll_outcomes` | one row per poll: `success` / `gated` (the feed delivered and the keyword gate dropped every entry) / `empty` / `error`, plus `newest_entry_ts`, `keyword_filtered` and, for non-document sinks, `sink_counts`. A subscribed source writes one row per window, with the connection's state in `stream` | **append-only** |
-| `source_stream_gaps` | one row per declared gap in what a subscribed source received (queue overflow, a reconnect that could not resume). The subscribe mode is built and off by default; see [ACQUISITION.md](ACQUISITION.md) | **append-only** |
+| `source_stream_gaps` | one row per declared gap in what a subscribed source received (queue overflow, a reconnect that could not resume). The subscribe mode is built and off by default; see [DATA_SOURCES.md](DATA_SOURCES.md) | **append-only** |
 | `fetch_versions` | the bytes a fetch actually received, as a version sequence per canonical address (or per source and body hash for a pushed envelope). An identical re-fetch bumps `last_seen_at` and `fetch_count`; a different body is a new row. The bytes live content-addressed in the evidence store, referenced by `object_ref`; for a page, the extracted main text is kept with its own hash | **append** plus last-seen bump; never overwritten |
 | `fetch_version_records` | which records (signals, observations) were derived from which version, and in what role (`response` or `page`) | **append-only, trigger-enforced** |
 | `fetch_drift_observations` | a row each time a second fetch of a page yields different extracted text or no longer answers | **append-only** |
@@ -126,7 +126,7 @@ token, so a person's write names `shared:admin-token`: the credential, never a g
 | `evidence_archive_bundles` / `evidence_archive_cold` | the cold tier: one row per uploaded, read-back-verified bundle, and one row per content address that has a cold copy (bundle plus byte range). `hot_removed_at` is stamped only after the bundle verified | **append-only**; nothing deletes from either |
 | `corpus_tombstones` | the search corpus's delete queue: the deleted `signals.id` is the corpus document id. Rows are never removed; the drain stamp keeps every dropped id queryable | **append plus drain-stamp**, written in the same transaction as its delete |
 | `iso_countries` | the country reference table the geo vocabularies resolve against | **static reference** |
-| `source_layers` / `desk_apertures` | the source-layer map loaded from its file: which layer each source sits in for a subject, and what each desk declares it can see ([DATA_SOURCES.md](DATA_SOURCES.md#source-layers)) | **derived** from the map file by its loader |
+| `source_layers` / `desk_apertures` | the source-layer map loaded from its file: which layer each source sits in for a subject, and what each desk declares it can see ([DATA_SOURCES.md](DATA_SOURCES.md)) | **derived** from the map file by its loader |
 
 ### Origins and origin groups
 
@@ -149,7 +149,7 @@ registrable domain of the configured address; a licence-ledger host; a knowledge
 applies, the descriptor on its own. An admin may move an origin to another group
 (`PUT /api/v1/registry/origins/{origin_id}/group`); `GET /api/v1/registry/origins` and
 `…/origins/{origin_id}/log` read them. `scripts/report_origin_groups.py --list` names the known wrong
-cases (unusual public suffixes, one publisher on two domains, proxied and direct feeds of one
+cases (uncommon public suffixes, one publisher on two domains, proxied and direct feeds of one
 publisher).
 
 **Independence counting does not use origin groups yet.** Every count of independent sources still
@@ -195,7 +195,7 @@ path calls it.
 | `consult_sessions` / `consult_turns` | the Consult audit trail: one session header per conversation (its `principal` the server-stamped actor), append-only turns carrying the reasoning steps, tool calls and cited references | header **mutate-in-place**, turns **append-only** |
 | `consult_writes` | one row per change a person directed through Consult (a source paused, a cadence moved, a fact asserted, an entity merged), whether executed, staged for confirmation, refused, failed, cancelled or expired, with its stored arguments and pre- and post-image so it can be replayed or reverted. No foreign keys, so no cascade deletes it | **append** plus status; `written_by` |
 | `scheduled_events` | the register of known future dated things (summits, votes, deadlines) every Consult run gets in its context; ships empty, filled by a person or a seed | **append** plus soft retire (`retired_at`); `written_by` |
-| `output_consumption` | the **forward** index: what now rests on this row, distinguishing a load-bearing basis input from a hedged periphery one | **append**; no foreign key on purpose, because consumers span both output tables. The writer never raises |
+| `output_consumption` | the **forward** index: what now rests on this row, distinguishing a basis input from a hedged periphery one | **append**; no foreign key on purpose, because consumers span both output tables. The writer never raises |
 | `review_flags` | one open flag per (product, foundation) pair whose foundation has since moved | **append plus close-by-supersession**; a trigger makes deletion a database error |
 | `bearing_edges` | dated, typed, weighted "this later thing bears on that earlier question" pointers, stamped with the matcher version | **append-only by writer discipline** |
 | `collection_requirements` | a durable, reviewable statement that something could not be seen | **append** (idempotent on a natural key) plus **disposition mutate-in-place**; the content columns are write-once |
@@ -548,7 +548,7 @@ was fetched, and what the retrieval came to. It holds a **retrieval outcome and 
 | `query` · `query_source` · `query_novel_tokens` | `text` · `text` · `int` | the counter-query, whether code or a model proposed it, and how many content words it carries that the claim does not |
 | `polarity_group` · `polarity_sign` | `text` · `smallint` | the position the claim took in the calibrated vocabulary, when it took one |
 | `rung` | `text` | the rung that answered |
-| `stance` | `text` | `contradicts` · `qualifies` · `none_found` · `search_failed`. "We looked and found nothing" and "we could not look" never share a shape |
+| `stance` | `text` | `contradicts` · `qualifies` · `none_found` · `search_failed`. "looked and found nothing" and "could not look" never share a value |
 | `derivation` | `text` | `polarity` (calibrated; the only one a composition reads) · `negation` (uncalibrated; human surfaces only) · `none` |
 | `reason` | `text` | why a retrieval did not happen, from a closed set |
 | `statement` | `text` | the hedged line a composition renders |
@@ -642,7 +642,7 @@ Four columns carry a classification, and each resolves to a registered value or 
 `target_descriptors` row) moves to `data.subject_id` and the column reads `unclassified`. Whatever the
 column no longer holds is kept verbatim in `data.category_raw`, so nothing is dropped.
 
-**The topic key.** The producer's value was load-bearing: the tower's situation leg signs events from
+**The topic key.** Other readers depend on the producer's value: the tower's situation leg signs events from
 it, and the event matcher compares it. Those readers read `case_columns.topic_key_sql`,
 `COALESCE(data->>'category_raw', category)`, which is the producer's value before and after the
 retrofit, so no event identity moves. The `category` filters on `GET /api/v1/v3/events` and the
@@ -699,7 +699,7 @@ and [API_ROLES.md](API_ROLES.md) for which route each role may call.
 
 | Table | Purpose | Write semantics |
 |---|---|---|
-| `budget_ledger` / `global_budget_envelope` | per-analyst and fleet-wide token accounting | **mutate-in-place** |
+| `budget_ledger` / `global_budget_envelope` | per-analyst and global token accounting | **mutate-in-place** |
 | `budget_demotion_events` | one row per budget-driven demotion | **append-only** |
 | `action_pack_invocations` | the agency ledger: one row per governed tool call, settled with its true outcome, cost, units and duration. The next call's rate window reads it | **append** plus settle |
 | `governor_events` | every allow and every block, with the cap dimension, the limit and the observed value | **append-only** |

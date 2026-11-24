@@ -7,8 +7,7 @@ One question, run five times on 2026-09-28 against the live consult loop —
 Opus (``181a8bab``), the core model BEFORE the fixes (``96d7bfc2``), and three
 core-model proof runs AFTER them (``6dd39dfd``, ``2d026feb``, ``5d66ccbb``). The
 recorded rows live under ``fixtures/consult_divergence/2026-09-28/`` exactly as
-exported; ``docs/history/CONSULT_DIVERGENCE_2026-09-28.md`` reads them side by
-side. They are the model-divergence layer's first case, and this test is the
+exported. They are the model-divergence layer's first case, and this test is the
 admission bar any model must clear for a tool-using role: **every tool call it
 writes must pass** ``validate_args`` against ``TOOL_SCHEMAS`` — except that a
 call written into the arguments of a tool that has not run (a tool RESULT where

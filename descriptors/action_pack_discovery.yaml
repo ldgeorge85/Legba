@@ -2,7 +2,7 @@
 # enqueue fed crawl_discovery/query_discovery kinds that no worker
 # handler ever consumed. The tool handler was removed; source discovery
 # ships via the registry discovery route; job-based deep crawl is a
-# designed direction item (docs/DIRECTION.md). Kept for registry
+# not built. Kept for registry
 # history; no bringup script registers it.
 # P-11 — discovery action pack (PIVOT §4.8 seed pack).
 #

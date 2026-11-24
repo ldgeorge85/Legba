@@ -7,7 +7,7 @@
 # the shared writer, builder `deterministic:<feed_id>`. The correctness grader
 # grades a keyed reference EXACTLY — present or absent by key, no model
 # (src/legba/data/analysts/deterministic_handlers/_correctness_keyed.py).
-# docs/REFERENCE_BUILDER.md "The keyed reference".
+# docs/GRADING.md "Keyed references".
 #
 # THE LIST DECLARED HERE IS CISA KEV (Review B §1.3 F2: "a deterministic
 # reference per (family, window) built from KEV"), and NOTHING IS BOUND. No

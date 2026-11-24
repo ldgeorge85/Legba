@@ -633,7 +633,7 @@ def render(data: dict[str, Any], public: bool = False) -> str:
     )
     lines.append(
         "- Roadmap / planned work (e.g. a dedicated cross-family verify "
-        "judge) — see `docs/STATUS.md` and `docs/DESIGN.md`."
+        "judge) — see `docs/STATUS.md` and `docs/SEAMS.md`."
     )
     lines.append("")
 

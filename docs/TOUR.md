@@ -1,9 +1,9 @@
 <!-- SPDX-FileCopyrightText: 2026 Lewis George
      SPDX-License-Identifier: AGPL-3.0-or-later -->
-# Tour — your first ten minutes
+# Tour
 
-You have deployed ([Setup](SETUP.md)) and the sources have been polling for a while. This is a walk
-through the console that a first-time reader can follow cold. If you would rather read the API than
+A first walk through the console, for someone who has just deployed ([Setup](SETUP.md)) and let the
+sources poll for a while. If you would rather read the API than
 click, skip to the [appendix](#appendix-the-api). The panels and controls are described in full in
 [UI.md](UI.md).
 
@@ -14,7 +14,7 @@ words.
 ## What you are looking at
 
 Legba watches the sources you configure and turns them into short reads, one per subject, which
-higher reads quote rather than paraphrase. Every claim in a read is cited to a source, and a second
+higher reads quote word for word. Every claim in a read is cited to a source, and a second
 pass checks whether the claim follows from what it cites before the read is trusted. Nothing is deleted
 for failing; it is flagged and demoted where you can see it. The chain from source item to citation to
 verdict to composed conclusion is kept, with a hash-chained trail back to the original bytes.
@@ -47,8 +47,7 @@ indicators to watch.
 
 ## 3. Check a claim
 
-Everything above is an assertion. This is how you check one, and it is the point of the product: not
-that it writes reads, but that it hands you the means to distrust each one.
+Every claim in a read can be checked from the console.
 
 - **Citation chips.** Every `[N]` marker is a live chip. Click it and the **Record** sheet slides in
   over the panels: the statement as published, the row it maps to, the evidence with its source and
@@ -62,9 +61,9 @@ that it writes reads, but that it hands you the means to distrust each one.
   faithfulness pass reads "unverified, structural".
 - **The trail to source.** The record walks the `derived_from` chain hop by hop to each signal's source
   URL. Every hop carries a receipt hash; a matching re-hash shows "chain-consistent (single-node)", an
-  integrity check on one node, not a distributed tamper-proof ledger.
+  integrity check on one node. It is not a distributed or tamper-proof ledger.
 
-A composed read cites verified unit claims rather than signals, so the drill goes from the composed
+A composed read cites verified unit claims, not signals, so the drill goes from the composed
 read to the unit claim to the signal to the source.
 
 ## 4. Ask a question

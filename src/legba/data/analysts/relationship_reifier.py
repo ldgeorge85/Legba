@@ -151,10 +151,9 @@ MAX_CANDIDATES_PER_RUN: int = 40
 LLM spend regardless of how many pending edges exist."""
 
 DEFAULT_BATCH_SIZE: int = 12
-"""Candidates per typing call. MEASURED (``docs/history/TYPING_BAKEOFF.md``
-§7.2-7.3), not assumed: at N=12 the core 120B returned 17/17 clean calls over
-200 candidates with zero truncation, and prompt tokens per candidate fall from
-1,462 (one call per candidate) to 297 — a 4.9× reduction, because the system
+"""Candidates per typing call. MEASURED, not assumed: at N=12 the core 120B
+returned 17/17 clean calls over 200 candidates with zero truncation, and
+prompt tokens per candidate fall from 1,462 (one call per candidate) to 297 — a 4.9× reduction, because the system
 preamble and the whole allowed-``rel_type`` vocabulary are stated ONCE per call
 instead of once per pair. N=24 and N=40 save more but rest on a single
 observation each, and N=40 showed a possible judgement shift (accepts 47.5% →
@@ -730,7 +729,7 @@ async def _read_candidates(
     unmatchable. Measured against the live substrate, the resulting top-40
     window contained **zero** pending rows — 24 ``orphaned``, 15 ``promoted``,
     1 ``rejected`` — so every typing call was structurally incapable of
-    producing an edge (``docs/history/TYPING_BAKEOFF.md`` §1).
+    producing an edge.
 
     The selection now lives in its own module because it grew a second stage
     (keeper resolution + a bulk bidirectional dedup probe) that has nothing to

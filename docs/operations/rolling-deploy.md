@@ -121,7 +121,7 @@ no deployed SHA on record, or a classifier error all mean full.
 **A `t1` walker run is reconciled by the resync, not by an event.** The walker
 registers direct-DB without a bus connection, so it emits no `descriptor.*`
 event; the runtime creates or re-versions the actor at its next periodic
-resync, up to five minutes later ([BRINGUP.md](../BRINGUP.md)). Check for
+resync, up to five minutes later ([RUNBOOK.md, "The descriptor walker"](../RUNBOOK.md#the-descriptor-walker)). Check for
 `reconcile.action ... create_actor` after that window, not immediately.
 
 **Module → service is derived, not listed.** The classifier parses every

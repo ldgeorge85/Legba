@@ -34,7 +34,7 @@
 #
 # State: draft in-tree; descriptors/LIFECYCLE.md records it `configured` on
 # the reference host. Activation is the orchestrator's flip at the roll
-# (docs/BRINGUP.md "The cyber desk reader (lane K-2)").
+# (docs/RUNBOOK.md "The descriptor walker", switching on a new analyst).
 
 identity:
   id: kev_digest

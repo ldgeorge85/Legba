@@ -5,8 +5,7 @@
 The bake-off measured that batching's win is prompt tokens and that it is large:
 the one-call-per-candidate path spends 1,462 prompt tokens per candidate because
 it repeats the whole system preamble and the entire allowed-``rel_type``
-vocabulary every time; at N=12 that falls to 297 (``docs/history/
-TYPING_BAKEOFF.md`` §7.3). These tests pin the run-loop policy that makes that real:
+vocabulary every time; at N=12 that falls to 297. These tests pin the run-loop policy that makes that real:
 
   * N candidates cost ONE call;
   * verdicts land on the right pair (idx correlation, never position);

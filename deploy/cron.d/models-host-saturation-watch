@@ -1,0 +1,34 @@
+# vLLM saturation watch, for the models host (not the app host). Samples the
+# vLLM /metrics surface every minute (requests running and waiting, KV-cache
+# use, preemptions, TTFT p95 over the sample delta) and pages over ntfy when
+# the server is saturating: a queue above 4 for 3 consecutive samples, KV cache
+# above 0.90, or any increase in preemptions. Alert-only; it never restarts
+# anything.
+#
+# Install (from the app host's checkout; set LEGBA_GPU_HOST to the models
+# host's address first):
+#   scp scripts/models_host_saturation_watch.sh \
+#       "${LEGBA_GPU_HOST:?set in host env}:/usr/local/bin/models_host_saturation_watch.sh"
+#   ssh "${LEGBA_GPU_HOST:?set in host env}" chmod 0755 /usr/local/bin/models_host_saturation_watch.sh
+#   scp deploy/cron.d/models-host-saturation-watch \
+#       "${LEGBA_GPU_HOST:?set in host env}:/etc/cron.d/models-host-saturation-watch"
+# Then give pages somewhere to go, on the models host:
+#   echo 'NTFY_URL=<an ntfy topic URL reachable from the models host>' \
+#       >> /etc/vllm-saturation.env
+# Without NTFY_URL the watch logs only (/var/log/vllm_saturation.log).
+#
+# Disable during maintenance (on the models host): touch /etc/vllm-saturation.disabled
+# Check it is running (on the models host):
+#   stat -c %y /tmp/vllm_saturation.healthy
+#   tail /var/log/vllm_saturation.log
+#
+# It runs every minute because the page conditions count consecutive samples:
+# the sampling interval is the detection resolution.
+#
+# Cron runs from $HOME, so the path below and every path inside the script are
+# absolute.
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+* * * * * root /usr/local/bin/models_host_saturation_watch.sh

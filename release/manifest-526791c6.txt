@@ -1,6 +1,6 @@
 # Legba release manifest
-# Generated: 2026-11-24T18:06:14Z
-# Git commit: 0c4b51d2
+# Generated: 2026-11-24T19:39:18Z
+# Git commit: 526791c6
 # Git tag:    (untagged)
 
 ## image digests (resolved sha256; '<not-pulled>' = image absent locally)

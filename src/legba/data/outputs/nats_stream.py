@@ -12,7 +12,7 @@ Contract
 * `async def emit(payload, *, subject, deps) -> None`
 
 The descriptor-derived subject pattern is `analyst.<analyst_id>.<channel>`
-per DESIGN.md §11 (Naming conventions, "Analyst NATS subject" row). The
+per CONTRIBUTING.md ("Naming conventions"). The
 caller resolves the subject via :func:`resolve_subject` from the analyst's
 descriptor `outputs[*].config` block — accepting either an explicit
 `nats_topic` override, or the (analyst_id, channel="findings") tuple.
@@ -73,12 +73,12 @@ logger = logging.getLogger(__name__)
 
 KIND_NAME = "nats_stream"
 
-# Default channel per DESIGN.md §11 ("analyst.<id>.findings" is the canonical
-# `Analyst NATS subject` row example).
+# Default channel ("analyst.<id>.findings"; CONTRIBUTING.md, "Naming
+# conventions").
 DEFAULT_CHANNEL = "findings"
 
-# DLQ subject prefix per DESIGN.md §11 ("Dead-letter NATS topic" row:
-# `legba.dlq.<namespace>.<id>`). The `<namespace>` for output-kind failures
+# DLQ subject prefix (`legba.dlq.<namespace>.<id>`; CONTRIBUTING.md,
+# "Naming conventions"). The `<namespace>` for output-kind failures
 # is `output.<kind>` so multiple output kinds can share the legba.dlq.* tree.
 DLQ_SUBJECT_PREFIX = "legba.dlq.output.nats_stream"
 

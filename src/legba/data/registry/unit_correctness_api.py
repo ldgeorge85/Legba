@@ -53,7 +53,7 @@ having written it inline — the seam is a file boundary, not an API boundary.
     poisons `sys.modules["feedparser"]` and imports this module, so the next
     convenient import fails in CI instead of in production.
 
-Reference: `docs/CORRECTNESS_GRADER.md`, migration
+Reference: `docs/GRADING.md`, migration
 `0196_unit_correctness_grading.sql`, `LEDGER_RESET_2026-09-16` §3 Program 2
 row G2.
 """

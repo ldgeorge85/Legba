@@ -1,13 +1,12 @@
 # Evidence archive tiering (hot → cold)
 
-How the evidence archive keeps recent bytes on the host and retires older
-bytes to blob storage that can live anywhere, how to verify and restore them,
-and how to move the cold tier to another endpoint. The code is
+For someone whose evidence archive is outgrowing the host's disk. How the
+archive keeps recent bytes on the host and retires older bytes to blob storage
+that can live anywhere, how to verify and restore them, and how to move the
+cold tier to another endpoint. The code is
 [`src/legba/data/archive_tier.py`](../../src/legba/data/archive_tier.py),
 [`src/legba/data/archive_store.py`](../../src/legba/data/archive_store.py) and
-the script [`scripts/archive_tier.py`](../../scripts/archive_tier.py). It was
-proved end to end on a copy of real archive bytes (results at the end of this
-page).
+the script [`scripts/archive_tier.py`](../../scripts/archive_tier.py)..
 
 ## The rules
 
@@ -40,7 +39,7 @@ page).
 | `LEGBA_ARCHIVE_S3_BUCKET` / `_PREFIX` / `_REGION` | bucket (create it once by hand), key prefix (default `legba-archive`), region. |
 | `LEGBA_ARCHIVE_S3_ACCESS_KEY_ID` / `LEGBA_ARCHIVE_S3_SECRET_ACCESS_KEY` | credentials, in `.env` only (the `_ACCESS_KEY_ENV` / `_SECRET_KEY_ENV` knobs rename them). |
 | `LEGBA_ARCHIVE_COLD_LOCAL_ROOT` | the directory for `local`. |
-| `LEGBA_ARCHIVE_HOT_DAYS` | the hot window, default 90. Never set it below 90 (the owner's floor). |
+| `LEGBA_ARCHIVE_HOT_DAYS` | the hot window, default 90. Do not set it below 90. |
 | `LEGBA_ARCHIVE_PACK_MB` | bundle size at rest, default 512. |
 
 **Readers need the same backend env as the mover.** Every reader goes through
@@ -103,14 +102,14 @@ by the next `--apply` (`resumed_checked` in its report).
 Downloads every recorded bundle in full and checks: the bundle's sha256, every
 recorded member against its address, the `.index.json` stored beside it
 against the database, and the member counts. Read-only. Run it after every
-pass that moved anything and monthly (it costs one full download of the cold
-tier: about 85 s for 2.1 GB in the proof run).
+pass that moved anything, and monthly. It costs one full download of the cold
+tier.
 
 ## Restoring from cold
 
 * One object: nothing to do — a read returns it. To put it back on the host:
   `--restore <sha256> [<sha256> ...]`.
-* A month: `--restore-month 2026-08`. Everything: `--restore-all`.
+* A month: `--restore-month YYYY-MM`. Everything: `--restore-all`.
 
 Each restored object is re-verified before it is written, and
 `hot_removed_at` is cleared. A later `--apply` retires restored objects again
@@ -141,16 +140,12 @@ If the database's local index ever disagrees, `--rebuild-index` rewrites
 
 A ready compose patch adds SeaweedFS under the `coldstore` profile:
 [`deploy/patches/seaweedfs-coldstore.patch`](../../deploy/patches/seaweedfs-coldstore.patch)
-(not applied). Measured cautions from the proof run:
+(not applied). Settings that matter:
 
-* Give it 1 GiB of memory and `GOMEMLIMIT=640MiB`: at 512 MiB it was
-  OOM-killed during a full read-back (about 90 ranged reads per second); at
-  1 GiB without a Go memory limit its heap sat at about 970 MiB; with the
-  limit it held about 590 MiB through a full verify and copy.
-* Run it with `-master.volumePreallocate=false`: with preallocation it
-  reserved 14 volumes × 512 MB = 7.2 GB of disk to hold 2.2 GB of bundles;
-  without it, 2.1 GB on disk for the same 2.15 GB. Idle before any data it
-  uses about 25 MiB of memory and 1 MB of disk.
+* Give it 1 GiB of memory and `GOMEMLIMIT=640MiB`. At 512 MiB it can be
+  killed for memory during a full read-back.
+* Run it with `-master.volumePreallocate=false`. With preallocation it
+  reserves whole 512 MB volumes regardless of how much data they hold.
 * The credentials file `deploy/seaweedfs/s3.json` is gitignored; generate it
   with a random key pair (`{"identities":[{"name":"legba-archive",
   "credentials":[{"accessKey":"…","secretKey":"…"}],"actions":["Admin","Read",
@@ -169,29 +164,9 @@ A ready compose patch adds SeaweedFS under the `coldstore` profile:
 Compression in place usually buys a host a long time before it needs a cold
 tier. Measure the archive's size at rest and its monthly growth against free
 disk, and start live tiering when free disk will run short within a few months
-at that rate, or when an off-machine endpoint becomes available. The second is
-the real benefit: a cold tier on the same disk only moves bytes. Until then,
-keep the SeaweedFS patch unapplied, and run a proof on a copy (as below) before
-turning it on. The first live pass retires the oldest month whose citing rows
-are all older than the hot window (90 days by default).
-
-## The proof run (2026-11-13)
-
-A copy of one deployment's oldest full archive month (2026-08: 51 854 objects, all
-rows referencing them, 2.15 GB at rest, 12.2 GB original) in a throwaway
-test-stack database, tiered to a local SeaweedFS 3.80:
-
-| Step | Result |
-| --- | --- |
-| Dry run (90-day window) | 25 621 candidates, 3 bundles planned, < 10 s |
-| Apply, 90-day window | 25 621 objects, 1.07 GB at rest (6.10 GB original), 3 bundles, 653 s (the per-object hot-window re-check scanned the table; since replaced by an indexed re-check) |
-| Apply, rest of the month (`--hot-days 74`) | 26 211 objects, 1.08 GB at rest (6.15 GB original), 3 bundles, 233 s with the indexed re-check (about 26 MB/s of original bytes) |
-| Verify | 6 bundles, 51 832 members, 0 problems, 85 s |
-| Read-back, every retired object, compared byte for byte with the live original | `EvidenceStore.from_env(...).get` 51 832 / 51 832 identical (563 s, 92 objects/s, 21.7 MB/s of original bytes); `archive_tier.read_original` 51 832 / 51 832; snapshot loader 300 / 300 sampled; fetch-receipt reader 20 / 20; archiver ingest-copy lookup 53 / 53 signal links |
-| Endpoint unreachable | every reader raised `ColdTierUnavailable` in 3–4 s; the archiver logged and fell back; the ledger unchanged; `--verify` exit 1 "backend unreachable" |
-| Bundle corrupted at rest | the member read raised `ColdObjectInvalid`; `--verify` flagged exactly that bundle; `--copy-from` refused to copy it until it was healed |
-| Upload corrupted in flight | 4 bundles failed read-back, nothing recorded, all 39 101 hot copies kept; the next clean pass repaired the 4 damaged keys and completed (402 s) |
-| Mover killed mid-pass (3 times) | recorded bundles intact, the interrupted bundle neither on the store nor recorded, hot copies intact; the next pass completed and verified |
-| Repoint to a second endpoint | `--copy-from` 6 bundles in 160 s, verified there; with the first store removed, 2 000 random reads identical and `--verify` clean |
-| Restore everything | 51 832 objects back on the hot tier in 1 641 s (32 objects/s), 0 failures |
-| Storage ratio | 5.7 : 1 original to cold (the bundles carry the same zstd frames as the hot tier) |
+at that rate, or when an off-machine endpoint becomes available; a cold tier
+on the same disk only moves bytes. Before turning it on, run a full pass on a
+copy of the archive in a throwaway stack: plan, apply, `--verify`, read every
+retired object back, then `--restore-all`. The first live pass retires the
+oldest month whose citing rows are all older than the hot window (90 days by
+default).

@@ -67,7 +67,7 @@ subprocess guard in ``tests/data_pkg/test_grader_roster_api.py`` poisons that
 module and imports this one, so a convenient future import fails in CI rather
 than answering 500 in production.
 
-Reference: ``docs/CORRECTNESS_GRADER.md``, migrations
+Reference: ``docs/GRADING.md``, migrations
 ``0196_unit_correctness_grading.sql`` / ``0197_unit_correctness_reference_age.sql``.
 """
 from __future__ import annotations

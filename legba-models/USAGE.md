@@ -1,478 +1,133 @@
-# Legba Models — API Usage & Integration Guide
+# legba-models
 
-**Service:** https://nlp.example.internal
-**Auth:** HTTP Basic Auth (the `legba` service account)
-**Internal (no auth):** `http://legba-models:8700` from any container on the `fastchat` Docker network
-**Host:** a GPU host — GPU 0 (Tesla T4, 16GB)
+For someone hosting Legba's NLP service. `legba-models` is a FastAPI service that runs four small
+transformer models on a GPU (it falls back to CPU) behind one HTTP surface: translation, zero-shot
+classification, relation extraction and summarisation, plus spaCy named entities. There is no LLM in
+it. The Legba runtime calls it at ingest through the `nlp.local.legba_models` stack component
+([docs/AI_MODELS.md](../docs/AI_MODELS.md)).
 
----
+## Running it
 
-## Service Account Credentials
+The directory holds its own `Dockerfile`, `docker-compose.yml` and `entrypoint.sh`.
 
-For programmatic / ingestion use:
-Set via environment variables (`MODELS_API_USER`, `MODELS_API_PASS`). Not stored in version control.
+```bash
+cd legba-models
+docker network create fastchat     # the compose file joins this external network; or edit it
+docker compose up -d --build
+docker logs legba-models --tail 50
+```
 
----
+- It listens on port 8700 inside the container and publishes no host port; reach it from
+  containers on the same network as `http://legba-models:8700`, or put a reverse proxy with TLS in
+  front of it for another host.
+- The compose file mounts `/mnt/data/models/legba` as `/data`. The first start creates a Python
+  virtual environment there (PyTorch for CUDA 12.4 plus `app/requirements.txt`) and downloads the
+  models (about 5–6 GB) before it accepts traffic. Change the mount if your disk is elsewhere.
+- It reserves GPU 0 (`NVIDIA_VISIBLE_DEVICES=0`). Edit the `deploy.resources` block to use another.
+- Logs rotate at 100 MB × 3.
+- The entrypoint reinstalls packages when the hash of `app/requirements.txt` changes; to start
+  clean, remove `/data/venv` and restart.
+
+`docker-compose.slm.yml` adds an optional small chat model served by llama.cpp (`legba-slm`, on
+`127.0.0.1:8701`); register it as a stack component if you use it.
+
+## Authentication
+
+- **In the service.** Set `LEGBA_MODELS_API_SECRET` on the container and every inference endpoint
+  requires a matching `X-Models-Secret` header. Unset, the service has no auth of its own.
+  `/health` is always open.
+- **At a reverse proxy.** For access from another host, put HTTP basic auth and TLS in front.
+
+The runtime's client sends basic auth and the `X-Models-Secret` header when they are configured
+(`MODELS_API_USER`, `MODELS_API_PASS` and `MODELS_API_SECRET` in `.env.example`).
 
 ## Endpoints
 
-| Endpoint | Method | Purpose | Typical Latency |
-|----------|--------|---------|-----------------|
-| `/health` | GET | Health check + GPU memory stats | <5ms |
-| `/translate` | POST | Translate non-English text → English | ~650ms |
-| `/classify` | POST | Zero-shot text classification | ~190ms (warm) |
-| `/extract` | POST | Relation/fact triple extraction | ~800ms |
-| `/summarize` | POST | Multi-text summarization | ~600ms |
+| Endpoint | Method | Model | Purpose |
+|---|---|---|---|
+| `/health` | GET | | status, GPU availability and memory |
+| `/translate` | POST | `facebook/nllb-200-distilled-1.3B` | translate to English or another supported language |
+| `/classify` | POST | `MoritzLaurer/deberta-v3-base-zeroshot-v2.0` | zero-shot classification |
+| `/extract` | POST | spaCy NER + `jackboyla/glirel-large-v0` | subject–predicate–object triples |
+| `/ner` | POST | spaCy | named entities, split into actors and locations |
+| `/summarize` | POST | `google-t5/t5-small` | one short summary of several texts |
 
-First call to each endpoint after startup is slower (~2s) due to model warmup. Subsequent calls hit the latencies above.
+Every response carries `ms`, the server-side time. The first call to each model after start is
+slower while it warms up.
 
----
-
-## Health Check
-
-```bash
-curl -u "$MODELS_API_USER:$MODELS_API_PASS" \
-  https://nlp.example.internal/health
-```
-
-Response:
-```json
-{
-  "status": "ok",
-  "gpu": true,
-  "gpu_memory": {"allocated_mb": 3939.5, "reserved_mb": 3958.0},
-  "models_loaded": true
-}
-```
-
----
-
-## 1. Translation — POST /translate
-
-Translates text from a source language to English (or another supported language) using NLLB-200-distilled-600M.
-
-**When to call:** At ingestion time, if a signal's detected language is not English. Translate title + first 500 chars of content. Store both original and translated text. All downstream processing (NER, classification, clustering, LLM) sees the English version.
-
-### Supported Languages
-
-| Code | Language |
-|------|----------|
-| `ar` | Arabic |
-| `fa` | Farsi / Persian |
-| `he` | Hebrew |
-| `ru` | Russian |
-| `en` | English |
-| `zh` | Chinese (Simplified) |
-| `fr` | French |
-| `es` | Spanish |
-| `de` | German |
-| `uk` | Ukrainian |
-| `tr` | Turkish |
-
-### Request
-
-```bash
-curl -u "$MODELS_API_USER:$MODELS_API_PASS" \
-  -X POST https://nlp.example.internal/translate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "text": "صواريخ باليستية أطلقتها إيران على أهداف إسرائيلية",
-    "source_lang": "ar",
-    "target_lang": "en"
-  }'
-```
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `text` | string | yes | — | Text to translate (truncated at 512 tokens) |
-| `source_lang` | string | yes | — | ISO 639-1 code from table above |
-| `target_lang` | string | no | `"en"` | Target language code |
-
-### Response
+### `/health`
 
 ```json
-{
-  "translated": "Ballistic missiles launched by Iran targeted Israeli targets.",
-  "source_lang": "ar",
-  "target_lang": "en",
-  "ms": 646.8
-}
+{"status": "ok", "gpu": true, "gpu_memory": {"allocated_mb": 3939.5, "reserved_mb": 3958.0}, "models_loaded": true}
 ```
 
-### Integration Point
+`status` is `loading` until the models are in memory.
 
-`ingestion/normalizer.py` — after fetch, before NER:
+### `/translate`
 
-```python
-async def translate_if_needed(self, signal):
-    if signal.detected_language and signal.detected_language != "en":
-        resp = await self._http.post(f"{self._models_url}/translate", json={
-            "text": signal.title + " " + signal.content[:500],
-            "source_lang": signal.detected_language,
-        })
-        if resp.status_code == 200:
-            data = resp.json()
-            signal.original_title = signal.title
-            signal.original_content = signal.content
-            signal.title = data["translated"]  # or split title/content
-    return signal
-```
+| Field | Required | Default | Meaning |
+|---|---|---|---|
+| `text` | yes | | text to translate; truncated at 512 tokens |
+| `source_lang` | yes | | ISO 639-1 code |
+| `target_lang` | no | `en` | ISO 639-1 code |
 
----
-
-## 2. Classification — POST /classify
-
-Zero-shot classification using DeBERTa-v3. Classifies text against category labels without any fine-tuning — labels are passed as natural language hypotheses to an NLI model.
-
-**When to call:** After normalization (and translation if applicable), classify each signal by its title (+ optionally first N chars of summary).
-
-### Request — Default Categories
+Supported codes: `ar`, `de`, `en`, `es`, `fa`, `fr`, `he`, `hi`, `id`, `it`, `ja`, `ko`, `nl`,
+`pl`, `pt`, `ru`, `th`, `tr`, `uk`, `ur`, `vi`, `zh` (Simplified). An unsupported `source_lang` is an
+error. The NLLB weights carry a non-commercial licence; check it against your use.
 
 ```bash
-curl -u "$MODELS_API_USER:$MODELS_API_PASS" \
-  -X POST https://nlp.example.internal/classify \
-  -H "Content-Type: application/json" \
-  -d '{"text": "Iran launched ballistic missiles at Israeli military targets"}'
+curl -s -X POST http://legba-models:8700/translate -H 'Content-Type: application/json' \
+  -d '{"text": "Le port a rouvert mardi.", "source_lang": "fr"}'
+# {"translated": "The port reopened on Tuesday.", "source_lang": "fr", "target_lang": "en", "ms": 210.4}
 ```
 
-When `labels` is omitted, the server uses built-in categories and returns short names:
+(Illustrative output.)
 
-`conflict`, `political`, `economic`, `health`, `environment`, `technology`, `disaster`, `social`, `sports`
+### `/classify`
 
-Response:
-```json
-{
-  "category": "conflict",
-  "confidence": 0.9889,
-  "scores": {
-    "conflict": 0.9889,
-    "political": 0.0092,
-    "disaster": 0.0003,
-    "technology": 0.0003,
-    "health": 0.0003,
-    "environment": 0.0003,
-    "economic": 0.0003,
-    "social": 0.0002,
-    "sports": 0.0002
-  },
-  "ms": 188.4
-}
-```
+| Field | Required | Default | Meaning |
+|---|---|---|---|
+| `text` | yes | | text to classify |
+| `labels` | no | built-in categories | your own labels, as plain phrases |
 
-### Request — Custom Labels
+Without `labels`, the answer uses short names: `conflict`, `political`, `economic`, `health`,
+`environment`, `technology`, `disaster`, `social`. With `labels`, it returns your labels as given.
+The response holds `category`, `confidence` and `scores` for every label.
 
-Pass your own labels for flexible re-classification or sub-categorization:
+### `/extract`
+
+| Field | Required | Default | Meaning |
+|---|---|---|---|
+| `text` | yes | | text; the first 2,000 characters are used |
+| `labels` | no | 20 built-in labels (`DEFAULT_RELATION_LABELS` in `app/main.py`) | relations to look for |
+| `threshold` | no | 0.3 | minimum relation score |
+
+spaCy finds the entities, then GLiREL scores relations between them. Text with fewer than two
+entities returns no triples. Each triple has `subject`, `predicate`, `object` and, when the entity
+can be traced, character offsets (`subject_start`, `subject_end`, `object_start`, `object_end`).
 
 ```bash
-curl -u "$MODELS_API_USER:$MODELS_API_PASS" \
-  -X POST https://nlp.example.internal/classify \
-  -H "Content-Type: application/json" \
-  -d '{
-    "text": "Federal Reserve raises interest rates by 25 basis points",
-    "labels": ["monetary policy", "trade", "employment", "housing"]
-  }'
+curl -s -X POST http://legba-models:8700/extract -H 'Content-Type: application/json' \
+  -d '{"text": "Example Corp opened a plant in City A."}'
 ```
 
-Response:
-```json
-{
-  "category": "monetary policy",
-  "confidence": 0.9986,
-  "scores": {
-    "monetary policy": 0.9986,
-    "trade": 0.0009,
-    "employment": 0.0003,
-    "housing": 0.0002
-  },
-  "ms": 188.4
-}
-```
+### `/ner`
 
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `text` | string | yes | — | Text to classify |
-| `labels` | list[string] | no | server defaults | Custom category labels (natural language) |
+Takes `text` (first 2,000 characters). Returns `entities` (text, spaCy label, offsets), plus
+`actors` (people, organisations, groups) and `locations` (places and facilities).
 
-### Integration Point
+### `/summarize`
 
-`ingestion/normalizer.py` — replaces `_classify_category()` regex function:
+| Field | Required | Default | Meaning |
+|---|---|---|---|
+| `texts` | yes | | texts, joined with a vertical bar before summarising |
+| `max_length` | no | 64 | maximum tokens in the summary |
 
-```python
-async def classify(self, text: str) -> tuple[str, float]:
-    resp = await self._http.post(f"{self._models_url}/classify", json={
-        "text": text,
-    })
-    if resp.status_code == 200:
-        data = resp.json()
-        return data["category"], data["confidence"]
-    return "other", 0.0  # fallback if service unavailable
-```
+Input is truncated at 512 tokens.
 
----
+## How Legba uses it
 
-## 3. Relation Extraction — POST /extract
-
-Extracts structured (subject, predicate, object) triples from text using GLiREL-large (zero-shot relation extraction).
-
-**When to call:** After NER, before storage. Extract triples from signal title + summary. Store as facts with `source_cycle=0` (ingestion-generated). Normalize predicates against existing vocabulary.
-
-### Request
-
-```bash
-curl -u "$MODELS_API_USER:$MODELS_API_PASS" \
-  -X POST https://nlp.example.internal/extract \
-  -H "Content-Type: application/json" \
-  -d '{
-    "text": "Barack Obama was born in Hawaii. He served as the 44th president of the United States."
-  }'
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `text` | string | yes | Text to extract relations from (truncated at 512 tokens) |
-
-### Response
-
-```json
-{
-  "triples": [
-    {"subject": "Barack Obama", "predicate": "place of birth", "object": "Hawaii"},
-    {"subject": "Barack Obama", "predicate": "position held", "object": "president of the United States"}
-  ],
-  "ms": 808.9
-}
-```
-
-### Integration Point
-
-`ingestion/normalizer.py` or new `ingestion/enrichment.py` — after NER, before storage:
-
-```python
-async def extract_triples(self, text: str) -> list[dict]:
-    resp = await self._http.post(f"{self._models_url}/extract", json={
-        "text": text,
-    })
-    if resp.status_code == 200:
-        data = resp.json()
-        return data["triples"]  # list of {subject, predicate, object}
-    return []
-```
-
-Each triple maps to a row in the facts table:
-```sql
-INSERT INTO facts (subject, predicate, object, source_cycle, source_signal_id)
-VALUES (%s, %s, %s, 0, %s);
-```
-
----
-
-## 4. Summarization — POST /summarize
-
-Generates a one-sentence summary from multiple texts using T5-small.
-
-**When to call:** After clustering, when a cluster of 3+ signals forms an event. Summarize the concatenated titles to produce a clean event title.
-
-### Request
-
-```bash
-curl -u "$MODELS_API_USER:$MODELS_API_PASS" \
-  -X POST https://nlp.example.internal/summarize \
-  -H "Content-Type: application/json" \
-  -d '{
-    "texts": [
-      "Earthquake strikes central Turkey, magnitude 6.2",
-      "Rescue teams deployed across 3 provinces in Turkey",
-      "Turkey earthquake death toll rises to 14, hundreds injured"
-    ],
-    "max_length": 64
-  }'
-```
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `texts` | list[string] | yes | — | List of texts to summarize (joined with ` \| ` internally) |
-| `max_length` | int | no | `64` | Max tokens in generated summary |
-
-### Response
-
-```json
-{
-  "summary": "earthquake death toll rises to 14, hundreds injured.",
-  "ms": 597.0
-}
-```
-
-### Integration Point
-
-`ingestion/cluster.py` — in `_create_event_from_cluster()`:
-
-```python
-async def summarize_cluster(self, signals: list) -> str:
-    titles = [s.title for s in signals]
-    resp = await self._http.post(f"{self._models_url}/summarize", json={
-        "texts": titles,
-    })
-    if resp.status_code == 200:
-        return resp.json()["summary"]
-    # Fallback: use highest-confidence signal's title
-    return max(signals, key=lambda s: s.confidence).title
-```
-
----
-
-## Ingestion Service Integration (Full Pattern)
-
-Per the original spec in `new-models.md`, the integration goes into `ingestion/service.py`:
-
-```python
-import httpx
-
-class ModelsClient:
-    """HTTP client for the Legba models service. Graceful degradation on failure."""
-
-    def __init__(self, base_url: str = "http://legba-models:8700"):
-        self._url = base_url
-        self._http = httpx.AsyncClient(base_url=base_url, timeout=30.0)
-        self._available = False
-
-    async def check_health(self) -> bool:
-        try:
-            resp = await self._http.get("/health")
-            self._available = resp.status_code == 200 and resp.json().get("status") == "ok"
-        except Exception:
-            self._available = False
-        return self._available
-
-    @property
-    def available(self) -> bool:
-        return self._available
-
-    async def translate_if_needed(self, signal):
-        if not self._available or not signal.detected_language:
-            return signal
-        if signal.detected_language == "en":
-            return signal
-        try:
-            resp = await self._http.post("/translate", json={
-                "text": (signal.title + " " + signal.content[:500]).strip(),
-                "source_lang": signal.detected_language,
-            })
-            if resp.status_code == 200:
-                data = resp.json()
-                signal.original_title = signal.title
-                signal.title = data["translated"]
-        except Exception:
-            pass  # degrade gracefully
-        return signal
-
-    async def classify(self, text: str) -> tuple[str, float]:
-        if not self._available:
-            return "other", 0.0
-        try:
-            resp = await self._http.post("/classify", json={"text": text})
-            if resp.status_code == 200:
-                data = resp.json()
-                return data["category"], data["confidence"]
-        except Exception:
-            pass
-        return "other", 0.0
-
-    async def extract_triples(self, text: str) -> list[dict]:
-        if not self._available:
-            return []
-        try:
-            resp = await self._http.post("/extract", json={"text": text})
-            if resp.status_code == 200:
-                return resp.json()["triples"]
-        except Exception:
-            pass
-        return []
-
-    async def summarize(self, texts: list[str]) -> str | None:
-        if not self._available:
-            return None
-        try:
-            resp = await self._http.post("/summarize", json={"texts": texts})
-            if resp.status_code == 200:
-                return resp.json()["summary"]
-        except Exception:
-            pass
-        return None
-```
-
-Usage in `_process_signal()`:
-
-```python
-# After normalizer.normalize():
-if self._models.available:
-    signal = await self._models.translate_if_needed(signal)
-    signal.category, signal.category_confidence = await self._models.classify(signal.title)
-    signal.facts = await self._models.extract_triples(signal.title + " " + signal.summary)
-
-# After clustering:
-if cluster.signal_count >= 3 and self._models.available:
-    summary = await self._models.summarize([s.title for s in cluster.signals])
-    if summary:
-        cluster.title = summary
-```
-
-**Graceful degradation:** If the models service is down, ingestion continues with regex classification and raw titles (current behavior). No hard dependency. Call `check_health()` periodically (e.g. every 60s) to detect recovery.
-
----
-
-## Infrastructure Details
-
-### GPU Layout
-
-The service runs on a single GPU (Tesla T4, 16GB), sharing it with the
-embedding and Whisper STT models:
-
-| Component | VRAM |
-|-----------|------|
-| Embeddings | ~1.3GB |
-| Whisper STT | ~3.3GB |
-| **Legba models (NLLB + DeBERTa + GLiREL + T5)** | ~3.9GB |
-
-### Models Loaded
-
-| Model | HuggingFace ID | Purpose | VRAM |
-|-------|---------------|---------|------|
-| NLLB-200-distilled-1.3B | `facebook/nllb-200-distilled-1.3B` | Translation | ~2.6GB |
-| DeBERTa-v3 zero-shot | `MoritzLaurer/deberta-v3-base-zeroshot-v2.0` | Classification | ~500MB |
-| GLiREL-large | `jackboyla/glirel-large-v0` | Relation extraction | ~1.5GB |
-| T5-small | `google-t5/t5-small` | Summarization | ~250MB |
-
-### File Paths
-
-| Path | Contents |
-|------|----------|
-| `<deploy-dir>/legba-models/` | Dockerfile, docker-compose.yml, entrypoint.sh, app/ |
-| `<caddy-conf-dir>/models.<host>.caddy` | Caddy reverse proxy + basic auth |
-| `<model-dir>/venv/` | Python venv (torch 2.6.0+cu124, transformers, FastAPI) |
-| `<model-dir>/hf-cache/` | HuggingFace model weights (~5-6GB) |
-
-### Container Management
-
-```bash
-cd <deploy-dir>/legba-models
-
-# Logs
-docker logs legba-models --tail 50
-
-# Restart
-docker compose restart
-
-# Rebuild (after code changes)
-docker compose build && docker compose up -d
-
-# Force fresh venv rebuild (after requirements change)
-rm -rf <model-dir>/venv
-docker compose restart
-```
-
-### Notes
-
-- **Classifier swap:** Original spec called for fine-tuned DistilBERT. Deployed DeBERTa-v3 zero-shot instead — works immediately without training data, flexible label set, comparable VRAM. Can swap to fine-tuned model later if needed; the zero-shot output can serve as training data.
-- **Internal access:** From any container on the `fastchat` Docker network, use `http://legba-models:8700` (no auth needed). External access requires basic auth over HTTPS.
-- **Log rotation:** Configured at 100MB x 3 files in docker-compose.yml.
-- **Input truncation:** All text inputs are truncated to 512 tokens at the model level. For longer content, send title + first ~500 chars.
+The runtime's NLP client (`src/legba/data/stack/nlp_service/client.py`) calls these endpoints from
+the enrichment filters. When the service is unreachable, enrichment passes signals through
+un-enriched and reports itself degraded; ingestion continues. An authentication failure is reported
+separately, because the credential has to be fixed.

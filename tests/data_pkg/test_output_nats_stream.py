@@ -8,7 +8,7 @@ exists precisely to mediate between the analyst and a real broker, so
 test value comes from exercising the real wire.
 
 Covers:
-  * Subject derivation honours `analyst.<id>.<channel>` (DESIGN.md §11).
+  * Subject derivation honours `analyst.<id>.<channel>` (CONTRIBUTING.md, "Naming conventions").
   * Explicit override (`nats_topic`) bypasses derivation.
   * Subject grammar rejects whitespace / wildcards / empty tokens.
   * Payload must be JSON-serializable; UUID + datetime are coerced.
@@ -105,13 +105,13 @@ def test_kind_name_constant():
 
 
 # ---------------------------------------------------------------------------
-# Subject derivation — DESIGN.md §11
+# Subject derivation — CONTRIBUTING.md, "Naming conventions"
 # ---------------------------------------------------------------------------
 
 
 class TestResolveSubject:
     def test_default_channel_uses_findings(self):
-        # DESIGN.md §11 row "Analyst NATS subject":
+        # CONTRIBUTING.md, "Naming conventions":
         # `analyst.cross_target_energy_correlator.findings`.
         subj = resolve_subject(analyst_id="cross_target_energy_correlator")
         assert subj == "analyst.cross_target_energy_correlator.findings"
@@ -620,12 +620,12 @@ async def test_programmer_error_bypasses_retry_and_dlq(
 
 
 # ---------------------------------------------------------------------------
-# Subject pattern — explicit assertion against DESIGN.md §11.
+# Subject pattern — explicit assertion against CONTRIBUTING.md, "Naming conventions".
 # ---------------------------------------------------------------------------
 
 
 def test_subject_pattern_matches_design_md_section_11():
-    """DESIGN.md §11 row 'Analyst NATS subject' specifies
+    """CONTRIBUTING.md ('Naming conventions') specifies
     `analyst.<id>.<channel>` with the example
     `analyst.cross_target_energy_correlator.findings`. Re-asserting the
     exact example string locks the convention against drift."""

@@ -3,16 +3,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """backfill_gazetteer_geo.py — bounded one-shot re-geocode via the live gazetteer.
 
-THE GAP THIS CLOSES: the 2026-07 geo-honesty fixes (`ACQUISITION.md`, "Geo
-honesty — two contamination fixes") made the ingest-time geocode path prefer
+THE GAP THIS CLOSES: the 2026-07 geo-honesty fixes (`docs/DATA_SOURCES.md`,
+"Enrichment", the geo rules) made the ingest-time geocode path prefer
 **untagged over mistagged** — a signal whose only place evidence is a bare
 NER `location`-class entity ("Kharkiv", "Fallujah") and no `country`-class
 entity is left with an EMPTY indexed `geo` column rather than a guessed one,
 because a bare city genuinely "can't be mapped to a country without the
 online gazetteer" (`filters/geocode.py:country_iso2s_from_country_entities`).
 That is the correct ingest-time default (never guess), but it leaves a
-backlog of rows that a live geocoder call COULD resolve. ACQUISITION.md says
-plainly: "re-geocoding historical rows is a separate operator-gated backfill."
+backlog of rows that a live geocoder call COULD resolve. docs/DATA_SOURCES.md says
+re-geocoding old rows is a separate backfill.
 This script is that backfill.
 
 THE MARKER (derived, not a stored column): there is no dedicated

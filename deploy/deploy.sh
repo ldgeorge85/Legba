@@ -426,7 +426,7 @@ wait_for "registry-healthz" 120 \
 # credibility seeds the per-family scripts used to. The region/applicability
 # desk tags (formerly step 5d) live in the target files themselves, so the
 # S2 region floor (region_composition's has_tag("region")) cannot vanish.
-# docs/BRINGUP.md triages every bring-up script this replaced.
+# docs/RUNBOOK.md "The descriptor walker" describes the walker.
 #   0 profile → 1 vault → 2 stack → 3 descriptors (the walker) → 4 budget.
 info "[0] instance profile ${PROFILE}"
 profile_query check || die "profile ${PROFILE} does not load (see above)"

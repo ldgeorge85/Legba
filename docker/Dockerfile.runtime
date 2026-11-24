@@ -5,7 +5,7 @@
 #
 # Multi-stage. Deps superset of legba-registry: + dapr Python SDK +
 # dapr-ext-fastapi + langdetect (the in-process language-detect filter
-# default; the lingua/torch heavy backends retired in L-205). The DSPy
+# default; the lingua/torch heavy backends removed). The DSPy
 # + temporalio deps deliberately stay out — analyst kinds lazy-import
 # dspy and degrade to direct-chat fallback when it's missing, so the
 # runtime image stays small. The optimizer kind's Temporal workflow
@@ -46,7 +46,7 @@ WORKDIR /build
 # Source-kind deps (telethon, google-cloud-bigquery, warcio,
 # aiobotocore, feedparser, trafilatura) ARE shipped here — sources
 # are imported at runtime activation, so missing deps would crash
-# actors. They're not heavy individually; the L-205 retirements
+# actors. They're not heavy individually; those removals
 # removed the genuinely fat ones (torch + spacy + sentence-
 # transformers).
 RUN pip install --prefix=/install \
@@ -68,7 +68,7 @@ RUN pip install --prefix=/install \
         "starlark-pyo3>=2026.1" \
         "dapr>=1.13" \
         "dapr-ext-fastapi>=1.13" \
-        # dapr-ext-workflow (L-205 / P-16): the optimizer analyst kind's durable
+        # dapr-ext-workflow : the optimizer analyst kind's durable
         # GEPA loop runs as a Dapr Workflow — the host starts an in-process
         # WorkflowRuntime worker + passes a workflow client into the optimizer's
         # durable-handle slot. Replaces temporalio (Temporal fully removed:
@@ -121,13 +121,13 @@ COPY pyproject.toml /build/pyproject.toml
 COPY src /build/src
 RUN pip install --prefix=/install --no-deps /build
 
-# W9 SPLIT-2 — the selected profile's prompt package (docs/PROFILES.md "Prompt
+# The selected profile's prompt package (docs/PROFILES.md "Prompt
 # packages"; the geopolitics profile: legba_geopolitics, the six political-lean
 # lenses). profiles/ is not part of the wheel, so the build copies the
 # profile's prompts/ directory into site-packages beside `legba` and then
 # imports every module in it: an absent or broken package fails the BUILD,
 # never an analyst's first run. LEGBA_PROFILE names the profile directory
-# (docker-compose.yml passes ${LEGBA_PROFILE}; default: the reference profile).
+# (docker-compose.yml passes ${LEGBA_PROFILE}; default: profiles/geopolitics).
 # docker/Dockerfile.registry carries the same step — the registry resolves
 # every descriptor's prompt_module at registration. Keep the two in lockstep.
 ARG LEGBA_PROFILE=profiles/geopolitics

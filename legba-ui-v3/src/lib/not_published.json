@@ -6,32 +6,32 @@
       "id": "seam-46",
       "seam": 46,
       "title": "Provenance-badge `fallback` signal",
-      "summary": "The backend half. The UI classifies a displayed number `live`, `fallback` or `absent`, but `fallback` is only returned when a route passes an explicit degradation flag, and most routes do not carry one yet.",
-      "guard": "The UI never fabricates a fallback state: with no explicit signal it never reports `fallback`.",
+      "summary": "The server side of the `fallback` label. The console labels a displayed number `live`, `fallback` or `absent`, but it shows `fallback` only when a route sends an explicit degradation flag, and most routes do not send one.",
+      "guard": "The console never shows `fallback` without that flag.",
       "source": "docs/SEAMS.md #46"
     },
     {
       "id": "seam-55",
       "seam": 55,
       "title": "Correctness grader reference dependency",
-      "summary": "Nothing — the grader shipped whole, including the independent reference builder it depends on. The row stays because the dependency is the interesting part: the grader reads references and can never write one.",
-      "guard": "It fails loud and it fails empty — it never grades against a substitute.",
+      "summary": "Nothing; the grader and the reference builder it depends on are built. The grader reads references and can never write one, so a subject and unit with no current reference get no correctness number at all.",
+      "guard": "With no current reference, `grade_target` writes nothing and calls no model.",
       "source": "docs/SEAMS.md #55"
     },
     {
       "id": "seam-60",
       "seam": 60,
       "title": "Sampled layer-classification audit",
-      "summary": "The measurement of how often a curated `source_layers` row files a source under the wrong layer. `layer_divergence` counts per layer and compares a country's gap to its own baseline; every one of those numbers inherits the map's classification error, and a wrong layer is a DIRECTIONAL error — it does not blur the gap, it moves it one way — so an un-audited map cannot bound the error on a fired finding.",
-      "guard": "Nothing is half-built and nothing claims to be audited: `deterministic_handlers/layer_divergence.py:CLASSIFICATION_AUDIT_NOTE` is stamped verbatim onto `data.classification_audit` of EVERY finding and receipt the unit writes, naming this seam, so no reader of a divergence number can mistake an un-audited map for an audited one.",
+      "summary": "A measured error rate for the curated `source_layers` map, which files each source under a layer. `layer_divergence` counts per layer and compares a country's gap to its own baseline, so every number it reports inherits the map's errors.",
+      "guard": "Every finding and receipt the analyst writes carries `CLASSIFICATION_AUDIT_NOTE` (from `deterministic_handlers/layer_divergence.py`) in `data.classification_audit`, naming this seam.",
       "source": "docs/SEAMS.md #60"
     },
     {
       "id": "seam-61",
       "seam": 61,
-      "title": "`not_collected` for SOURCES on the typed-absence route",
-      "summary": "The half of `not_collected` that asks \"does any source cover this subject for this desk at all\". `GET /v3/absence` emits the kind only for a bounded UNIT with no read on record.",
-      "guard": "Nothing is fabricated and nothing over-claims: every emitted source item is a source the route OBSERVED producing in scope, its proof names the `roster_days` window it was derived over, and the two source kinds are omitted entirely — and named in `not_measured` with the reason — for a desk with no `scope.geo` to resolve a roster from.",
+      "title": "`not_collected` for sources on the typed-absence route",
+      "summary": "The half of `not_collected` that asks whether any source covers a subject for a desk at all. `GET /v3/absence` emits that kind only for a bounded unit with no read on record.",
+      "guard": "Every source item the route emits is one it saw producing in scope, and its proof names the `roster_days` window.",
       "source": "docs/SEAMS.md #61"
     }
   ],

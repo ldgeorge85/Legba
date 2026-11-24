@@ -209,7 +209,7 @@ services:
         limits:
           memory: 3G   # was mem_limit: 3g
 
-  # nats — JetStream, still R1 (DIRECTION.md §6 truth #1, unchanged by the
+  # nats — JetStream, still R1 (unchanged by the
   # data-node MOVE; replication is a separate, gated program). Data-node loss
   # = stream loss (signals also in PG; in-flight job messages are not).
   nats:

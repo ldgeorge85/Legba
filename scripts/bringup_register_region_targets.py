@@ -22,7 +22,7 @@ carry from S1-T1, so the region_composition analyst reads the country reads in
 its region by that tag.
 
 Registration goes through the registry REST surface (POST /descriptors/target),
-mirroring ``attic/bringup_register_multi_country_targets.py`` + ``_token.py`` auth.
+with ``_token.py`` auth.
 CREATE-only + idempotent: a frame whose head row already exists is left alone
 (reported ``exists``), never PUT — bringup does not mutate live descriptors.
 

@@ -4,7 +4,7 @@ A claim source carries a party's own claim: a group saying it attacked
 someone, or a tracker listing what such groups posted. What a claim row can
 support is fixed in code ([DATA_SOURCES.md, "Claim sources"](../DATA_SOURCES.md#claim-sources)):
 "<claimant> claimed / posted / listed ...", attributed and dated, never the
-event itself. This note is what an owner does to switch one on, what they will
+event itself. This note is what an admin does to switch one on, what they will
 see afterwards, and what the platform refuses. Every name below is invented.
 
 Two claim descriptors ship: `source.ransomware_live.claims` and

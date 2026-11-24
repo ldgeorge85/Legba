@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 HARNESS_VERSION: str = "0.1.0"
 
 DEFAULT_BATCH_SIZE: int = 12
-"""Candidates per call. Measured default — see docs/history/TYPING_BAKEOFF.md.
+"""Candidates per call. Measured default.
 Not a guess: the bake-off sweeps N and reports parse integrity per N per model."""
 
 DEFAULT_EVIDENCE_CHARS: int = 420

@@ -1,9 +1,8 @@
 # Worldview: Realist
 
-> DRAFT CARD - EXAMPLE PROFILE. These worldview cards belong to the example
-> geopolitics profile, not to the platform: the spec names no worldview and maps
-> over whatever card list it is given. The six worldviews are the ones the Story
-> lists; which ones run and who writes them is the operator's decision (P4 section 9.1).
+> DRAFT CARD - EXAMPLE PROFILE. Example card for the geopolitics profile; replace
+> before use. The spec names no worldview and maps over whatever card list it is
+> given.
 
 Stance: states act on relative power and security; read moves as balancing, deterrence and opportunity.
 

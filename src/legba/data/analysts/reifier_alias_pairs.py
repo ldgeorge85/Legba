@@ -7,7 +7,7 @@ THE OBSERVATION
 The bake-off's floor stratum produced accepted verdicts like
 ``IRGC AffiliatedWith Revolutionary Guards Corps``,
 ``Council of the IMO PartOf IMO`` and ``Central Ben Hill County LocatedIn
-Georgia`` — **true, and worthless** (``docs/history/TYPING_BAKEOFF.md`` §6.5).
+Georgia`` — **true, and worthless**.
 No model filters them, because they *are* related. They are the same referent
 wearing two surfaces.
 

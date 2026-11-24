@@ -48,7 +48,7 @@
 #
 # State: draft in-tree; descriptors/LIFECYCLE.md records it `configured` on
 # the reference host. Activation is the orchestrator's flip at the roll
-# (docs/BRINGUP.md "The due-and-absent check (lane E-1)").
+# (docs/RUNBOOK.md "The descriptor walker", switching on a new analyst).
 
 identity:
   id: due_and_absent

@@ -24,8 +24,8 @@ the library is intentionally minimal but real:
     the consult loop's governed tool surface (A-3a).
 
 (``discover_sources`` was removed per decision F-1 — its enqueue fed job
-kinds no worker handler ever consumed; deep-crawl discovery is a designed
-direction item, docs/DIRECTION.md §8.)
+kinds no worker handler ever consumed; deep-crawl discovery is not
+built.)
 
 A handler is ``async (call, ctx) -> ToolResult``. It NEVER decides agency —
 resolution + the governor have already admitted the call when a handler runs.
@@ -588,7 +588,7 @@ async def _emit_to_channels(
 # enqueued crawl_discovery/query_discovery jobs that no worker handler has
 # ever consumed — a terminal "no handler" failure dressed as an enqueue.
 # Source discovery ships via the registry discovery route; job-based deep
-# crawl is a designed direction item — docs/DIRECTION.md §8.)
+# crawl is not built.)
 
 
 # ---------------------------------------------------------------------------

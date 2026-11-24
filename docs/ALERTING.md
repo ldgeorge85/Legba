@@ -150,7 +150,7 @@ is logged only. Every kind the shipped rule pages nothing for is declared
 `paging="logged_only"` and listed as "logged only" in
 [TYPES.md](TYPES.md#alert-kinds); a test holds the declarations and the shipped
 rule to each other, so a kind is never logged-only by accident. Paging a
-logged-only kind is a new rule version, the owner's call.
+logged-only kind is a new rule version, an admin decision.
 
 When the rule pages, it is the floor: the sinks' own
 `LEGBA_ALERT_NTFY_MIN_SEVERITY` / `LEGBA_ALERT_WEBHOOK_MIN_SEVERITY` no longer
@@ -233,7 +233,7 @@ is 404.
   window.
 * No daily digest route; "logged" means the log and the Watch surface.
 * The first-generation `alert` output kind keeps its own legacy transports
-  (Pushover, XMPP, Matrix — dormant since 2026-07-01) besides raising here.
+  (Pushover, XMPP, Matrix; unused) besides raising here.
 * The models-host watchdogs (`models_host_vllm_watchdog.sh`,
-  `host_ai1_saturation_watch.sh`) run on another machine and cannot reach the
+  `models_host_saturation_watch.sh`) run on another machine and cannot reach the
   runtime; they still post directly if `NTFY_URL` is set there.

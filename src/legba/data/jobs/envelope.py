@@ -49,8 +49,8 @@ from pydantic import BaseModel, ConfigDict, Field
 # tree: ``process_media`` is the one shipped kind. (``crawl_discovery`` /
 # ``query_discovery`` were DROPPED per decision F-1, 2026-06-09 — they were
 # enqueueable but no handler ever consumed them, a terminal "no handler"
-# failure dressed as an enqueue; job-based deep-crawl discovery is a
-# designed direction item, docs/DIRECTION.md §8.)
+# failure dressed as an enqueue; job-based deep-crawl discovery is
+# not built.)
 JobKind = str
 
 KNOWN_JOB_KINDS: tuple[str, ...] = (

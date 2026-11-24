@@ -86,8 +86,8 @@ SALIENCE_SATURATION: int = 500
 #: story a month to accumulate a second source.
 RETENTION_STALE_DAYS: int = 30
 
-#: The recommended bar. See docs/history/TYPING_BAKEOFF.md for the measured
-#: pool size at this and neighbouring settings.
+#: The recommended bar, chosen from the measured pool size at this and
+#: neighbouring settings.
 RECOMMENDED_BAR: float = 0.42
 
 #: A hard floor applied ahead of the weighted score: a pair resting on a single

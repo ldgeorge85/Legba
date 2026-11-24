@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lewis George
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The LAYER vocabulary — Program 6 L0 (docs/DIRECTION.md, "The layered source
-fan-out"; migration 0214).
+"""The LAYER vocabulary (the source layers in docs/DATA_SOURCES.md; migration 0214).
 
 THE IDEA. Today a desk reads one pool of sources. The next widening ingests,
 per country, the same stack of source LAYERS — official, domestic press,
@@ -53,8 +52,6 @@ from ..taxon_families import SOURCE_LAYER, SOURCE_LAYERS, bind_taxon
 #:                      not scoped to this country.
 #:   social_digest    — channel-level social monitoring (Telegram/Discord and
 #:                      similar), counts and summaries only — never identities
-#:                      (docs/DIRECTION.md: "removal is a first-class signal,
-#:                      stored as counts and summaries, never as identities").
 #:   public_data     — structured feeds: IGO/government open data, sanctions
 #:                      lists, conflict-event datasets, analytical/think-tank
 #:                      output with no single-country scope.

@@ -62,7 +62,7 @@ catalogue's post-pin key list.
    place in the Watch surface's order; ties break by id) and `doc` (the
    summary a person reads).
 2. The producer that raises it, and, if it pages, its entry in
-   `alerts/page_rule.yaml` (policy, the owner's call; a test holds the rule and
+   `alerts/page_rule.yaml` (policy, an admin decision; a test holds the rule and
    the `paging` declarations to each other).
 3. `python3 scripts/gen_type_tables.py` (the tables in
    [ALERTING.md](ALERTING.md) and [TYPES.md](TYPES.md)).

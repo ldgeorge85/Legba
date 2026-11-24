@@ -3,8 +3,8 @@
 # curated entry-by-entry against descriptors/source_*.yaml's actual
 # scope.geo / scope.source_class / identity.kind, descriptors/wire_map.yaml's
 # same_publisher['ap'] wire/agency set, and the specific IL desk reading of
-# each source (docs/DIRECTION.md: "the same channel is independent
-# commentary in one country and the state's voice in another"). Every entry
+# each source (the same channel is independent
+# commentary in one country and the state's voice in another). Every entry
 # either keeps its generator layer with reason "derived: ... — confirmed"
 # (checked against the source descriptor, unchanged) or is reasoned fresh
 # with "curated: ..." (a real per-country judgement was made, whether or not

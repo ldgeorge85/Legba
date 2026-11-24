@@ -27,7 +27,8 @@ def _utcnow() -> datetime:
 # SourceActor owns acquisition; TargetActor is a passive subscriber.)
 
 
-# Per-kind NATS subject channel suffixes (DESIGN.md §11 / L-191).
+# Per-kind NATS subject channel suffixes (CONTRIBUTING.md, "Naming
+# conventions").
 # (No SIGNAL entry: signals are source-owned rows published by
 # source_actor's canonical write path, never an analyst output kind.)
 _NATS_CHANNEL_BY_KIND: dict[OutputKind, str] = {

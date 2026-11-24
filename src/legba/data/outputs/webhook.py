@@ -124,7 +124,7 @@ HEADER_SIGNER_DID = "X-Legba-Signer-DID"
 HEADER_CONTENT_TYPE = "Content-Type"
 
 # DLQ subject prefix — mirrors `legba.dlq.output.<kind>.<analyst_id>` per
-# DESIGN.md §11 and the nats_stream convention.
+# CONTRIBUTING.md ("Naming conventions") and the nats_stream convention.
 DLQ_SUBJECT_PREFIX = "legba.dlq.output.webhook"
 
 # Retry defaults — exponential backoff (1s, 2s, 4s) across 3 attempts.

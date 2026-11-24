@@ -73,7 +73,7 @@
 # Ships `state: draft`. descriptors/LIFECYCLE.md records it `configured` on the
 # reference host: registered, inspectable, scheduled by nothing. Activation is
 # the orchestrator's flip at the roll, AFTER theme_cyber is active
-# (docs/BRINGUP.md "The cyber desk reader (lane K-2)").
+# (docs/RUNBOOK.md "The descriptor walker", switching on a new analyst).
 
 identity:
   id: cyber_watch

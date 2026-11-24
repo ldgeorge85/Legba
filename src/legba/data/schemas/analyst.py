@@ -384,8 +384,7 @@ class BudgetRetryPolicy(BaseModel):
     window resets (cooldown to the next UTC-day bucket; a
     ``budget_demotion_events`` row + a warning log record the demotion).
     Real cheap-model fallback demotion (wiring ``method.llm.fallback``
-    into ``fallback_run_method``) is a declared seam — docs/SEAMS.md /
-    docs/DIRECTION.md.
+    into ``fallback_run_method``) is a declared seam — docs/SEAMS.md.
     ``dlq`` — give up on this run; pair with the global envelope when
     you want hard caps.
     """

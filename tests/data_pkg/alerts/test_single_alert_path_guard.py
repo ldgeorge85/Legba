@@ -249,7 +249,7 @@ def test_no_direct_sink_deliver_outside_the_dispatcher() -> None:
 
 #: Scripts that run on ANOTHER host (the models host) and cannot reach the
 #: runtime container; documented in docs/ALERTING.md "Not yet".
-_SCRIPTS_OFF_HOST = {"models_host_vllm_watchdog.sh", "host_ai1_saturation_watch.sh"}
+_SCRIPTS_OFF_HOST = {"models_host_vllm_watchdog.sh", "models_host_saturation_watch.sh"}
 
 
 def test_every_host_script_that_pushes_raises_through_the_alert_path_first() -> None:

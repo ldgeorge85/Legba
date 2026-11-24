@@ -2446,8 +2446,8 @@ class AnalystActor(Actor, AnalystActorInterface, Remindable):
                 #       - pause_until_next_window → cooldown + BUDGET_THROTTLED.
                 #       - demote_and_continue (F-2) → EXPLICIT audited pause
                 #         until the bucket window resets. Real cheap-model
-                #         fallback demotion is a declared seam (docs/SEAMS.md
-                #         → DIRECTION.md) — never a silent degrade.
+                #         fallback demotion is a declared seam (docs/SEAMS.md)
+                #         — never a silent degrade.
                 #       - dlq → BUDGET_THROTTLED + DLQ tag.
                 #   * throttle (projected overrun) → cooldown + BUDGET_THROTTLED
                 #         without an exhaustion audit row (nothing exhausted yet).

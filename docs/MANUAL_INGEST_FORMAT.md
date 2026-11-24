@@ -1,38 +1,31 @@
 <!-- SPDX-FileCopyrightText: 2026 Lewis George -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 
-# Manual ingest — batch format
+# Manual ingest: batch format
 
-*The on-disk FORMAT for hand-supplying data to the substrate (facts, entities, nexuses, signals, and a vector-corpus lane): a directory
-with a manifest and per-kind JSONL files. This describes the shape and the
-validation contract. The loader that consumes a validated batch lives in
-[`src/legba/data/seed/manual_batch.py`](../src/legba/data/seed/manual_batch.py)
-(`run_manual_batch`, the skip/merge/force reconciliation) and is driven by the
-[`scripts/manual_ingest.py`](../scripts/manual_ingest.py) CLI (`--batch DIR
-[--mode skip|merge|force] [--dry-run]`), run in the **runtime** container
-(`legba/legba-runtime-dapr`) — NOT the registry image, whose lighter build lacks
-`pycountry` (the seed geocode path imports it), so `legba-registry` dies with
-`ModuleNotFoundError: pycountry`. Otherwise driven like `migrate`/`seed`.*
+For someone loading data they already hold (facts, entities, relationships,
+backfilled signals, or documents for retrieval) into a Legba instance. A batch is
+a directory with a manifest and one JSON Lines file per record kind.
 
-Manual ingestion rides the existing seed plane (`src/legba/data/seed/`): a batch
-is validated, then written through the same temporal write path
-(`write_fact` / `write_nexus`) with supersession semantics and a `seed_batches`
-ledger row. It is **not** a new subsystem — it is a defined file format plus a
-generic loader over it.
+- The format and its validation: [`src/legba/data/seed/manual_schema.py`](../src/legba/data/seed/manual_schema.py)
+  (pydantic models).
+- The loader: [`src/legba/data/seed/manual_batch.py`](../src/legba/data/seed/manual_batch.py)
+  (`run_manual_batch`), driven by [`scripts/manual_ingest.py`](../scripts/manual_ingest.py)
+  (`--batch DIR [--mode skip|merge|force] [--dry-run]`).
+- Run the CLI in the runtime container (`legba/legba-runtime-dapr`). The registry
+  image lacks `pycountry`, which the geocode path imports, so it fails there with
+  `ModuleNotFoundError: pycountry`.
 
-**How it differs from the on-request intake.** A manual batch is records a person
-already has, written straight into the substrate through the seed write path (stamped `manual`, or `curated` when the manifest says so). The
-on-request intake ([operations/on-request-fetching.md](operations/on-request-fetching.md))
-is the opposite direction: a request to *fetch* an address or re-poll a source,
-run through a registered source's pipeline, with fetch receipts and the source's
-own provenance. Use a batch for curated data without a live upstream; use the
-intake when the material should arrive the way a poll would bring it.
+A batch goes through the seed write path (`write_fact` / `write_nexus`), with the
+same supersession rules as any other write, and records a `seed_batches` ledger
+row. Records are stamped `manual`, or `curated` when the manifest asks for it.
 
-The format and its validation live in
-[`src/legba/data/seed/manual_schema.py`](../src/legba/data/seed/manual_schema.py)
-(pydantic models). Validation reports **per-line** errors (file + 1-indexed line
-+ reason) — one bad record in a large batch names its own line rather than
-failing the whole batch opaquely.
+Use a batch for curated data with no live upstream. To fetch an address or
+re-poll a source through a registered source's pipeline, use the on-request
+intake instead ([operations/on-request-fetching.md](operations/on-request-fetching.md)).
+
+Validation reports errors per line (file, 1-indexed line, reason), so one bad
+record in a large batch is named directly.
 
 ## Directory layout
 
@@ -49,8 +42,9 @@ mybatch/
   docs/                 # (optional) source docs referenced by docs.jsonl
 ```
 
-Only the lanes named in the manifest's `files:` block are processed; any subset
-is valid, but a batch must declare **at least one** lane.
+Only the kinds named in the manifest's `files:` block are processed. Any subset
+is valid, but a batch must declare at least one. (The loader's code and error
+messages call these kinds "lanes".)
 
 Each `*.jsonl` file is [JSON Lines](https://jsonlines.org/): one JSON object per
 line. Blank lines are ignored (and do not shift line numbering in error
@@ -60,10 +54,10 @@ reports).
 
 ```yaml
 schema_version: "1"                # must match the build's supported version
-batch_id: "iiss-milbal-2026"       # stable id for this batch (ledger key)
+batch_id: "example-batch-2026"     # stable id for this batch (ledger key)
 operator: "your-handle"            # who assembled it
 created_at: 2026-07-02T00:00:00Z   # ISO-8601
-description: "IISS Military Balance officeholders + orders of battle."
+description: "Officeholders and org charts from an example annual report."
 
 default_provenance: manual         # curated | manual   (default: manual)
 mode: skip                         # skip | merge | force  (default: skip)
@@ -72,7 +66,7 @@ default_confidence: 0.85           # batch-wide fallback (0.0–1.0), optional
 # Provenance / licensing defaults every record inherits unless it overrides.
 license: "CC-BY-4.0"
 source_url: "https://example.org/report"
-provenance_notes: "extracted from the 2026 print edition"
+provenance_notes: "extracted from the print edition"
 
 files:                             # per-kind file references (≥1 required)
   facts: facts.jsonl
@@ -83,22 +77,21 @@ files:                             # per-kind file references (≥1 required)
 ```
 
 Unknown top-level keys are rejected (fail-loud against typos). A manifest whose
-`schema_version` does not match the build, or that declares no lane, is refused
+`schema_version` does not match the build, or that declares no record file, is refused
 before any record is read.
 
 ### Provenance tier — `default_provenance`
 
-Load-bearing. Two values:
+Two values:
 
 | tier | meaning | grounding-eligible |
 |---|---|---|
 | `curated` | authoritative, vetted; may feed the analysis grounding preamble | **yes** |
 | `manual`  | stored, but **not** injected as a trusted prior | no |
 
-The default is the safe `manual`: a batch must ask, explicitly, to be treated as
-grounding-eligible. This mirrors the platform's Tier-1 provenance gate, which
-only injects `seed`/`curated` context into the authoritative preamble — loading
-data as `manual` records it without making it a trusted prior.
+The default is `manual`, so a batch must ask explicitly to be grounding-eligible.
+The analysis preamble only takes `seed` and `curated` context; `manual` data is
+stored but never used as a trusted prior.
 
 ### Modes — `mode`
 
@@ -112,35 +105,34 @@ mode ever hard-deletes; history is preserved via the temporal
 | `merge` | fill empty fields; on a value change, write the new row and supersede the old |
 | `force` | supersede every matching row unconditionally; the batch is the authority |
 
-### Confidence policy — no silent `1.0`
+### Confidence policy
 
-For the **asserting lanes** (facts, nexuses) confidence must be supplied
-honestly, either:
+Facts and nexuses assert something, so each needs a confidence, either:
 
-- per record (`"confidence": 0.9` on the line), **or**
+- per record (`"confidence": 0.9` on the line), or
 - via the manifest's `default_confidence`.
 
 If a fact/nexus record carries no confidence **and** the manifest sets no
-`default_confidence`, the record is **refused** with a per-line error — the
-loader never fabricates a `1.0`. Entities, signals, and docs are not assertions
+`default_confidence`, the record is refused with a per-line error. The loader
+never fills in `1.0`. Entities, signals, and docs are not assertions
 and carry no confidence (signals carry `source_credibility` instead).
 
 ## Per-kind record schemas + natural keys
 
-Field names mirror the internal typed payloads, so a validated record maps
-one-to-one onto a write. The **natural key** is what idempotency and merge
-targeting key on.
+Field names match the internal typed payloads, so a validated record maps
+one-to-one onto a write. The **natural key** is what re-runs and merges match on.
+The examples below are illustrative.
 
 ### `facts.jsonl`
 
 ```json
-{"subject": "Iran", "predicate": "head of state", "value": "Mojtaba Khamenei", "valid_from": "2026-03-08", "confidence": 0.95}
+{"subject": "Example Corp", "predicate": "chief executive", "value": "Person A", "valid_from": "2026-01-01", "confidence": 0.95}
 ```
 
 | field | required | notes |
 |---|---|---|
 | `subject`, `predicate`, `value` | yes | the `(subject, predicate, value)` triple |
-| `valid_from` | yes | ISO date/datetime — facts are temporally honest |
+| `valid_from` | yes | ISO date or datetime when the fact became true |
 | `valid_until` | no | close time; omit for an open-ended fact |
 | `confidence` | see policy | 0.0–1.0; per-record or batch default |
 | `geo_lat`, `geo_lon` | no | optional point geo |
@@ -151,7 +143,7 @@ targeting key on.
 ### `entities.jsonl`
 
 ```json
-{"canonical_name": "Iran", "entity_class": "country", "geo_country": "IR"}
+{"canonical_name": "Example Corp", "entity_class": "organization"}
 ```
 
 | field | required | notes |
@@ -162,13 +154,13 @@ targeting key on.
 | `data` | no | extras bag |
 
 **Natural key:** `canonical_name`. Emit an entity record only to enrich an
-entity with a class/geo the facts alone would not carry — the loader
-auto-resolves every fact/nexus endpoint regardless.
+entity with a class or geo the facts alone would not carry; the loader
+resolves every fact and nexus endpoint itself.
 
 ### `nexuses.jsonl`
 
 ```json
-{"subject": "Iran", "object": "United States", "rel_type": "in active conflict with", "polarity": -1, "valid_from": "2026-02-28", "intent": "conflict", "confidence": 0.9}
+{"subject": "Example Corp", "object": "Example Supplier Ltd", "rel_type": "in contract dispute with", "polarity": -1, "valid_from": "2026-01-01", "intent": "dispute", "confidence": 0.9}
 ```
 
 | field | required | notes |
@@ -193,7 +185,7 @@ backfill so time-windowed analysts can exclude it while the fact/accumulation
 paths still benefit.
 
 ```json
-{"external_id": "rep-001", "title": "…", "body": "…", "published_at": "2026-02-28T18:30:00Z", "geo": ["IR"], "entities": ["Iran"], "tags": ["conflict"], "source_credibility": 0.8}
+{"external_id": "rep-001", "title": "…", "body": "…", "published_at": "2026-01-01T18:30:00Z", "entities": ["Example Corp"], "tags": ["dispute"], "source_credibility": 0.8}
 ```
 
 | field | required | notes |
@@ -216,7 +208,7 @@ is inline (`text`) or referenced (`text_ref`, a path under the batch's `docs/`
 dir).
 
 ```json
-{"corpus": "world_context", "doc_id": "iran-brief", "chunk_seq": 0, "title": "Iran country brief", "section": "overview", "text": "…", "countries": ["Iran"], "topics": ["background"], "lang": "en", "license": "CC0-1.0", "effective_date": "2026-01-01"}
+{"corpus": "world_context", "doc_id": "example-brief", "chunk_seq": 0, "title": "Example Corp background brief", "section": "overview", "text": "…", "topics": ["background"], "lang": "en", "license": "CC0-1.0", "effective_date": "2026-01-01"}
 ```
 
 | field | required | notes |
@@ -234,9 +226,9 @@ dir).
 ## Validation
 
 `legba.data.seed.validate_batch(batch_dir, *, strict=False)` reads the manifest,
-then every declared lane line-by-line, and returns a `ValidatedBatch` carrying
-the typed records grouped by lane plus **every** per-line error (validation does
-not stop at the first bad record). Each error names its file, 1-indexed line,
+then every declared kind line by line, and returns a `ValidatedBatch` carrying
+the typed records grouped by kind plus every per-line error. Validation does
+not stop at the first bad record. Each error names its file, 1-indexed line,
 and a compact reason, e.g.:
 
 ```
@@ -246,48 +238,42 @@ nexuses.jsonl:1 [nexuses] polarity: Input should be less than or equal to 1
 
 `strict=True` raises `BatchValidationError` (which carries the same per-line
 error list) instead of returning a result with errors. A malformed manifest is
-fail-loud and raises before any lane is walked.
+raises before any record file is read.
 
-## Lane 4 — the vector-corpus loader (`docs.jsonl` → Qdrant)
+## The vector-corpus loader (`docs.jsonl` to Qdrant)
 
-The structured lanes (facts/entities/nexuses/signals) write to Postgres. The
-`docs` lane is different: it is **chunked, embedded, and upserted into Qdrant**
+Facts, entities, nexuses and signals are written to Postgres. `docs` records are
+chunked, embedded and upserted into Qdrant
 by `legba.data.rag.load_vector_batch` (CLI: `scripts/manual_ingest_vectors.py`),
 riding the same `seed_batches` ledger for idempotency.
 
-**Collections.** Only two RAG corpora are provisioned; a `docs` record's
-`corpus` must be one of them (an unknown corpus is refused, never silently
-created):
+**Collections.** Two retrieval corpora are provisioned. A `docs` record's
+`corpus` must be one of them; an unknown corpus is refused, not created:
 
 | `corpus` | Qdrant collection | contents |
 |---|---|---|
-| `world_context` | `world_context` | country/topic priors — briefs, doctrine summaries keyed to places/actors |
-| `tradecraft`    | `tradecraft`    | how-to-analyze corpus — analytic standards, SAT handbooks |
+| `world_context` | `world_context` | background briefs keyed to places, actors and topics |
+| `tradecraft`    | `tradecraft`    | analytic method: standards, technique handbooks |
 
-Both are 1024-dim cosine (bge-m3), same as `legba_signals`.
+Both are 1024-dim cosine, the same as `legba_signals` (the default embedder is `BAAI/bge-m3`).
 
 **Chunking.** Each record's text (inline `text` or the file at `text_ref`) is
-run through a heading-aware chunker (`legba.data.rag.chunk_text`, ~400-800
-tokens, small overlap). A record that already fits the token band becomes one
+run through a heading-aware chunker (`legba.data.rag.chunk_text`: target 512
+tokens, hard cap 800, 64-token overlap). A record that already fits the token band becomes one
 chunk (`chunk_part = 0`); a longer one splits into `chunk_part = 0..N`. The
-stored **natural key** is therefore `(corpus, doc_id, chunk_seq, chunk_part)` —
-the design's `(corpus, doc_id, chunk_seq)` plus the sub-index. Point ids are a
+stored natural key is therefore `(corpus, doc_id, chunk_seq, chunk_part)`. Point ids are a
 deterministic `uuid5` of that key, so a re-upsert overwrites in place.
 
 **Modes.** `skip` (and `merge`) are no-ops on an identical re-run (deduped on
-the ledger's manifest `content_hash`, so no re-embed). `force` = **delete the
-doc's existing chunks and re-embed** (see below).
+the ledger's manifest `content_hash`, so no re-embed). `force` deletes the
+document's existing chunks and re-embeds it (see below).
 
-### ⚠ DELETE-EXCEPTION — `--mode=force` on the vector lane
+### `--mode=force` deletes vector chunks
 
-The platform rule is *no hard deletes* — structured substrate (Lanes 1-3) is
-only ever superseded (`valid_until` / `superseded_by`), never `DELETE`d. **Lane 4
-is the one documented exception.** `force` deletes every stored chunk of each
-`(corpus, doc_id)` in the batch, then re-embeds from source. This is safe here,
-and only here, because **vector rows are DERIVED, re-embeddable artifacts** — a
-chunk can always be rebuilt from its source document, so deleting it loses no
-authored knowledge (unlike a fact/nexus, whose supersession history is the
-record). Use `force` to re-chunk a document after its source text, chunker
-params, or embedding model change. The delete is scoped by a payload filter on
-`corpus` + `doc_id`, so it never touches another document's or another corpus's
-chunks.
+Postgres records are never deleted; they are superseded (`valid_until` /
+`superseded_by`). The vector corpus is the one exception. `force` deletes every
+stored chunk of each `(corpus, doc_id)` in the batch, then re-embeds from the
+source text. Chunks are derived data and can always be rebuilt from the source
+document. Use `force` after the source text, the chunker settings or the
+embedding model change. The delete is filtered on `corpus` + `doc_id`, so other
+documents and corpora are untouched.

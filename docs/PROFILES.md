@@ -12,7 +12,7 @@ Two profiles ship:
 
 | profile | what it is |
 |---|---|
-| `profiles/geopolitics/` | the example instance the reference host runs. Its descriptors are the tree's `descriptors/`; its own prose is its `prompts/` package, `legba_geopolitics` (the six political-lean lenses). It is the default. |
+| `profiles/geopolitics/` | the example instance. Its descriptors are the tree's `descriptors/`; its own prose is its `prompts/` package, `legba_geopolitics` (the six political-lean lenses). It is the default. |
 | `profiles/sanctions_export_control/` | a **skeleton** of a focused instance: sanctions and export-control determination. Ten regime subjects, a source set, its five questions as data, its labels. It validates and plans; it is not registered anywhere, and it has no units, top floor or scorecard yet. |
 
 ## The manifest
@@ -23,7 +23,7 @@ refused at every level.
 | key | meaning |
 |---|---|
 | `id` | the profile's slug; must equal its directory name |
-| `descriptors_dir` | the directory the descriptor walker registers from; its `RETIRED.md`, when present, is the walker's exclusion list ([BRINGUP.md](BRINGUP.md)) |
+| `descriptors_dir` | the directory the descriptor walker registers from; its `RETIRED.md`, when present, is the walker's exclusion list ([SETUP.md](SETUP.md)) |
 | `lifecycle` | the live-state overlay: the state each descriptor holds on this instance when it differs from the state its file ships. The key names an overlay file (`LIFECYCLE.md`); the walker reads the per-row directory beside it (`LIFECYCLE.d/`, one `<family>__<id>.md` file per row) and any row left in the file. `null` = shipped states |
 | `seeds` | the knowledge-seed adapters `deploy.sh --seed` runs, in order (`LEGBA_SEED_SOURCES` overrides) |
 | `rosters` | the instance's rosters as data: `subject_tags` (every tag that puts a target on the subject roster), `scored_subject_tags` (the subset that carries the per-subject scorecard, baselines and baseline-deviation alerts), `units` (the bounded-unit roster, in display order; `question` only for a unit whose descriptor is not written yet), `scored_units` (the subset of `units` that are the fixed scorecard dimensions the correctness plane measures one by one), `source_catalog` (the profile's source-catalog YAML file, or `null`), `credibility_seeds` (the modules whose `seed_credibility` the walker runs), `gazetteer` (the profile's gazetteer YAML file — its tables of names and codes — or `null`; see "The gazetteer" below) |
@@ -37,8 +37,8 @@ refused at every level.
 Paths are relative to the profile directory and must stay inside the repo (the
 bring-up reads them inside the registrar container, which mounts only the repo).
 
-The stance and mission ids are the shell's own keys, exemplar-shaped where the
-shell's are (`desk`, `desk_watch`); the workstation renames them with aliases,
+The stance and mission ids are the shell's own keys, shaped after the example
+profile where the shell's are (`desk`, `desk_watch`); the workstation renames them with aliases,
 and the manifests follow.
 
 ## Rosters are data
@@ -87,8 +87,8 @@ inline. Every key is optional:
 | `scope_note` | the empty state a scoped unit shows on a subject it does not run on |
 | `query_terms` | the desk reference's web-search terms (`desk_reference`) |
 | `title_terms` | the title-frame gauge's vocabulary: lower-case stems a title uses when it is about this unit |
-| `reference_queries` | the reference builder's query patterns; `{subject}` is the one substitution (`{country}`, the exemplar's spelling, is filled from the same value) |
-| `structural` | `true` when the unit's status is a standing condition (a sanctions regime in force, a war footing) rather than a run of events: its descriptor then declares level-shaped indicators (`method.options.level_indicators`), each measured against a declared reference and reading `observed_at_level` on a report from the run's own window — the re-evidence the carried-state rule accepts for a status no change-shaped signpost renews. A test pins the flag to the descriptor both ways; `scripts/census_carried_level.py` reads it. The exemplar marks `energy_security` and `military_posture` |
+| `reference_queries` | the reference builder's query patterns; `{subject}` is the one substitution (`{country}`, the example profile's spelling, is filled from the same value) |
+| `structural` | `true` when the unit's status is a standing condition (a sanctions regime in force, a war footing) rather than a run of events: its descriptor then declares level-shaped indicators (`method.options.level_indicators`), each measured against a declared reference and reading `observed_at_level` on a report from the run's own window — the re-evidence the carried-state rule accepts for a status no change-shaped signpost renews. A test pins the flag to the descriptor both ways; `scripts/census_carried_level.py` reads it. The example profile marks `energy_security` and `military_posture` |
 
 A unit that declares none of them degrades by name: the desk reference skips it
 and says so in its warnings, the reference builder gives it generic patterns,
@@ -107,7 +107,7 @@ and a test fails if it names a unit that is not on it.
 ### The source catalog
 
 `rosters.source_catalog` names a YAML file of feed entries
-(`profiles/geopolitics/rosters/source_catalog.yaml` for the exemplar). It is a
+(`profiles/geopolitics/rosters/source_catalog.yaml` for the example profile). It is a
 mapping with one key, `entries`; each entry carries the fields of the catalog
 loader's `CatalogEntry` (`id`, `name`, `kind`, `url`, `tags`,
 `cadence_minutes`, the credibility seed `cred_host` / `cred_score` /
@@ -115,7 +115,7 @@ loader's `CatalogEntry` (`id`, `name`, `kind`, `url`, `tags`,
 `language`, `extra_config`, `enrich_text`, `fact_extract`, `snapshot`,
 `access_class`, `source_class`). A key left out takes the field's default and an unknown key is
 refused. `source_class` is the entry's editorial class when it is curated
-rather than derived from `tier`: the exemplar's five state-controlled outlets
+rather than derived from `tier`: the example profile's five state-controlled outlets
 say `state_media`, and the catalog loader reads its state-media set from those
 entries. It must be one of the source schema's classes (`reporting`,
 `analysis`, `official`, `state_media`); left out, `thinktank` derives
@@ -127,7 +127,7 @@ the credibility seeding and the live probe (`--verify`) are the platform's, in
 ### The gazetteer
 
 `rosters.gazetteer` names one YAML file of name and code tables
-(`profiles/geopolitics/rosters/gazetteer.yaml` for the exemplar). Five modules
+(`profiles/geopolitics/rosters/gazetteer.yaml` for the example profile). Five modules
 used to carry these as code literals: the absence-slice claim scope and the
 cross-target guard's vocabulary (`provenance/absence_slice.py`), the
 officeholder guard and fact supersession (`provenance/world_knowledge_guards.py`,
@@ -141,7 +141,7 @@ The file is sectioned by the tables it replaced. Every section is optional:
 
 | section | what it holds | who reads it |
 |---|---|---|
-| `desk_ids` | `marker`: the substring that marks a per-subject desk id whose trailing `_<token>` is its ISO-2 code (`country` on the exemplar) | the absence-slice and cross-target guards, the off-target guard, the grounding fast path |
+| `desk_ids` | `marker`: the substring that marks a per-subject desk id whose trailing `_<token>` is its ISO-2 code (`country` on the example profile) | the absence-slice and cross-target guards, the off-target guard, the grounding fast path |
 | `desk_countries`, `slice_geo_countries` | desk slug → the names a slice row uses; the wider set of names a row can be about | the absence-slice claim scope |
 | `slug_to_country`, `country_tokens`, `slug_to_abbrev`, `irregular_demonyms` | desk slug → names; the "another country" set; case-sensitive short forms; demonyms the suffix rule cannot derive | the cross-target guard and the slice screen |
 | `screen_stopwords` | the subject nouns of the stage-1 title screen's stoplist (the rest of the stoplist is platform) | the absence-slice screen |
@@ -175,25 +175,24 @@ the same way its rosters do. With `LEGBA_PROFILE` set, the loader reads that
 profile directory instead. `scripts/gen_profile_gazetteer.py` writes the
 export, and `tests/data_pkg/test_gazetteer.py` fails when it is stale. That
 test also pins every geopolitics table by sha256 to the literal it replaced,
-and checks that 50 live headlines get the same guard verdicts as before.
+and checks that 50 sample signal titles get the same guard verdicts as before.
 
 The sanctions skeleton's gazetteer declares only the polity universe and the
 spellings of the four designating authorities (United States, United Kingdom,
 European Union, United Nations). Its regime and counterparty targets are not
 country desks, so every country-desk guard is `not_applicable` there.
 
-Two related decisions stay in code. The class gates (`_frame_anchor`'s
-`class_gate="country"` and the auto-merge on class `country`) belong to the
-class-gate lane (SPLIT-3). The matchers themselves (the suffix demonym rule,
-the whole-token rule, the Republic of China / People's Republic of China
-substring guard) are platform: they work on whatever table the profile
-supplies.
+The class gates (`_frame_anchor`'s class gate and the entity auto-merge class)
+read the `anchor_class` and `auto_merge_class` constants below. The matchers
+themselves (the suffix demonym rule, the whole-token rule, the Republic of
+China / People's Republic of China substring guard) are platform code: they
+work on whatever table the profile supplies.
 
 ## Constants
 
 A handful of values the platform's mechanisms key on belong to the instance: they
 are the manifest's `constants` block (closed), and the code reads each one through
-ONE leaf, `src/legba/data/profile_constants.py`, never a literal.
+one leaf, `src/legba/data/profile_constants.py`, never a literal.
 
 | key | what it is | who reads it | geopolitics | sanctions skeleton |
 |---|---|---|---|---|
@@ -205,16 +204,16 @@ ONE leaf, `src/legba/data/profile_constants.py`, never a literal.
 | `translation_languages` | the source languages translated before NER | the NER filter, the two backfill sweeps, the journal's raw-language warning | the eleven non-Latin NLLB codes | none (its sources publish in English) |
 | `adjacency` | edge families: family id → undirected `[a, b]` pairs of subject codes | `desk_baseline` (`land_border`, the neighbour-spillover feature) | 20 land-border pairs | none |
 | `applicability_tags` | the closed tag vocabulary a subject's own target file carries to narrow unit fan-out | `scripts/bringup_tag_targets.py` | `nuclear_watch, conflict_active, sanctions_regime` | none |
-| `reference_subject_tags` | the non-scored `rosters.subject_tags` whose subjects the CORRECTNESS roster also covers: the reference builder builds them a reference over the units scoped to the tag, and the grader grades them (INST-1; each must be a `subject_tags` entry) | `_reference_roster.reference_roster_tags` / `reference_units` (the reference builder, the correctness grader, the keyed reference kind) | `supply_chain` — the lanes and flows are graded desks | none (the roster is the scored subjects alone; the skeleton declares no scored tag, so INST-2 declares its regimes here or there) |
+| `reference_subject_tags` | the non-scored `rosters.subject_tags` whose subjects the correctness roster also covers: the reference builder builds them a reference over the units scoped to the tag, and the grader grades them (each must be a `subject_tags` entry) | `_reference_roster.reference_roster_tags` / `reference_units` (the reference builder, the correctness grader, the keyed reference kind) | `supply_chain` — the lanes and flows are graded desks | none (the roster is the scored subjects alone) |
 
 `top_floor` stays a top-level key; `profile_constants.top_floor()` reads it.
 
 The skeleton's `none`s are deliberate. Its subjects are regimes and counterparties, so
 the anchor a frame would need is an organization, and the frame anchor refuses an
 organization anchor until there is a home-entity exclusion and an organization fold;
-a compliance record merges no entity without the adjudicator. Each reader refuses BY
-NAME (`frame_anchor.no_anchor_class`, `profile_constants.adjacency_undeclared`, an
-empty drain rank, the stratum `other`), never with the exemplar's value.
+a compliance record merges no entity without the adjudicator. Each reader refuses by
+name (`frame_anchor.no_anchor_class`, `profile_constants.adjacency_undeclared`, an
+empty drain rank, the stratum `other`), never with the example profile's value.
 
 Like the rosters, the constants ship in the package as `src/legba/data/profile_constants.json`
 (frame ids resolved to their producers), `LEGBA_PROFILE` selects a profile directory
@@ -226,7 +225,7 @@ PYTHONPATH=src python3 scripts/gen_profile_constants.py --check   # exit 1 when 
 ```
 
 With no profile at all (no `LEGBA_PROFILE` and no packaged export) the leaf reads its
-documented fallback, the exemplar's values as the code spelled them, and logs
+documented fallback, the example profile's values as the code spelled them, and logs
 `profile_constants.unloaded`. Constants a module builds at import (the drain rank,
 the adjacency edges, the NER translate set) hold the values the process started with.
 
@@ -275,18 +274,18 @@ declares it, and an async caller with a connection reads the live head
 target files resolves by its id on the DB-free paths until it is added to the
 profile and the export regenerated.
 
-**The correctness roster reads the ladder too** (INST-1). The reference builder
-names a subject by the ladder and calls it by its label's TIER (`Lane — Strait of
+**The correctness roster reads the ladder too.** The reference builder
+names a subject by the ladder and calls it by its label's tier (`Lane — Strait of
 Hormuz` → "a knowledgeable *lane* analyst"; a polity — named by the gazetteer's
-polity rung — stays "country", byte-identical to the measured instruction) and
-searches it by the label's NAME half (`Strait of Hormuz shipping traffic`). Its
+polity rung — stays "country", as before) and
+searches it by the label's name half (`Strait of Hormuz shipping traffic`). Its
 query patterns are each unit's `reference_queries`, else the unit's own
 `query_terms` cut into two-word queries after the subject, else the generic
 patterns. The gazetteer rung is read only when the profile's gazetteer declares
 `polities`, and only for a code that is one of the subject's declared geo codes; a
-profile with no gazetteer reads it ABSENT and names every subject by its
-descriptor. A subject whose record is a machine-readable LIST gets a keyed
-reference instead (`reference_deterministic`, [REFERENCE_BUILDER](REFERENCE_BUILDER.md#the-keyed-reference)):
+profile with no gazetteer reads it as absent and names every subject by its
+descriptor. A subject whose record is a machine-readable list gets a keyed
+reference instead (`reference_deterministic`, [GRADING.md](GRADING.md)):
 the descriptor declares the list's shape and `bindings` (`target_id=value|value`),
 and the grader grades it exactly, by key.
 
@@ -320,7 +319,7 @@ needs it as much as the runtime: registration resolves every analyst
 descriptor's `prompt_module` and refuses a dead one on an active descriptor.
 From a checkout, the directory goes on `PYTHONPATH`: `deploy/deploy.sh` adds it
 to every registrar run (after the image's own copy), and pytest's `pythonpath`
-carries the default profile's. After a roll, `scripts/rolling_deploy.sh
+carries the default profile's. After a rolling deploy, `scripts/rolling_deploy.sh
 --verify-import legba_<id>.<module>` proves the package landed in all three
 containers, and deploy.sh's boot check imports it in the runtime.
 
@@ -332,7 +331,7 @@ four) are platform prose in `legba.prompts`. A profile adds lenses of its own
 on the same tier: their prose in its prompt package, their descriptors in its
 descriptors directory, and their ids in a `<profile>.lens` vocabulary family,
 seeded by the walker from a `descriptors/vocabulary_<profile>_lens.yaml` seed
-file. The geopolitics exemplar's six political-lean lenses are registered this
+file. The geopolitics profile's six political-lean lenses are registered this
 way (`geopolitics.lens`, `legba_geopolitics.lens_*`).
 
 `src/legba/data/lens_family.py` reads the family through the process's
@@ -341,7 +340,7 @@ fallback when the family is absent, empty or unloaded; a loaded family can
 narrow or extend the roster. The journal kind builds its lean roster from it at
 import, so a process holds the roster it started with, and the runtime, which
 installs no such source, holds the literal. The family the platform reads is
-the exemplar's; reading the running profile's own family is the next step. The
+the example profile's; reading the running profile's own family is not built yet. The
 chorus diff's roster stays the four epistemic lenses whatever the family holds.
 
 ## The projection
@@ -349,7 +348,7 @@ chorus diff's roster stays the four epistemic lenses whatever the family holds.
 A profile's read-time vocabulary — its subject groups, its unit roster with each unit's own
 cadence, its tier labels, the Morning Read's bands, the absence route's scope resolution and its
 crosswalk rows — is one declared shape per profile, `projection/view.yaml`, materialized into the
-`profile_projection` table as the profile's PLANE ([DATA_MODEL.md](DATA_MODEL.md)). It is the
+`profile_projection` table as the profile's plane ([DATA_MODEL.md](DATA_MODEL.md)). It is the
 `graph_arcs` pattern in four parts: the view, the leaf `src/legba/data/profile_projection.py`
 (the flag, the staleness read, the plane catalog, the crosswalk resolver), the builder
 `deterministic_handlers/profile_projector.py` (a deterministic analyst, hourly, a whole rebuild
@@ -383,7 +382,7 @@ read refuses `projection_disabled`; a plane never built refuses `projection_empt
 than `LEGBA_PROFILE_PROJECTION_MAX_AGE_SECONDS` refuses `projection_stale`; an unknown plane or an
 undeclared section is a 404 naming what is known. The sanctions skeleton declares no projection.
 
-Reading it today: the absence route resolves its scope (the units it checks, the analysts that
+What reads it: the absence route resolves its scope (the units it checks, the analysts that
 stamp the banding and audit kinds, the unit grace) from the plane's `scope` section when the flag
 is on and the plane is fresh, and from its constants otherwise; on the geopolitics data the two
 answers are byte-identical. The workstation still reads its literals.
@@ -400,8 +399,8 @@ unmapped, and readers leave it as it is.
 ## Selecting a profile
 
 `--profile <dir>` beats `LEGBA_PROFILE`, which beats the default
-`profiles/geopolitics`. A plain `deploy/deploy.sh` is therefore the reference
-instance, unchanged.
+`profiles/geopolitics`. A plain `deploy/deploy.sh` therefore runs the geopolitics
+example instance.
 
 ```bash
 # validate a manifest and print its summary (the registry image carries the loader)
@@ -441,7 +440,7 @@ PYTHONPATH=src python3 scripts/gen_profile_ui.py --check   # exit 1 when stale
 
 Copy the sanctions skeleton's shape: a `profile.yaml`, a `descriptors/`
 directory of the instance's own target and source files (shipping `draft`), and
-symlinks to any exemplar descriptor it reuses unchanged. Validate it with
+symlinks to any example-profile descriptor it reuses unchanged. Validate it with
 `check`, then dry-run the walker against an empty database. The platform's own
-analysts and action packs still live in the exemplar's `descriptors/`; until they
+analysts and action packs still live in the example profile's `descriptors/`; until they
 are split out, a second instance's walk registers only its own directory.
